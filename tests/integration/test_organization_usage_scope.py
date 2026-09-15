@@ -11,8 +11,9 @@ accident, and "beta's model is not in this response" cannot.
 Four things are asserted for each of the four routes:
 
 - an owner reads every workspace in their organization, and none outside it;
-- a member reads the workspaces they belong to, and not the sibling workspace
-  they do not;
+- a member reads their own requests in the workspaces they belong to: not the
+  sibling workspace they do not belong to, and not other people's requests in
+  the workspace they share;
 - ``workspace_id`` narrows and never widens, answering 404 outside the scope the
   way a workspace that does not exist does;
 - the scope follows the *membership*, not the ``active_organization_id`` pointer,
@@ -38,6 +39,7 @@ from sqlmodel import col
 
 from gateway.core.config import API_ROOT
 from gateway.models.entities import DashboardSession, UsageLog
+from gateway.models.entities import User as AttributionUser
 from gateway.models.tenancy import Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
@@ -68,6 +70,20 @@ class _World:
 _ALPHA_ONE_MODELS = ("alpha-one-a", "alpha-one-b")
 _ALPHA_TWO_MODELS = ("alpha-two-a",)
 _BETA_MODELS = ("beta-one-a", "beta-one-b")
+# Billed to the member and the viewer, in the workspace they share with the
+# unattributed rows above.
+_ALPHA_ONE_MEMBER_MODELS = ("alpha-one-member",)
+_ALPHA_ONE_VIEWER_MODELS = ("alpha-one-viewer",)
+# Billed to the member, in the workspace they do not belong to: theirs, and still
+# outside their scope.
+_ALPHA_TWO_MEMBER_MODELS = ("alpha-two-member",)
+_ALPHA_MODELS = (
+    _ALPHA_ONE_MODELS
+    + _ALPHA_TWO_MODELS
+    + _ALPHA_ONE_MEMBER_MODELS
+    + _ALPHA_ONE_VIEWER_MODELS
+    + _ALPHA_TWO_MEMBER_MODELS
+)
 
 
 def _identity(
@@ -128,12 +144,15 @@ def _identity(
     return user.id, token
 
 
-def _usage_rows(session: Session, workspace_id: uuid.UUID, models: tuple[str, ...]) -> None:
+def _usage_rows(
+    session: Session, workspace_id: uuid.UUID, models: tuple[str, ...], *, user_id: uuid.UUID | None = None
+) -> None:
     for model in models:
         session.add(
             UsageLog(
                 id=str(uuid.uuid4()),
                 workspace_id=workspace_id,
+                user_id=str(user_id) if user_id is not None else None,
                 model=model,
                 provider="p",
                 endpoint="/v1/chat/completions",
@@ -215,6 +234,15 @@ def world(client: TestClient, master_key_header: dict[str, str], db_session_fact
             ),
         }
         built.users = {name: user_id for name, (user_id, _) in people.items()}
+        # A usage row names the attribution user it was billed to, which is keyed
+        # on the identity's id, so those rows exist before the usage that cites them.
+        session.add_all(
+            [AttributionUser(user_id=str(built.users[who]), alias=who) for who in ("alpha_member", "alpha_viewer")]
+        )
+        session.commit()
+        _usage_rows(session, alpha_one.id, _ALPHA_ONE_MEMBER_MODELS, user_id=built.users["alpha_member"])
+        _usage_rows(session, alpha_one.id, _ALPHA_ONE_VIEWER_MODELS, user_id=built.users["alpha_viewer"])
+        _usage_rows(session, alpha_two.id, _ALPHA_TWO_MEMBER_MODELS, user_id=built.users["alpha_member"])
         built.sessions = {name: token for name, (_, token) in people.items()}
         return built
     finally:
@@ -254,8 +282,8 @@ def _models_summarized(client: TestClient, world: _World, who: str, query: str =
 def test_an_owner_or_admin_reads_every_workspace_in_their_own_organization(
     client: TestClient, world: _World, who: str
 ) -> None:
-    """The management arm: the whole tenant, and nothing outside it."""
-    assert _models_listed(client, world, who) == set(_ALPHA_ONE_MODELS) | set(_ALPHA_TWO_MODELS)
+    """The management arm: the whole tenant, everyone's requests, and nothing outside it."""
+    assert _models_listed(client, world, who) == set(_ALPHA_MODELS)
 
 
 @pytest.mark.parametrize("who", ["alpha_owner", "alpha_admin"])
@@ -270,12 +298,30 @@ def test_a_member_reads_only_the_workspaces_they_belong_to(client: TestClient, w
 
     ``alpha_member`` belongs to Alpha one and not Alpha two. Both are their
     organization's, so an implementation that scoped to the organization alone
-    would pass every other test in this file and fail this one.
+    would pass every other test in this file and fail this one. Alpha two also
+    holds a row billed to them, which must stay hidden: their own requests are
+    read within their workspaces, not instead of them.
     """
     listed = _models_listed(client, world, "alpha_member")
-    assert listed == set(_ALPHA_ONE_MODELS)
-    assert listed.isdisjoint(_ALPHA_TWO_MODELS)
+    assert listed == set(_ALPHA_ONE_MEMBER_MODELS)
+    assert listed.isdisjoint(_ALPHA_TWO_MODELS + _ALPHA_TWO_MEMBER_MODELS)
     assert listed.isdisjoint(_BETA_MODELS)
+
+
+@pytest.mark.parametrize("query", ["", "?workspace_id={alpha_one}"])
+def test_a_member_reads_only_their_own_requests_in_a_shared_workspace(
+    client: TestClient, world: _World, query: str
+) -> None:
+    """Alpha one holds other people's requests as well as the member's, and those stay hidden.
+
+    Both ways of reaching the workspace, the whole scope and the explicit filter,
+    because they build the condition on separate branches.
+    """
+    query = query.format(alpha_one=world.workspaces["alpha_one"])
+    listed = _models_listed(client, world, "alpha_member", query)
+    assert listed == set(_ALPHA_ONE_MEMBER_MODELS)
+    assert listed.isdisjoint(_ALPHA_ONE_MODELS + _ALPHA_ONE_VIEWER_MODELS)
+    assert _models_summarized(client, world, "alpha_member", query) == set(_ALPHA_ONE_MEMBER_MODELS)
 
 
 def test_a_viewer_is_scoped_like_a_member_and_not_like_an_admin(client: TestClient, world: _World) -> None:
@@ -286,8 +332,8 @@ def test_a_viewer_is_scoped_like_a_member_and_not_like_an_admin(client: TestClie
     rather than for management would hand a viewer the whole organization.
     """
     listed = _models_listed(client, world, "alpha_viewer")
-    assert listed == set(_ALPHA_ONE_MODELS)
-    assert listed.isdisjoint(_ALPHA_TWO_MODELS)
+    assert listed == set(_ALPHA_ONE_VIEWER_MODELS)
+    assert listed.isdisjoint(_ALPHA_TWO_MODELS + _ALPHA_ONE_MODELS)
 
 
 def test_a_member_of_no_workspace_reads_an_empty_page_rather_than_a_refusal(client: TestClient, world: _World) -> None:
@@ -335,7 +381,7 @@ def test_a_suspended_workspace_membership_stops_granting_the_workspace(
     whole surface: this caller is still a member of Alpha and still reads it,
     with one workspace fewer in it.
     """
-    assert _models_listed(client, world, "alpha_member") == set(_ALPHA_ONE_MODELS)
+    assert _models_listed(client, world, "alpha_member") == set(_ALPHA_ONE_MEMBER_MODELS)
 
     session = db_session_factory()
     try:
@@ -371,7 +417,7 @@ def test_a_superuser_reads_their_active_organization_and_not_every_tenant(client
 
 def test_a_workspace_filter_inside_the_scope_narrows_the_read(client: TestClient, world: _World) -> None:
     query = f"?workspace_id={world.workspaces['alpha_two']}"
-    assert _models_listed(client, world, "alpha_owner", query) == set(_ALPHA_TWO_MODELS)
+    assert _models_listed(client, world, "alpha_owner", query) == set(_ALPHA_TWO_MODELS + _ALPHA_TWO_MEMBER_MODELS)
 
 
 @pytest.mark.parametrize("path", _SCOPED_PATHS)
@@ -431,8 +477,8 @@ def test_switching_organizations_is_what_moves_the_scope(client: TestClient, wor
 
 def test_the_count_never_describes_more_rows_than_the_list_returns(client: TestClient, world: _World) -> None:
     for who, expected in (
-        ("alpha_owner", len(_ALPHA_ONE_MODELS) + len(_ALPHA_TWO_MODELS)),
-        ("alpha_member", len(_ALPHA_ONE_MODELS)),
+        ("alpha_owner", len(_ALPHA_MODELS)),
+        ("alpha_member", len(_ALPHA_ONE_MEMBER_MODELS)),
         ("beta_owner", len(_BETA_MODELS)),
     ):
         code, body = _as(client, world, who, f"{API_ROOT}/organizations/me/usage/count")
@@ -444,8 +490,8 @@ def test_the_summary_totals_count_only_the_callers_own_rows(client: TestClient, 
     code, body = _as(client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage/summary")
     assert code == status.HTTP_200_OK, body
     assert isinstance(body, dict)
-    assert body["totals"]["request_count"] == len(_ALPHA_ONE_MODELS)
-    assert _models_summarized(client, world, "alpha_member") == set(_ALPHA_ONE_MODELS)
+    assert body["totals"]["request_count"] == len(_ALPHA_ONE_MEMBER_MODELS)
+    assert _models_summarized(client, world, "alpha_member") == set(_ALPHA_ONE_MEMBER_MODELS)
 
 
 def test_the_series_splits_only_the_callers_own_rows(client: TestClient, world: _World) -> None:
@@ -453,7 +499,7 @@ def test_the_series_splits_only_the_callers_own_rows(client: TestClient, world: 
     assert code == status.HTTP_200_OK, body
     assert isinstance(body, dict)
     keys = {group["key"] for group in body["groups"] if not group.get("is_other")}
-    assert keys == set(_ALPHA_ONE_MODELS)
+    assert keys == set(_ALPHA_ONE_MEMBER_MODELS)
 
 
 # =============================================================================
@@ -512,9 +558,7 @@ def test_the_context_agrees_with_the_admin_access_endpoint(client: TestClient, w
         assert context["deployment_operator"] is access["granted"], who
 
 
-def test_every_response_carrying_the_context_carries_the_operator_answer(
-    client: TestClient, world: _World
-) -> None:
+def test_every_response_carrying_the_context_carries_the_operator_answer(client: TestClient, world: _World) -> None:
     """`POST /me/switch` and `PATCH /me` return the shape too, not just `GET /me`.
 
     The dashboard keeps whichever context it saw last, so a write answering a
