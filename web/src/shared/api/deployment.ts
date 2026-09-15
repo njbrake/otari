@@ -3,6 +3,7 @@ import type {
   DashboardBuild,
   DeploymentAdminAccess,
   DeploymentUser,
+  DeploymentUserPassword,
   GatewayHealth,
   UpdateDeploymentUserRequest,
 } from "@/client"
@@ -130,6 +131,20 @@ export function useUpdateDeploymentUser() {
       // Deactivating an account ends its sessions and changes what the
       // organization roster may offer it, so the tenancy reads go stale with it.
       void queryClient.invalidateQueries({ queryKey: [ORGANIZATION_MEMBERS] })
+    },
+  })
+}
+
+export function useGenerateDeploymentUserPassword() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<DeploymentUserPassword>(
+        `/admin/users/${encodeURIComponent(id)}/password`,
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: [DEPLOYMENT_ADMIN] })
     },
   })
 }

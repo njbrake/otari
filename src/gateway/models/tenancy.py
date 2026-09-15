@@ -409,6 +409,15 @@ class DeploymentUserUpdateRequest(SQLModel):
     is_superuser: bool | None = None
 
 
+class DeploymentUserPasswordPublic(SQLModel):
+    """A password generated for an account, returned once.
+
+    Only its hash is stored, so this response is the one place the plaintext exists.
+    """
+
+    password: str
+
+
 class DeploymentAdminAccessPublic(SQLModel):
     """Whether the caller may reach the deployment administration surface.
 

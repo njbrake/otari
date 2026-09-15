@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -23,6 +23,8 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+const GENERATED_PASSWORD = "generated-password-1234"
+
 function mockApi(opts: { granted?: boolean; accounts?: DeploymentUser[] }) {
   const granted = opts.granted ?? true
   const accounts = opts.accounts ?? [deploymentUser()]
@@ -41,6 +43,9 @@ function mockApi(opts: { granted?: boolean; accounts?: DeploymentUser[] }) {
       return jsonResponse({ granted })
     }
     if (url.includes(`${API_ROOT}/admin/users`)) {
+      if (url.endsWith("/password")) {
+        return jsonResponse({ password: GENERATED_PASSWORD })
+      }
       if (method === "GET") {
         return jsonResponse({ data: accounts, count: accounts.length })
       }
@@ -236,6 +241,58 @@ describe("DeploymentAccountsPage", () => {
         /^Deactivate Anchor \(The bootstrap operator/,
       ),
     ).toBeDisabled()
+  })
+
+  it("generates a password after a confirmation and shows it once", async () => {
+    const requests = mockApi({ accounts: [ANALYST] })
+    renderPage(<DeploymentAccountsPage />)
+
+    await userEvent.click(
+      await screen.findByLabelText("Set a password for Analyst"),
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: "Generate password" }),
+    )
+
+    const post = requests.find((request) => request.method === "POST")
+    expect(post?.url).toContain(
+      `${API_ROOT}/admin/users/${ANALYST.id}/password`,
+    )
+    expect(await screen.findByText(GENERATED_PASSWORD)).toBeInTheDocument()
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "I’ve sent this password" }),
+    )
+    await waitFor(() =>
+      expect(screen.queryByText(GENERATED_PASSWORD)).not.toBeInTheDocument(),
+    )
+  })
+
+  it("disables Set password on the caller's own row and on an account with no address", async () => {
+    mockApi({
+      accounts: [
+        OPERATOR,
+        deploymentUser({
+          id: "dddddddd-0000-0000-0000-000000000000",
+          full_name: "Nameless",
+          email: null,
+        }),
+        ANALYST,
+      ],
+    })
+    renderPage(<DeploymentAccountsPage />)
+
+    expect(
+      await screen.findByLabelText(
+        /^Set a password for Operator \(Change your own password/,
+      ),
+    ).toBeDisabled()
+    expect(
+      screen.getByLabelText(
+        /^Set a password for Nameless \(This account has no email address/,
+      ),
+    ).toBeDisabled()
+    expect(screen.getByLabelText("Set a password for Analyst")).toBeEnabled()
   })
 
   it("says the surface is not for you when the gate refuses", async () => {

@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.api.deps import CurrentIdentity, get_db, verify_master_key
 from gateway.models.tenancy import (
     DeploymentAdminAccessPublic,
+    DeploymentUserPasswordPublic,
     DeploymentUserPublic,
     DeploymentUsersPublic,
     DeploymentUserUpdateRequest,
@@ -101,3 +102,20 @@ async def update_deployment_user(
     master-key sign-in resolves to. Granting either is unguarded.
     """
     return await service.update_user(actor=current_identity, user_id=user_id, request=body)
+
+
+@router.post("/users/{user_id}/password")
+async def generate_deployment_user_password(
+    service: DeploymentUserServiceDep,
+    current_identity: CurrentIdentity,
+    user_id: uuid.UUID,
+) -> DeploymentUserPasswordPublic:
+    """Replace an account's password with a generated one, and return it once.
+
+    For a deployment with no mail, where a member added or invited by address has
+    no other way to get a password: the operator hands this one over. The account
+    signs in with its address and this password straight away, its dashboard
+    sessions end, and only the hash is stored. Refused for the caller's own
+    account and for an account with no email address.
+    """
+    return await service.generate_password(actor=current_identity, user_id=user_id)

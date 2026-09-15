@@ -1,12 +1,20 @@
 import { useMemo, useState } from "react"
-import { FiCheckCircle, FiShield, FiSlash, FiUserX } from "react-icons/fi"
+import {
+  FiCheckCircle,
+  FiKey,
+  FiShield,
+  FiSlash,
+  FiUserX,
+} from "react-icons/fi"
 
 import type { DeploymentUser } from "@/client"
+import { CopyableValue } from "@/design-system/actions/CopyField"
 import { RowAction, RowActionRow } from "@/design-system/actions/RowAction"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
+import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { Dot } from "@/design-system/indicators/Dot"
@@ -15,6 +23,7 @@ import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import {
   useDeploymentAdminAccess,
   useDeploymentUsers,
+  useGenerateDeploymentUserPassword,
   useUpdateDeploymentUser,
 } from "@/shared/api/deployment"
 import { formatRelative } from "@/shared/helpers/format"
@@ -23,6 +32,7 @@ import {
   accountLabel,
   accountLockoutReason,
   organizationSummary,
+  passwordUnavailableReason,
 } from "./accounts"
 
 // Every account on the deployment, which is the one identity list that is not
@@ -31,9 +41,9 @@ import {
 // suspended, which is exactly the account an operator comes looking for; before
 // this page the recourse was SQL.
 //
-// Three controls, matching the three the API serves: deactivate (which also ends
-// that account's dashboard sessions), reactivate, and grant or remove operator
-// access. Creating an account is not here, because an account without a
+// Four controls, matching the API: deactivate (which also ends that account's
+// dashboard sessions), reactivate, grant or remove operator access, and generate
+// a password, which is how a deployment with no mail gets a member signed in. Creating an account is not here, because an account without a
 // membership can do nothing and memberships are the organization surface's; nor
 // is deleting one, because historical attribution resolves through rows that
 // hang off it.
@@ -65,7 +75,17 @@ export function DeploymentAccountsPage() {
   const granted = access.data === true
   const accounts = useDeploymentUsers(granted)
   const update = useUpdateDeploymentUser()
+  const generate = useGenerateDeploymentUserPassword()
   const [deactivating, setDeactivating] = useState<DeploymentUser | null>(null)
+  const [settingPassword, setSettingPassword] = useState<DeploymentUser | null>(
+    null,
+  )
+  // The plaintext, held only until the operator acknowledges it: the server
+  // stores the hash, so closing this dialog is the last time it can be read.
+  const [generated, setGenerated] = useState<{
+    account: DeploymentUser
+    password: string
+  } | null>(null)
 
   const rows = accounts.data ?? []
 
@@ -138,6 +158,7 @@ export function DeploymentAccountsPage() {
         align: "end",
         cell: (account) => {
           const blocked = accountLockoutReason(account)
+          const passwordBlocked = passwordUnavailableReason(account)
           return (
             <RowActionRow>
               {/* The reason is folded into each control's own name, as the
@@ -198,12 +219,19 @@ export function DeploymentAccountsPage() {
                   })
                 }}
               />
+              <RowAction
+                icon={FiKey}
+                label="Set password"
+                isDisabled={passwordBlocked !== undefined || generate.isPending}
+                ariaLabel={`Set a password for ${accountLabel(account)}${passwordBlocked ? ` (${passwordBlocked})` : ""}`}
+                onPress={() => setSettingPassword(account)}
+              />
             </RowActionRow>
           )
         },
       },
     ],
-    [update],
+    [update, generate],
   )
 
   if (access.isLoading) {
@@ -298,6 +326,68 @@ export function DeploymentAccountsPage() {
           }
         }}
       />
+
+      <ConfirmDialog
+        isOpen={settingPassword !== null}
+        onOpenChange={(open) => {
+          if (!open) setSettingPassword(null)
+        }}
+        heading="Set password"
+        body={
+          <>
+            Generate a new password for{" "}
+            <strong>
+              {settingPassword ? accountLabel(settingPassword) : ""}
+            </strong>
+            ? It replaces any password they have now and signs them out
+            everywhere. It is shown once, for you to send them; they can change
+            it afterwards from their account page.
+          </>
+        }
+        confirmLabel="Generate password"
+        confirmVariant="primary"
+        isPending={generate.isPending}
+        error={generate.error}
+        onConfirm={() => {
+          const account = settingPassword
+          if (!account) return
+          generate.mutate(account.id, {
+            onSuccess: ({ password }) => {
+              setSettingPassword(null)
+              setGenerated({ account, password })
+            },
+          })
+        }}
+      />
+
+      {generated ? (
+        <FormDialog
+          isOpen
+          onOpenChange={(open) => {
+            if (!open) setGenerated(null)
+          }}
+          // Dismissing loses the password for good, so the acknowledgement is
+          // the only way out, as on the Keys page.
+          isDismissable={false}
+          title="Password generated"
+          submitLabel="I’ve sent this password"
+          onSubmit={() => setGenerated(null)}
+          isPending={false}
+        >
+          <InfoBanner>
+            Send this to <strong>{accountLabel(generated.account)}</strong>.
+            They sign in with <strong>{generated.account.email}</strong> and
+            this password. It is not shown again.
+            <div className="mt-2">
+              <CopyableValue value={generated.password} label="Password">
+                <span className="break-all font-mono text-xs">
+                  {generated.password}
+                </span>
+              </CopyableValue>
+            </div>
+          </InfoBanner>
+        </FormDialog>
+      ) : null}
     </div>
   )
 }
