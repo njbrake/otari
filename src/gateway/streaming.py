@@ -173,9 +173,9 @@ async def streaming_generator(
         format_chunk: Formats a chunk into an SSE string
         extract_usage: Extracts usage from a chunk, or returns None if no usage present
         fmt: SSE format configuration (done marker, error payload, etc.)
-        display_model: When set (a configured alias was used), each chunk's
-            ``model`` field is relabeled to this before formatting, so the
-            underlying provider/model never appears on the wire.
+        display_model: When set (the selector, alias, or policy name the caller
+            sent), each chunk's ``model`` field is relabeled to this before
+            formatting, so the upstream model name never appears on the wire.
         on_complete: Called with aggregated usage after successful streaming that
             included usage data
         on_error: Called with the raised exception on failure. The exception

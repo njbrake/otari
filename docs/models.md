@@ -16,7 +16,10 @@ ollama:llama3
 ```
 
 The prefix selects a provider or named provider instance. Everything after the
-first colon is sent as the provider's model ID.
+first colon is sent as the provider's model ID. A standalone response's `model`
+is the selector that was sent (`openai:gpt-5`), not the provider's own name for
+the model that served it. When that name differs (a dated snapshot, say), a
+non-streaming response carries it in the `X-Otari-Served-Model` header.
 
 `provider/model` is also accepted on completion routes for compatibility with
 otari.ai. Prefer the colon form in standalone configuration, pricing, aliases,
