@@ -4,11 +4,11 @@ import userEvent from "@testing-library/user-event"
 import type { ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { DeploymentUser } from "@/client"
+import type { DeploymentUser, User } from "@/client"
 import { DeploymentAccountsPage } from "@/features/admin/DeploymentAccountsPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
-import { bootstrap, deploymentUser } from "@/tests/fixtures"
+import { bootstrap, deploymentUser, user } from "@/tests/fixtures"
 
 interface Request {
   url: string
@@ -25,9 +25,14 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const GENERATED_PASSWORD = "generated-password-1234"
 
-function mockApi(opts: { granted?: boolean; accounts?: DeploymentUser[] }) {
+function mockApi(opts: {
+  granted?: boolean
+  accounts?: DeploymentUser[]
+  users?: User[]
+}) {
   const granted = opts.granted ?? true
   const accounts = opts.accounts ?? [deploymentUser()]
+  const users = opts.users ?? []
   const requests: Request[] = []
 
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -51,6 +56,12 @@ function mockApi(opts: { granted?: boolean; accounts?: DeploymentUser[] }) {
       }
       const body = init?.body ? JSON.parse(String(init.body)) : {}
       return jsonResponse({ ...accounts[0], ...body })
+    }
+    if (url.includes(`${API_ROOT}/users`)) {
+      if (method === "GET") {
+        return jsonResponse(users)
+      }
+      return jsonResponse({ user: users[0], moved: { api_keys: 1 } })
     }
     return jsonResponse({})
   })
@@ -293,6 +304,50 @@ describe("DeploymentAccountsPage", () => {
       ),
     ).toBeDisabled()
     expect(screen.getByLabelText("Set a password for Analyst")).toBeEnabled()
+  })
+
+  it("merges a chosen user record into the account", async () => {
+    const requests = mockApi({
+      accounts: [ANALYST, OPERATOR],
+      users: [
+        user({ user_id: "klubrake", alias: "Katie" }),
+        // Another account's own record, which cannot be retired.
+        user({ user_id: OPERATOR.id, alias: "Operator" }),
+        // The target itself.
+        user({ user_id: ANALYST.id, alias: "Analyst" }),
+      ],
+    })
+    const actor = userEvent.setup()
+    renderPage(<DeploymentAccountsPage />)
+
+    await actor.click(
+      await screen.findByLabelText("Merge a user record into Analyst"),
+    )
+    const dialog = await screen.findByRole("dialog")
+    await actor.click(
+      within(dialog).getByRole("button", { name: /User record to merge/ }),
+    )
+    await actor.click(
+      await screen.findByRole("option", { name: "klubrake (Katie)" }),
+    )
+    expect(
+      screen.queryByRole("option", { name: `${OPERATOR.id} (Operator)` }),
+    ).not.toBeInTheDocument()
+    await actor.click(within(dialog).getByRole("button", { name: "Merge" }))
+
+    await waitFor(() =>
+      expect(
+        requests.find(
+          (request) =>
+            request.method === "POST" && request.url.endsWith("/merge"),
+        ),
+      ).toBeDefined(),
+    )
+    const post = requests.find(
+      (request) => request.method === "POST" && request.url.endsWith("/merge"),
+    )
+    expect(post?.url).toContain(`${API_ROOT}/users/${ANALYST.id}/merge`)
+    expect(post?.body).toEqual({ source_user_id: "klubrake" })
   })
 
   it("says the surface is not for you when the gate refuses", async () => {

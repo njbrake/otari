@@ -7940,6 +7940,48 @@
           }
         },
         {
+          "name": "Merge User",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"source_user_id\": \"string\"\n}"
+            },
+            "description": "Merge another user in the caller's organization into this one.\n\nMoves the source user's API keys, usage history, telemetry, files, batches,\nbudget resets and reservations, per-user aliases and routing policies, and\nrouting memory onto this user, adds its spend, token and request counters to\nthis user's, and soft-deletes it. This user keeps its budget, model access and\nblocked flag. Refused with 409 when the source is a sign-in account's own\nuser, has a budget reservation in flight, or holds a per-user alias or policy\nwhose name this user already uses in the same workspace.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                ":user_id",
+                "merge"
+              ],
+              "raw": "{{baseUrl}}/api/v1/users/:user_id/merge",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "user_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Get User Usage",
           "request": {
             "description": "Get usage history for a user in the caller's organization.",

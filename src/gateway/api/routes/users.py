@@ -23,6 +23,7 @@ from gateway.models.money import as_float
 from gateway.repositories.users_repository import in_organization
 from gateway.services.budget_periods import budget_window
 from gateway.services.model_access import validate_allowed_models
+from gateway.services.user_merge_service import SameUserMergeError, UserMergeError, merge_users
 
 router = APIRouter(
     prefix="/users",
@@ -100,6 +101,21 @@ class UpdateUserRequest(BaseModel):
     blocked: bool | None = None
     allowed_models: list[str] | None = None
     metadata: dict[str, Any] | None = None
+
+
+class MergeUserRequest(BaseModel):
+    """Request model for merging another user into this one."""
+
+    source_user_id: str = Field(
+        description="The user whose keys, usage and per-user state move onto this one. It is retired afterwards."
+    )
+
+
+class MergeUserResponse(BaseModel):
+    """The user after the merge, and the rows moved per table."""
+
+    user: UserResponse
+    moved: dict[str, int]
 
 
 class UsageLogResponse(BaseModel):
@@ -409,6 +425,39 @@ async def delete_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database error",
         ) from None
+
+
+@router.post("/{user_id}/merge")
+async def merge_user(
+    user_id: str,
+    request: MergeUserRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    organization_id: CallerOrganization,
+) -> MergeUserResponse:
+    """Merge another user in the caller's organization into this one.
+
+    Moves the source user's API keys, usage history, telemetry, files, batches,
+    budget resets and reservations, per-user aliases and routing policies, and
+    routing memory onto this user, adds its spend, token and request counters to
+    this user's, and soft-deletes it. This user keeps its budget, model access and
+    blocked flag. Refused with 409 when the source is a sign-in account's own
+    user, has a budget reservation in flight, or holds a per-user alias or policy
+    whose name this user already uses in the same workspace.
+    """
+    target = await _load_user_in_organization(db, user_id, organization_id)
+    source = await _load_user_in_organization(db, request.source_user_id, organization_id)
+    try:
+        moved = await merge_users(db, source=source, target=target)
+    except SameUserMergeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+    except UserMergeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error",
+        ) from None
+    return MergeUserResponse(user=UserResponse.from_model(target), moved=moved)
 
 
 @router.get("/{user_id}/usage")

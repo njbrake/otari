@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 import {
   FiCheckCircle,
+  FiGitMerge,
   FiKey,
   FiShield,
   FiSlash,
@@ -17,6 +18,7 @@ import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
+import { Select } from "@/design-system/forms/Select"
 import { Dot } from "@/design-system/indicators/Dot"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
@@ -26,11 +28,13 @@ import {
   useGenerateDeploymentUserPassword,
   useUpdateDeploymentUser,
 } from "@/shared/api/deployment"
+import { useMergeUser, useUsers } from "@/shared/api/users"
 import { formatRelative } from "@/shared/helpers/format"
 
 import {
   accountLabel,
   accountLockoutReason,
+  mergeCandidates,
   organizationSummary,
   passwordUnavailableReason,
 } from "./accounts"
@@ -76,6 +80,12 @@ export function DeploymentAccountsPage() {
   const accounts = useDeploymentUsers(granted)
   const update = useUpdateDeploymentUser()
   const generate = useGenerateDeploymentUserPassword()
+  const merge = useMergeUser()
+  // Read only while the merge dialog is open: the list is the organization's
+  // whole users table and nothing else on the page needs it.
+  const [mergingInto, setMergingInto] = useState<DeploymentUser | null>(null)
+  const [mergeSource, setMergeSource] = useState("")
+  const users = useUsers(granted && mergingInto !== null)
   const [deactivating, setDeactivating] = useState<DeploymentUser | null>(null)
   const [settingPassword, setSettingPassword] = useState<DeploymentUser | null>(
     null,
@@ -226,12 +236,22 @@ export function DeploymentAccountsPage() {
                 ariaLabel={`Set a password for ${accountLabel(account)}${passwordBlocked ? ` (${passwordBlocked})` : ""}`}
                 onPress={() => setSettingPassword(account)}
               />
+              <RowAction
+                icon={FiGitMerge}
+                label="Merge user record"
+                ariaLabel={`Merge a user record into ${accountLabel(account)}`}
+                onPress={() => {
+                  merge.reset()
+                  setMergeSource("")
+                  setMergingInto(account)
+                }}
+              />
             </RowActionRow>
           )
         },
       },
     ],
-    [update, generate],
+    [update, generate, merge],
   )
 
   if (access.isLoading) {
@@ -359,6 +379,51 @@ export function DeploymentAccountsPage() {
           })
         }}
       />
+
+      <FormDialog
+        isOpen={mergingInto !== null}
+        onOpenChange={(open) => {
+          if (!open) setMergingInto(null)
+        }}
+        title="Merge user record"
+        submitLabel="Merge"
+        isPending={merge.isPending}
+        isSubmitDisabled={mergeSource === ""}
+        error={merge.error}
+        onSubmit={() => {
+          if (!mergingInto || mergeSource === "") return
+          merge.mutate(
+            { targetId: mergingInto.id, sourceId: mergeSource },
+            { onSuccess: () => setMergingInto(null) },
+          )
+        }}
+      >
+        <InfoBanner>
+          The record&apos;s API keys, usage history, budgets and routing state
+          move to{" "}
+          <strong>{mergingInto ? accountLabel(mergingInto) : ""}</strong>, its
+          spend is added to theirs, and the record is retired. This cannot be
+          undone.
+        </InfoBanner>
+        <Select
+          label="User record to merge"
+          value={mergeSource}
+          onChange={setMergeSource}
+          placeholder={users.isLoading ? "Loading users…" : "Choose a user"}
+          options={
+            mergingInto
+              ? mergeCandidates(mergingInto, users.data ?? [], rows).map(
+                  (user) => ({
+                    value: user.user_id,
+                    label: user.alias
+                      ? `${user.user_id} (${user.alias})`
+                      : user.user_id,
+                  }),
+                )
+              : []
+          }
+        />
+      </FormDialog>
 
       {generated ? (
         <FormDialog

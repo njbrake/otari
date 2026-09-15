@@ -6800,6 +6800,42 @@
         "title": "McpToolsResponse",
         "type": "object"
       },
+      "MergeUserRequest": {
+        "description": "Request model for merging another user into this one.",
+        "properties": {
+          "source_user_id": {
+            "description": "The user whose keys, usage and per-user state move onto this one. It is retired afterwards.",
+            "title": "Source User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_user_id"
+        ],
+        "title": "MergeUserRequest",
+        "type": "object"
+      },
+      "MergeUserResponse": {
+        "description": "The user after the merge, and the rows moved per table.",
+        "properties": {
+          "moved": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Moved",
+            "type": "object"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserResponse"
+          }
+        },
+        "required": [
+          "user",
+          "moved"
+        ],
+        "title": "MergeUserResponse",
+        "type": "object"
+      },
       "Message": {
         "description": "A human-readable acknowledgment for an operation with nothing to return.",
         "properties": {
@@ -31341,6 +31377,67 @@
           }
         ],
         "summary": "Update User",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/{user_id}/merge": {
+      "post": {
+        "description": "Merge another user in the caller's organization into this one.\n\nMoves the source user's API keys, usage history, telemetry, files, batches,\nbudget resets and reservations, per-user aliases and routing policies, and\nrouting memory onto this user, adds its spend, token and request counters to\nthis user's, and soft-deletes it. This user keeps its budget, model access and\nblocked flag. Refused with 409 when the source is a sign-in account's own\nuser, has a budget reservation in flight, or holds a per-user alias or policy\nwhose name this user already uses in the same workspace.",
+        "operationId": "users-merge_user",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeUserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Merge User",
         "tags": [
           "users"
         ]

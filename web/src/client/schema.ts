@@ -4433,6 +4433,34 @@ export interface paths {
         patch: operations["users-update_user"];
         trace?: never;
     };
+    "/api/v1/users/{user_id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge User
+         * @description Merge another user in the caller's organization into this one.
+         *
+         *     Moves the source user's API keys, usage history, telemetry, files, batches,
+         *     budget resets and reservations, per-user aliases and routing policies, and
+         *     routing memory onto this user, adds its spend, token and request counters to
+         *     this user's, and soft-deletes it. This user keeps its budget, model access and
+         *     blocked flag. Refused with 409 when the source is a sign-in account's own
+         *     user, has a budget reservation in flight, or holds a per-user alias or policy
+         *     whose name this user already uses in the same workspace.
+         */
+        post: operations["users-merge_user"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/{user_id}/usage": {
         parameters: {
             query?: never;
@@ -8256,6 +8284,28 @@ export interface components {
             tools: components["schemas"]["McpToolDefinition"][];
             /** Warnings */
             warnings: components["schemas"]["McpToolWarning"][];
+        };
+        /**
+         * MergeUserRequest
+         * @description Request model for merging another user into this one.
+         */
+        MergeUserRequest: {
+            /**
+             * Source User Id
+             * @description The user whose keys, usage and per-user state move onto this one. It is retired afterwards.
+             */
+            source_user_id: string;
+        };
+        /**
+         * MergeUserResponse
+         * @description The user after the merge, and the rows moved per table.
+         */
+        MergeUserResponse: {
+            /** Moved */
+            moved: {
+                [key: string]: number;
+            };
+            user: components["schemas"]["UserResponse"];
         };
         /**
          * Message
@@ -19793,6 +19843,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "users-merge_user": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergeUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeUserResponse"];
                 };
             };
             /** @description Validation Error */
