@@ -23,6 +23,14 @@ from any_llm.types.completion import (
     Embedding,
     Usage,
 )
+from any_llm.types.messages import (
+    MessageResponse,
+    MessageStartEvent,
+    MessageStopEvent,
+    MessageStreamEvent,
+    MessageUsage,
+    TextBlock,
+)
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
@@ -466,9 +474,7 @@ async def test_streaming_response_model_echoes_alias(client: TestClient) -> None
             object="chat.completion.chunk",
             created=0,
             model="claude-opus-4",  # what the provider streams back
-            choices=[
-                ChunkChoice(index=0, delta=ChoiceDelta(role="assistant", content="hi"), finish_reason="stop")
-            ],
+            choices=[ChunkChoice(index=0, delta=ChoiceDelta(role="assistant", content="hi"), finish_reason="stop")],
             usage=CompletionUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         )
 
@@ -545,3 +551,165 @@ async def test_moderations_response_model_echoes_alias(client: TestClient) -> No
     assert resp.status_code == 200
     # The caller sees the alias they sent, not the underlying model name.
     assert resp.json()["model"] == "myopusmodel"
+
+
+# ---------------------------------------------------------------------------
+# A provider-prefixed request gets back the name it sent
+# ---------------------------------------------------------------------------
+#
+# A client that stores the reply's ``model`` and sends it back must receive a
+# name this gateway accepts. The bare upstream name (``qwen3``) is not one: the
+# key's model access is written against ``home_lab:qwen3``.
+
+
+@pytest.mark.asyncio
+async def test_provider_prefixed_chat_response_echoes_the_requested_name(client: TestClient) -> None:
+    _create_user(client)
+
+    mock_response = ChatCompletion(
+        id="chatcmpl-prefixed",
+        object="chat.completion",
+        created=0,
+        model="qwen3",
+        choices=[Choice(index=0, message=ChatCompletionMessage(role="assistant", content="hi"), finish_reason="stop")],
+        usage=CompletionUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    async def mock_acompletion(**kwargs: Any) -> ChatCompletion:
+        return mock_response
+
+    with patch("gateway.api.routes.chat.acompletion", new=mock_acompletion):
+        resp = client.post(
+            f"{API_ROOT}/chat/completions",
+            json={"model": "home_lab:qwen3", "messages": [{"role": "user", "content": "Hi"}], "user": "test-user"},
+            headers=HEADERS,
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model"] == "home_lab:qwen3"
+
+
+@pytest.mark.asyncio
+async def test_provider_prefixed_chat_stream_echoes_the_requested_name(client: TestClient) -> None:
+    _create_user(client)
+
+    async def chunk_stream() -> AsyncIterator[ChatCompletionChunk]:
+        yield ChatCompletionChunk(
+            id="chatcmpl-prefixed",
+            object="chat.completion.chunk",
+            created=0,
+            model="qwen3",
+            choices=[ChunkChoice(index=0, delta=ChoiceDelta(role="assistant", content="hi"), finish_reason="stop")],
+            usage=CompletionUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+
+    async def mock_acompletion(**kwargs: Any) -> AsyncIterator[ChatCompletionChunk]:
+        return chunk_stream()
+
+    with patch("gateway.api.routes.chat.acompletion", new=mock_acompletion):
+        resp = client.post(
+            f"{API_ROOT}/chat/completions",
+            json={
+                "model": "home_lab:qwen3",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "user": "test-user",
+                "stream": True,
+            },
+            headers=HEADERS,
+        )
+    assert resp.status_code == 200, resp.text
+    assert '"model":"home_lab:qwen3"' in resp.text.replace(" ", "")
+    assert '"model":"qwen3"' not in resp.text.replace(" ", "")
+
+
+def _message_response(model: str) -> MessageResponse:
+    return MessageResponse(
+        id="msg_prefixed",
+        type="message",
+        role="assistant",
+        model=model,
+        content=[TextBlock(type="text", text="hi", citations=None)],
+        stop_reason=None,
+        stop_sequence=None,
+        usage=MessageUsage(
+            input_tokens=10,
+            output_tokens=5,
+            cache_creation_input_tokens=None,
+            cache_read_input_tokens=None,
+            cache_creation=None,
+            server_tool_use=None,
+            service_tier=None,
+        ),
+        container=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_prefixed_messages_response_echoes_the_requested_name(client: TestClient) -> None:
+    _create_user(client)
+
+    async def mock_amessages(**kwargs: Any) -> MessageResponse:
+        return _message_response("claude-opus-4")
+
+    with patch("gateway.api.routes.messages.amessages", new=mock_amessages):
+        resp = client.post(
+            f"{API_ROOT}/messages",
+            json={
+                "model": "anthropic:claude-opus-4",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "Hi"}],
+                "metadata": {"user_id": "test-user"},
+            },
+            headers=HEADERS,
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model"] == "anthropic:claude-opus-4"
+
+
+@pytest.mark.asyncio
+async def test_provider_prefixed_messages_stream_start_echoes_the_requested_name(client: TestClient) -> None:
+    _create_user(client)
+
+    async def mock_amessages(**kwargs: Any) -> AsyncIterator[MessageStreamEvent]:
+        async def events() -> AsyncIterator[MessageStreamEvent]:
+            yield MessageStartEvent(type="message_start", message=_message_response("claude-opus-4"))
+            yield MessageStopEvent(type="message_stop")
+
+        return events()
+
+    with patch("gateway.api.routes.messages.amessages", new=mock_amessages):
+        resp = client.post(
+            f"{API_ROOT}/messages",
+            json={
+                "model": "anthropic:claude-opus-4",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "Hi"}],
+                "metadata": {"user_id": "test-user"},
+                "stream": True,
+            },
+            headers=HEADERS,
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.text.replace(" ", "")
+    assert '"model":"anthropic:claude-opus-4"' in body
+    assert '"model":"claude-opus-4"' not in body
+
+
+@pytest.mark.asyncio
+async def test_provider_prefixed_embeddings_response_echoes_the_requested_name(client: TestClient) -> None:
+    _create_user(client)
+
+    mock_response = CreateEmbeddingResponse(
+        data=[Embedding(embedding=[0.1, 0.2], index=0, object="embedding")],
+        model="qwen3",
+        object="list",
+        usage=Usage(prompt_tokens=5, total_tokens=5),
+    )
+
+    with patch("gateway.api.routes.embeddings.aembedding", new_callable=AsyncMock, return_value=mock_response):
+        resp = client.post(
+            f"{API_ROOT}/embeddings",
+            json={"model": "home_lab:qwen3", "input": "hello", "user": "test-user"},
+            headers=HEADERS,
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model"] == "home_lab:qwen3"

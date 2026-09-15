@@ -659,7 +659,7 @@ async def create_response(
             provider=billing_instance,
             model=model,
             session_label=request_body.session_label,
-            display_model=resolved.alias,
+            display_model=resolved.alias or request_body.model,
             base_request_fields=base_request_fields,
         )
 
@@ -692,7 +692,7 @@ async def create_response(
         response=response,
         provider=billing_instance,
         model=model,
-        display_model=resolved.alias,
+        display_model=resolved.alias or request_body.model,
         base_request_fields=base_request_fields,
     )
 

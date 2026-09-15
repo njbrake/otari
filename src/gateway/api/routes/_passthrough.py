@@ -555,7 +555,7 @@ async def run_passthrough(
         for key, value in headers.items():
             response.headers[key] = value
 
-    if relabel and resolved.alias is not None:
-        relabel_model(result, resolved.alias)
+    if relabel:
+        relabel_model(result, resolved.alias or model)
 
     return PassthroughOutcome(result=result, resolved=resolved, headers=headers)

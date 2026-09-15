@@ -795,7 +795,7 @@ async def create_message(
             provider=resolved.instance,
             model=resolved.model,
             session_label=request.session_label,
-            display_model=resolved.alias,
+            display_model=resolved.alias or request.model,
             base_request_fields=request_fields,
         )
 
@@ -841,7 +841,7 @@ async def create_message(
         response=response,
         provider=resolved.instance,
         model=resolved.model,
-        display_model=resolved.alias,
+        display_model=resolved.alias or request.model,
         base_request_fields=request_fields,
     )
 
