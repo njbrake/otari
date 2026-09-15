@@ -1,7 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { CreateUserRequest, UpdateUserRequest, User } from "@/client"
+import type {
+  CreateUserRequest,
+  MergeUserRequest,
+  MergeUserResult,
+  UpdateUserRequest,
+  User,
+} from "@/client"
 import { apiFetch } from "@/shared/api/client"
-import { BUDGETS, KEYS, USERS } from "@/shared/api/queryKeys"
+import { BUDGETS, KEYS, USAGE, USERS } from "@/shared/api/queryKeys"
 
 const USERS_PAGE_SIZE = 1000
 const USERS_MAX_PAGES = 100
@@ -74,6 +80,34 @@ export function useDeleteUser() {
       invalidateUserViews(queryClient)
       // Deleting a user deactivates its keys server-side.
       void queryClient.invalidateQueries({ queryKey: [KEYS] })
+    },
+  })
+}
+
+export function useMergeUser() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      targetId,
+      sourceId,
+    }: {
+      targetId: string
+      sourceId: string
+    }) =>
+      apiFetch<MergeUserResult>(
+        `/users/${encodeURIComponent(targetId)}/merge`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            source_user_id: sourceId,
+          } satisfies MergeUserRequest),
+        },
+      ),
+    onSuccess: () => {
+      invalidateUserViews(queryClient)
+      // The source's keys and usage now belong to the target.
+      void queryClient.invalidateQueries({ queryKey: [KEYS] })
+      void queryClient.invalidateQueries({ queryKey: [USAGE] })
     },
   })
 }

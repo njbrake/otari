@@ -10,7 +10,7 @@
  * both protected rows.
  */
 
-import type { DeploymentUser } from "@/client"
+import type { DeploymentUser, User } from "@/client"
 
 /**
  * Why deactivating this account, or taking its operator access, is refused.
@@ -76,4 +76,24 @@ export function passwordUnavailableReason(
     return "This account has no email address to sign in with"
   }
   return undefined
+}
+
+/**
+ * The user records that can be merged into this account's own.
+ *
+ * Leaves out the account's own record, every other account's (the server refuses
+ * to retire a sign-in account's user), and the per-key virtual users.
+ */
+export function mergeCandidates(
+  account: DeploymentUser,
+  users: readonly User[],
+  accounts: readonly DeploymentUser[],
+): User[] {
+  const accountIds = new Set(accounts.map((row) => row.id))
+  return users.filter(
+    (user) =>
+      user.user_id !== account.id &&
+      !accountIds.has(user.user_id) &&
+      !user.user_id.startsWith("apikey-"),
+  )
 }

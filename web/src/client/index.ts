@@ -504,6 +504,9 @@ export type DeploymentUserOrganization =
 export type UpdateDeploymentUserRequest = Schemas["DeploymentUserUpdateRequest"]
 /** A generated password, returned once: only its hash is stored. */
 export type DeploymentUserPassword = Schemas["DeploymentUserPasswordPublic"]
+/** Fold one request-plane user into another: keys, usage and per-user state. */
+export type MergeUserRequest = Schemas["MergeUserRequest"]
+export type MergeUserResult = Schemas["MergeUserResponse"]
 
 export type Workspace = Schemas["WorkspacePublic"]
 export type CreateWorkspaceRequest = Schemas["WorkspaceCreate"]
