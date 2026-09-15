@@ -67,8 +67,8 @@ function usageParams(filters: UsageFilters): URLSearchParams {
 //
 // `/usage` is deployment-wide and refuses anyone who does not operate the
 // deployment; `/organizations/me/usage` serves the same rows narrowed to the
-// caller's own organization, and to the workspaces they belong to within it
-// (otari#837). Both answer identical shapes, so every hook below differs only in
+// caller's own organization, to the workspaces they belong to within it
+// (otari#837), and for a member or viewer to the requests billed to them. Both answer identical shapes, so every hook below differs only in
 // the prefix it asks.
 //
 // Read off the organization context rather than `useDeploymentAdminAccess`,

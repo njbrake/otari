@@ -116,7 +116,9 @@ attachment. Cap batch-heavy workloads in dollars rather than in tokens. See
 
 Usage is attributed to the workspace bound to the authenticating API key.
 Organization and workspace usage views then apply the signed-in identity's
-membership. Deployment operators can read the deployment-wide usage API.
+membership: an owner or admin sees every request in their scope, and a member or
+viewer sees only the requests billed to them, even in a workspace they share.
+Deployment operators can read the deployment-wide usage API.
 
 Routing fallback and built-in tools can create several internal attempts, but a
 successful request remains one caller-visible request. The activity log records

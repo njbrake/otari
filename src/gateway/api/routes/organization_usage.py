@@ -25,6 +25,10 @@ reading of the same rows:
   member or viewer reads the ones they actively belong to. A member who belongs
   to no workspace gets an empty page, not a refusal: the surface is theirs and
   simply has nothing in it yet.
+* **Whose requests** follows the same split: an owner, an admin or a superuser
+  reads everyone's, and a member or viewer reads only the rows billed to them
+  (``users.user_id`` is their identity's id, the row their own keys bill
+  through), even in a workspace they share with other people.
 * **``workspace_id`` still narrows, and cannot widen.** It is put through
   ``resolve_workspace_in_organization``, the same resolver every other
   workspace-scoped read uses, so a workspace outside the caller's scope answers
@@ -44,7 +48,7 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import ColumnElement, false, func, select
+from sqlalchemy import ColumnElement, and_, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
@@ -83,8 +87,8 @@ from gateway.api.routes.usage import (
 )
 from gateway.core.sql import MAX_FILTER_VALUES
 from gateway.models.entities import APIKey, UsageLog, User
+from gateway.models.tenancy import MANAGEMENT_ROLES, Workspace
 from gateway.models.tenancy import User as TenancyUser
-from gateway.models.tenancy import Workspace
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import (
     resolve_visible_workspace_scope,
@@ -100,6 +104,23 @@ router = APIRouter(
     # deployment operator gate does not belong here.
     dependencies=[Depends(verify_master_key)],
 )
+
+
+async def _reads_everyones_requests(
+    user: TenancyUser,
+    organization_id: uuid.UUID,
+    organizations: OrganizationService,
+) -> bool:
+    """Whether this caller reads every person's requests in their scope, or only their own."""
+    if user.is_superuser:
+        return True
+    membership = await organizations.members.get_active_by_organization_and_user(organization_id, user.id)
+    return membership is not None and membership.role in MANAGEMENT_ROLES
+
+
+def _own_requests(user: TenancyUser) -> ColumnElement[bool]:
+    """The rows billed to this identity's attribution user, which is keyed on its id."""
+    return col(UsageLog.user_id) == str(user.id)
 
 
 async def _scope_condition(
@@ -142,7 +163,10 @@ async def _scope_condition(
             organization=organization,
             organizations=organizations,
         )
-        return col(UsageLog.workspace_id) == workspace_id
+        workspace_rows = col(UsageLog.workspace_id) == workspace_id
+        if await _reads_everyones_requests(user, organization.id, organizations):
+            return workspace_rows
+        return and_(workspace_rows, _own_requests(user))
 
     scope = await resolve_visible_workspace_scope(db, user=user, organizations=organizations)
     if scope.sees_every_workspace:
@@ -153,7 +177,8 @@ async def _scope_condition(
         # Belongs to no workspace yet. An empty result, and deliberately not a
         # 403: nothing was refused, there is simply nothing here.
         return false()
-    return col(UsageLog.workspace_id).in_(scope.workspace_ids)
+    # Not the management arm above, so a member: their own requests, in their workspaces.
+    return and_(col(UsageLog.workspace_id).in_(scope.workspace_ids), _own_requests(user))
 
 
 @router.get("")
