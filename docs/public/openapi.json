@@ -4623,6 +4623,20 @@
         "title": "DeploymentUserOrganizationPublic",
         "type": "object"
       },
+      "DeploymentUserPasswordPublic": {
+        "description": "A password generated for an account, returned once.\n\nOnly its hash is stored, so this response is the one place the plaintext exists.",
+        "properties": {
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "DeploymentUserPasswordPublic",
+        "type": "object"
+      },
       "DeploymentUserPublic": {
         "description": "An identity on this deployment, whatever organization it belongs to.\n\nNot ``ActiveOrganizationMemberPublic``: that shape is a *membership* joined\nto an identity, scoped to one organization and hiding the suspended rows.\nThis one is the identity itself, and its ``organizations`` list carries every\nmembership at whatever status, because an account whose only membership is\nsuspended is precisely what an operator comes here to find.\n\n``is_bootstrap_operator`` and ``is_self`` are the two rows an operator may\nnot deactivate or demote, and they travel on the row so the page can disable\nthose controls rather than offering ones the server refuses. Neither is an\nauthorization: the server refuses either way. ``is_self`` is answered here\nbecause nothing else the dashboard fetches names the caller's identity, so\nwithout it the page could not tell which row is the reader's own.",
         "properties": {
@@ -17500,6 +17514,58 @@
           }
         ],
         "summary": "Update Deployment User",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{user_id}/password": {
+      "post": {
+        "description": "Replace an account's password with a generated one, and return it once.\n\nFor a deployment with no mail, where a member added or invited by address has\nno other way to get a password: the operator hands this one over. The account\nsigns in with its address and this password straight away, its dashboard\nsessions end, and only the hash is stored. Refused for the caller's own\naccount and for an account with no email address.",
+        "operationId": "admin-generate_deployment_user_password",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentUserPasswordPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Generate Deployment User Password",
         "tags": [
           "admin"
         ]

@@ -112,6 +112,35 @@
               ]
             }
           }
+        },
+        {
+          "name": "Generate Deployment User Password",
+          "request": {
+            "description": "Replace an account's password with a generated one, and return it once.\n\nFor a deployment with no mail, where a member added or invited by address has\nno other way to get a password: the operator hands this one over. The account\nsigns in with its address and this password straight away, its dashboard\nsessions end, and only the hash is stored. Refused for the caller's own\naccount and for an account with no email address.",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                ":user_id",
+                "password"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/users/:user_id/password",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "user_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
         }
       ],
       "name": "admin"

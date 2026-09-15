@@ -145,6 +145,17 @@ class EmptyDeploymentUserUpdateError(TenancyValidationError):
         super().__init__("Set is_active or is_superuser; a change naming neither does nothing")
 
 
+class DeploymentUserOwnPasswordError(TenancyValidationError):
+    """An operator generating a password for their own account.
+
+    Refused because changing your own password asks for the current one, and a
+    generated password would skip that proof.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("Change your own password from your account page")
+
+
 class MembershipUpdateError(TenancyValidationError):
     """A membership change the organization's own rules refuse (e.g. the last owner)."""
 

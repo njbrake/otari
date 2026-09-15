@@ -198,7 +198,10 @@ without somebody deciding about the person, and it is fenced accordingly: see
 [Email-domain auto-join](access-control.md#email-domain-auto-join).
 
 Mail is optional. Without SMTP, invitation links can still be copied and shared
-manually. See [Configuration](configuration.md#mail).
+manually. See [Configuration](configuration.md#mail). Setting a password is the
+step that needs mail, because it sends a verification link, so on a deployment
+without mail an operator generates one instead: **Accounts**, then **Set
+password**, shows it once to hand over.
 
 ## Bundled guide and custom documentation
 

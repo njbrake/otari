@@ -502,6 +502,8 @@ export type DeploymentUser = Schemas["DeploymentUserPublic"]
 export type DeploymentUserOrganization =
   Schemas["DeploymentUserOrganizationPublic"]
 export type UpdateDeploymentUserRequest = Schemas["DeploymentUserUpdateRequest"]
+/** A generated password, returned once: only its hash is stored. */
+export type DeploymentUserPassword = Schemas["DeploymentUserPasswordPublic"]
 
 export type Workspace = Schemas["WorkspacePublic"]
 export type CreateWorkspaceRequest = Schemas["WorkspaceCreate"]

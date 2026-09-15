@@ -8,8 +8,9 @@ deployment-wide concepts were the ``is_superuser`` flag and the
 ``tenancy_bootstrap_user_id`` marker, neither of which had an API, so the
 recourse for a stuck or abusive account was SQL (mozilla-ai/otari#797).
 
-Three operations, and deliberately only three: list every identity, deactivate
-or reactivate one, and flip its ``is_superuser`` flag. Creating and inviting stay
+Four operations: list every identity, deactivate or reactivate one, flip its
+``is_superuser`` flag, and generate a password for one, which is how a deployment
+that sends no mail gets a member signed in. Creating and inviting stay
 with the organization surface, which is where the membership that makes an
 identity useful is created, and deleting is not here at all for the reason
 ``routes/organizations.py`` gives about deleting an organization: historical
@@ -40,13 +41,17 @@ granting yourself back a cleared flag, or reactivating the bootstrap identity,
 something an operator can still do here.
 """
 
+import secrets
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.log_config import logger
 from gateway.models.tenancy import (
     DeploymentUserOrganizationPublic,
+    DeploymentUserPasswordPublic,
     DeploymentUserPublic,
     DeploymentUsersPublic,
     DeploymentUserUpdateRequest,
@@ -60,10 +65,15 @@ from gateway.services.tenancy.errors import (
     BootstrapOperatorProtectedError,
     DeploymentAdministrationUnavailableError,
     DeploymentUserNotFoundError,
+    DeploymentUserOwnPasswordError,
     DeploymentUserSelfChangeError,
     EmptyDeploymentUserUpdateError,
+    SignInAddressRequiredError,
 )
 from gateway.services.tenancy.provisioning_service import load_bootstrap_identity
+
+# 24 URL-safe characters: 144 bits, past MIN_PASSWORD_LENGTH and inside bcrypt's 72 bytes.
+GENERATED_PASSWORD_BYTES = 18
 
 
 class DeploymentUserService:
@@ -187,6 +197,36 @@ class DeploymentUserService:
             bootstrap_id=bootstrap.id if bootstrap is not None else None,
             actor_id=actor.id,
         )
+
+    async def generate_password(self, *, actor: User, user_id: uuid.UUID) -> DeploymentUserPasswordPublic:
+        """Replace one identity's password with a generated one, and return it once.
+
+        For a deployment that sends no mail, where neither the signup claim nor
+        the reset link can reach anybody, so the operator hands the password over
+        themselves. The operator vouches for the address the way a verified
+        signup would, so the account can sign in straight away; ``set_password``
+        stores the hash, ends the account's sessions and clears its outstanding
+        tokens.
+        """
+        await self._require_administration_access(actor)
+        target = await self.users.get(user_id)
+        if target is None:
+            raise DeploymentUserNotFoundError(user_id)
+        if target.id == actor.id:
+            raise DeploymentUserOwnPasswordError
+        if target.email is None:
+            raise SignInAddressRequiredError
+
+        # Imported here, not at the top: user_service imports organization_service,
+        # which imports this module.
+        from gateway.services.tenancy.user_service import set_password
+
+        password = secrets.token_urlsafe(GENERATED_PASSWORD_BYTES)
+        if target.email_verified_at is None:
+            target.email_verified_at = datetime.now(UTC)
+        await set_password(self.db, target, new_password=password)
+        logger.info("Operator %s set a generated password on account %s", actor.id, target.id)
+        return DeploymentUserPasswordPublic(password=password)
 
     async def _require_administration_access(self, actor: User) -> None:
         """Raise the 404 unless this caller operates the deployment."""

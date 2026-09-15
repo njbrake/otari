@@ -86,6 +86,32 @@ export interface paths {
         patch: operations["admin-update_deployment_user"];
         trace?: never;
     };
+    "/api/v1/admin/users/{user_id}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Deployment User Password
+         * @description Replace an account's password with a generated one, and return it once.
+         *
+         *     For a deployment with no mail, where a member added or invited by address has
+         *     no other way to get a password: the operator hands this one over. The account
+         *     signs in with its address and this password straight away, its dashboard
+         *     sessions end, and only the hash is stored. Refused for the caller's own
+         *     account and for an account with no email address.
+         */
+        post: operations["admin-generate_deployment_user_password"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-telemetry": {
         parameters: {
             query?: never;
@@ -7088,6 +7114,16 @@ export interface components {
             status: string;
         };
         /**
+         * DeploymentUserPasswordPublic
+         * @description A password generated for an account, returned once.
+         *
+         *     Only its hash is stored, so this response is the one place the plaintext exists.
+         */
+        DeploymentUserPasswordPublic: {
+            /** Password */
+            password: string;
+        };
+        /**
          * DeploymentUserPublic
          * @description An identity on this deployment, whatever organization it belongs to.
          *
@@ -12830,6 +12866,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentUserPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "admin-generate_deployment_user_password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentUserPasswordPublic"];
                 };
             };
             /** @description Validation Error */

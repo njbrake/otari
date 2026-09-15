@@ -59,3 +59,21 @@ export function organizationSummary(account: DeploymentUser): string {
     )
     .join(", ")
 }
+
+/**
+ * Why generating a password for this account is refused.
+ *
+ * `undefined` when it is allowed. The server refuses the same two, so the
+ * control is disabled with the reason rather than offered and then failed.
+ */
+export function passwordUnavailableReason(
+  account: DeploymentUser,
+): string | undefined {
+  if (account.is_self) {
+    return "Change your own password from your account page"
+  }
+  if (!account.email) {
+    return "This account has no email address to sign in with"
+  }
+  return undefined
+}
