@@ -20,6 +20,7 @@ from gateway.core.config import API_KEY_HEADER, API_ROOT, GATEWAY_TOKEN_HEADER, 
 from gateway.core.database import create_session, dispose_db, init_db
 from gateway.dashboard import DASHBOARD_PACKAGE_PATH, get_dashboard_build_id, get_dashboard_dir
 from gateway.inflight import InFlightMiddleware, InFlightRegistry
+from gateway.legacy_routes import LegacyRouteMiddleware
 from gateway.log_config import logger
 from gateway.rate_limit import RateLimiter
 from gateway.root_page import FAVICON_SVG, ROOT_TUTORIAL_HTML
@@ -804,6 +805,9 @@ def create_app(config: GatewayConfig) -> FastAPI:
         from gateway.metrics import MetricsMiddleware
 
         app.add_middleware(MetricsMiddleware)
+
+    # Added last so it is outermost: everything above sees the current path.
+    app.add_middleware(LegacyRouteMiddleware)
 
     if config.rate_limit_rpm is not None:
         app.state.rate_limiter = RateLimiter(config.rate_limit_rpm)
