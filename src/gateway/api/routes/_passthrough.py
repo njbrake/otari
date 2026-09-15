@@ -50,7 +50,7 @@ from gateway.core.database import release_session
 from gateway.core.metered_pricing import quantize_cost
 from gateway.inflight import track_request
 from gateway.log_config import logger
-from gateway.model_labeling import relabel_model
+from gateway.model_labeling import relabel_model, served_model_headers
 from gateway.models.entities import APIKey, ModelPricing, UsageLog
 from gateway.rate_limit import check_rate_limit
 from gateway.services.budget_service import (
@@ -119,11 +119,11 @@ class PassthroughOutcome(Generic[ResultT]):
     """A successful pass-through provider call plus response metadata."""
 
     result: ResultT
-    """The provider result, relabeled to the request alias when applicable."""
+    """The provider result, relabeled to the selector the caller sent unless ``relabel`` is off."""
     resolved: ResolvedProvider
     """The resolved selector the call was dispatched against."""
     headers: dict[str, str]
-    """Rate-limit headers for routes that build their own response object."""
+    """Rate-limit and served-model headers for routes that build their own response object."""
 
 
 async def run_passthrough(
@@ -203,8 +203,9 @@ async def run_passthrough(
         reserve_before_resolve: Preserve the audio routes' historical ordering,
             reserving budget before the selector is resolved. Routes that need
             pricing resolve first (the pricing key is the resolved instance).
-        relabel: Rewrite the result's ``model`` field to the configured alias
-            the caller used, so responses do not echo the aliased target.
+        relabel: Rewrite the result's ``model`` field to the selector the
+            caller sent (the alias, when one was named), so a client can send
+            the reply's ``model`` back and responses do not echo an alias target.
 
     Returns:
         The provider result plus the resolved selector and rate-limit headers.
@@ -550,7 +551,11 @@ async def run_passthrough(
             detail=PASSTHROUGH_PROVIDER_ERROR_DETAIL,
         ) from e
 
-    headers = rate_limit_headers(rate_limit_info) if rate_limit_info else {}
+    headers = dict(rate_limit_headers(rate_limit_info)) if rate_limit_info else {}
+    if relabel:
+        headers.update(
+            served_model_headers(result, requested=model, provider=resolved.instance, model=resolved.model)
+        )
     if response is not None:
         for key, value in headers.items():
             response.headers[key] = value

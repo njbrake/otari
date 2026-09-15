@@ -118,7 +118,7 @@ from gateway.core.usage import (
 from gateway.inflight import track_request
 from gateway.log_config import logger
 from gateway.metrics import record_abandoned_attempt, record_cost, record_inline_cost_settlement, record_tokens
-from gateway.model_labeling import relabel_model
+from gateway.model_labeling import relabel_model, served_model_headers
 from gateway.models.entities import APIKey, ModelPricing, UsageLog
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import McpServerConfig
@@ -4623,8 +4623,8 @@ async def run_standalone_non_stream(
     against actual cost; every failure path refunds the reservation before
     mapping the error to the format's wire envelope.
 
-    ``display_model`` (a configured alias) relabels the result's ``model`` field
-    before returning, so the underlying provider/model stays hidden; billing and
+    ``display_model`` (the selector, alias, or policy name the caller sent)
+    relabels the result's ``model`` field before returning; billing and
     logging above still key on the resolved target ``model``/``provider``.
 
     When ``ctx.plan`` holds more than one candidate (the caller named a routing
@@ -4716,6 +4716,9 @@ async def run_standalone_non_stream(
                     ctx.db, ctx.reservation, actual_cost or Decimal(0), actual_tokens=_settled_tokens(usage_data)
                 )
         if display_model is not None:
+            response.headers.update(
+                served_model_headers(result, requested=display_model, provider=str(provider), model=model)
+            )
             relabel_model(result, display_model)
         return result
     except HTTPException:

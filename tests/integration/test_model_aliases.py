@@ -31,10 +31,14 @@ from any_llm.types.messages import (
     MessageUsage,
     TextBlock,
 )
+from any_llm.types.responses import Response
 from fastapi.testclient import TestClient
+from openai.types.responses import ResponseUsage
+from openai.types.responses.response_usage import InputTokensDetails, OutputTokensDetails
 from sqlalchemy import create_engine, text
 
 from gateway.core.config import API_KEY_HEADER, API_ROOT, GatewayConfig
+from gateway.model_labeling import SERVED_MODEL_HEADER
 from gateway.types.moderation import ModerationResponse, ModerationResult
 
 from .conftest import build_test_client
@@ -586,6 +590,8 @@ async def test_provider_prefixed_chat_response_echoes_the_requested_name(client:
         )
     assert resp.status_code == 200, resp.text
     assert resp.json()["model"] == "home_lab:qwen3"
+    # The provider reported the requested model's own name, so there is nothing to add.
+    assert SERVED_MODEL_HEADER not in resp.headers
 
 
 @pytest.mark.asyncio
@@ -713,3 +719,117 @@ async def test_provider_prefixed_embeddings_response_echoes_the_requested_name(c
         )
     assert resp.status_code == 200, resp.text
     assert resp.json()["model"] == "home_lab:qwen3"
+
+
+def _chat_completion(model: str) -> ChatCompletion:
+    return ChatCompletion(
+        id="chatcmpl-served",
+        object="chat.completion",
+        created=0,
+        model=model,
+        choices=[Choice(index=0, message=ChatCompletionMessage(role="assistant", content="hi"), finish_reason="stop")],
+        usage=CompletionUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_differing_upstream_name_is_carried_in_the_served_model_header(client: TestClient) -> None:
+    _create_user(client)
+
+    async def mock_acompletion(**kwargs: Any) -> ChatCompletion:
+        return _chat_completion("claude-opus-4-20250514")
+
+    with patch("gateway.api.routes.chat.acompletion", new=mock_acompletion):
+        resp = client.post(
+            f"{API_ROOT}/chat/completions",
+            json={
+                "model": "anthropic:claude-opus-4",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "user": "test-user",
+            },
+            headers=HEADERS,
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model"] == "anthropic:claude-opus-4"
+    assert resp.headers[SERVED_MODEL_HEADER] == "claude-opus-4-20250514"
+
+
+@pytest.mark.asyncio
+async def test_an_alias_reply_carries_no_served_model_header(client: TestClient) -> None:
+    """An alias hides its target, including the provider's name for it."""
+    _create_user(client)
+
+    async def mock_acompletion(**kwargs: Any) -> ChatCompletion:
+        return _chat_completion("claude-opus-4-20250514")
+
+    with patch("gateway.api.routes.chat.acompletion", new=mock_acompletion):
+        resp = client.post(
+            f"{API_ROOT}/chat/completions",
+            json={"model": "myopusmodel", "messages": [{"role": "user", "content": "Hi"}], "user": "test-user"},
+            headers=HEADERS,
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model"] == "myopusmodel"
+    assert SERVED_MODEL_HEADER not in resp.headers
+
+
+@pytest.mark.asyncio
+async def test_provider_prefixed_responses_reply_echoes_the_requested_name(client: TestClient) -> None:
+    _create_user(client)
+
+    async def mock_aresponses(**kwargs: Any) -> Response:
+        return Response(
+            id="resp_prefixed",
+            created_at=0.0,
+            model="qwen3",
+            object="response",
+            status="completed",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            usage=ResponseUsage(
+                input_tokens=5,
+                input_tokens_details=InputTokensDetails(cached_tokens=0),
+                output_tokens=2,
+                output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+                total_tokens=7,
+            ),
+            error=None,
+            incomplete_details=None,
+            instructions=None,
+            metadata=None,
+            temperature=None,
+            top_p=None,
+        )
+
+    with patch("gateway.api.routes.responses.aresponses", new=mock_aresponses):
+        resp = client.post(
+            f"{API_ROOT}/responses",
+            json={"model": "home_lab:qwen3", "input": "hi", "user": "test-user"},
+            headers=HEADERS,
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model"] == "home_lab:qwen3"
+
+
+@pytest.mark.asyncio
+async def test_a_pass_through_reply_carries_the_served_model_header(client: TestClient) -> None:
+    _create_user(client)
+
+    mock_response = CreateEmbeddingResponse(
+        data=[Embedding(embedding=[0.1, 0.2], index=0, object="embedding")],
+        model="qwen3-embed-v2",
+        object="list",
+        usage=Usage(prompt_tokens=5, total_tokens=5),
+    )
+
+    with patch("gateway.api.routes.embeddings.aembedding", new_callable=AsyncMock, return_value=mock_response):
+        resp = client.post(
+            f"{API_ROOT}/embeddings",
+            json={"model": "home_lab:qwen3", "input": "hello", "user": "test-user"},
+            headers=HEADERS,
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model"] == "home_lab:qwen3"
+    assert resp.headers[SERVED_MODEL_HEADER] == "qwen3-embed-v2"

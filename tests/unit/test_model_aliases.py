@@ -6,7 +6,7 @@ import pytest
 from any_llm import LLMProvider
 
 from gateway.core.config import GatewayConfig
-from gateway.model_labeling import relabel_model
+from gateway.model_labeling import SERVED_MODEL_HEADER, relabel_model, served_model_headers
 from gateway.services.merged_catalog_service import alias_target_keys
 from gateway.services.provider_kwargs import normalize_pricing_key, resolve_provider_selector
 
@@ -209,3 +209,29 @@ def test_relabel_no_model_field_is_noop() -> None:
     obj = _Bare()
     relabel_model(obj, "fastmodel")  # must not raise
     assert not hasattr(obj, "model")
+
+
+def test_served_model_header_names_a_differing_upstream_name() -> None:
+    obj = _HasModel("claude-opus-4-20250514")
+    headers = served_model_headers(
+        obj, requested="anthropic:claude-opus-4", provider="anthropic", model="claude-opus-4"
+    )
+    assert headers == {SERVED_MODEL_HEADER: "claude-opus-4-20250514"}
+
+
+def test_served_model_header_is_absent_when_the_names_match() -> None:
+    obj = _HasModel("qwen3")
+    assert served_model_headers(obj, requested="home_lab:qwen3", provider="home_lab", model="qwen3") == {}
+
+
+def test_served_model_header_is_absent_for_an_alias() -> None:
+    """An alias hides its target, so its reply names no upstream model."""
+    obj = _HasModel("claude-opus-4-20250514")
+    assert served_model_headers(obj, requested="myopusmodel", provider="anthropic", model="claude-opus-4") == {}
+
+
+def test_served_model_header_is_absent_without_a_model_field() -> None:
+    class _Bare:
+        pass
+
+    assert served_model_headers(_Bare(), requested="openai:gpt-5", provider="openai", model="gpt-5") == {}
