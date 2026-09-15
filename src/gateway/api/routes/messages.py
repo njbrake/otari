@@ -69,6 +69,7 @@ from gateway.services.mcp_loop_messages import (
     anthropic_tool_loop_stream,
 )
 from gateway.services.tool_format import inject_purpose_hints_anthropic, openai_to_anthropic_tools
+from gateway.services.tool_result_errors import fold_tool_result_errors
 from gateway.services.web_search_budget import WebSearchBudget
 from gateway.streaming import ANTHROPIC_STREAM_FORMAT, StreamFormat
 from gateway.types.attempt import Attempt
@@ -482,11 +483,11 @@ class _MessagesAdapter:
 
     async def call_provider(self, kwargs: dict[str, Any]) -> MessageResponse:
         provider_kwargs, _ = _split_mcp_client_beta(kwargs)
-        return await amessages(**provider_kwargs)  # type: ignore[return-value]
+        return await amessages(**fold_tool_result_errors(provider_kwargs))  # type: ignore[return-value]
 
     async def open_provider_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[MessageStreamEvent]:
         provider_kwargs, _ = _split_mcp_client_beta(kwargs)
-        return await amessages(**provider_kwargs)  # type: ignore[return-value]
+        return await amessages(**fold_tool_result_errors(provider_kwargs))  # type: ignore[return-value]
 
     def prepare_stream_kwargs(
         self,

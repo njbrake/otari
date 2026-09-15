@@ -38,6 +38,7 @@ from gateway.services.mcp_loop import (
     ToolBackend,
 )
 from gateway.services.tool_format import openai_to_anthropic_tools
+from gateway.services.tool_result_errors import fold_tool_result_errors
 from gateway.services.tool_usage import is_tool_error
 from gateway.services.web_search_backend import WEB_SEARCH_TOOL_NAME
 from gateway.services.web_search_budget import MAX_USES_EXCEEDED_ERROR, WebSearchBudget, is_capped_search
@@ -541,7 +542,7 @@ class _MessagesToolLoopStrategy:
     # ---- non-streaming hooks ----
 
     async def call(self, kwargs: dict[str, Any]) -> MessageResponse:
-        result: MessageResponse = await amessages(**kwargs)  # type: ignore[assignment]
+        result: MessageResponse = await amessages(**fold_tool_result_errors(kwargs))  # type: ignore[assignment]
         return result
 
     def new_usage_accumulator(self) -> _MessagesUsageAccumulator:
@@ -638,7 +639,7 @@ class _MessagesToolLoopStrategy:
     # ---- streaming hooks ----
 
     async def open_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[MessageStreamEvent]:
-        stream: AsyncIterator[MessageStreamEvent] = await amessages(**kwargs)  # type: ignore[assignment]
+        stream: AsyncIterator[MessageStreamEvent] = await amessages(**fold_tool_result_errors(kwargs))  # type: ignore[assignment]
         return stream
 
     def new_stream_state(self) -> _MessagesStreamState:
