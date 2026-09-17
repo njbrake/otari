@@ -46,6 +46,22 @@ def test_postgres_connect_args_carry_every_timeout() -> None:
     assert args["timeout"] == 10.0
     assert args["command_timeout"] == 60.0
     assert args["server_settings"]["statement_timeout"] == "65000"
+    assert args["server_settings"]["lock_timeout"] == "10000"
+
+
+def test_a_statement_waiting_on_a_lock_gives_up_first() -> None:
+    # A statement blocked behind another transaction is queued rather than slow,
+    # and the statement timeout cannot tell the difference: without its own bound
+    # it holds a pooled connection for the full minute and everything sharing the
+    # pool queues behind it. Ordered below the statement timeout so the lock wait
+    # is reported as one.
+    config = GatewayConfig()
+    assert config.db_lock_timeout_ms < config.db_statement_timeout_ms
+
+
+def test_a_lock_timeout_the_statement_timeout_would_preempt_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="db_lock_timeout_ms"):
+        GatewayConfig(db_lock_timeout_ms=70000)
 
 
 def test_the_server_side_backstop_fires_after_the_client_side_timeout() -> None:
@@ -65,9 +81,12 @@ def test_ordering_is_not_enforced_when_either_timeout_is_off() -> None:
 
 
 def test_timeouts_are_individually_disablable() -> None:
-    args = _pg_kwargs(db_command_timeout=0, db_statement_timeout_ms=0)["connect_args"]
+    args = _pg_kwargs(db_command_timeout=0, db_statement_timeout_ms=0, db_lock_timeout_ms=0)["connect_args"]
     assert "command_timeout" not in args
     assert "server_settings" not in args
+
+    only_locks = _pg_kwargs(db_command_timeout=0, db_statement_timeout_ms=0)["connect_args"]
+    assert only_locks["server_settings"] == {"lock_timeout": "10000"}
 
 
 def test_existing_server_settings_are_preserved() -> None:

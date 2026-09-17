@@ -61,8 +61,9 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
 from opentelemetry.proto.metrics.v1.metrics_pb2 import AggregationTemporality
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import TelemetryStoragePortDep, get_config, get_db, verify_api_key_or_master_key
+from gateway.api.deps import TelemetryStoragePortDep, get_config, verify_api_key_or_master_key
 from gateway.core.config import GatewayConfig
+from gateway.core.database import get_ingest_db
 from gateway.log_config import logger
 from gateway.models.entities import APIKey
 from gateway.ports.telemetry_storage_port import TelemetryRecord
@@ -437,7 +438,7 @@ def _otlp_response(content_type: str, response: Message) -> Response:
 async def receive_traces(
     request: Request,
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_ingest_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> Response:
     """Ingest LLM usage from OTLP spans (GenAI semantic conventions)."""
@@ -476,7 +477,7 @@ async def receive_traces(
 async def receive_logs(
     request: Request,
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_ingest_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     storage: TelemetryStoragePortDep,
 ) -> Response:
@@ -535,7 +536,7 @@ async def receive_logs(
 async def receive_metrics(
     request: Request,
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_ingest_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     storage: TelemetryStoragePortDep,
 ) -> Response:

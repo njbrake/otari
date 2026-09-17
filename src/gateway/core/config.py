@@ -462,12 +462,31 @@ class GatewayConfig(BaseSettings):
             "0 disables."
         ),
     )
+    db_lock_timeout_ms: int = Field(
+        default=10000,
+        ge=0,
+        description=(
+            "How long a statement waits for a lock another transaction holds before giving up, in "
+            "milliseconds, applied per connection. Without one it waits out db_statement_timeout "
+            "instead, holding its pooled connection for that whole time and queueing the requests "
+            "behind it. 0 disables."
+        ),
+    )
     db_log_pool_size: int = Field(
         default=5,
         ge=1,
         description=(
             "Connections reserved for the usage-log writer, separate from the request pool so "
             "metering is not starved by traffic. No overflow above this."
+        ),
+    )
+    db_ingest_pool_size: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Connections telemetry ingest may use (the OTLP endpoints and the external-events "
+            "import), separate from the request pool so a burst of imports cannot take the "
+            "connections the rest of the API needs. No overflow above this."
         ),
     )
     host: str = Field(default="0.0.0.0", description="Host to bind the server to")  # noqa: S104
@@ -2009,6 +2028,13 @@ class GatewayConfig(BaseSettings):
                 f"db_command_timeout ({self.db_command_timeout}s = "
                 f"{int(self.db_command_timeout * 1000)}ms), so the server-side backstop fires "
                 "after the client-side timeout rather than racing it"
+            )
+            raise ValueError(msg)
+        if 0 < self.db_statement_timeout_ms <= self.db_lock_timeout_ms:
+            msg = (
+                f"db_lock_timeout_ms ({self.db_lock_timeout_ms}) must be below "
+                f"db_statement_timeout_ms ({self.db_statement_timeout_ms}), or a statement blocked "
+                "on a lock is killed as a slow statement and the lock wait is never reported as one"
             )
             raise ValueError(msg)
         return self
