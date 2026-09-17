@@ -77,7 +77,9 @@ _CONFIG_VIEW: tuple[tuple[str, tuple[str, ...]], ...] = (
             "db_connect_timeout",
             "db_command_timeout",
             "db_statement_timeout_ms",
+            "db_lock_timeout_ms",
             "db_log_pool_size",
+            "db_ingest_pool_size",
         ),
     ),
     (

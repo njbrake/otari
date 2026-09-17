@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.api.deps import get_config, get_db, require_deployment_operator, verify_api_key_or_master_key
 from gateway.api.routes._billing_schemas import ChargeLine, MeterMap
 from gateway.core.config import GatewayConfig
+from gateway.core.database import get_ingest_db
 from gateway.core.sql import (
     MAX_FILTER_VALUES,
     bucket_expr,
@@ -553,7 +554,7 @@ async def list_usage(
 async def ingest_external_usage(
     request: ExternalEventsRequest,
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_ingest_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> ExternalIngestResult:
     """Ingest a batch of externally-observed usage events (standalone).

@@ -97,7 +97,9 @@ non-secret effective set through `GET /api/v1/settings`.
 | `db_connect_timeout` | Seconds to wait for a new connection to be established. |
 | `db_command_timeout` | Client-side ceiling on one statement. `0` disables. |
 | `db_statement_timeout_ms` | Server-side ceiling on one statement, the backstop for the setting above. Must exceed it; `0` disables. |
+| `db_lock_timeout_ms` | How long a statement waits for a lock another transaction holds. Must be below the statement ceiling; `0` disables. |
 | `db_log_pool_size` | Connections reserved for usage logging, separate from the pool above. |
+| `db_ingest_pool_size` | Connections telemetry ingest may use, separate from the pool above and with no overflow. |
 
 The pool sizes bound concurrent *database* work, not concurrent provider calls:
 a request hands its connection back before the upstream call. Raise them for a
@@ -109,6 +111,18 @@ or a NAT, which drop idle connections without closing them. The pool's pre-ping
 would catch a closed connection, but the ping is itself a statement and blocks
 on a socket that went away silently, so leaving these unset turns a dropped
 connection into a request that hangs for minutes.
+
+`db_lock_timeout_ms` bounds a different wait. A statement queued behind another
+transaction's lock is not slow, and the two ceilings above cannot tell the
+difference: without a lock timeout it holds its pooled connection until one of
+them fires, and the requests needing a connection wait for the whole of it. The
+contended write fails in seconds instead, for a caller that can retry it.
+
+`db_ingest_pool_size` is what keeps a telemetry import off that critical path.
+The OTLP endpoints and `POST /api/v1/usage/external-events` draw from it rather
+than the request pool, so a burst of imports contending on the same events
+cannot take the connections sign-in and the dashboard need. It has no overflow,
+which is the point: the cap is the isolation.
 
 `db_command_timeout` is enforced client-side and `db_statement_timeout_ms`
 server-side, so the second one still ends a statement when the client is the

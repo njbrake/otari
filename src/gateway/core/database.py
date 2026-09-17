@@ -24,6 +24,8 @@ _engine: AsyncEngine | None = None
 _SessionLocal: async_sessionmaker[AsyncSession] | None = None
 _log_engine: AsyncEngine | None = None
 _LogSessionLocal: async_sessionmaker[AsyncSession] | None = None
+_ingest_engine: AsyncEngine | None = None
+_IngestSessionLocal: async_sessionmaker[AsyncSession] | None = None
 
 # How long a SQLite connection waits for a held lock before raising
 # "database is locked", in milliseconds.
@@ -247,6 +249,16 @@ def engine_kwargs(
         server_settings = dict(args.get("server_settings") or {})
         server_settings.setdefault("statement_timeout", str(config.db_statement_timeout_ms))
         args["server_settings"] = server_settings
+    if config.db_lock_timeout_ms > 0:
+        # A statement waiting on a lock another transaction holds is queued, not
+        # slow, and the timeouts above cannot tell the difference: they let it
+        # hold its pooled connection until one of them fires, with every request
+        # that needs a connection waiting behind it. Bounding the queueing part
+        # on its own makes a contended write fail in seconds, for a caller that
+        # can retry it, rather than an outage for everything sharing the pool.
+        server_settings = dict(args.get("server_settings") or {})
+        server_settings.setdefault("lock_timeout", str(config.db_lock_timeout_ms))
+        args["server_settings"] = server_settings
     return kwargs
 
 
@@ -254,6 +266,7 @@ def init_db(config: GatewayConfig) -> None:
     """Initialize async database engine and optionally run migrations."""
 
     global _engine, _SessionLocal, _log_engine, _LogSessionLocal  # noqa: PLW0603
+    global _ingest_engine, _IngestSessionLocal  # noqa: PLW0603
 
     database_url = config.database_url
     async_url, connect_args = _to_async_url(database_url)
@@ -278,6 +291,8 @@ def init_db(config: GatewayConfig) -> None:
         # most common path.
         _log_engine = None
         _LogSessionLocal = _SessionLocal
+        _ingest_engine = None
+        _IngestSessionLocal = _SessionLocal
     else:
         # Usage logging gets a pool of its own. It shares the request pool's
         # database, but not its contention: a saturated request pool used to
@@ -299,6 +314,27 @@ def init_db(config: GatewayConfig) -> None:
         _install_timeout_translation(_log_engine)
         _LogSessionLocal = async_sessionmaker(_log_engine, expire_on_commit=False)
 
+        # Telemetry ingest gets a pool of its own for the opposite reason to the
+        # writer's: not to keep it from being starved, but to keep it from
+        # starving everything else. An import writes history somebody else
+        # already holds, so two exporters resending the same batch contend on
+        # the idempotency key, and a batch that waits behind another transaction
+        # holds its connection while it waits. On the request pool a burst of
+        # those is an outage for every door that needs a connection to answer,
+        # sign-in first. Capped and with no overflow: the cap is the isolation.
+        _ingest_engine = create_async_engine(
+            async_url,
+            **engine_kwargs(
+                config,
+                connect_args=connect_args,
+                is_sqlite=is_sqlite,
+                pool_size=config.db_ingest_pool_size,
+                max_overflow=0,
+            ),
+        )
+        _install_timeout_translation(_ingest_engine)
+        _IngestSessionLocal = async_sessionmaker(_ingest_engine, expire_on_commit=False)
+
     if config.auto_migrate:
         _run_migrations(database_url)
 
@@ -311,6 +347,23 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         raise RuntimeError(msg)
 
     async with _SessionLocal() as session:
+        yield session
+
+
+async def get_ingest_db() -> AsyncGenerator[AsyncSession, None]:
+    """Dependency for telemetry ingest, on a pool the rest of the API does not share.
+
+    Only the routes that import usage somebody else observed take this. What
+    they write is idempotent and the exporter that sent it will send it again,
+    so a refusal under contention costs nothing, while the same batch waiting on
+    the request pool costs a sign-in. On SQLite there is one pool and this is it.
+    """
+    factory = _IngestSessionLocal or _SessionLocal
+    if factory is None:
+        msg = "Database not initialized. Call init_db() first."
+        raise RuntimeError(msg)
+
+    async with factory() as session:
         yield session
 
 
@@ -346,12 +399,15 @@ def _take_engines() -> list[AsyncEngine]:
     """Forget the active engines and hand them to the caller to dispose."""
 
     global _engine, _SessionLocal, _log_engine, _LogSessionLocal  # noqa: PLW0603
+    global _ingest_engine, _IngestSessionLocal  # noqa: PLW0603
 
-    engines = [engine for engine in (_engine, _log_engine) if engine is not None]
+    engines = [engine for engine in (_engine, _log_engine, _ingest_engine) if engine is not None]
     _engine = None
     _SessionLocal = None
     _log_engine = None
     _LogSessionLocal = None
+    _ingest_engine = None
+    _IngestSessionLocal = None
     return engines
 
 
@@ -392,6 +448,7 @@ __all__ = [
     "dispose_db",
     "engine_kwargs",
     "get_db",
+    "get_ingest_db",
     "init_db",
     "release_session",
     "reset_db",

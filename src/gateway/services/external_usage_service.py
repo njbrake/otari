@@ -19,11 +19,14 @@ completions, and tool payloads are rejected by the request schema, not stored.
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +48,12 @@ from gateway.services.workspace_scope import organization_for_workspace_id, reso
 # capped so one bad batch can't return an unbounded payload; the IN() list is
 # chunked to stay under SQLite's default variable limit (999).
 MAX_EVENTS_PER_BATCH = 1000
+
+# Rows per INSERT statement. A batch is bounded by MAX_EVENTS_PER_BATCH and each
+# row binds around two dozen parameters, so one statement for a whole batch would
+# approach the driver's parameter ceiling; chunking stays well inside it without
+# giving up the single round trip per chunk.
+_INSERT_CHUNK = 200
 _MAX_ERRORS = 100
 _IN_CHUNK = 500
 # Slug pattern for a source: keep provenance identifiers boring so they are safe to
@@ -392,58 +401,86 @@ def _build_row(
     )
 
 
+def _insert_values(row: UsageLog) -> dict[str, Any]:
+    """What :func:`_build_row` assigned, as values for a Core insert.
+
+    Only the attributes that were set: a dict of every mapped column would carry
+    ``None`` for the ones that were not, overriding their defaults.
+    """
+    state = sa_inspect(row)
+    return {attr.key: getattr(row, attr.key) for attr in state.mapper.column_attrs if attr.key in state.dict}
+
+
+def _insert_ignoring_duplicates(db: AsyncSession, rows: list[UsageLog]) -> Any:
+    """An INSERT that skips the rows a concurrent import already landed."""
+    values = [_insert_values(row) for row in rows]
+    insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+    return (
+        insert(UsageLog)
+        .values(values)
+        .on_conflict_do_nothing(index_elements=["source", "source_event_id"])
+        .returning(UsageLog.id)
+    )
+
+
 async def _insert_rows(
     db: AsyncSession,
     source: str,
     rows: list[UsageLog],
     result: ExternalIngestResult,
 ) -> None:
-    """Commit new rows, treating unique-constraint collisions as duplicates.
+    """Commit new rows, counting the ones a concurrent import already landed as duplicates.
 
-    A concurrent import of the same event races on ``(source, source_event_id)``.
-    On IntegrityError the whole batch rolls back, so re-query what now exists and
-    retry only the survivors. If the retry commit also collides (a still-racing
-    writer landed more ids in the window), fall back to row-at-a-time inserts so
-    events that collide with nothing are not misreported as duplicates.
+    One statement per chunk, and a collision on ``(source, source_event_id)`` is
+    not an error in it: the events are idempotent by that key, so a row another
+    writer landed first is a row that is already correct. The statement reports
+    the ids it inserted and the rest of the chunk is the duplicates.
+
+    That the collision is not an error is the point, and not only for tidiness.
+    A batch that raises one has to be taken apart and retried, and every round
+    trip of that is time the transaction holds the locks it already took, with
+    the importer of the same events waiting behind them. Two exporters resending
+    the same batch is the ordinary case here rather than the rare one: it is what
+    an OTLP exporter does when an export takes too long.
     """
     if not rows:
         return
-    db.add_all(rows)
-    try:
-        await db.commit()
-        result.accepted += len(rows)
-        return
-    except IntegrityError:
-        await db.rollback()
+    for start in range(0, len(rows), _INSERT_CHUNK):
+        chunk = rows[start : start + _INSERT_CHUNK]
+        try:
+            inserted = len((await db.execute(_insert_ignoring_duplicates(db, chunk))).all())
+            await db.commit()
+        except IntegrityError:
+            # Not the idempotency key, which the statement above absorbs: some
+            # other constraint, such as an API key deleted since the batch was
+            # priced. One refused row must not cost the rest of the chunk, so
+            # that chunk alone degrades to a row at a time.
+            await db.rollback()
+            await _insert_one_at_a_time(db, source, chunk, result)
+            continue
+        result.accepted += inserted
+        result.duplicate += len(chunk) - inserted
 
-    existing = await _existing_event_ids(db, source, [r.source_event_id for r in rows if r.source_event_id])
-    survivors = [r for r in rows if r.source_event_id not in existing]
-    result.duplicate += len(rows) - len(survivors)
-    if not survivors:
-        return
-    db.add_all(survivors)
-    try:
-        await db.commit()
-        result.accepted += len(survivors)
-        return
-    except IntegrityError:
-        await db.rollback()
 
-    still_colliding = 0
-    for row in survivors:
+async def _insert_one_at_a_time(
+    db: AsyncSession,
+    source: str,
+    rows: list[UsageLog],
+    result: ExternalIngestResult,
+) -> None:
+    """Salvage a chunk that a constraint other than the idempotency key refused."""
+    refused = 0
+    for row in rows:
         db.add(row)
         try:
             await db.commit()
             result.accepted += 1
         except IntegrityError:
             await db.rollback()
-            # This specific event is landing via a concurrent request (or, rarely,
-            # violates another constraint such as a just-deleted API key). Count it
-            # as duplicate rather than retry indefinitely.
             result.duplicate += 1
-            still_colliding += 1
-    if still_colliding:
-        logger.warning("external usage: %d events still colliding after retry for source=%s", still_colliding, source)
+            refused += 1
+    if refused:
+        logger.warning("external usage: %d events refused row-at-a-time for source=%s", refused, source)
 
 
 async def ingest_external_events(
