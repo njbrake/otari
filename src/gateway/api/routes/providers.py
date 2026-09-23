@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import get_config, get_db, require_deployment_operator
 from gateway.core.config import PROVIDER_TYPE_ALIASES, RESERVED_PROVIDER_INSTANCE_NAMES, GatewayConfig
+from gateway.core.database import DATABASE_ERRORS
 from gateway.log_config import logger
 from gateway.models.entities import ProviderCredential
 from gateway.services.model_discovery_service import (
@@ -431,17 +432,36 @@ async def _gate_api_base(api_base: str | None) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
 
-async def _commit(db: AsyncSession, *, conflict_detail: str | None = None) -> None:
+def _db_error_summary(exc: BaseException) -> str:
+    """Name a database error by the driver's exception class and SQLSTATE, never by its text.
+
+    The text is unsafe to log here: ``str(exc)`` carries the statement's bound
+    parameters, and asyncpg appends the server's DETAIL, which for a constraint
+    failure is the whole row, ``client_args`` included in plaintext.
+    """
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return type(exc).__name__
+    # SQLAlchemy's asyncpg adapter re-raises asyncpg's own exception as the cause.
+    driver = orig.__cause__ or orig
+    sqlstate = getattr(orig, "sqlstate", None) or getattr(driver, "sqlstate", None)
+    return f"{type(driver).__name__} (SQLSTATE {sqlstate})" if sqlstate else type(driver).__name__
+
+
+async def _commit(db: AsyncSession, instance: str, *, conflict_detail: str | None = None) -> None:
     try:
         await db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         # A concurrent create can slip past the pre-check and collide on the
         # primary key here; surface that as the intended 409, not a 500.
         await db.rollback()
         if conflict_detail is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict_detail) from None
+        logger.error("Failed to write stored provider '%s': %s", instance, _db_error_summary(exc))
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error") from None
-    except SQLAlchemyError:
+    except DATABASE_ERRORS as exc:
+        # Logged before the rollback, which can itself fail on a timed-out connection.
+        logger.error("Failed to write stored provider '%s': %s", instance, _db_error_summary(exc))
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -568,6 +588,7 @@ async def create_stored_provider(
 
     await _commit(
         db,
+        request.instance,
         conflict_detail=f"A stored provider '{request.instance}' already exists; use PATCH to update it.",
     )
     if request.instance in (config._provider_baseline or {}):
@@ -620,7 +641,7 @@ async def update_stored_provider(
     except SecretBoxUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
-    await _commit(db)
+    await _commit(db, instance)
     await _apply_write(db, config, instance)
     await db.refresh(row)
     return StoredProviderResponse.from_model(row)
@@ -638,7 +659,7 @@ async def delete_stored_provider(
         if instance in (config._provider_baseline or {}):
             detail = f"Provider '{instance}' is defined in config.yml and cannot be deleted through the API."
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
-    await _commit(db)
+    await _commit(db, instance)
     await _apply_write(db, config, instance)
 
 
