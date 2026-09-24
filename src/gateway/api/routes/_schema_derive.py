@@ -50,8 +50,9 @@ SENSITIVE_PARAM_FIELDS: frozenset[str] = frozenset(
         "client",
         "credentials",
         "extra_body",
-        # Headers the provider SDK sends verbatim, so a caller could override an
-        # operator-set header (``x-session-affinity`` among them).
+        # Upstream request headers are the operator's to set (``x-session-affinity``
+        # among them). any-llm's responses entry point rejects this field outright,
+        # so stripping it also turns a caller's stray value into a dropped field.
         "extra_headers",
         "aws_access_key_id",
         "aws_secret_access_key",

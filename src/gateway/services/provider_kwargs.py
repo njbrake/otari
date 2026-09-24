@@ -242,14 +242,19 @@ def with_session_affinity(call_kwargs: dict[str, Any], config: GatewayConfig, in
     already replaced the caller's key with its identity-scoped hash, so the raw
     caller value never reaches the header. A call with no key, or an instance
     without ``session_affinity: true``, is returned unchanged.
+
+    The header goes on the client (``client_args.default_headers``) rather than
+    in ``extra_headers``: any-llm's ``aresponses`` validates its kwargs strictly
+    and rejects ``extra_headers``, and any-llm builds a client per call, so a
+    client default is still per request.
     """
     key = call_kwargs.get("prompt_cache_key")
     entry = config.providers.get(instance)
     if not isinstance(key, str) or not key or not isinstance(entry, dict) or entry.get("session_affinity") is not True:
         return call_kwargs
-    headers = dict(call_kwargs.get("extra_headers") or {})
-    headers[SESSION_AFFINITY_HEADER] = key
-    return {**call_kwargs, "extra_headers": headers}
+    client_args = dict(call_kwargs.get("client_args") or {})
+    client_args["default_headers"] = {**(client_args.get("default_headers") or {}), SESSION_AFFINITY_HEADER: key}
+    return {**call_kwargs, "client_args": client_args}
 
 
 @dataclass(frozen=True)

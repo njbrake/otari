@@ -4,7 +4,9 @@ from collections.abc import AsyncIterator, Generator
 from typing import Any, cast
 from unittest.mock import patch
 
+import httpx
 import pytest
+from any_llm import aresponses as real_aresponses
 from any_llm.types.messages import (
     MessageDelta,
     MessageDeltaEvent,
@@ -98,7 +100,7 @@ def test_opted_in_instance_gets_the_scoped_key_as_the_header(
     scoped = captured["prompt_cache_key"]
     assert scoped != "s-42"
     assert len(scoped) == 64
-    assert captured["extra_headers"] == {SESSION_AFFINITY_HEADER: scoped}
+    assert captured["client_args"]["default_headers"] == {SESSION_AFFINITY_HEADER: scoped}
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -106,14 +108,14 @@ def test_no_header_for_an_instance_that_did_not_opt_in(
     affinity_client: TestClient, key_header: dict[str, str], stream: bool
 ) -> None:
     captured = _send(affinity_client, key_header, "plain:zai-org/GLM-5.3", prompt_cache_key="s-42", stream=stream)
-    assert "extra_headers" not in captured
+    assert "client_args" not in captured
 
 
 @pytest.mark.parametrize("stream", [False, True])
 def test_no_header_when_no_key_was_sent(affinity_client: TestClient, key_header: dict[str, str], stream: bool) -> None:
     captured = _send(affinity_client, key_header, "baseten:zai-org/GLM-5.3", stream=stream)
     assert "prompt_cache_key" not in captured
-    assert "extra_headers" not in captured
+    assert "client_args" not in captured
 
 
 class _FakeResponse:
@@ -138,14 +140,53 @@ def _send_responses(client: TestClient, headers: dict[str, str], model: str, **e
 
 def test_responses_route_sends_the_header_too(affinity_client: TestClient, key_header: dict[str, str]) -> None:
     captured = _send_responses(affinity_client, key_header, "baseten:zai-org/GLM-5.3", prompt_cache_key="s-42")
-    assert captured["extra_headers"] == {SESSION_AFFINITY_HEADER: captured["prompt_cache_key"]}
+    assert captured["client_args"]["default_headers"] == {SESSION_AFFINITY_HEADER: captured["prompt_cache_key"]}
+
+
+def test_responses_route_sends_the_header_on_the_wire(affinity_client: TestClient, key_header: dict[str, str]) -> None:
+    """Through the real ``aresponses``, which rejects kwargs it does not declare, ``extra_headers`` among them."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 0,
+                "model": "glm",
+                "output": [],
+                "status": "completed",
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+            },
+        )
+
+    async def wired_aresponses(**kwargs: Any) -> Any:
+        client_args = {
+            **kwargs.get("client_args", {}),
+            "http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        }
+        return await real_aresponses(**{**kwargs, "client_args": client_args})
+
+    body = {"model": "baseten:zai-org/GLM-5.3", "input": "hi", "prompt_cache_key": "s-42"}
+    with patch("gateway.api.routes.responses.aresponses", new=wired_aresponses):
+        response = affinity_client.post(f"{API_ROOT}/responses", json=body, headers=key_header)
+
+    assert response.status_code == 200, response.text
+    assert len(seen) == 1
+    sent = seen[0].headers[SESSION_AFFINITY_HEADER]
+    assert sent != "s-42"
+    assert len(sent) == 64
 
 
 @pytest.mark.parametrize("model", ["plain:zai-org/GLM-5.3", "baseten:zai-org/GLM-5.3"])
 def test_a_caller_cannot_set_the_header_itself(
     affinity_client: TestClient, key_header: dict[str, str], model: str
 ) -> None:
-    """The Responses body allows extra fields, so ``extra_headers`` used to reach the provider verbatim."""
+    """The Responses body allows extra fields, so a caller's ``extra_headers`` is stripped, not forwarded."""
     captured = _send_responses(
         affinity_client,
         key_header,
@@ -153,7 +194,8 @@ def test_a_caller_cannot_set_the_header_itself(
         prompt_cache_key="s-42",
         extra_headers={SESSION_AFFINITY_HEADER: "raw-caller-value", "x-other": "1"},
     )
-    sent = captured.get("extra_headers") or {}
+    assert "extra_headers" not in captured
+    sent = (captured.get("client_args") or {}).get("default_headers") or {}
     assert "raw-caller-value" not in sent.values()
     assert "x-other" not in sent
 

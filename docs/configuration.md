@@ -175,7 +175,9 @@ When a request carries `prompt_cache_key`, Otari sends the key's scoped form
 provider) as the header value. The caller's raw key is never sent, and a request
 without a key sends no header. It applies on `/api/v1/messages`, `/api/v1/chat/completions`
 and `/api/v1/responses`, streaming included, and to each candidate of a routing
-policy according to that candidate's own instance.
+policy according to that candidate's own instance. The header is set on the
+provider SDK client, so the flag is accepted only on an `openai` or `anthropic`
+instance (including the `-compatible` forms); startup refuses it elsewhere.
 
 The flag is config-file only: a provider stored through the Providers page has
 no field for it, and a stored entry replaces a config-file entry of the same

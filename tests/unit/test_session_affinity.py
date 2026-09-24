@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
-from any_llm import LLMProvider, amessages
+from any_llm import LLMProvider, acompletion, amessages, aresponses
 
 from gateway.api.routes._pipeline import RequestContext, _local_attempt_kwargs, scope_prompt_cache_key
 from gateway.api.routes._tools import _strip_gateway_fields
@@ -24,6 +24,11 @@ BASETEN = {
 
 def _config(**providers: dict[str, Any]) -> GatewayConfig:
     return GatewayConfig(providers=providers)
+
+
+def _sent_headers(kwargs: dict[str, Any]) -> dict[str, str] | None:
+    client_args = kwargs.get("client_args")
+    return None if client_args is None else client_args.get("default_headers")
 
 
 def _scoped(caller_key: str, config: GatewayConfig) -> str:
@@ -50,7 +55,7 @@ def _scoped(caller_key: str, config: GatewayConfig) -> str:
 def test_header_is_sent_when_the_instance_opts_in_and_a_key_is_present() -> None:
     config = _config(baseten=BASETEN)
     kwargs = with_session_affinity({"prompt_cache_key": "scoped"}, config, "baseten")
-    assert kwargs["extra_headers"] == {SESSION_AFFINITY_HEADER: "scoped"}
+    assert _sent_headers(kwargs) == {SESSION_AFFINITY_HEADER: "scoped"}
 
 
 @pytest.mark.parametrize("flag", [False, None])
@@ -59,18 +64,18 @@ def test_header_is_absent_when_the_flag_is_off(flag: bool | None) -> None:
     if flag is not None:
         entry["session_affinity"] = flag
     kwargs = with_session_affinity({"prompt_cache_key": "scoped"}, _config(baseten=entry), "baseten")
-    assert "extra_headers" not in kwargs
+    assert "client_args" not in kwargs
 
 
 @pytest.mark.parametrize("fields", [{}, {"prompt_cache_key": ""}, {"prompt_cache_key": None}])
 def test_header_is_absent_when_no_key_was_sent(fields: dict[str, Any]) -> None:
     kwargs = with_session_affinity(fields, _config(baseten=BASETEN), "baseten")
-    assert "extra_headers" not in kwargs
+    assert "client_args" not in kwargs
 
 
 def test_header_is_absent_for_an_instance_that_is_not_configured() -> None:
     kwargs = with_session_affinity({"prompt_cache_key": "scoped"}, _config(baseten=BASETEN), "openai")
-    assert "extra_headers" not in kwargs
+    assert "client_args" not in kwargs
 
 
 def test_the_value_sent_is_the_scoped_key_never_the_raw_one() -> None:
@@ -79,16 +84,21 @@ def test_the_value_sent_is_the_scoped_key_never_the_raw_one() -> None:
 
     kwargs = with_session_affinity({"prompt_cache_key": scoped}, config, "baseten")
 
-    assert kwargs["extra_headers"][SESSION_AFFINITY_HEADER] == scoped
+    assert _sent_headers(kwargs) == {SESSION_AFFINITY_HEADER: scoped}
     assert scoped != "clawbolt-session-42"
     assert len(scoped) == 64
 
 
-def test_other_extra_headers_are_kept() -> None:
+def test_configured_client_args_are_kept_and_not_mutated() -> None:
+    client_args = {"timeout": 30, "default_headers": {"x-other": "1"}}
     kwargs = with_session_affinity(
-        {"prompt_cache_key": "scoped", "extra_headers": {"x-other": "1"}}, _config(baseten=BASETEN), "baseten"
+        {"prompt_cache_key": "scoped", "client_args": client_args}, _config(baseten=BASETEN), "baseten"
     )
-    assert kwargs["extra_headers"] == {"x-other": "1", SESSION_AFFINITY_HEADER: "scoped"}
+    assert kwargs["client_args"] == {
+        "timeout": 30,
+        "default_headers": {"x-other": "1", SESSION_AFFINITY_HEADER: "scoped"},
+    }
+    assert client_args == {"timeout": 30, "default_headers": {"x-other": "1"}}
 
 
 def test_the_flag_never_reaches_the_provider_call() -> None:
@@ -102,6 +112,31 @@ def test_a_non_boolean_flag_is_rejected_at_config_load() -> None:
     with pytest.raises(ValueError, match="session_affinity must be true or false"):
         config.validate_provider_instances()
     _config(baseten=BASETEN).validate_provider_instances()  # no raise
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"provider_type": "openai"},
+        {"provider_type": "openai-compatible", "api_base": "https://inference.baseten.co/v1"},
+        {"provider_type": "anthropic"},
+        {"provider_type": "anthropic-compatible", "api_base": "https://example.com"},
+    ],
+)
+def test_the_flag_is_accepted_on_openai_and_anthropic_instances(entry: dict[str, Any]) -> None:
+    _config(inst={**entry, "api_key": "k", "session_affinity": True}).validate_provider_instances()
+
+
+def test_the_flag_on_a_bare_openai_instance_is_accepted() -> None:
+    _config(openai={"api_key": "k", "session_affinity": True}).validate_provider_instances()
+
+
+@pytest.mark.parametrize("entry", [{"provider_type": "gemini"}, {"provider_type": "bedrock"}])
+def test_the_flag_is_refused_where_the_client_cannot_carry_it(entry: dict[str, Any]) -> None:
+    config = _config(inst={**entry, "api_key": "k", "session_affinity": True})
+    with pytest.raises(ValueError, match="session_affinity is supported only for provider_type openai or anthropic"):
+        config.validate_provider_instances()
+    _config(inst={**entry, "api_key": "k", "session_affinity": False}).validate_provider_instances()  # no raise
 
 
 def test_a_caller_cannot_send_its_own_upstream_headers() -> None:
@@ -122,8 +157,8 @@ def test_each_routed_candidate_uses_its_own_instance_setting() -> None:
     baseten = Attempt(position=1, instance="baseten", provider=LLMProvider.OPENAI, model="glm")
     fallback = Attempt(position=2, instance="fallback", provider=LLMProvider.OPENAI, model="gpt")
 
-    assert build(baseten, fields)["extra_headers"] == {SESSION_AFFINITY_HEADER: "scoped"}
-    assert "extra_headers" not in build(fallback, fields)
+    assert _sent_headers(build(baseten, fields)) == {SESSION_AFFINITY_HEADER: "scoped"}
+    assert "client_args" not in build(fallback, fields)
 
 
 def _completion(stream: bool) -> httpx.Response:
@@ -151,34 +186,68 @@ def _completion(stream: bool) -> httpx.Response:
     return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True])
-async def test_header_reaches_the_wire_on_a_translated_messages_call(stream: bool) -> None:
-    """any-llm carries ``extra_headers`` through its Messages-to-Completions bridge.
+_RESPONSE = {
+    "id": "r1",
+    "object": "response",
+    "created_at": 0,
+    "model": "glm",
+    "output": [],
+    "status": "completed",
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+}
 
-    Pins the contract this feature relies on: an any-llm upgrade that drops
-    per-request kwargs on the bridged path fails here rather than silently.
+
+async def _call(entry_point: str, stream: bool, kwargs: dict[str, Any]) -> None:
+    result: Any
+    if entry_point == "messages":
+        result = await amessages(
+            model="openai:glm", messages=[{"role": "user", "content": "hi"}], max_tokens=16, stream=stream, **kwargs
+        )
+    elif entry_point == "completion":
+        result = await acompletion(
+            model="openai:glm", messages=[{"role": "user", "content": "hi"}], stream=stream, **kwargs
+        )
+    else:
+        result = await aresponses(model="glm", provider="openai", input_data="hi", **kwargs)
+    if stream:
+        async for _ in cast(AsyncIterator[Any], result):
+            pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entry_point", "stream", "path"),
+    [
+        ("messages", False, "/v1/chat/completions"),
+        ("messages", True, "/v1/chat/completions"),
+        ("completion", False, "/v1/chat/completions"),
+        ("completion", True, "/v1/chat/completions"),
+        ("responses", False, "/v1/responses"),
+    ],
+)
+async def test_header_reaches_the_wire(entry_point: str, stream: bool, path: str) -> None:
+    """The header survives each any-llm entry point, the Messages-to-Completions bridge included.
+
+    Pins the any-llm contract this feature relies on: an upgrade that stops
+    honoring ``client_args`` on one of these paths fails here rather than silently.
     """
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return _completion(stream)
+        return httpx.Response(200, json=_RESPONSE) if entry_point == "responses" else _completion(stream)
 
-    result = await amessages(
-        model="openai:glm",
-        api_key="test-key",
-        api_base="https://inference.baseten.co/v1",
-        client_args={"http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler))},
-        messages=[{"role": "user", "content": "hi"}],
-        max_tokens=16,
-        stream=stream,
-        extra_headers={SESSION_AFFINITY_HEADER: "scoped"},
+    kwargs = with_session_affinity(
+        {"api_key": "test-key", "api_base": BASETEN["api_base"], "prompt_cache_key": "scoped"},
+        _config(baseten=BASETEN),
+        "baseten",
     )
-    if stream:
-        async for _ in cast(AsyncIterator[Any], result):
-            pass
+    kwargs["client_args"]["http_client"] = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    await _call(entry_point, stream, kwargs)
 
     assert len(seen) == 1
-    assert seen[0].url.path == "/v1/chat/completions"
+    assert seen[0].url.path == path
     assert seen[0].headers[SESSION_AFFINITY_HEADER] == "scoped"
