@@ -55,7 +55,7 @@ SecretField: { label, value, onChange, placeholder?, description?, reserveMessag
 SearchField: { label, value, onChange, placeholder = "Search", isDisabled?, className? }
 Toggle: { label, isSelected, onChange: (next: boolean) => void, isDisabled? }
 Checkbox: { isSelected, onChange: (next: boolean) => void, isDisabled?, ariaLabel?,
-  children }
+  description?, children }
 Select: { label, value, onChange, options: SelectOption[], description?, placeholder?,
   isRequired?, isDisabled?, isInvalid?, errorMessage?, reserveMessage?, className? }
 ComboBoxField: { label, value, onChange, onQueryChange?, options: ComboBoxOption[],
@@ -279,6 +279,9 @@ The box fills with `--color-control-indicator` and the mark is
 Pass `ariaLabel` when the visible label repeats across the page (one workspace list
 per guardrail, say). Keep the visible text inside it so speech input still reaches
 the control.
+
+Pass `description` for help text under a checkbox rather than a sibling paragraph:
+it is linked to the control, so a screen reader announces it with the label.
 
 ## Buttons in a form
 

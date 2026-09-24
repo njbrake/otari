@@ -609,3 +609,76 @@ def test_a_credential_shaped_client_arg_can_still_be_replaced_and_removed(
     assert cleared.status_code == 200, cleared.text
     assert _stored_client_args(db_session) == {}
 
+
+def _baseten(**overrides: object) -> dict[str, object]:
+    return {
+        "instance": "baseten",
+        "provider_type": "openai-compatible",
+        "api_base": "https://inference.baseten.co/v1",
+        "api_key": "sk-baseten",
+        **overrides,
+    }
+
+
+def test_session_affinity_round_trips_and_defaults_off(
+    client: TestClient, master_key_header: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_key(monkeypatch)
+    url = f"{API_ROOT}/provider-credentials"
+    assert client.post(url, json=_baseten(session_affinity=True), headers=master_key_header).status_code == 201
+    _create(client, master_key_header, instance="openai")
+
+    listed = {row["instance"]: row for row in client.get(url, headers=master_key_header).json()}
+    assert listed["baseten"]["session_affinity"] is True
+    assert listed["openai"]["session_affinity"] is False
+
+
+def test_session_affinity_patch_keeps_when_omitted_and_turns_off_with_null(
+    client: TestClient, master_key_header: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_key(monkeypatch)
+    url = f"{API_ROOT}/provider-credentials"
+    assert client.post(url, json=_baseten(), headers=master_key_header).status_code == 201
+
+    on = client.patch(f"{url}/baseten", json={"session_affinity": True}, headers=master_key_header)
+    assert on.status_code == 200, on.text
+    assert on.json()["session_affinity"] is True
+
+    kept = client.patch(f"{url}/baseten", json={"api_base": "https://other.example/v1"}, headers=master_key_header)
+    assert kept.json()["session_affinity"] is True
+
+    off = client.patch(f"{url}/baseten", json={"session_affinity": None}, headers=master_key_header)
+    assert off.json()["session_affinity"] is False
+
+
+def test_session_affinity_is_refused_where_the_client_cannot_carry_it(
+    client: TestClient, master_key_header: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_key(monkeypatch)
+    url = f"{API_ROOT}/provider-credentials"
+    refused = client.post(
+        url, json={"instance": "gem", "provider_type": "gemini", "session_affinity": True}, headers=master_key_header
+    )
+    assert refused.status_code == 400
+    assert "session_affinity is supported only for provider_type openai or anthropic" in refused.json()["detail"]
+    assert client.get(url, headers=master_key_header).json() == []
+
+
+def test_changing_only_the_type_of_a_flagged_provider_is_refused(
+    client: TestClient, master_key_header: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_key(monkeypatch)
+    url = f"{API_ROOT}/provider-credentials"
+    assert client.post(url, json=_baseten(session_affinity=True), headers=master_key_header).status_code == 201
+
+    resp = client.patch(f"{url}/baseten", json={"provider_type": "gemini"}, headers=master_key_header)
+    assert resp.status_code == 400
+    row = next(r for r in client.get(url, headers=master_key_header).json() if r["instance"] == "baseten")
+    assert row["provider_type"] == "openai-compatible"
+    assert row["session_affinity"] is True
+
+    # Turning the flag off in the same request makes the change acceptable.
+    ok = client.patch(
+        f"{url}/baseten", json={"provider_type": "gemini", "session_affinity": False}, headers=master_key_header
+    )
+    assert ok.status_code == 200, ok.text

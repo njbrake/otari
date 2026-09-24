@@ -6984,6 +6984,12 @@ export interface components {
              * @description any-llm implementation when the instance name is not itself one.
              */
             provider_type?: string | null;
+            /**
+             * Session Affinity
+             * @description Forward the caller's scoped prompt_cache_key upstream as an x-session-affinity header. Only for openai or anthropic instances.
+             * @default false
+             */
+            session_affinity: boolean;
         };
         /**
          * CreateUserRequest
@@ -11093,6 +11099,11 @@ export interface components {
             last4?: string | null;
             /** Provider Type */
             provider_type?: string | null;
+            /**
+             * Session Affinity
+             * @default false
+             */
+            session_affinity: boolean;
             /** Updated At */
             updated_at?: string | null;
         };
@@ -11578,6 +11589,11 @@ export interface components {
             expected_updated_at?: string | null;
             /** Provider Type */
             provider_type?: string | null;
+            /**
+             * Session Affinity
+             * @description Forward the caller's scoped prompt_cache_key upstream as an x-session-affinity header. Only for openai or anthropic instances. Omit to keep; null turns it off.
+             */
+            session_affinity?: boolean | null;
         };
         /**
          * UpdateToolSettingsRequest

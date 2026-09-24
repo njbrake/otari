@@ -565,6 +565,9 @@ class ProviderCredential(Base):
     encrypted_api_key: Mapped[str | None] = mapped_column()
     last4: Mapped[str | None] = mapped_column()
     client_args: Mapped[dict[str, Any]] = mapped_column("client_args", JSON, default=dict)
+    # Forward the scoped prompt cache key as ``x-session-affinity``, the stored
+    # form of a config.yml entry's ``session_affinity``.
+    session_affinity: Mapped[bool] = mapped_column(default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -587,6 +590,7 @@ class ProviderCredential(Base):
             "api_base": self.api_base,
             "last4": self.last4,
             "client_args": redact_secret_like_values(self.client_args) or {},
+            "session_affinity": self.session_affinity,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

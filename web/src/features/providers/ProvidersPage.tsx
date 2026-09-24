@@ -57,6 +57,8 @@ import {
   ProviderComboBox,
   ProviderCredentialFields,
   parseClientArgs,
+  SessionAffinityField,
+  supportsSessionAffinity,
 } from "./providerFields"
 
 // Testing the form's credentials before they are saved, in two nodes because
@@ -161,6 +163,10 @@ function KnownProviderForm({
   const [name, setName] = useState("")
   const [clientArgsText, setClientArgsText] = useState("")
   const [credentials, setCredentials] = useState<CredentialFieldValues>({})
+  const [sessionAffinity, setSessionAffinity] = useState(false)
+  // A renamed instance records the provider as its provider_type, so the
+  // provider picked decides support either way.
+  const affinitySupported = supportsSessionAffinity(providerId, null)
   const clientArgs = parseClientArgs(clientArgsText)
   const credentialFields = credentialFieldsFor(providerId)
   const credentialErrors = validateCredentialFields(
@@ -199,6 +205,7 @@ function KnownProviderForm({
     apiBase,
     clientArgsText,
     credentials,
+    sessionAffinity,
   })
   const canSubmit =
     providerId !== "" &&
@@ -227,6 +234,7 @@ function KnownProviderForm({
           api_base: apiBase.trim() || null,
           api_key: apiKey.trim() || null,
           client_args: mergeCredentialFields(credentials, clientArgs.value),
+          session_affinity: affinitySupported && sessionAffinity,
         }
 
   const submit = () => {
@@ -345,6 +353,12 @@ function KnownProviderForm({
             onChange={setClientArgsText}
             error={clientArgs.ok ? null : clientArgs.error}
           />
+          {affinitySupported ? (
+            <SessionAffinityField
+              isSelected={sessionAffinity}
+              onChange={setSessionAffinity}
+            />
+          ) : null}
         </div>
       ) : null}
       <ConnectionTestResult test={test} />
@@ -370,7 +384,12 @@ function CustomProviderForm({
   const [apiBase, setApiBase] = useState("")
   const [apiKey, setApiKey] = useState("")
   const [clientArgsText, setClientArgsText] = useState("")
+  const [sessionAffinity, setSessionAffinity] = useState(false)
   const clientArgs = parseClientArgs(clientArgsText)
+  const affinitySupported = supportsSessionAffinity(
+    name.trim(),
+    providerType || "openai-compatible",
+  )
 
   const nameHasDelimiter = /[:/]/.test(name)
   // Same snapshot as the known tab, for the same reason: this list had missed
@@ -381,6 +400,7 @@ function CustomProviderForm({
     apiBase,
     apiKey,
     clientArgsText,
+    sessionAffinity,
   })
   const canSubmit =
     name.trim() !== "" &&
@@ -397,6 +417,7 @@ function CustomProviderForm({
         api_base: apiBase.trim(),
         api_key: apiKey.trim() || null,
         client_args: clientArgs.value,
+        session_affinity: affinitySupported && sessionAffinity,
       },
       { onSuccess: onClose },
     )
@@ -429,6 +450,7 @@ function CustomProviderForm({
                   api_base: apiBase.trim(),
                   api_key: apiKey.trim() || null,
                   client_args: clientArgs.value,
+                  session_affinity: affinitySupported && sessionAffinity,
                 }
           }
         />
@@ -483,6 +505,12 @@ function CustomProviderForm({
         onChange={setClientArgsText}
         error={clientArgs.ok ? null : clientArgs.error}
       />
+      {affinitySupported ? (
+        <SessionAffinityField
+          isSelected={sessionAffinity}
+          onChange={setSessionAffinity}
+        />
+      ) : null}
       <ConnectionTestResult test={test} />
     </FormDialog>
   )
@@ -551,6 +579,13 @@ function EditProviderForm({
   const update = useUpdateStoredProvider()
   const [providerType, setProviderType] = useState(provider.provider_type ?? "")
   const [apiBase, setApiBase] = useState(provider.api_base ?? "")
+  const [sessionAffinity, setSessionAffinity] = useState(
+    provider.session_affinity,
+  )
+  const affinitySupported = supportsSessionAffinity(
+    provider.instance,
+    providerType.trim() || null,
+  )
   const [replacingKey, setReplacingKey] = useState(false)
   const [apiKey, setApiKey] = useState("")
   // An instance keeps its provider's name unless it was renamed, so the
@@ -587,6 +622,7 @@ function EditProviderForm({
     apiKey,
     clientArgsText,
     credentials,
+    sessionAffinity,
   })
   const blocked = !clientArgs.ok || Object.keys(credentialErrors).length > 0
 
@@ -601,6 +637,8 @@ function EditProviderForm({
         clientArgs.value,
         stored.redacted,
       ),
+      // Off whenever the type cannot carry it, so switching type clears it.
+      session_affinity: affinitySupported && sessionAffinity,
       // Guard against clobbering a concurrent edit; a 412 tells the operator to reload.
       expected_updated_at: provider.updated_at,
     }
@@ -703,6 +741,12 @@ function EditProviderForm({
         onChange={setClientArgsText}
         error={clientArgs.ok ? null : clientArgs.error}
       />
+      {affinitySupported ? (
+        <SessionAffinityField
+          isSelected={sessionAffinity}
+          onChange={setSessionAffinity}
+        />
+      ) : null}
     </FormDialog>
   )
 }

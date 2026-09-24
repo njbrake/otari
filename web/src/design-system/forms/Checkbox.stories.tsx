@@ -143,3 +143,21 @@ export const NamedForScreenReaders: Story = {
     )
   },
 }
+
+/** `description` renders under the control and is announced with its label. */
+export const WithDescription: Story = {
+  render: () => {
+    const [on, setOn] = useState(false)
+    return (
+      <div className="max-w-md">
+        <Checkbox
+          isSelected={on}
+          onChange={setOn}
+          description="Send each caller's scoped prompt cache key as an x-session-affinity header."
+        >
+          Session affinity
+        </Checkbox>
+      </div>
+    )
+  },
+}

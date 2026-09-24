@@ -11,7 +11,9 @@ from any_llm import LLMProvider, acompletion, amessages, aresponses
 from gateway.api.routes._pipeline import RequestContext, _local_attempt_kwargs, scope_prompt_cache_key
 from gateway.api.routes._tools import _strip_gateway_fields
 from gateway.core.config import GatewayConfig
+from gateway.models.entities import ProviderCredential
 from gateway.services.provider_kwargs import SESSION_AFFINITY_HEADER, get_provider_kwargs, with_session_affinity
+from gateway.services.provider_store_service import _row_to_entry
 from gateway.types.attempt import Attempt
 
 BASETEN = {
@@ -251,3 +253,10 @@ async def test_header_reaches_the_wire(entry_point: str, stream: bool, path: str
     assert len(seen) == 1
     assert seen[0].url.path == path
     assert seen[0].headers[SESSION_AFFINITY_HEADER] == "scoped"
+
+
+def test_a_stored_provider_carries_the_flag_into_the_overlay() -> None:
+    on = ProviderCredential(instance="baseten", provider_type="openai", session_affinity=True, client_args={})
+    off = ProviderCredential(instance="plain", provider_type="openai", session_affinity=False, client_args={})
+    assert _row_to_entry(on)["session_affinity"] is True
+    assert "session_affinity" not in _row_to_entry(off)

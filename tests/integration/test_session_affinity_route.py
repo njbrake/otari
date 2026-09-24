@@ -204,3 +204,26 @@ def test_the_flag_is_not_passed_to_the_provider(affinity_client: TestClient, key
     captured = _send(affinity_client, key_header, "baseten:zai-org/GLM-5.3", prompt_cache_key="s-42")
     assert "session_affinity" not in captured
     assert cast(str, captured["api_base"]) == _BASETEN["api_base"]
+
+
+def test_a_provider_stored_through_the_dashboard_sends_the_header(
+    client: TestClient, master_key_header: dict[str, str], api_key_header: dict[str, str]
+) -> None:
+    """The flag set on a stored provider reaches dispatch through the provider overlay."""
+    created = client.post(
+        f"{API_ROOT}/provider-credentials",
+        json={
+            "instance": "stored-baseten",
+            "provider_type": "openai-compatible",
+            "api_base": "https://inference.baseten.co/v1",
+            "session_affinity": True,
+        },
+        headers=master_key_header,
+    )
+    assert created.status_code == 201, created.text
+
+    captured = _send(client, api_key_header, "stored-baseten:zai-org/GLM-5.3", prompt_cache_key="s-42")
+
+    scoped = captured["prompt_cache_key"]
+    assert len(scoped) == 64
+    assert captured["client_args"]["default_headers"] == {SESSION_AFFINITY_HEADER: scoped}

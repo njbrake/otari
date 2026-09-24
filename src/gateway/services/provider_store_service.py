@@ -81,6 +81,8 @@ def _row_to_entry(row: ProviderCredential) -> dict[str, Any]:
         entry["client_args"] = dict(row.client_args)
     if row.encrypted_api_key:
         entry["api_key"] = decrypt_secret(row.encrypted_api_key)
+    if row.session_affinity:
+        entry["session_affinity"] = True
     return entry
 
 
@@ -220,6 +222,7 @@ async def save_credential(
     api_base: str | None | _Unset = UNSET,
     api_key: str | None | _Unset = UNSET,
     client_args: dict[str, Any] | None | _Unset = UNSET,
+    session_affinity: bool | _Unset = UNSET,
 ) -> ProviderCredential:
     """Create or update a stored credential (staged; caller commits).
 
@@ -248,6 +251,8 @@ async def save_credential(
         # editor resubmitting the whole object sends the mask for entries it never
         # saw; those keep what is stored rather than overwriting it with ``***``.
         row.client_args = restore_redacted_values(client_args, existing.client_args if existing else None) or {}
+    if not isinstance(session_affinity, _Unset):
+        row.session_affinity = session_affinity
     if not isinstance(api_key, _Unset):
         if api_key:
             row.encrypted_api_key = encrypt_secret(api_key)

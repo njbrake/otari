@@ -26,6 +26,9 @@ API_KEY_HEADER = "Otari-Key"
 # Provider implementations whose SDK client accepts ``default_headers``, which is how
 # ``session_affinity`` sends its header.
 _SESSION_AFFINITY_IMPLEMENTATIONS = frozenset({"openai", "anthropic"})
+SESSION_AFFINITY_UNSUPPORTED_DETAIL = (
+    "session_affinity is supported only for provider_type openai or anthropic (including their -compatible forms)."
+)
 # Aliases accepted for a provider instance's ``provider_type`` that map onto a
 # real any-llm implementation. The "openai-compatible" spelling mirrors the
 # naming opencode / pi use for self-hosted OpenAI-compatible backends.
@@ -239,6 +242,16 @@ class _NonScalarField(Exception):
 def _get_platform_token_from_env() -> str | None:
     token = os.getenv(PLATFORM_TOKEN_ENV_VAR, "").strip()
     return token or None
+
+
+def session_affinity_supported(instance: str, provider_type: str | None) -> bool:
+    """Whether an instance can carry ``session_affinity``.
+
+    The header rides on the SDK client's ``default_headers``, a constructor
+    argument other provider clients reject on every call.
+    """
+    implementation = PROVIDER_TYPE_ALIASES.get(provider_type, provider_type) if provider_type else instance
+    return implementation in _SESSION_AFFINITY_IMPLEMENTATIONS
 
 
 def provider_credential_env_names(provider_type: str) -> tuple[str, ...] | None:
@@ -1812,18 +1825,11 @@ class GatewayConfig(BaseSettings):
             if session_affinity is not None and not isinstance(session_affinity, bool):
                 msg = f"providers.{instance}.session_affinity must be true or false."
                 raise ValueError(msg)
-            if session_affinity:
-                # The header rides on the SDK client's ``default_headers``, a constructor
-                # argument other provider clients reject on every call.
-                impl = instance
-                if isinstance(declared, str) and declared:
-                    impl = PROVIDER_TYPE_ALIASES.get(declared, declared)
-                if impl not in _SESSION_AFFINITY_IMPLEMENTATIONS:
-                    msg = (
-                        f"providers.{instance}.session_affinity is supported only for provider_type "
-                        "openai or anthropic (including their -compatible forms)."
-                    )
-                    raise ValueError(msg)
+            if session_affinity and not session_affinity_supported(
+                instance, declared if isinstance(declared, str) else None
+            ):
+                msg = f"providers.{instance}.{SESSION_AFFINITY_UNSUPPORTED_DETAIL}"
+                raise ValueError(msg)
             if not entry:
                 self._warn_on_uncredentialed_bare_entry(instance)
 
