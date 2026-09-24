@@ -182,8 +182,8 @@ instance (including the `-compatible` forms); startup refuses it elsewhere.
 A provider stored through the Providers page sets the same flag with its
 **Session affinity** checkbox, which the page offers only where it applies, or
 with `session_affinity` on `/api/v1/provider-credentials`, which refuses it on any
-other provider type. A stored entry replaces
-a config-file entry of the same name, flag included.
+other provider type. A stored entry replaces a config-file entry of the same
+name, flag included.
 
 ### Runtime provider management
 

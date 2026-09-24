@@ -200,15 +200,14 @@ export function SessionAffinityField({
   onChange: (next: boolean) => void
 }) {
   return (
-    <div className="flex max-w-md flex-col gap-1">
-      <Checkbox isSelected={isSelected} onChange={onChange}>
+    <div className="max-w-md">
+      <Checkbox
+        isSelected={isSelected}
+        onChange={onChange}
+        description="Send each caller's prompt cache key, scoped to that caller, as an x-session-affinity header. Baseten uses it to keep a conversation on the replica that holds its cached prefix."
+      >
         Session affinity
       </Checkbox>
-      <p className="text-caption">
-        Send each caller's prompt cache key, scoped to that caller, as an
-        x-session-affinity header. Baseten uses it to keep a conversation on the
-        replica that holds its cached prefix.
-      </p>
     </div>
   )
 }

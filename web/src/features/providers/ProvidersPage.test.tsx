@@ -511,6 +511,7 @@ describe("ProvidersPage", () => {
     )
     const affinity = screen.getByRole("checkbox", { name: "Session affinity" })
     expect(affinity).not.toBeChecked()
+    expect(affinity).toHaveAccessibleDescription(/x-session-affinity header/)
     await user.click(affinity)
     await user.click(screen.getByRole("button", { name: "Add provider" }))
 
@@ -528,6 +529,80 @@ describe("ProvidersPage", () => {
       provider_type: "openai-compatible",
       session_affinity: true,
     })
+  })
+
+  function knownProvider(id: string, name: string) {
+    return {
+      id,
+      name,
+      env_key: null,
+      default_api_base: null,
+      requires_api_key: true,
+      env_key_present: false,
+    }
+  }
+
+  it("offers session affinity under Advanced for a known provider that can carry it", async () => {
+    const fetchMock = mockApi({
+      stored: [storedProvider("anthropic", "0000")],
+      catalog: [knownProvider("openai", "OpenAI")],
+    })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await screen.findByText("••••0000")
+    await user.click(screen.getByRole("button", { name: "Add provider" }))
+    await user.type(screen.getByPlaceholderText("Search providers…"), "Open")
+    await user.click(await screen.findByRole("option", { name: "OpenAI" }))
+    await user.type(await screen.findByLabelText("API key"), "sk-1")
+    await user.click(
+      screen.getByRole("button", {
+        name: "Advanced (API base, rename, client options)",
+      }),
+    )
+    await user.click(screen.getByRole("checkbox", { name: "Session affinity" }))
+    const add = within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Add provider",
+    })
+    await waitFor(() => expect(add).toBeEnabled())
+    await user.click(add)
+
+    const post = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([u, init]) =>
+          String(u).endsWith(`${API_ROOT}/provider-credentials`) &&
+          (init?.method ?? "") === "POST",
+      )
+      expect(call).toBeDefined()
+      return call!
+    })
+    expect(JSON.parse(String(post[1]?.body))).toMatchObject({
+      instance: "openai",
+      session_affinity: true,
+    })
+  })
+
+  it("does not offer session affinity for a known provider that cannot carry it", async () => {
+    mockApi({
+      stored: [storedProvider("anthropic", "0000")],
+      catalog: [knownProvider("gemini", "Gemini")],
+    })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await screen.findByText("••••0000")
+    await user.click(screen.getByRole("button", { name: "Add provider" }))
+    await user.type(screen.getByPlaceholderText("Search providers…"), "Gem")
+    await user.click(await screen.findByRole("option", { name: "Gemini" }))
+    await user.click(
+      screen.getByRole("button", {
+        name: "Advanced (API base, rename, client options)",
+      }),
+    )
+    expect(screen.getByText("Client options (JSON)")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("checkbox", { name: "Session affinity" }),
+    ).not.toBeInTheDocument()
   })
 
   it("clears session affinity when an edit retypes the provider to one that cannot carry it", async () => {

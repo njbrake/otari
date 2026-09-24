@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { useEffect, useState } from "react"
+import { useEffect, useId, useState } from "react"
 import { Checkbox as AriaCheckbox } from "react-aria-components"
 
 // The box visual, split out so it can hold optimistic state: react-aria only
@@ -98,6 +98,7 @@ export function Checkbox({
   onChange,
   isDisabled = false,
   ariaLabel,
+  description,
   children,
 }: {
   isSelected: boolean
@@ -109,11 +110,18 @@ export function Checkbox({
    * Keep the visible text inside it, so speech input still reaches the control.
    */
   ariaLabel?: string
+  /**
+   * Help text shown under the control and announced with it, the way `Field`'s
+   * description is.
+   */
+  description?: ReactNode
   children: ReactNode
 }) {
-  return (
+  const descriptionId = useId()
+  const box = (
     <AriaCheckbox
       aria-label={ariaLabel}
+      aria-describedby={description ? descriptionId : undefined}
       isSelected={isSelected}
       onChange={onChange}
       isDisabled={isDisabled}
@@ -130,5 +138,14 @@ export function Checkbox({
         </>
       )}
     </AriaCheckbox>
+  )
+  if (!description) return box
+  return (
+    <div className="flex flex-col gap-1">
+      {box}
+      <p id={descriptionId} className="text-caption">
+        {description}
+      </p>
+    </div>
   )
 }

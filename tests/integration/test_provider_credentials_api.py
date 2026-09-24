@@ -610,7 +610,6 @@ def test_a_credential_shaped_client_arg_can_still_be_replaced_and_removed(
     assert _stored_client_args(db_session) == {}
 
 
-
 def _baseten(**overrides: object) -> dict[str, object]:
     return {
         "instance": "baseten",
