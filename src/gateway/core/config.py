@@ -730,7 +730,10 @@ class GatewayConfig(BaseSettings):
             "instances of one implementation (e.g. real OpenAI plus a self-hosted "
             "OpenAI-compatible backend), give each a distinct instance name and set "
             "'provider_type' to the underlying implementation. An optional 'models' "
-            "list declares model ids for instances whose backend has no /api/v1/models."
+            "list declares model ids for instances whose backend has no /api/v1/models. "
+            "'session_affinity: true' forwards the caller's scoped prompt_cache_key as an "
+            "x-session-affinity header, which Baseten uses to route a session to the replica "
+            "holding its cached prefix."
         ),
     )
     aliases: dict[str, str] = Field(
@@ -1801,6 +1804,10 @@ class GatewayConfig(BaseSettings):
             models = entry.get("models")
             if models is not None and not (isinstance(models, list) and all(isinstance(m, str) for m in models)):
                 msg = f"providers.{instance}.models must be a list of model id strings."
+                raise ValueError(msg)
+            session_affinity = entry.get("session_affinity")
+            if session_affinity is not None and not isinstance(session_affinity, bool):
+                msg = f"providers.{instance}.session_affinity must be true or false."
                 raise ValueError(msg)
             if not entry:
                 self._warn_on_uncredentialed_bare_entry(instance)

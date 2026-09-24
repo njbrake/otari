@@ -50,6 +50,9 @@ SENSITIVE_PARAM_FIELDS: frozenset[str] = frozenset(
         "client",
         "credentials",
         "extra_body",
+        # Headers the provider SDK sends verbatim, so a caller could override an
+        # operator-set header (``x-session-affinity`` among them).
+        "extra_headers",
         "aws_access_key_id",
         "aws_secret_access_key",
         # any-llm's acompletion()/aresponses() forward this dict straight to

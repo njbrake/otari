@@ -45,7 +45,11 @@ from gateway.services.tenancy.org_provider_key_service import cached_org_provide
 
 # Keys that describe an instance to otari but are not credentials any-llm
 # understands, so they must be stripped before the provider call.
-_INSTANCE_META_KEYS = ("provider_type", "models")
+_INSTANCE_META_KEYS = ("provider_type", "models", "session_affinity")
+
+# Baseten routes requests carrying the same value to the same replica, which is
+# what makes its automatic prefix cache hit reliably.
+SESSION_AFFINITY_HEADER = "x-session-affinity"
 
 # any-llm rejects a keyless call to most providers (openai, anthropic, ...) with
 # MissingApiKeyError, but a self-hosted OpenAI-/Anthropic-compatible backend
@@ -229,6 +233,23 @@ def get_provider_kwargs(
         kwargs["api_key"] = placeholder
 
     return kwargs
+
+
+def with_session_affinity(call_kwargs: dict[str, Any], config: GatewayConfig, instance: str) -> dict[str, Any]:
+    """Send the call's prompt cache key upstream as ``x-session-affinity`` when ``instance`` opts in.
+
+    Reads ``prompt_cache_key`` from the merged call kwargs, where the route has
+    already replaced the caller's key with its identity-scoped hash, so the raw
+    caller value never reaches the header. A call with no key, or an instance
+    without ``session_affinity: true``, is returned unchanged.
+    """
+    key = call_kwargs.get("prompt_cache_key")
+    entry = config.providers.get(instance)
+    if not isinstance(key, str) or not key or not isinstance(entry, dict) or entry.get("session_affinity") is not True:
+        return call_kwargs
+    headers = dict(call_kwargs.get("extra_headers") or {})
+    headers[SESSION_AFFINITY_HEADER] = key
+    return {**call_kwargs, "extra_headers": headers}
 
 
 @dataclass(frozen=True)

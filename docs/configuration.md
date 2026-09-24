@@ -155,6 +155,34 @@ providers:
 Call it as `home_lab:qwen3-32b`. The optional `models` list supplies discovery
 for backends without a model-listing endpoint. See [Models](models.md).
 
+### Session affinity
+
+Some backends only reuse a cached prompt prefix when related requests land on
+the same replica. Baseten routes on an `x-session-affinity` header, and an
+instance can opt into sending it:
+
+```yaml
+providers:
+  baseten:
+    provider_type: openai
+    api_base: "https://inference.baseten.co/v1"
+    api_key: ${BASETEN_API_KEY}
+    session_affinity: true
+```
+
+When a request carries `prompt_cache_key`, Otari sends the key's scoped form
+(hashed with the caller's identity, as it already is before reaching any
+provider) as the header value. The caller's raw key is never sent, and a request
+without a key sends no header. It applies on `/api/v1/messages`, `/api/v1/chat/completions`
+and `/api/v1/responses`, streaming included, and to each candidate of a routing
+policy according to that candidate's own instance.
+
+The flag is config-file only: a provider stored through the Providers page has
+no field for it, and a stored entry replaces a config-file entry of the same
+name, flag included. For one fixed header on a stored provider, set
+`client_args: {"default_headers": {"x-session-affinity": "..."}}` instead; that
+pins every request on the instance to one replica.
+
 ### Runtime provider management
 
 Standalone operators can store provider credentials through the Providers page
