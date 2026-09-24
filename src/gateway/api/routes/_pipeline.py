@@ -154,7 +154,12 @@ from gateway.services.pricing_service import (
     price_tool_calls,
     pricing_required_but_missing,
 )
-from gateway.services.provider_kwargs import ResolvedProvider, credential_ladder_exhausted, resolve_provider_selector
+from gateway.services.provider_kwargs import (
+    ResolvedProvider,
+    credential_ladder_exhausted,
+    resolve_provider_selector,
+    with_session_affinity,
+)
 from gateway.services.routing import (
     BudgetState,
     CompiledPlan,
@@ -3936,6 +3941,19 @@ def stream_final_attempt_extra_seconds(
 # ---------------------------------------------------------------------------
 
 
+def _local_attempt_kwargs(
+    adapter: FormatAdapter[Any, Any], config: GatewayConfig
+) -> Callable[[Attempt, dict[str, Any]], dict[str, Any]]:
+    """Build each routed candidate's call kwargs, with that candidate's session affinity."""
+
+    def build(attempt: Attempt, base_request_fields: dict[str, Any]) -> dict[str, Any]:
+        return with_session_affinity(
+            adapter.local_attempt_kwargs(attempt, base_request_fields), config, attempt.instance
+        )
+
+    return build
+
+
 async def run_single_attempt_stream(
     *,
     adapter: FormatAdapter[Any, ChunkT],
@@ -3997,7 +4015,7 @@ async def run_single_attempt_stream(
                     run_attempt=_open_candidate,
                     max_tool_iterations=tool_ctx.max_tool_iterations,
                     policy_name=ctx.plan.policy_name,
-                    build_kwargs=adapter.local_attempt_kwargs,
+                    build_kwargs=_local_attempt_kwargs(adapter, ctx.config),
                     on_absorbed=_absorbed,
                     on_terminal=stopped_on.append,
                 )
@@ -4009,7 +4027,11 @@ async def run_single_attempt_stream(
             provider, model, display_model = chosen.instance, chosen.model, chosen.display_model
             stream_attribution = _attribution_for(ctx, chosen)
         else:
-            stream = await open_stream(adapter=adapter, tool_ctx=tool_ctx, call_kwargs=call_kwargs)
+            stream = await open_stream(
+                adapter=adapter,
+                tool_ctx=tool_ctx,
+                call_kwargs=with_session_affinity(call_kwargs, ctx.config, provider),
+            )
             # A single-candidate policy still names a policy and a reason, and
             # both belong on the row.
             stream_attribution = _attribution_for(ctx, ctx.plan.head) if ctx.plan is not None else None
@@ -4669,7 +4691,7 @@ async def run_standalone_non_stream(
                     run_attempt=_run_candidate,
                     max_tool_iterations=tool_ctx.max_tool_iterations,
                     policy_name=ctx.plan.policy_name,
-                    build_kwargs=adapter.local_attempt_kwargs,
+                    build_kwargs=_local_attempt_kwargs(adapter, ctx.config),
                     on_absorbed=_absorbed,
                     on_terminal=stopped_on.append,
                 )
@@ -4681,7 +4703,11 @@ async def run_standalone_non_stream(
             provider, model, display_model = chosen.instance, chosen.model, chosen.display_model
             attribution = _attribution_for(ctx, chosen)
         else:
-            result = await dispatch_non_stream(adapter=adapter, tool_ctx=tool_ctx, call_kwargs=call_kwargs)
+            result = await dispatch_non_stream(
+                adapter=adapter,
+                tool_ctx=tool_ctx,
+                call_kwargs=with_session_affinity(call_kwargs, ctx.config, provider),
+            )
             # A single-candidate policy still has a name and a selection reason, and
             # both belong on the row: "served by its default target" is the answer to
             # the same question a fallover answers differently.

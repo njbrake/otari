@@ -50,6 +50,10 @@ SENSITIVE_PARAM_FIELDS: frozenset[str] = frozenset(
         "client",
         "credentials",
         "extra_body",
+        # Upstream request headers are the operator's to set (``x-session-affinity``
+        # among them). any-llm's responses entry point rejects this field outright,
+        # so stripping it also turns a caller's stray value into a dropped field.
+        "extra_headers",
         "aws_access_key_id",
         "aws_secret_access_key",
         # any-llm's acompletion()/aresponses() forward this dict straight to

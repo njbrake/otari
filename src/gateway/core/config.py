@@ -23,6 +23,9 @@ from gateway.log_config import logger
 from gateway.models.routing import RoutingConfig
 
 API_KEY_HEADER = "Otari-Key"
+# Provider implementations whose SDK client accepts ``default_headers``, which is how
+# ``session_affinity`` sends its header.
+_SESSION_AFFINITY_IMPLEMENTATIONS = frozenset({"openai", "anthropic"})
 # Aliases accepted for a provider instance's ``provider_type`` that map onto a
 # real any-llm implementation. The "openai-compatible" spelling mirrors the
 # naming opencode / pi use for self-hosted OpenAI-compatible backends.
@@ -730,7 +733,10 @@ class GatewayConfig(BaseSettings):
             "instances of one implementation (e.g. real OpenAI plus a self-hosted "
             "OpenAI-compatible backend), give each a distinct instance name and set "
             "'provider_type' to the underlying implementation. An optional 'models' "
-            "list declares model ids for instances whose backend has no /api/v1/models."
+            "list declares model ids for instances whose backend has no /api/v1/models. "
+            "'session_affinity: true' forwards the caller's scoped prompt_cache_key as an "
+            "x-session-affinity header, which Baseten uses to route a session to the replica "
+            "holding its cached prefix."
         ),
     )
     aliases: dict[str, str] = Field(
@@ -1802,6 +1808,22 @@ class GatewayConfig(BaseSettings):
             if models is not None and not (isinstance(models, list) and all(isinstance(m, str) for m in models)):
                 msg = f"providers.{instance}.models must be a list of model id strings."
                 raise ValueError(msg)
+            session_affinity = entry.get("session_affinity")
+            if session_affinity is not None and not isinstance(session_affinity, bool):
+                msg = f"providers.{instance}.session_affinity must be true or false."
+                raise ValueError(msg)
+            if session_affinity:
+                # The header rides on the SDK client's ``default_headers``, a constructor
+                # argument other provider clients reject on every call.
+                impl = instance
+                if isinstance(declared, str) and declared:
+                    impl = PROVIDER_TYPE_ALIASES.get(declared, declared)
+                if impl not in _SESSION_AFFINITY_IMPLEMENTATIONS:
+                    msg = (
+                        f"providers.{instance}.session_affinity is supported only for provider_type "
+                        "openai or anthropic (including their -compatible forms)."
+                    )
+                    raise ValueError(msg)
             if not entry:
                 self._warn_on_uncredentialed_bare_entry(instance)
 
