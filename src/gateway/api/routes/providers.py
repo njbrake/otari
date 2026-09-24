@@ -18,7 +18,13 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import get_config, get_db, require_deployment_operator
-from gateway.core.config import PROVIDER_TYPE_ALIASES, RESERVED_PROVIDER_INSTANCE_NAMES, GatewayConfig
+from gateway.core.config import (
+    PROVIDER_TYPE_ALIASES,
+    RESERVED_PROVIDER_INSTANCE_NAMES,
+    SESSION_AFFINITY_UNSUPPORTED_DETAIL,
+    GatewayConfig,
+    session_affinity_supported,
+)
 from gateway.core.database import DATABASE_ERRORS
 from gateway.log_config import logger
 from gateway.models.entities import ProviderCredential
@@ -302,6 +308,7 @@ class StoredProviderResponse(BaseModel):
     api_base: str | None = None
     last4: str | None = None
     client_args: dict[str, Any] = Field(default_factory=dict)
+    session_affinity: bool = False
     created_at: str | None = None
     updated_at: str | None = None
     # False when the stored key cannot be decrypted with the current
@@ -336,6 +343,13 @@ class CreateStoredProviderRequest(BaseModel):
     api_base: str | None = None
     api_key: str | None = Field(default=None, description="Provider API key. Stored encrypted; never returned.")
     client_args: dict[str, Any] | None = None
+    session_affinity: bool = Field(
+        default=False,
+        description=(
+            "Forward the caller's scoped prompt_cache_key upstream as an x-session-affinity header. "
+            "Only for openai or anthropic instances."
+        ),
+    )
 
 
 class UpdateStoredProviderRequest(BaseModel):
@@ -345,6 +359,13 @@ class UpdateStoredProviderRequest(BaseModel):
     api_base: str | None = None
     api_key: str | None = Field(default=None, description="New API key. Omit to keep the existing one. Never returned.")
     client_args: dict[str, Any] | None = None
+    session_affinity: bool | None = Field(
+        default=None,
+        description=(
+            "Forward the caller's scoped prompt_cache_key upstream as an x-session-affinity header. "
+            "Only for openai or anthropic instances. Omit to keep; null turns it off."
+        ),
+    )
     expected_updated_at: str | None = Field(
         default=None,
         description="Optimistic concurrency: if set, the update 412s unless it matches the stored updated_at.",
@@ -412,6 +433,12 @@ def _validate_instance(instance: str, provider_type: str | None) -> None:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"provider_type '{provider_type}' is not a known provider implementation.",
             ) from exc
+
+
+def _validate_session_affinity(instance: str, provider_type: str | None, session_affinity: bool) -> None:
+    """Refuse ``session_affinity`` on an instance whose SDK client cannot carry the header, as a 400."""
+    if session_affinity and not session_affinity_supported(instance, provider_type):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=SESSION_AFFINITY_UNSUPPORTED_DETAIL)
 
 
 async def _gate_api_base(api_base: str | None) -> None:
@@ -568,6 +595,7 @@ async def create_stored_provider(
 ) -> StoredProviderResponse:
     """Add a provider at runtime. Storing a key requires OTARI_SECRET_KEY."""
     _validate_instance(request.instance, request.provider_type)
+    _validate_session_affinity(request.instance, request.provider_type, request.session_affinity)
     await _gate_api_base(request.api_base)
     if await get_credential(db, request.instance) is not None:
         raise HTTPException(
@@ -582,6 +610,7 @@ async def create_stored_provider(
             api_base=request.api_base,
             api_key=request.api_key,
             client_args=request.client_args,
+            session_affinity=request.session_affinity,
         )
     except SecretBoxUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
@@ -627,6 +656,14 @@ async def update_stored_provider(
     _validate_instance(instance, request.provider_type)
     # Distinguish "field omitted" (keep) from "field set to null" (clear).
     sent = request.model_fields_set
+    # Checked against what the row will hold, so changing only provider_type on a
+    # row that already has the flag is refused too.
+    session_affinity = bool(request.session_affinity) if "session_affinity" in sent else existing.session_affinity
+    _validate_session_affinity(
+        instance,
+        request.provider_type if "provider_type" in sent else existing.provider_type,
+        session_affinity,
+    )
     if "api_base" in sent:
         await _gate_api_base(request.api_base)
     try:
@@ -637,6 +674,7 @@ async def update_stored_provider(
             api_base=request.api_base if "api_base" in sent else UNSET,
             api_key=request.api_key if "api_key" in sent else UNSET,
             client_args=request.client_args if "client_args" in sent else UNSET,
+            session_affinity=session_affinity if "session_affinity" in sent else UNSET,
         )
     except SecretBoxUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None

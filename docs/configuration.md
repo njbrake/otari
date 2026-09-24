@@ -179,11 +179,11 @@ policy according to that candidate's own instance. The header is set on the
 provider SDK client, so the flag is accepted only on an `openai` or `anthropic`
 instance (including the `-compatible` forms); startup refuses it elsewhere.
 
-The flag is config-file only: a provider stored through the Providers page has
-no field for it, and a stored entry replaces a config-file entry of the same
-name, flag included. For one fixed header on a stored provider, set
-`client_args: {"default_headers": {"x-session-affinity": "..."}}` instead; that
-pins every request on the instance to one replica.
+A provider stored through the Providers page sets the same flag with its
+**Session affinity** checkbox, which the page offers only where it applies, or
+with `session_affinity` on `/api/v1/provider-credentials`, which refuses it on any
+other provider type. A stored entry replaces
+a config-file entry of the same name, flag included.
 
 ### Runtime provider management
 

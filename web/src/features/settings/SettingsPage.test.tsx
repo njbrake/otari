@@ -171,6 +171,7 @@ function storedProvider(
     api_base: null,
     last4,
     client_args: {},
+    session_affinity: false,
     created_at: null,
     updated_at: "2026-01-01T00:00:00+00:00",
     decryptable,

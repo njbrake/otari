@@ -61,6 +61,7 @@ function storedProvider(
     api_base: null,
     last4,
     client_args: clientArgs,
+    session_affinity: false,
     created_at: null,
     updated_at: "2026-01-01T00:00:00+00:00",
     decryptable,
@@ -492,6 +493,80 @@ describe("ProvidersPage", () => {
     expect(
       screen.getByRole("textbox", { name: "Client options (JSON)" }),
     ).toHaveValue('{\n  "timeout": 1800\n}')
+  })
+
+  it("sends session affinity when a custom endpoint opts in", async () => {
+    const fetchMock = mockApi({ meta: [], stored: [] })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Add your first provider" }),
+    )
+    await user.click(screen.getByRole("button", { name: "Custom endpoint" }))
+    await user.type(screen.getByLabelText("Name"), "baseten")
+    await user.type(
+      screen.getByLabelText("API base"),
+      "https://inference.baseten.co/v1",
+    )
+    const affinity = screen.getByRole("checkbox", { name: "Session affinity" })
+    expect(affinity).not.toBeChecked()
+    await user.click(affinity)
+    await user.click(screen.getByRole("button", { name: "Add provider" }))
+
+    const post = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([u, init]) =>
+          String(u).endsWith(`${API_ROOT}/provider-credentials`) &&
+          (init?.method ?? "") === "POST",
+      )
+      expect(call).toBeDefined()
+      return call!
+    })
+    expect(JSON.parse(String(post[1]?.body))).toMatchObject({
+      instance: "baseten",
+      provider_type: "openai-compatible",
+      session_affinity: true,
+    })
+  })
+
+  it("clears session affinity when an edit retypes the provider to one that cannot carry it", async () => {
+    const fetchMock = mockApi({
+      stored: [
+        {
+          ...storedProvider("baseten", "1234"),
+          provider_type: "openai-compatible",
+          session_affinity: true,
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await user.click(await screen.findByRole("button", { name: "Edit" }))
+    expect(
+      screen.getByRole("checkbox", { name: "Session affinity" }),
+    ).toBeChecked()
+
+    const providerType = screen.getByRole("textbox", { name: "Provider type" })
+    await user.clear(providerType)
+    await user.type(providerType, "gemini")
+    expect(
+      screen.queryByRole("checkbox", { name: "Session affinity" }),
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Save" }))
+
+    const patch = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([, init]) => (init?.method ?? "") === "PATCH",
+      )
+      expect(call).toBeDefined()
+      return call!
+    })
+    expect(JSON.parse(String(patch[1]?.body))).toMatchObject({
+      provider_type: "gemini",
+      session_affinity: false,
+    })
   })
 
   it("keeps a split-out option when the provider type is retyped mid-edit", async () => {

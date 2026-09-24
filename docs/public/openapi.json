@@ -4342,6 +4342,12 @@
             ],
             "description": "any-llm implementation when the instance name is not itself one.",
             "title": "Provider Type"
+          },
+          "session_affinity": {
+            "default": false,
+            "description": "Forward the caller's scoped prompt_cache_key upstream as an x-session-affinity header. Only for openai or anthropic instances.",
+            "title": "Session Affinity",
+            "type": "boolean"
           }
         },
         "required": [
@@ -12795,6 +12801,11 @@
             ],
             "title": "Provider Type"
           },
+          "session_affinity": {
+            "default": false,
+            "title": "Session Affinity",
+            "type": "boolean"
+          },
           "updated_at": {
             "anyOf": [
               {
@@ -14075,6 +14086,18 @@
               }
             ],
             "title": "Provider Type"
+          },
+          "session_affinity": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Forward the caller's scoped prompt_cache_key upstream as an x-session-affinity header. Only for openai or anthropic instances. Omit to keep; null turns it off.",
+            "title": "Session Affinity"
           }
         },
         "title": "UpdateStoredProviderRequest",

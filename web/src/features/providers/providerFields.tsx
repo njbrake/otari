@@ -9,6 +9,7 @@ import {
   TextField,
 } from "@heroui/react"
 import { type ReactNode, useMemo, useState } from "react"
+import { Checkbox } from "@/design-system/forms/Checkbox"
 import { ComboBoxEmpty } from "@/design-system/forms/ComboBoxEmpty"
 import { Field } from "@/design-system/forms/Field"
 import { FieldMessages } from "@/design-system/forms/FieldMessages"
@@ -169,6 +170,46 @@ export function ClientArgsField({
         </Description>
       </FieldMessages>
     </TextField>
+  )
+}
+
+// The spellings `session_affinity_supported` in the gateway's core/config.py
+// accepts: the header rides on the SDK client's default headers, which only the
+// OpenAI and Anthropic clients take. The server refuses the rest either way.
+const SESSION_AFFINITY_TYPES = new Set([
+  "openai",
+  "openai-compatible",
+  "openai_compatible",
+  "anthropic",
+  "anthropic-compatible",
+  "anthropic_compatible",
+])
+
+export function supportsSessionAffinity(
+  instance: string,
+  providerType: string | null | undefined,
+): boolean {
+  return SESSION_AFFINITY_TYPES.has(providerType || instance)
+}
+
+export function SessionAffinityField({
+  isSelected,
+  onChange,
+}: {
+  isSelected: boolean
+  onChange: (next: boolean) => void
+}) {
+  return (
+    <div className="flex max-w-md flex-col gap-1">
+      <Checkbox isSelected={isSelected} onChange={onChange}>
+        Session affinity
+      </Checkbox>
+      <p className="text-caption">
+        Send each caller's prompt cache key, scoped to that caller, as an
+        x-session-affinity header. Baseten uses it to keep a conversation on the
+        replica that holds its cached prefix.
+      </p>
+    </div>
   )
 }
 
