@@ -1378,9 +1378,118 @@ describe("ActivityPage", () => {
     ).not.toBeInTheDocument()
   })
 
+  it.each(["error", "absorbed"])(
+    "says a %s attempt that failed before reporting usage had nothing to price",
+    async (status) => {
+      // A provider that rejects the model outright (a 404) reports no tokens, so
+      // the row has no cost for a reason pricing cannot fix.
+      const user = userEvent.setup()
+      mockApi({
+        rows: [
+          entry({
+            id: "failed",
+            model: "accounts/fireworks/models/deepseek-v4-flash-0731",
+            provider: "fireworks",
+            status,
+            status_code: 404,
+            error_message: "Model not found, inaccessible, and/or not deployed",
+            prompt_tokens: null,
+            completion_tokens: null,
+            total_tokens: null,
+            cost: null,
+          }),
+        ],
+      })
+      renderPage(<ActivityPage />)
+
+      const row = (
+        await screen.findByText(
+          "accounts/fireworks/models/deepseek-v4-flash-0731",
+        )
+      ).closest("tr")!
+      await user.click(row)
+
+      expect(
+        screen.getByText(/failed before the provider reported any usage/),
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/no price is set/)).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole("button", { name: "Price this model" }),
+      ).not.toBeInTheDocument()
+    },
+  )
+
+  it("does not send a provider's own 402 to pricing", async () => {
+    // A provider out of balance answers 402 too, and the row records the
+    // provider's status. Pricing the model would not fix it.
+    const user = userEvent.setup()
+    mockApi({
+      rows: [
+        entry({
+          id: "out-of-balance",
+          model: "deepseek-chat",
+          provider: "deepseek",
+          status: "error",
+          status_code: 402,
+          error_message: "Error code: 402 - Insufficient Balance",
+          prompt_tokens: null,
+          completion_tokens: null,
+          total_tokens: null,
+          cost: null,
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const row = (await screen.findByText("deepseek-chat")).closest("tr")!
+    await user.click(row)
+
+    expect(
+      screen.getByText(/failed before the provider reported any usage/),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Price this model" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("still offers a price for a request refused for lacking one", async () => {
+    // require_pricing refuses an unpriced model with a 402 before billing, and
+    // pricing the model is exactly the fix.
+    const user = userEvent.setup()
+    mockApi({
+      rows: [
+        entry({
+          id: "refused",
+          model: "mistral-small",
+          provider: "vllm",
+          status: "error",
+          status_code: 402,
+          error_message:
+            "No pricing is configured for model 'vllm:mistral-small', and require_pricing is on, so it cannot be billed.",
+          prompt_tokens: null,
+          completion_tokens: null,
+          total_tokens: null,
+          cost: null,
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const row = (await screen.findByText("mistral-small")).closest("tr")!
+    await user.click(row)
+
+    expect(
+      screen.getByRole("button", { name: "Price this model" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/failed before the provider reported any usage/),
+    ).not.toBeInTheDocument()
+  })
+
   it("prices a selector that never resolved from the row's model alone", async () => {
     // A selector the gateway could not resolve is logged with no provider and
-    // the raw selector as the model, so it is already the key to price.
+    // the raw selector as the model, so it is already the key to price. The
+    // require_pricing refusal is the one such row that reaches the button.
     const user = userEvent.setup()
     mockApi({
       rows: [
@@ -1388,6 +1497,13 @@ describe("ActivityPage", () => {
           id: "unresolved",
           model: "vllm:mistral-small",
           provider: null,
+          status: "error",
+          status_code: 402,
+          error_message:
+            "No pricing is configured for model 'vllm:mistral-small', and require_pricing is on, so it cannot be billed.",
+          prompt_tokens: null,
+          completion_tokens: null,
+          total_tokens: null,
           cost: null,
         }),
       ],

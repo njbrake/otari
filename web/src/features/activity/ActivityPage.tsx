@@ -983,12 +983,26 @@ function RequestDetail({
 }) {
   const memberLabels = useMemberAttributionLabels()
   // A row with no cost (cost IS NULL, the same test the "Priced?" filter uses)
-  // is either a model the gateway has no price for or a request refused before
-  // it could be billed. Both are the same fix, and the row holds what the
-  // selector was, which a provider without model discovery would never have put
-  // in the catalog. A $0 cost is a real price, so it is deliberately not
-  // treated as uncosted.
+  // is a model the gateway has no price for, a request the gateway refused for
+  // lacking one, or an attempt that failed before the provider reported any
+  // usage. Pricing fixes the first two, and the row holds what the selector was,
+  // which a provider without model discovery would never have put in the
+  // catalog. The third reported nothing to price, so it is not offered one. A $0
+  // cost is a real price, so it is deliberately not treated as uncosted.
+  //
+  // The refusal is told apart by its text, not its 402 alone: a provider's own
+  // 402 (an exhausted account balance) is recorded with the same status, and
+  // pricing does not fix it. Every refusal the gateway writes names
+  // require_pricing; tests/unit/test_pricing_refusal_text.py holds it to that.
   const uncosted = entry.cost === null
+  const pricingRefusal =
+    entry.status_code === 402 &&
+    (entry.error_message ?? "").includes("require_pricing")
+  const failedBeforeUsage =
+    uncosted &&
+    entry.status !== "success" &&
+    !entry.total_tokens &&
+    !pricingRefusal
   const pricingKey = pricingSelectorOf(entry)
   return (
     <div className="flex flex-col gap-4 px-4 py-4">
@@ -1085,7 +1099,12 @@ function RequestDetail({
           {entry.id}
         </DetailField>
       </div>
-      {uncosted ? (
+      {failedBeforeUsage ? (
+        <span className="text-caption">
+          This attempt failed before the provider reported any usage, so there
+          was nothing to price.
+        </span>
+      ) : uncosted ? (
         <div className="flex flex-wrap items-center gap-3">
           {onPriceModel ? (
             <Button
