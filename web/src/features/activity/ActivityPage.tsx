@@ -983,12 +983,18 @@ function RequestDetail({
 }) {
   const memberLabels = useMemberAttributionLabels()
   // A row with no cost (cost IS NULL, the same test the "Priced?" filter uses)
-  // is either a model the gateway has no price for or a request refused before
-  // it could be billed. Both are the same fix, and the row holds what the
-  // selector was, which a provider without model discovery would never have put
-  // in the catalog. A $0 cost is a real price, so it is deliberately not
-  // treated as uncosted.
+  // is a model the gateway has no price for, a request refused for lacking one
+  // (a 402), or an attempt that failed before the provider reported any usage.
+  // Pricing fixes the first two, and the row holds what the selector was, which
+  // a provider without model discovery would never have put in the catalog. The
+  // third had nothing to bill, so it is not offered a price. A $0 cost is a real
+  // price, so it is deliberately not treated as uncosted.
   const uncosted = entry.cost === null
+  const failedBeforeUsage =
+    uncosted &&
+    entry.status !== "success" &&
+    !entry.total_tokens &&
+    entry.status_code !== 402
   const pricingKey = pricingSelectorOf(entry)
   return (
     <div className="flex flex-col gap-4 px-4 py-4">
@@ -1085,7 +1091,12 @@ function RequestDetail({
           {entry.id}
         </DetailField>
       </div>
-      {uncosted ? (
+      {failedBeforeUsage ? (
+        <span className="text-caption">
+          This attempt failed before the provider reported any usage, so there
+          was nothing to bill.
+        </span>
+      ) : uncosted ? (
         <div className="flex flex-wrap items-center gap-3">
           {onPriceModel ? (
             <Button
