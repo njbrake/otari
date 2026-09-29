@@ -2311,6 +2311,62 @@ describe("ActivityPage suggestion scoping", () => {
     expect(entityQuery).not.toContain("user_id=alice")
     expect(entityQuery).toContain("model=gpt-4o")
   })
+
+  it("keeps offering the other users while the picker's own summary loads", async () => {
+    // The first pick ends the shared request. Until the entity picker's own
+    // summary lands it has to keep the shared one, or it offers nothing.
+    let holdEntity = false
+    mockApi({ rows: [entry()] })
+    const fetchMock = vi.mocked(globalThis.fetch)
+    const answer = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input)
+      const dims = new URL(url, "http://x").searchParams.getAll("dimensions")
+      if (holdEntity && dims.join() === "user,api_key") {
+        return new Promise<Response>(() => {})
+      }
+      return answer(input, init)
+    })
+    const user = userEvent.setup()
+    renderPage(<ActivityPage />)
+    await screen.findByText("gpt-4o")
+    holdEntity = true
+
+    const userInput = screen.getByRole("combobox", { name: "User" })
+    await user.click(userInput)
+    await user.click(await screen.findByRole("option", { name: /alice/ }))
+    await user.click(userInput)
+    expect(
+      await screen.findByRole("option", { name: /bob/ }),
+    ).toBeInTheDocument()
+  })
+
+  it("sends one suggestion summary while no picker filter is set", async () => {
+    // Unfiltered, both pickers ask the same window, so the entity breakdowns ride
+    // the model typeahead's request instead of repeating the whole summary.
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />)
+    await screen.findByText("gpt-4o")
+
+    const suggestions = calls
+      .map((c) => c.url)
+      .filter(
+        (url) =>
+          url.includes(`${API_ROOT}/usage/summary`) &&
+          url.includes("dimensions=model"),
+      )
+    expect(suggestions).toHaveLength(1)
+    expect(suggestions[0]).toContain("dimensions=user")
+    expect(suggestions[0]).toContain("dimensions=api_key")
+    expect(
+      calls.filter(
+        (c) =>
+          c.url.includes(`${API_ROOT}/usage/summary`) &&
+          c.url.includes("dimensions=user") &&
+          !c.url.includes("dimensions=model"),
+      ),
+    ).toHaveLength(0)
+  })
 })
 
 // ---------------------------------------------------------------------------
