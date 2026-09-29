@@ -44,8 +44,9 @@ from gateway.repositories.tenancy import (
     WorkspaceRepository,
 )
 from gateway.services.api_keys import ApiKeyService
-from gateway.services.budgets import BudgetService
+from gateway.services.budgets import BudgetService, WorkspaceBudgetDefaultService
 from gateway.services.tenancy.organization_service import OrganizationService
+from gateway.services.tenancy.workspace_service import WorkspaceService
 
 pytestmark = pytest.mark.asyncio
 
@@ -299,6 +300,7 @@ async def test_list_in_scopes_matches_what_the_organization_surface_lists(async_
         BudgetRepositories.on(uow),
         OrganizationService(async_db, membership_listener=None),
         ApiKeyService(ApiKeyRepository(uow)),
+        WorkspaceService(async_db, membership_listener=WorkspaceBudgetDefaultService(async_db)),
     )
     surface = await service.list_organization_ceilings(user=acme_owner)
 

@@ -56,6 +56,32 @@ def period_window(
     return None
 
 
+def rolled_window(
+    now: datetime,
+    *,
+    duration: int | None,
+    alignment: str | None,
+) -> tuple[datetime, datetime | None]:
+    """Where the gate moves a ceiling whose period ran out, at ``now``.
+
+    Into its cadence's window, or, for a cadence that no longer resets, a window
+    open from ``now``. Raises ``ValueError`` as :func:`period_window` does.
+    """
+    window = period_window(now, duration=duration, alignment=alignment)
+    return window if window is not None else (now, None)
+
+
+def as_utc(value: datetime | None) -> datetime | None:
+    """Read a stored timestamp as UTC.
+
+    SQLite hands datetimes back naive, and comparing one to an aware ``now``
+    raises. A stored value is always the UTC it was written as, so say so.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
+
+
 def budget_window(now: datetime, budget: object) -> tuple[datetime, datetime] | None:
     """The window a ``Budget`` row occupies at ``now``, or None if it never resets.
 
@@ -74,6 +100,8 @@ def budget_window(now: datetime, budget: object) -> tuple[datetime, datetime] | 
 __all__ = [
     "MAX_BUDGET_DURATION_SEC",
     "aligned_window",
+    "as_utc",
     "budget_window",
     "period_window",
+    "rolled_window",
 ]

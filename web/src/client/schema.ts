@@ -5120,6 +5120,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Budget
+         * @description Return the workspace's own spend ceiling for the current period, or null when it has none.
+         *
+         *     Any member of the workspace may read it, as may an organization owner or
+         *     admin; a workspace the caller cannot see is not found. ``spent`` is settled
+         *     spend plus holds in flight, what the gate enforces against.
+         */
+        get: operations["workspace-budget-get_workspace_budget"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/code-execution-policy": {
         parameters: {
             query?: never;
@@ -5422,6 +5446,54 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/saved-views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Saved Views
+         * @description List the views the caller may open on a page: their own first, then those shared with the workspace.
+         */
+        get: operations["saved-views-list_saved_views"];
+        put?: never;
+        /**
+         * Create Saved View
+         * @description Save a view. Sharing it with the workspace needs someone who manages the workspace.
+         */
+        post: operations["saved-views-create_saved_view"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/saved-views/{view_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Saved View
+         * @description Delete one of the caller's views, or a shared one when they manage the workspace.
+         */
+        delete: operations["saved-views-delete_saved_view"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Saved View
+         * @description Rename, re-save or re-share one of the caller's own views.
+         */
+        patch: operations["saved-views-update_saved_view"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/web-search": {
@@ -11970,6 +12042,89 @@ export interface components {
             workspace_id: string;
         };
         /**
+         * SavedViewCreate
+         * @description A view to save: the page it belongs to, its name, and the query string it applies.
+         */
+        SavedViewCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Page
+             * @constant
+             */
+            page: "activity";
+            /** Query */
+            query: string;
+            /**
+             * Shared
+             * @default false
+             */
+            shared: boolean;
+        };
+        /**
+         * SavedViewPublic
+         * @description A saved view as its menu lists it.
+         */
+        SavedViewPublic: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Mine */
+            is_mine: boolean;
+            /** Name */
+            name: string;
+            /** Owner Name */
+            owner_name: string | null;
+            /**
+             * Page
+             * @constant
+             */
+            page: "activity";
+            /** Query */
+            query: string;
+            /** Shared */
+            shared: boolean;
+            /** Updated At */
+            updated_at: string | null;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /**
+         * SavedViewUpdate
+         * @description What to change. A field left out, or sent as null, is left as it is.
+         */
+        SavedViewUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Query */
+            query?: string | null;
+            /** Shared */
+            shared?: boolean | null;
+        };
+        /**
+         * SavedViewsPublic
+         * @description A page's menu: the caller's own views first, then the workspace's shared ones, each by name.
+         *
+         *     ``data`` is the page ``skip`` and ``limit`` asked for; ``count`` is how many
+         *     the caller may open in all.
+         */
+        SavedViewsPublic: {
+            /** Count */
+            count: number;
+            /** Data */
+            data: components["schemas"]["SavedViewPublic"][];
+        };
+        /**
          * ScopedBudgetResponse
          * @description One scoped ceiling and its live counters.
          *
@@ -14200,6 +14355,32 @@ export interface components {
             organization_id: string;
             /** Updated At */
             updated_at?: string | null;
+        };
+        /**
+         * WorkspaceSpendPublic
+         * @description A workspace's own spend ceiling as any member of the workspace may read it.
+         *
+         *     Dollars only, and only the workspace-wide ceiling: no member's personal cap and
+         *     no other workspace's. ``spent`` is what the gate enforces against, settled
+         *     spend plus holds still in flight. ``max_budget`` is null when the ceiling's
+         *     budget caps only tokens or requests.
+         */
+        WorkspaceSpendPublic: {
+            /** Max Budget */
+            max_budget: number | null;
+            /** Name */
+            name: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Spent */
+            spent: number;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
         };
         /** WorkspaceUpdate */
         WorkspaceUpdate: {
@@ -22735,6 +22916,37 @@ export interface operations {
             };
         };
     };
+    "workspace-budget-get_workspace_budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSpendPublic"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     "workspace-code-execution-policy-get_workspace_code_execution_policy": {
         parameters: {
             query?: never;
@@ -23435,6 +23647,145 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "saved-views-list_saved_views": {
+        parameters: {
+            query: {
+                /** @description The dashboard page the views belong to. */
+                page: "activity";
+                skip?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedViewsPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "saved-views-create_saved_view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedViewCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedViewPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "saved-views-delete_saved_view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                view_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "saved-views-update_saved_view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                view_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedViewUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedViewPublic"];
                 };
             };
             /** @description Validation Error */

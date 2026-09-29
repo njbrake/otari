@@ -65,17 +65,17 @@ since. A module "runs queries" when it imports a query builder (`select`,
 
 | Measure | Count |
 | --- | --- |
-| Service modules | 125, of which 64 sit flat at the top of `services/` |
+| Service modules | 127, of which 64 sit flat at the top of `services/` |
 | Service modules that run queries | 35, plus 2 that only call `session.get` |
-| Route modules | 74 |
+| Route modules | 76 |
 | Route modules that run queries | 16, plus 1 that only calls `session.get` |
 | Route modules that define Pydantic models inline | 40 |
-| Model modules | 20 |
-| Repository modules | 22: a base, `users_repository.py`, and the rest under `tenancy/`, `overview/`, `api_keys/`, `files/`, `budgets/`, `pricing/`, `providers/`, `code_execution/` and `usage/` |
-| Service packages per domain | 6: `services/tools/`, which holds the built-in tool registry and no service yet, `services/overview/`, `services/budgets/`, `services/api_keys/`, `services/files/` and `services/providers/`, which holds the organization-scoped half of providers. `services/mail/`, `services/routing/` and `services/tenancy/` are older subpackages |
-| Repository packages per domain | 7: `repositories/overview/`, `repositories/api_keys/`, `repositories/files/`, `repositories/budgets/`, `repositories/pricing/`, `repositories/providers/` and `repositories/usage/`. `repositories/tenancy/` is an older subpackage |
-| Modules in `schemas/` | Five domain modules so far, `budgets.py`, `files.py`, `overview.py`, `providers.py` and `usage.py` |
-| Modules in `exceptions/` | The shared error bases in `_base.py`, which the package root re-exports, `shared_exceptions.py` for the errors no one domain owns, and eight domain modules: `budget_exceptions.py`, `files_exceptions.py`, `guardrails_exceptions.py`, `identity_exceptions.py`, `organizations_exceptions.py`, `pricing_exceptions.py`, `providers_exceptions.py` and `tools_exceptions.py` |
+| Model modules | 21 |
+| Repository modules | 24: a base, `users_repository.py`, and the rest under `tenancy/`, `overview/`, `api_keys/`, `files/`, `budgets/`, `pricing/`, `providers/`, `code_execution/`, `saved_views/` and `usage/` |
+| Service packages per domain | 7: `services/tools/`, which holds the built-in tool registry and no service yet, `services/overview/`, `services/budgets/`, `services/api_keys/`, `services/files/`, `services/saved_views/` and `services/providers/`, which holds the organization-scoped half of providers. `services/mail/`, `services/routing/` and `services/tenancy/` are older subpackages |
+| Repository packages per domain | 8: `repositories/overview/`, `repositories/api_keys/`, `repositories/files/`, `repositories/budgets/`, `repositories/pricing/`, `repositories/providers/`, `repositories/saved_views/` and `repositories/usage/`. `repositories/tenancy/` is an older subpackage |
+| Modules in `schemas/` | Six domain modules so far, `budgets.py`, `files.py`, `overview.py`, `providers.py`, `saved_views.py` and `usage.py` |
+| Modules in `exceptions/` | The shared error bases in `_base.py`, which the package root re-exports, `shared_exceptions.py` for the errors no one domain owns, and nine domain modules: `budget_exceptions.py`, `files_exceptions.py`, `guardrails_exceptions.py`, `identity_exceptions.py`, `organizations_exceptions.py`, `pricing_exceptions.py`, `providers_exceptions.py`, `saved_views_exceptions.py` and `tools_exceptions.py` |
 
 ## The domains
 
@@ -143,7 +143,7 @@ The deployment's and the members' API keys, and which models a key may reach.
 Ceilings, reservations, reset periods and per-member policies.
 
 - Routes: `budgets.py`, `scoped_budgets.py`, `organization_budgets.py`,
-  `workspace_member_budget_policies.py`
+  `workspace_member_budget_policies.py`, `workspace_budget.py`
 - Services: `budgets/`
 - Repositories: `budgets/`
 - Schemas: `budgets.py`
@@ -291,6 +291,18 @@ a service package and no repository.
 - Routes: `hooks.py`
 - Outside the four layers: the evaluator is `otari_agent.domain`, in the
   `otari-agent` workspace member (`cli/`), so `otari hook` can run without the gateway
+
+### saved-views
+
+A dashboard page's named filter states, each person's own or shared with a
+workspace.
+
+- Routes: `saved_views.py`
+- Services: `saved_views/`
+- Repositories: `saved_views/`
+- Schemas: `saved_views.py`
+- Exceptions: `saved_views_exceptions.py`
+- Models: `saved_views.py`
 
 ### usage-and-telemetry
 

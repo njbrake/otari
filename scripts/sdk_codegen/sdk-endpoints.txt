@@ -285,6 +285,11 @@ GET /api/v1/workspaces/{workspace_id}/members                   # dashboard-only
 POST /api/v1/workspaces/{workspace_id}/members/{user_id}        # dashboard-only
 PATCH /api/v1/workspaces/{workspace_id}/members/{user_id}       # dashboard-only
 DELETE /api/v1/workspaces/{workspace_id}/members/{user_id}      # dashboard-only
+GET /api/v1/workspaces/{workspace_id}/budget                    # dashboard-only
+GET /api/v1/workspaces/{workspace_id}/saved-views               # dashboard-only
+POST /api/v1/workspaces/{workspace_id}/saved-views              # dashboard-only
+PATCH /api/v1/workspaces/{workspace_id}/saved-views/{view_id}   # dashboard-only
+DELETE /api/v1/workspaces/{workspace_id}/saved-views/{view_id}  # dashboard-only
 GET /api/v1/organizations/me/pricing                            # dashboard-only
 POST /api/v1/organizations/me/pricing                           # dashboard-only
 PUT /api/v1/organizations/me/pricing/{pricing_id}               # dashboard-only
