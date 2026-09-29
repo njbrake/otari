@@ -324,6 +324,20 @@ def test_a_member_reads_only_their_own_requests_in_a_shared_workspace(
     assert _models_summarized(client, world, "alpha_member", query) == set(_ALPHA_ONE_MEMBER_MODELS)
 
 
+def test_a_members_search_never_reaches_outside_their_scope(client: TestClient, world: _World) -> None:
+    """Search ORs across columns, and the scope is ANDed around all of it.
+
+    The viewer's model shares the member's workspace and matches the search, so a
+    search that escaped its scope would surface it here.
+    """
+    assert _models_listed(client, world, "alpha_member", "?q=alpha-one") == set(_ALPHA_ONE_MEMBER_MODELS)
+    assert _models_listed(client, world, "alpha_member", "?q=viewer") == set()
+    assert _models_summarized(client, world, "alpha_member", "?q=viewer") == set()
+    # Matching the member's own alias finds only the rows the scope already allows:
+    # their row in alpha two stays out, since they belong to alpha one alone.
+    assert _models_listed(client, world, "alpha_member", "?q=alpha_member") == set(_ALPHA_ONE_MEMBER_MODELS)
+
+
 def test_a_viewer_is_scoped_like_a_member_and_not_like_an_admin(client: TestClient, world: _World) -> None:
     """``viewer`` is the fourth role and is outside ``MANAGEMENT_ROLES``.
 
@@ -645,3 +659,71 @@ def test_the_context_reports_whether_provider_keys_can_be_encrypted(client: Test
     assert isinstance(body["provider_key_encryption_available"], bool)
     # Says whether a key is configured, never anything about its value.
     assert "secret" not in str(body).lower()
+
+
+def test_another_organizations_names_never_match_a_search(client: TestClient, world: _World) -> None:
+    """The alias and key-name subqueries are not tenant-scoped; the scope around them is.
+
+    ``alpha_member`` is the alias of a user who only has rows in alpha, so beta's
+    owner searching for it must find nothing rather than learn it exists.
+    """
+    assert _models_listed(client, world, "beta_owner", "?q=alpha_member") == set()
+    assert _models_listed(client, world, "beta_owner", "?q=alpha-one") == set()
+    assert _models_listed(client, world, "alpha_owner", "?q=beta-one") == set()
+
+
+def test_earlier_failed_attempts_are_counted_only_inside_the_callers_scope(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """A member's folded row counts its own absorbed attempt and nobody else's.
+
+    The viewer's absorbed row shares the member's request group, which no real
+    request does; it stands in for any row the scope must keep out of the count.
+    """
+    workspace = world.workspaces["alpha_one"]
+    member, viewer = str(world.users["alpha_member"]), str(world.users["alpha_viewer"])
+    now = datetime.now(UTC)
+    routed = {"workspace_id": workspace, "provider": "p", "endpoint": "/v1/chat/completions", "source": "gateway"}
+    session = db_session_factory()
+    try:
+        session.add_all(
+            [
+                UsageLog(
+                    id="served",
+                    user_id=member,
+                    model="routed-served",
+                    status="success",
+                    request_group_id="g",
+                    timestamp=now,
+                    **routed,
+                ),
+                UsageLog(
+                    id="mine-absorbed",
+                    user_id=member,
+                    model="routed-first",
+                    status="absorbed",
+                    request_group_id="g",
+                    timestamp=now - timedelta(seconds=2),
+                    **routed,
+                ),
+                UsageLog(
+                    id="viewers-absorbed",
+                    user_id=viewer,
+                    model="routed-first",
+                    status="absorbed",
+                    request_group_id="g",
+                    timestamp=now - timedelta(seconds=1),
+                    **routed,
+                ),
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    code, body = _as(
+        client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage?include_absorbed=false&q=routed"
+    )
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, list)
+    assert [(row["id"], row["absorbed_attempts"]) for row in body] == [("served", 1)]

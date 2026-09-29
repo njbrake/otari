@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.metered_pricing import BillableUsage, billable_usage, price_billable_usage
 from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
+from gateway.core.usage_filters import MAX_SEARCH_LENGTH, usage_search_condition
 from gateway.core.usage_source import not_served_here
 from gateway.log_config import logger
 from gateway.models.pricing import ModelPricing
@@ -93,6 +94,13 @@ class UsageSelection(BaseModel):
     # filter is: an operator who filtered the table to one workspace and then
     # chose "all N matching" must not delete another workspace's rows.
     workspace_id: uuid.UUID | None = None
+    # Mirrors of the read filters of the same name. Both are NULL on an imported
+    # row, the only kind this selection reaches, so either narrows it to nothing;
+    # forwarded for the invariant, as ``tool`` is. The reads' row-id ``id`` filter
+    # has no counterpart here: ``ids`` is the other mode, not a narrowing of this one.
+    request_id: str | _CappedValues | None = None
+    requested_model: str | _CappedValues | None = None
+    q: str | None = Field(default=None, max_length=MAX_SEARCH_LENGTH)
 
     @model_validator(mode="after")
     def _require_exactly_one_mode(self) -> "UsageSelection":
@@ -207,6 +215,12 @@ def _selection_conditions(selection: UsageSelection) -> list[ColumnElement[bool]
             if selection.tool == "any"
             else namespace[selection.tool]["billed"].as_integer().is_not(None)
         )
+    if selection.request_id is not None and selection.request_id != []:
+        conditions.append(match_any(UsageLog.request_id, selection.request_id))
+    if selection.requested_model is not None and selection.requested_model != []:
+        conditions.append(match_any(UsageLog.requested_model, selection.requested_model))
+    if selection.q is not None and (search := usage_search_condition(selection.q)) is not None:
+        conditions.append(search)
     return conditions
 
 

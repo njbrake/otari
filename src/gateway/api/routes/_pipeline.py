@@ -950,8 +950,11 @@ class RequestContext:
         code_execution_policy: ResolvedCodeExecutionPolicy | None = None,
         code_execution_policy_loaded: bool = False,
         request_id: str | None = None,
+        requested_model: str | None = None,
     ) -> None:
         self.config = config
+        # The model name as sent, before an alias or policy resolved it.
+        self.requested_model = requested_model
         # Sent to the client as ``Otari-Request-ID``: the platform's id in hybrid
         # mode, one minted by this gateway in standalone.
         self.request_id = request_id
@@ -1123,6 +1126,8 @@ async def resolve_dispatch_provider(
             api_key_id=ctx.api_key_id,
             user_id=ctx.user_id,
             model=model_selector,
+            requested_model=ctx.requested_model,
+            request_id=ctx.request_id,
             provider=None,
             endpoint=adapter.endpoint,
             detail=unresolvable_model_detail(model_selector),
@@ -1260,6 +1265,8 @@ async def _serve_from_hosted_credential(
             api_key_id=ctx.api_key_id,
             user_id=ctx.user_id,
             model=resolved.model,
+            requested_model=ctx.requested_model,
+            request_id=ctx.request_id,
             provider=resolved.instance,
             endpoint=adapter.endpoint,
             detail=denied_detail,
@@ -1296,6 +1303,8 @@ async def _serve_from_hosted_credential(
             api_key_id=ctx.api_key_id,
             user_id=ctx.user_id,
             model=resolved.model,
+            requested_model=ctx.requested_model,
+            request_id=ctx.request_id,
             provider=resolved.instance,
             endpoint=adapter.endpoint,
             detail=HOSTED_CREDENTIAL_UNUSABLE_DETAIL,
@@ -1335,6 +1344,8 @@ async def _serve_from_hosted_credential(
             api_key_id=ctx.api_key_id,
             user_id=ctx.user_id,
             model=resolved.model,
+            requested_model=ctx.requested_model,
+            request_id=ctx.request_id,
             provider=resolved.instance,
             endpoint=adapter.endpoint,
             detail=HOSTED_CREDENTIAL_UNUSABLE_DETAIL,
@@ -1377,6 +1388,7 @@ async def _bill_vision_side_call(
     user_id: str,
     endpoint: str,
     usage: CompletionUsage,
+    request_id: str,
     counts_toward_budget: bool = True,
 ) -> None:
     """Meter and bill a vision describe side-call made during normalization.
@@ -1406,6 +1418,7 @@ async def _bill_vision_side_call(
         log_writer=log_writer,
         api_key_id=api_key_id,
         model=resolved.model,
+        request_id=request_id,
         provider=resolved.instance,
         endpoint=endpoint,
         user_id=user_id,
@@ -1581,6 +1594,7 @@ async def _compile_request_plan(
     started_at: float,
     routing_signal: Callable[[], RoutingSignal] | None = None,
     workspace_id: uuid.UUID | None = None,
+    request_id: str,
 ) -> CompiledPlan | None:
     """Compile ``model`` into a plan when it names a routing policy, else ``None``.
 
@@ -1644,6 +1658,8 @@ async def _compile_request_plan(
             api_key_id=api_key_id,
             user_id=user_id,
             model=model,
+            requested_model=model,
+            request_id=request_id,
             provider=None,
             endpoint=endpoint,
             detail=exc.operator_detail,
@@ -1668,6 +1684,7 @@ async def _resolve_keyed_user_id(
     master_key_user_required_detail: str,
     user_forbidden_detail: str,
     started_at: float,
+    request_id: str,
 ) -> str:
     """The billed user for a key- or master-key-authenticated request.
 
@@ -1711,6 +1728,8 @@ async def _resolve_keyed_user_id(
                 api_key_id=api_key_id,
                 user_id=api_key.user_id,
                 model=model,
+                requested_model=model,
+                request_id=request_id,
                 provider=None,
                 endpoint=adapter.endpoint,
                 detail=user_forbidden_detail,
@@ -1880,6 +1899,7 @@ async def resolve_request_context(
                 master_key_user_required_detail=master_key_user_required_detail,
                 user_forbidden_detail=user_forbidden_detail,
                 started_at=started_at,
+                request_id=request_id,
             )
             # Resolved before the plan rather than with the gate below, because the
             # compiler must drop candidates this caller may not use: a chain that fell
@@ -1912,6 +1932,7 @@ async def resolve_request_context(
             started_at=started_at,
             routing_signal=routing_signal,
             workspace_id=workspace_id,
+            request_id=request_id,
         )
         if plan is not None:
             head = plan.head
@@ -1952,6 +1973,8 @@ async def resolve_request_context(
                 api_key_id=api_key_id,
                 user_id=user_id,
                 model=gate_model,
+                requested_model=model,
+                request_id=request_id,
                 provider=gate_instance,
                 endpoint=adapter.endpoint,
                 detail=not_allowed_detail,
@@ -1982,6 +2005,8 @@ async def resolve_request_context(
                     api_key_id=api_key_id,
                     user_id=user_id,
                     model=gate_model,
+                    requested_model=model,
+                    request_id=request_id,
                     provider=gate_instance,
                     endpoint=adapter.endpoint,
                     detail=not_allowed_detail,
@@ -2068,6 +2093,8 @@ async def resolve_request_context(
                     api_key_id=api_key_id,
                     user_id=user_id,
                     model=gate_model,
+                    requested_model=model,
+                    request_id=request_id,
                     provider=gate_instance,
                     endpoint=adapter.endpoint,
                     detail=str(exc.detail),
@@ -2090,6 +2117,8 @@ async def resolve_request_context(
                 api_key_id=api_key_id,
                 user_id=user_id,
                 model=gate_model,
+                requested_model=model,
+                request_id=request_id,
                 provider=gate_instance,
                 endpoint=adapter.endpoint,
                 detail=no_pricing_detail,
@@ -2153,6 +2182,7 @@ async def resolve_request_context(
                         user_id=user_id,
                         endpoint=adapter.endpoint,
                         usage=vision_usage,
+                        request_id=request_id,
                         counts_toward_budget=not budget_exempt,
                     )
                 # Attachments expanded the payload, so the stored inputs must
@@ -2236,6 +2266,7 @@ async def resolve_request_context(
         request_group_id=str(uuid.uuid4()) if plan is not None else None,
         organization_id=organization_id,
         request_id=request_id,
+        requested_model=model,
     )
 
 
@@ -3625,6 +3656,8 @@ async def _require_tool_pricing(
                 api_key_id=ctx.api_key_id,
                 user_id=ctx.user_id,
                 model=key,
+                requested_model=ctx.requested_model,
+                request_id=ctx.request_id,
                 provider=GATEWAY_TOOL_PRICING_PROVIDER,
                 endpoint=adapter.endpoint,
                 detail=detail,
@@ -3752,6 +3785,8 @@ async def record_usage(
     attribution: RoutingAttribution | None = None,
     tool_tally: ToolUsageTally | None = None,
     workspace_id: uuid.UUID | None = None,
+    requested_model: str | None = None,
+    request_id: str | None = None,
 ) -> LoggedUsage:
     """Log API usage to the database and return the computed cost and its source.
 
@@ -3793,6 +3828,11 @@ async def record_usage(
             None for a non-streaming request or a stream that never yielded one
         attribution: Which routing policy produced this row and where in its plan,
             or None for a request that named a plain model
+        requested_model: The model name the caller sent, before an alias or a
+            routing policy resolved it to ``model``; None for a row no caller
+            named (a side-call billed on the caller's behalf)
+        request_id: The request's ``Otari-Request-ID``, or None where none was
+            minted
         workspace_id: The workspace already resolved for this request (from
             ``resolve_workspace_id``/``RequestContext.workspace_id``), reused
             instead of re-deriving it. Every ``ctx``-bearing caller has this for
@@ -3817,6 +3857,8 @@ async def record_usage(
         user_id=user_id,
         timestamp=datetime.now(UTC),
         model=model,
+        requested_model=requested_model,
+        request_id=request_id,
         provider=provider,
         endpoint=endpoint,
         status=_row_status(error=error, attribution=attribution),
@@ -4079,6 +4121,8 @@ async def log_gateway_rejection(
     detail: str,
     status_code: int,
     started_at: float | None,
+    requested_model: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     """Record a request the gateway itself refused before any provider was called.
 
@@ -4141,6 +4185,8 @@ async def log_gateway_rejection(
             log_writer=log_writer,
             api_key_id=api_key_id,
             model=model,
+            requested_model=requested_model,
+            request_id=request_id,
             provider=provider,
             endpoint=endpoint,
             user_id=user_id,
@@ -4187,6 +4233,8 @@ async def _log_failure_and_refund(
         log_writer=ctx.log_writer,
         api_key_id=ctx.api_key_id,
         model=model,
+        requested_model=ctx.requested_model,
+        request_id=ctx.request_id,
         provider=provider,
         endpoint=adapter.endpoint,
         user_id=ctx.user_id,
@@ -4526,6 +4574,7 @@ def build_streaming_response(
     tool_tally: ToolUsageTally | None = None,
     workspace_id: uuid.UUID | None = None,
     extra_headers: dict[str, str] | None = None,
+    requested_model: str | None = None,
 ) -> StreamingResponse:
     """Wrap an already-opened upstream stream in an SSE response.
 
@@ -4580,6 +4629,8 @@ def build_streaming_response(
             log_writer=log_writer,
             api_key_id=api_key_id,
             model=model,
+            requested_model=requested_model,
+            request_id=request_id,
             provider=provider,
             endpoint=adapter.endpoint,
             user_id=user_id,
@@ -4628,6 +4679,8 @@ def build_streaming_response(
                 log_writer=log_writer,
                 api_key_id=api_key_id,
                 model=model,
+                requested_model=requested_model,
+                request_id=request_id,
                 provider=provider,
                 endpoint=adapter.endpoint,
                 user_id=user_id,
@@ -4654,6 +4707,8 @@ def build_streaming_response(
             log_writer=log_writer,
             api_key_id=api_key_id,
             model=model,
+            requested_model=requested_model,
+            request_id=request_id,
             provider=provider,
             endpoint=adapter.endpoint,
             user_id=user_id,
@@ -4701,6 +4756,8 @@ def build_streaming_response(
             log_writer=log_writer,
             api_key_id=api_key_id,
             model=model,
+            requested_model=requested_model,
+            request_id=request_id,
             provider=provider,
             endpoint=adapter.endpoint,
             user_id=user_id,
@@ -4739,6 +4796,8 @@ def build_streaming_response(
                 log_writer=log_writer,
                 api_key_id=api_key_id,
                 model=model,
+                requested_model=requested_model,
+                request_id=request_id,
                 provider=provider,
                 endpoint=adapter.endpoint,
                 user_id=user_id,
@@ -4989,6 +5048,7 @@ async def run_single_attempt_stream(
         stream=stream,
         provider=provider,
         model=model,
+        requested_model=ctx.requested_model,
         config=ctx.config,
         db=ctx.db,
         extra_headers=_container_headers(tool_ctx.container_lease),
@@ -5501,6 +5561,8 @@ async def log_exhausted_plan(
         log_writer=ctx.log_writer,
         api_key_id=ctx.api_key_id,
         model=last.model,
+        requested_model=ctx.requested_model,
+        request_id=ctx.request_id,
         provider=last.instance,
         endpoint=adapter.endpoint,
         user_id=ctx.user_id,
@@ -5542,6 +5604,8 @@ async def log_absorbed_attempt(
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
             model=attempt.model,
+            requested_model=ctx.requested_model,
+            request_id=ctx.request_id,
             provider=attempt.instance,
             endpoint=adapter.endpoint,
             user_id=ctx.user_id,
@@ -5664,6 +5728,8 @@ async def run_standalone_non_stream(
                     log_writer=ctx.log_writer,
                     api_key_id=ctx.api_key_id,
                     model=model,
+                    requested_model=ctx.requested_model,
+                    request_id=ctx.request_id,
                     provider=provider,
                     endpoint=adapter.endpoint,
                     user_id=ctx.user_id,

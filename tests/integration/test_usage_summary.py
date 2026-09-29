@@ -124,6 +124,9 @@ def test_summary_empty_range_is_all_zero(client: TestClient, master_key_header: 
         "unpriced_requests": 0,
         "billed_input_tokens": 0,
         "billed_output_tokens": 0,
+        "p95_latency_ms": None,
+        "absorbed_count": 0,
+        "imported_cost": 0.0,
     }
     assert body["by_model"] == []
     assert body["by_user"] == []

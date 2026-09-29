@@ -243,6 +243,17 @@ def test_failover_serves_the_next_candidate_and_bills_it_once(client: TestClient
     assert served[0]["request_group_id"] == absorbed[0]["request_group_id"]
     assert served[0]["request_group_id"] is not None
 
+    # Both record the name the caller sent and the request id they were given, so the
+    # id in the caller's log finds the whole plan.
+    assert served[0]["requested_model"] == absorbed[0]["requested_model"] == "fast"
+    assert served[0]["request_id"] == absorbed[0]["request_id"] == resp.headers["Otari-Request-ID"]
+    # The serving row counts the attempt it recovered from; listed without absorbed
+    # rows, the request is one row.
+    assert served[0]["absorbed_attempts"] == 1
+    assert absorbed[0]["absorbed_attempts"] == 0
+    folded = client.get(f"{API_ROOT}/usage", params={"include_absorbed": "false"}, headers=HEADERS).json()
+    assert [(r["id"], r["absorbed_attempts"]) for r in folded] == [(served[0]["id"], 1)]
+
 
 def test_all_candidates_failing_is_a_generic_502(client: TestClient) -> None:
     """A multi-candidate fallthrough must not attribute one provider's status to
@@ -1376,7 +1387,8 @@ def test_a_streamed_fallover_correlates_both_of_its_rows(client: TestClient) -> 
         return chunks()
 
     with patch("gateway.api.routes.chat.acompletion", new=flaky_stream):
-        assert _chat(client, "fast", stream=True).status_code == 200
+        resp = _chat(client, "fast", stream=True)
+        assert resp.status_code == 200
 
     rows = _usage_rows(client)
     served = [r for r in rows if r["status"] == "success"]
@@ -1386,6 +1398,8 @@ def test_a_streamed_fallover_correlates_both_of_its_rows(client: TestClient) -> 
     assert served[0]["attempt_position"] == 2
     assert served[0]["request_group_id"] is not None
     assert served[0]["request_group_id"] == absorbed[0]["request_group_id"]
+    assert served[0]["requested_model"] == absorbed[0]["requested_model"] == "fast"
+    assert served[0]["request_id"] == absorbed[0]["request_id"] == resp.headers["Otari-Request-ID"]
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
