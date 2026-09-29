@@ -86,7 +86,7 @@ export interface DataTableProps<Row> {
   onRowAction?: (key: string) => void
   rowClassName?: (row: Row) => string | undefined
   /** Enables draggable column resize handles. */
-  resizable?: boolean
+  isResizable?: boolean
   /**
    * Inline detail: when `detailKey` matches a row's key, `renderDetail(row)`
    * renders as a full-width row directly under that row (accordion style), so
@@ -106,6 +106,11 @@ export interface DataTableProps<Row> {
 
 const SELECTION_COLUMN_WIDTH = 44
 
+// How long the optimistic row highlight survives with no panel. Long enough to
+// cover the interaction render it stands in for, short enough that a row action
+// which opens nothing does not leave a row lit indefinitely.
+const DETAIL_OPENING_BACKSTOP_MS = 1500
+
 // Whether the document's text selection is a real (non-empty) one anchored inside
 // `root`. Used to tell "the operator was highlighting an id" from "the operator
 // clicked the row": a plain click leaves a collapsed selection, and a selection
@@ -118,10 +123,10 @@ function hasTextSelectionIn(root: HTMLElement | null): boolean {
   return selection.anchorNode !== null && root.contains(selection.anchorNode)
 }
 
-// HeroUI's Table.Root is itself a card, so `.otari-table` in globals.css is what
-// neutralizes it: no fill, no radius, no padding, no column separators. A table
-// is a region of the one surface, bounded by the section rules around it and by
-// its own header and row hairlines.
+// HeroUI's Table.Root is itself a card, so `.otari-table` in design-system.css is
+// what neutralizes it: no fill, no radius, no padding, no column separators. A
+// table is a region of the one surface, bounded by the section rules around it
+// and by its own header and row hairlines.
 //
 // Those are the DEFAULTS, which is newer than it looks. The base used to paint a
 // surface fill and a brand-tint header, and each of the sixteen per-table
@@ -148,12 +153,14 @@ export function DataTable<Row extends object>({
   onSortChange,
   onRowAction,
   rowClassName,
-  resizable = false,
+  isResizable = false,
   detailKey = null,
   renderDetail,
 }: DataTableProps<Row>) {
   const showSelection = selectionMode === "multiple"
-  const Container = resizable ? Table.ResizableContainer : Table.ScrollContainer
+  const Container = isResizable
+    ? Table.ResizableContainer
+    : Table.ScrollContainer
   const columnCount = columns.length + (showSelection ? 1 : 0)
 
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -163,7 +170,7 @@ export function DataTable<Row extends object>({
   const detailRow = useMemo(
     () =>
       detailKey != null && renderDetail
-        ? (rows.find((r) => getRowKey(r) === detailKey) ?? null)
+        ? (rows.find((row) => getRowKey(row) === detailKey) ?? null)
         : null,
     [detailKey, renderDetail, rows, getRowKey],
   )
@@ -183,6 +190,27 @@ export function DataTable<Row extends object>({
   } | null>(null)
   // Stable identity: it only reads and writes a ref, so the effect below can
   // list it without re-running on every render.
+  // Which row currently wears the optimistic highlight, and the backstop that
+  // takes it off. The key rather than the element: a closure holding the <tr>
+  // keeps a detached node alive for the length of the window when the table
+  // filters or repaginates under it.
+  const opening = useRef<
+    { key: string; backstop: ReturnType<typeof setTimeout> } | undefined
+  >(undefined)
+
+  /** Take the highlight off whichever row has it, and cancel its backstop. */
+  const clearOpening = useCallback(() => {
+    const current = opening.current
+    if (!current) return
+    opening.current = undefined
+    clearTimeout(current.backstop)
+    rootRef.current
+      ?.querySelector(`tbody tr[data-key="${CSS.escape(current.key)}"]`)
+      ?.classList.remove("otari-detail-opening")
+  }, [])
+
+  useEffect(() => clearOpening, [clearOpening])
+
   const ensureHost = useCallback(() => {
     if (!hostRef.current) {
       const row = document.createElement("tr")
@@ -222,10 +250,8 @@ export function DataTable<Row extends object>({
         `tbody tr[data-key="${CSS.escape(detailKey)}"]`,
       )
       if (!target) return false
-      // The optimistic "opening" highlight has served its purpose once the
-      // panel actually lands.
-      for (const el of root.querySelectorAll(".otari-detail-opening"))
-        el.classList.remove("otari-detail-opening")
+      // The optimistic highlight has served its purpose once the panel lands.
+      clearOpening()
       // Only move it when it is not already there. Re-inserting an attached
       // node detaches and re-attaches its subtree, which cancels and restarts
       // the reveal animation running inside it.
@@ -245,7 +271,15 @@ export function DataTable<Row extends object>({
       observer.observe(root, { childList: true, subtree: true })
     }
     return () => observer?.disconnect()
-  }, [detailKey, detailRow, columnCount, rows, sortDescriptor, ensureHost])
+  }, [
+    detailKey,
+    detailRow,
+    columnCount,
+    rows,
+    sortDescriptor,
+    ensureHost,
+    clearOpening,
+  ])
 
   // Detach on unmount. Deliberately not part of the effect above, whose cleanup
   // runs on every dependency change: removing the host there is what made a
@@ -260,24 +294,32 @@ export function DataTable<Row extends object>({
     (key: string) => {
       if (!onRowAction) return
       if (renderDetail && key !== detailKey) {
+        clearOpening()
         const target = rootRef.current?.querySelector(
           `tbody tr[data-key="${CSS.escape(key)}"]`,
         )
+        // Written to the DOM rather than held in state on purpose: a state
+        // update would be queued behind the same O(rows) render this is here to
+        // cover, so the acknowledgment would arrive with the panel it stands in
+        // for.
         target?.classList.add("otari-detail-opening")
-        setTimeout(() => target?.classList.remove("otari-detail-opening"), 1500)
+        opening.current = {
+          key,
+          backstop: setTimeout(clearOpening, DETAIL_OPENING_BACKSTOP_MS),
+        }
       }
       onRowAction(key)
     },
-    [onRowAction, renderDetail, detailKey],
+    [onRowAction, renderDetail, detailKey, clearOpening],
   )
 
   // The row key for an event on an ordinary data cell, or null when the event
   // belongs to something else: checkboxes, buttons, links, inputs, and the detail
   // panel pass through untouched. Only meaningful for tables with a row action.
   const dataCellRowKey = useCallback(
-    (e: { target: EventTarget | null }): string | null => {
+    (event: { target: EventTarget | null }): string | null => {
       if (!onRowAction) return null
-      const target = e.target instanceof Element ? e.target : null
+      const target = event.target instanceof Element ? event.target : null
       if (!target) return null
       if (
         target.closest(
@@ -320,11 +362,22 @@ export function DataTable<Row extends object>({
   // so callers must keep `columns`, `getRowKey`, and `rowClassName` (if used)
   // referentially stable across unrelated re-renders for the cache to pay off;
   // an inline arrow for any of them rebuilds every row on each render.
+  // A boolean, not `onRowAction` itself: every caller passes an inline arrow, and
+  // depending on its identity would rebuild the row cache below on each render.
+  const hasRowAction = onRowAction != null
+
   const renderRow = useCallback(
     (row: Row) => {
       const key = getRowKey(row)
+      // A row with a drill-in action takes the pointer cursor. The base rule in
+      // `globals.css` cannot reach it: nothing in the markup tells a row that
+      // opens something from one that is inert.
+      const className =
+        [hasRowAction ? "cursor-pointer" : null, rowClassName?.(row)]
+          .filter(Boolean)
+          .join(" ") || undefined
       return (
-        <Table.Row key={key} id={key} className={rowClassName?.(row)}>
+        <Table.Row key={key} id={key} className={className}>
           {showSelection ? (
             <Table.Cell>
               <SelectionCheckbox ariaLabel="Select row" />
@@ -343,33 +396,33 @@ export function DataTable<Row extends object>({
         </Table.Row>
       )
     },
-    [getRowKey, rowClassName, showSelection, columns],
+    [getRowKey, rowClassName, showSelection, columns, hasRowAction],
   )
 
   return (
     <Table.Root ref={rootRef} className="otari-table">
       <Container
         className="overflow-x-auto"
-        onPointerDownCapture={(e: ReactPointerEvent) => {
-          if (dataCellRowKey(e) != null) e.stopPropagation()
+        onPointerDownCapture={(event: ReactPointerEvent) => {
+          if (dataCellRowKey(event) != null) event.stopPropagation()
         }}
-        onMouseDownCapture={(e: ReactMouseEvent) => {
+        onMouseDownCapture={(event: ReactMouseEvent) => {
           // react-aria falls back to mouse events where PointerEvent is
           // unavailable; the press (and its selection toggle) starts here.
-          if (dataCellRowKey(e) != null) e.stopPropagation()
+          if (dataCellRowKey(event) != null) event.stopPropagation()
         }}
-        onClickCapture={(e: ReactMouseEvent) => {
-          const key = dataCellRowKey(e)
+        onClickCapture={(event: ReactMouseEvent) => {
+          const key = dataCellRowKey(event)
           if (key == null) return
           // Swallowed either way, so react-aria's row press never fires a second
           // action. A click that ended a text drag inside the table is a
           // selection, not an activation: cells are selectable by design (see
-          // globals.css), and drilling in mid-highlight both loses the selection
+          // design-system.css), and drilling in mid-highlight both loses the selection
           // and moves the page under the operator, so the action is skipped for
           // that click only. Deliberately scoped to the click path: the same
           // check in fireRowAction would also swallow Enter on a focused row,
           // which is a deliberate activation even with an id still highlighted.
-          e.stopPropagation()
+          event.stopPropagation()
           if (!hasTextSelectionIn(rootRef.current)) fireRowAction(key)
         }}
       >
@@ -418,7 +471,7 @@ export function DataTable<Row extends object>({
                     ) : (
                       <span>{col.header}</span>
                     )}
-                    {resizable ? (
+                    {isResizable ? (
                       <Table.ColumnResizer className="ml-auto cursor-col-resize px-1" />
                     ) : null}
                   </div>

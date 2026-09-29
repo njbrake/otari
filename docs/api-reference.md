@@ -15,8 +15,9 @@ exporter appends `/v1/traces`, `/v1/logs` and `/v1/metrics`.
 
 ## Authentication
 
-In standalone and hosted mode, Otari accepts a local API key or the master key in
-any of these forms:
+Otari accepts a credential in any of these forms, whatever the mode: a local API
+key or the master key in standalone and hosted mode, an otari.ai user token in
+hybrid mode:
 
 ```text
 Authorization: Bearer <token>
@@ -32,9 +33,9 @@ operations, a separately scoped endpoint serves it to the caller's own
 organization: `/api/v1/organizations/me/usage` for usage, and
 `/api/v1/organizations/me/keys` for a member's own API keys.
 
-In hybrid mode, the generation APIs and the `/api/v1/mcp` endpoints accept an
-otari.ai user token through `Authorization: Bearer <token>`. Local API keys and
-management APIs are not used.
+In hybrid mode, the generation APIs and the `/api/v1/mcp` and `/api/v1/hooks`
+endpoints accept an otari.ai user token in the same header forms. Local API
+keys and management APIs are not used.
 
 ## Availability by mode
 
@@ -61,6 +62,26 @@ Otari implements three completion surfaces:
 Standalone mode also serves embeddings, images, audio, files, batches,
 moderations, rerank, and search. Provider support differs by endpoint, so use
 `GET /api/v1/models` and the OpenAPI document for the deployment you are calling.
+
+### Request ID and inline cost
+
+Every Chat, Messages, and Responses response carries an `Otari-Request-ID`
+header, streaming or not. In hybrid mode it is the platform's id for the
+request; a standalone gateway mints its own.
+
+A priced response also carries its cost on the usage object it already returns,
+as `usage.cost_usd` (a six-decimal USD string) and `usage.pricing_source`. On a
+stream the fields ride the terminal usage event: the last usage chunk for Chat
+Completions, `message_delta` for Messages, and `response.completed` for
+Responses. The two fields always appear together, and an unpriced or
+unreported request carries neither.
+
+In standalone mode the amount is the one the gateway wrote to its own usage
+record, including any gateway-run tool charges, and `pricing_source` names the
+rate that priced the model: `organization` (an organization's override),
+`deployment` (a rate stored on this gateway), or `defaults` (the bundled
+genai-prices dataset). Hybrid mode attaches the platform's settlement instead;
+see [Hybrid mode protocol](hybrid-mode-protocol.md#inline-response-fields).
 
 ## Search
 

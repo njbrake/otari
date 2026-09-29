@@ -1,11 +1,8 @@
-"""Workspace per-member budget defaults (standalone mode only).
+"""Workspace per-member budget defaults.
 
-A default is a workspace-level template for the per-member ``scoped_budgets``
-ceiling; the materialized per-member rows live on the existing
-``/api/v1/scoped-budgets`` surface. Thin composition over
-`gateway.services.tenancy.workspace_budget_default_service`, following
-`routes/workspaces.py`'s own shape (master-key on the router, plus the
-caller's tenancy identity for the per-workspace role checks).
+A default is a workspace-level template for the per-member ``scoped_budgets`` ceiling.
+The router is mounted in standalone and hosted modes, and not in hybrid mode.
+The router requires the master key, and the caller's tenancy identity decides the per-workspace role checks.
 """
 
 import uuid
@@ -16,13 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import CurrentIdentity, get_db, verify_master_key
 from gateway.api.routes.organizations import Message
-from gateway.services.tenancy.workspace_budget_default_service import (
-    WorkspaceBudgetDefaultService,
+from gateway.schemas.budgets import (
     WorkspaceMemberBudgetPoliciesPublic,
     WorkspaceMemberBudgetPolicyCreate,
     WorkspaceMemberBudgetPolicyPublic,
     WorkspaceMemberBudgetPolicyUpdate,
 )
+from gateway.services.budgets import WorkspaceBudgetDefaultService
 
 # Auth is declared on the router, matching `routes/workspaces.py`: every
 # handler here needs the master key, and a future one that forgot the

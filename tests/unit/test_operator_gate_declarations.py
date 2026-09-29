@@ -37,6 +37,7 @@ from gateway.api.routes import (
     aliases,
     budgets,
     catalog,
+    hooks,
     keys,
     mail,
     maintenance_mode,
@@ -78,16 +79,23 @@ _DEPLOYMENT_WIDE_ROUTERS: list[tuple[str, APIRouter]] = [
 
 # The routers a caller reaches without operator standing, and the dependency
 # each admits them with instead. Listed so the gate can be asserted *off* them:
-# putting it on the whole of `models.py`, `pricing.py` or `usage.py` is the
-# plausible wrong fix, and it would take the dashboard's Models and Pricing
-# pages and a data-plane gateway's usage report with it.
+# putting it on the whole of `models.py`, `pricing.py`, `providers.py`,
+# `tool_settings.py` or `usage.py` is the plausible wrong fix, and it would take
+# the dashboard's Models and Pricing pages, the organization forms' lists of BYO
+# providers and of built-in guardrails, and a data-plane gateway's usage report
+# with it. An entry here is not enforced by the totality case below, which sees
+# only that a router declares some gate in `_ROUTER_LEVEL_GATES`; a router split
+# off the operator one has to be added by hand.
 _NON_OPERATOR_ROUTERS: list[tuple[str, APIRouter, Callable[..., Any]]] = [
     ("catalog", catalog.router, verify_catalog_reader_or_public),
     ("models.catalog", models.catalog_router, verify_catalog_reader),
     ("pricing.catalog", pricing.catalog_router, verify_catalog_reader),
+    ("providers.catalog", providers.catalog_router, verify_catalog_reader),
+    ("tool_settings.catalog", tool_settings.catalog_router, verify_catalog_reader),
     ("tool_settings.reader", tool_settings.reader_router, verify_master_key),
     ("tools", tools.router, verify_catalog_reader),
     ("usage.ingest", usage.ingest_router, verify_api_key_or_master_key),
+    ("hooks", hooks.router, hooks.verify_hook_caller),
 ]
 
 
@@ -135,6 +143,7 @@ _UNGATED_ROUTERS: dict[str, str] = {
 # then authorize the caller against the organization or workspace themselves.
 _ROUTER_LEVEL_GATES: frozenset[Callable[..., Any]] = frozenset(
     {
+        hooks.verify_hook_caller,
         require_deployment_operator,
         verify_api_key_or_master_key,
         verify_catalog_reader,

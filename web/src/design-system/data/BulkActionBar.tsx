@@ -1,12 +1,14 @@
 import { Button } from "@heroui/react"
 import type { ReactNode } from "react"
+import { formatNumber } from "@/design-system/helpers/format"
 
 // Contextual bar shown when a table has a selection. Reads "{n} selected" with a
 // Clear, the action buttons the page supplies, and, when the whole visible page
 // is selected and more rows match the filter, a "Select all N matching this
 // filter" affordance so a bulk op can target the full filtered set.
 //
-// `left` and `width` are not spelled here: `.otari-bulk-bar` in `globals.css`
+// `left` and `width` are not spelled here: `.otari-bulk-bar` in
+// `design-system.css`
 // sets both from the rail's published footprint, and an unlayered rule beats a
 // Tailwind utility, so a `left-*` or `w-*` class at this call site would be
 // inert and editing it would change nothing with no error to say so. `max-w-3xl`
@@ -43,8 +45,8 @@ export function BulkActionBar({
   children,
 }: BulkActionBarProps) {
   const label = allMatching
-    ? `All ${(matchingTotal ?? selectedCount).toLocaleString()} matching rows selected`
-    : `${selectedCount.toLocaleString()} selected`
+    ? `All ${formatNumber(matchingTotal ?? selectedCount)} matching rows selected`
+    : `${formatNumber(selectedCount)} selected`
 
   return (
     <div
@@ -66,7 +68,7 @@ export function BulkActionBar({
       </span>
       {!allMatching && canSelectAllMatching && matchingTotal != null ? (
         <Button size="sm" variant="ghost" onPress={onSelectAllMatching}>
-          Select all {matchingTotal.toLocaleString()} matching this filter
+          Select all {formatNumber(matchingTotal)} matching this filter
         </Button>
       ) : null}
       <div className="ml-auto flex flex-wrap items-center gap-2">

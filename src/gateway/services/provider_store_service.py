@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.core.config import GatewayConfig
 from gateway.core.database import create_session
 from gateway.log_config import logger
-from gateway.models.entities import ProviderCredential
+from gateway.models.providers import ProviderCredential
 from gateway.models.secret_fields import restore_redacted_values
 from gateway.services.secret_box import (
     SecretBoxUnavailableError,
@@ -134,8 +134,7 @@ async def refresh_provider_cache(db: AsyncSession, config: GatewayConfig) -> set
             overlay[row.instance] = _row_to_entry(row)
         except (SecretBoxUnavailableError, SecretDecryptionError):
             logger.warning(
-                "Skipping stored provider '%s': its API key could not be decrypted "
-                "(check OTARI_SECRET_KEY).",
+                "Skipping stored provider '%s': its API key could not be decrypted (check OTARI_SECRET_KEY).",
                 row.instance,
             )
     _cache.clear()

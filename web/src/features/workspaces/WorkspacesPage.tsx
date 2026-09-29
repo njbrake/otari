@@ -102,7 +102,7 @@ function DefaultBudgetPicker({
       // this could ever hold. `FieldMessages` reserves the line by default, and
       // `FilterSelect` reserved nothing, so the swap to `Select` brought ~23px
       // of empty back with it.
-      reserveMessage={false}
+      shouldReserveMessage={false}
       options={[
         { value: NO_DEFAULT, label: "No default" },
         ...budgetChoices(budgets),
@@ -141,7 +141,7 @@ function NarrowedDefaults({
 
   const taken = new Set(narrowed.map((row) => row.provider_key_id))
   const available = providers.filter((instance) => !taken.has(instance))
-  const pending =
+  const isPending =
     createDefault.isPending ||
     updateDefault.isPending ||
     deleteDefault.isPending
@@ -173,7 +173,7 @@ function NarrowedDefaults({
                   })
                 }
                 options={budgetChoices(budgets)}
-                disabled={pending}
+                disabled={isPending}
               />
               <Button
                 size="sm"
@@ -181,7 +181,7 @@ function NarrowedDefaults({
                 // Named per row, as the picker beside it is: this is a list of
                 // providers, not a table with a row header to lean on.
                 aria-label={`Remove default for ${row.provider_key_id}`}
-                isDisabled={pending}
+                isDisabled={isPending}
                 onPress={() => setPendingDelete(row)}
               >
                 Remove
@@ -216,7 +216,7 @@ function NarrowedDefaults({
           <Button
             size="sm"
             variant="ghost"
-            isDisabled={pending || provider === "" || budgetId === ""}
+            isDisabled={isPending || provider === "" || budgetId === ""}
             onPress={() =>
               createDefault.mutate(
                 {
@@ -332,8 +332,8 @@ export function CreateWorkspaceForm({
   // the deployment having no budgets. Resolved here rather than passed in
   // because the workspace switcher offers this same form.
   const context = useOrganizationContext()
-  const operates = isDeploymentOperator(context.data)
-  const budgets = useBudgets(operates)
+  const isOperator = isDeploymentOperator(context.data)
+  const budgets = useBudgets(isOperator)
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [budgetId, setBudgetId] = useState(NO_DEFAULT)
@@ -371,7 +371,7 @@ export function CreateWorkspaceForm({
   // button said "and open" while nothing opened would be the worse bug of the
   // two this fixes.
   const entersWorkspace = onCreated !== undefined
-  const pending = create.isPending || createDefault.isPending || holding
+  const isPending = create.isPending || createDefault.isPending || holding
   // Only a refusal *about the name* belongs on the name. These three are the
   // ones this endpoint answers with when the input is the problem: taken (409),
   // malformed (400), or rejected by the schema (422). A 403, a 500 or a dropped
@@ -445,7 +445,7 @@ export function CreateWorkspaceForm({
       title="New workspace"
       submitLabel={entersWorkspace ? "Create and open" : "Create workspace"}
       onSubmit={submit}
-      isPending={pending}
+      isPending={isPending}
       isSubmitDisabled={trimmed === ""}
       isDirty={isDirty}
       returnFocusRef={returnFocusRef}
@@ -490,13 +490,13 @@ export function CreateWorkspaceForm({
         onChange={setDescription}
         // No description under it, so no line held open for one. See forms.md:
         // the reserve exists for an error to replace a description in.
-        reserveMessage={false}
+        shouldReserveMessage={false}
       />
       {/* Withheld from a caller who does not operate the deployment: the
           picker's options come from the operator-gated `/budgets` read, so
           offering it would be offering a control whose list is empty and whose
           save cannot succeed. */}
-      {operates ? (
+      {isOperator ? (
         <DefaultBudgetPicker
           budgets={budgets.data ?? []}
           value={budgetId}
@@ -524,9 +524,9 @@ function EditWorkspaceForm({
   // read itself is workspace-scoped and would answer, but this form only reads
   // it into those controls, so it is declined together with them.
   const context = useOrganizationContext()
-  const operates = isDeploymentOperator(context.data)
-  const budgets = useBudgets(operates)
-  const defaults = useWorkspaceBudgetDefaults(operates ? workspace.id : null)
+  const isOperator = isDeploymentOperator(context.data)
+  const budgets = useBudgets(isOperator)
+  const defaults = useWorkspaceBudgetDefaults(isOperator ? workspace.id : null)
   const createDefault = useCreateWorkspaceBudgetDefault()
   const updateDefault = useUpdateWorkspaceBudgetDefault()
   const deleteDefault = useDeleteWorkspaceBudgetDefault()
@@ -538,18 +538,18 @@ function EditWorkspaceForm({
   const narrowed = (defaults.data ?? []).filter(
     (row) => row.provider_key_id !== null,
   )
-  const providers = useProviders(operates)
+  const providers = useProviders(isOperator)
   const [name, setName] = useState(workspace.name)
   const [description, setDescription] = useState(workspace.description ?? "")
-  const [budgetId, setBudgetId] = useState<string | null>(null)
-  // Null until the operator touches the picker, so a default that arrives after
-  // the form mounted is still what the picker shows.
+  const [budgetId, setBudgetId] = useState<string>()
+  // Unset until the operator touches the picker, so a default that arrives
+  // after the form mounted is still what the picker shows.
   const selectedBudget = budgetId ?? aggregate?.budget_id ?? NO_DEFAULT
   const savingDefault =
     createDefault.isPending ||
     updateDefault.isPending ||
     deleteDefault.isPending
-  // `budgetId` rather than `selectedBudget`: null is "the picker was never
+  // `budgetId` rather than `selectedBudget`: unset is "the picker was never
   // touched", so a default that resolves after mount is part of the seed rather
   // than a change the guard should arm on. The per-provider defaults and the
   // provider keys below write as they are changed rather than on save, so
@@ -562,7 +562,7 @@ function EditWorkspaceForm({
     // With the picker withheld, an untouched `selectedBudget` over an unfetched
     // defaults list would read as "none" and delete nothing, but say so rather
     // than lean on that coincidence.
-    if (!operates) return
+    if (!isOperator) return
     if (selectedBudget === NO_DEFAULT) {
       if (aggregate) {
         await deleteDefault.mutateAsync({
@@ -634,19 +634,19 @@ function EditWorkspaceForm({
         onChange={setName}
         isRequired
         autoFocus
-        reserveMessage={false}
+        shouldReserveMessage={false}
       />
       <Field
         label="Description"
         value={description}
         onChange={setDescription}
-        reserveMessage={false}
+        shouldReserveMessage={false}
       />
       {/* Withheld from a caller who does not operate the deployment: the
           picker's options come from the operator-gated `/budgets` read, so
           offering it would be offering a control whose list is empty and whose
           save cannot succeed. */}
-      {operates ? (
+      {isOperator ? (
         <>
           <DefaultBudgetPicker
             budgets={budgets.data ?? []}
@@ -690,8 +690,8 @@ export function WorkspacesPage() {
   // unless the caller may read it, and the column it names is withheld with it
   // (the OrganizationMembersPage pattern, otari#838): without the names, every
   // cell could only echo a UUID fragment of the default's id.
-  const operates = isDeploymentOperator(context.data)
-  const budgets = useBudgets(operates)
+  const isOperator = isDeploymentOperator(context.data)
+  const budgets = useBudgets(isOperator)
   const remove = useDeleteWorkspace()
 
   const [creating, setCreating] = useState(false)
@@ -708,8 +708,8 @@ export function WorkspacesPage() {
     setCreatingCount((n) => n + 1)
     setCreating(true)
   }
-  const [editing, setEditing] = useState<string | null>(null)
-  const [deleting, setDeleting] = useState<Workspace | null>(null)
+  const [editing, setEditing] = useState<string>()
+  const [deleting, setDeleting] = useState<Workspace>()
 
   const rows = workspaces.data ?? []
   const workspaceIds = useMemo(() => rows.map((row) => row.id), [rows])
@@ -717,7 +717,7 @@ export function WorkspacesPage() {
   // workspace-scoped and would answer, but this page only reads it into the
   // withheld column below.
   const workspaceDefaults = useAllWorkspaceBudgetDefaults(
-    operates ? workspaceIds : [],
+    isOperator ? workspaceIds : [],
   )
   // The budget each workspace hands to its members, by workspace. Only the
   // aggregate default (no provider narrowing) is named: that is the one the
@@ -729,18 +729,16 @@ export function WorkspacesPage() {
     const names = new Map(
       known.map((budget) => [budget.budget_id, nameBudget(budget)]),
     )
-    const byWorkspace = new Map<string, string>()
-    for (const { workspaceId, default: row } of workspaceDefaults.data) {
-      if (row.provider_key_id === null) {
-        // A default naming a budget this page did not read has nothing to derive
-        // a label from, so the id is all there is left to show.
-        byWorkspace.set(
+    // A default naming a budget this page did not read has nothing to derive a
+    // label from, so the id is all there is left to show.
+    return new Map(
+      workspaceDefaults.data
+        .filter(({ default: row }) => row.provider_key_id === null)
+        .map(({ workspaceId, default: row }) => [
           workspaceId,
           names.get(row.budget_id) ?? shortBudgetId(row.budget_id),
-        )
-      }
-    }
-    return byWorkspace
+        ]),
+    )
   }, [budgets.data, workspaceDefaults.data])
   // Only once the list has actually answered: an empty list while loading is
   // not one workspace, and disabling on it would flicker.
@@ -768,14 +766,14 @@ export function WorkspacesPage() {
   const holdsProviderKeys = [...providerKeys.data.values()].some(
     (rows) => rows.length > 0,
   )
-  const editingWorkspace = rows.find((row) => row.id === editing) ?? null
+  const editingWorkspace = rows.find((row) => row.id === editing)
   // Not gated on `creating`: unmounting the empty state when the dialog opens
   // takes away the node react-aria restores focus to, so closing drops focus to
   // `<body>`. `PageIntro`'s action is ungated for the same reason.
   const showOnboarding = !workspaces.isLoading && rows.length === 0
 
   // The default-budget column is dropped, not emptied, for a caller who cannot
-  // read the budget names it shows; see the note on `operates` above.
+  // read the budget names it shows; see the note on `isOperator` above.
   const columns = useMemo<DataTableColumn<Workspace>[]>(() => {
     const all: DataTableColumn<Workspace>[] = [
       {
@@ -876,7 +874,7 @@ export function WorkspacesPage() {
       },
     ]
     return all.filter((column) => {
-      if (column.id === "default-budget") return operates
+      if (column.id === "default-budget") return isOperator
       if (column.id === "provider-keys") return manages && holdsProviderKeys
       return true
     })
@@ -884,7 +882,7 @@ export function WorkspacesPage() {
     manages,
     isOnlyWorkspace,
     defaultBudgetName,
-    operates,
+    isOperator,
     providerKeys.data,
     holdsProviderKeys,
   ])
@@ -899,7 +897,7 @@ export function WorkspacesPage() {
               ref={createButtonRef}
               variant="primary"
               onPress={() => {
-                setEditing(null)
+                setEditing(undefined)
                 openCreate()
               }}
             >
@@ -939,7 +937,7 @@ export function WorkspacesPage() {
         <EditWorkspaceForm
           key={editingWorkspace.id}
           workspace={editingWorkspace}
-          onClose={() => setEditing(null)}
+          onClose={() => setEditing(undefined)}
         />
       ) : null}
 
@@ -964,9 +962,9 @@ export function WorkspacesPage() {
       )}
 
       <ConfirmDialog
-        isOpen={deleting !== null}
+        isOpen={deleting !== undefined}
         onOpenChange={(open) => {
-          if (!open) setDeleting(null)
+          if (!open) setDeleting(undefined)
         }}
         heading="Delete workspace"
         body={
@@ -982,8 +980,8 @@ export function WorkspacesPage() {
           if (deleting) {
             remove.mutate(deleting.id, {
               onSuccess: () => {
-                if (editing === deleting.id) setEditing(null)
-                setDeleting(null)
+                if (editing === deleting.id) setEditing(undefined)
+                setDeleting(undefined)
               },
             })
           }

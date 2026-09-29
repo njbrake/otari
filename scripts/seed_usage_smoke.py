@@ -19,8 +19,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import col
 
-from gateway.models.entities import APIKey, ModelPricing, UsageLog, User
+from gateway.models.api_keys import APIKey
+from gateway.models.pricing import ModelPricing
 from gateway.models.tenancy import Organization, Workspace
+from gateway.models.usage import UsageLog
+from gateway.models.users import User
 from gateway.services.pricing_service import gateway_tool_pricing_key
 from gateway.services.tool_usage import TOOL_METER_NAMESPACE
 
@@ -154,9 +157,7 @@ for _ in range(1500):
         if rate is not None:
             entry["unit_rate"] = rate
             tool_cost = round(billed * rate, 6)
-            tool_lines.append(
-                {"meter": f"{tool}_calls", "units": billed, "unit_rate": rate, "cost": tool_cost}
-            )
+            tool_lines.append({"meter": f"{tool}_calls", "units": billed, "unit_rate": rate, "cost": tool_cost})
         tool_meters[tool] = entry
         tool_rows += 1
 
@@ -191,16 +192,12 @@ for _ in range(1500):
             cache_read_tokens=cache_read or None,
             cache_write_tokens=None,
             cost=token_cost if not tool_cost else round((token_cost or 0.0) + tool_cost, 6),
-            billing_meters=(
-                {**token_meters, **({TOOL_METER_NAMESPACE: tool_meters} if tool_meters else {})} or None
-            ),
+            billing_meters=({**token_meters, **({TOOL_METER_NAMESPACE: tool_meters} if tool_meters else {})} or None),
             pricing_breakdown=tool_lines or None,
             status="error" if is_error else "success",
             error_message="provider quota exceeded" if is_error else None,
             # A tool-loop request is slower: it made several provider round trips.
-            latency_ms=None
-            if is_error
-            else base_latency + rng.randint(-200, 800) + (1800 if tool_meters else 0),
+            latency_ms=None if is_error else base_latency + rng.randint(-200, 800) + (1800 if tool_meters else 0),
         )
     )
     n += 1

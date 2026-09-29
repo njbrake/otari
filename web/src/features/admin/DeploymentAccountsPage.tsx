@@ -76,8 +76,8 @@ export function DeploymentAccountsPage() {
   // Withheld until the gate answers: fetching the list first would put a 404 in
   // the console on every non-operator load to learn what `access` is about to
   // say, and the query would be discarded either way.
-  const granted = access.data === true
-  const accounts = useDeploymentUsers(granted)
+  const isGranted = access.data === true
+  const accounts = useDeploymentUsers(isGranted)
   const update = useUpdateDeploymentUser()
   const generate = useGenerateDeploymentUserPassword()
   const merge = useMergeUser()
@@ -85,8 +85,8 @@ export function DeploymentAccountsPage() {
   // whole users table and nothing else on the page needs it.
   const [mergingInto, setMergingInto] = useState<DeploymentUser | null>(null)
   const [mergeSource, setMergeSource] = useState("")
-  const users = useUsers(granted && mergingInto !== null)
-  const [deactivating, setDeactivating] = useState<DeploymentUser | null>(null)
+  const users = useUsers(isGranted && mergingInto !== null)
+  const [deactivating, setDeactivating] = useState<DeploymentUser>()
   const [settingPassword, setSettingPassword] = useState<DeploymentUser | null>(
     null,
   )
@@ -278,7 +278,7 @@ export function DeploymentAccountsPage() {
   // not one lands here rather than being signed out. The sidebar drops the row
   // on the same answer, which makes this the state of somebody who arrived by
   // URL or whose access was taken away while the page was open.
-  if (!granted) {
+  if (!isGranted) {
     return (
       <div className="flex flex-col">
         <PageIntro title="Accounts" />
@@ -318,9 +318,9 @@ export function DeploymentAccountsPage() {
       </TableScrollFrame>
 
       <ConfirmDialog
-        isOpen={deactivating !== null}
+        isOpen={deactivating !== undefined}
         onOpenChange={(open) => {
-          if (!open) setDeactivating(null)
+          if (!open) setDeactivating(undefined)
         }}
         heading="Deactivate account"
         body={
@@ -341,7 +341,7 @@ export function DeploymentAccountsPage() {
           if (deactivating) {
             update.mutate(
               { id: deactivating.id, body: { is_active: false } },
-              { onSuccess: () => setDeactivating(null) },
+              { onSuccess: () => setDeactivating(undefined) },
             )
           }
         }}

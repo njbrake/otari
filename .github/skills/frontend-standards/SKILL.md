@@ -95,8 +95,10 @@ can link Vite's esbuild binary at all.
   shell already switches to a drawer below `md`, and the screenshot matrix captures every page
   at 390px. Touch targets ≥44px, no hover-only controls, a table needs an answer below `md`.
   See [responsiveness.md](./responsiveness.md).
-- Prefer `undefined` over `null` for absent values in your own types (the API layer may return
-  `null`; convert at the boundary). See [typescript-and-react.md](./typescript-and-react.md).
+- Spell an absent value as the type's own empty value first (`""`, `[]`, `{}`), `undefined`
+  only where there is no empty value that cannot collide with a real one, and never `null` (the
+  API layer may return it; convert at the boundary). See
+  [typescript-and-react.md](./typescript-and-react.md).
 - Gate a deployment-dependent surface through `useDeployment()` / `useSurfaces()`, the one place
   that knows which deployment served the page. Mind the vocabulary: a *surface* is the
   deployment axis, a *capability* is the entitlement axis.
@@ -119,9 +121,15 @@ can link Vite's esbuild binary at all.
 - New HeroUI **v2** patterns: granular imports, `HeroUIProvider`, `classNames={{ slot }}`,
   `onValueChange`, `color` on `Button`, or a `content1`/`content2` utility. v3 ignores some of
   these silently, which is why the full v2-to-v3 table is in [components.md](./components.md).
-- Inline `style={{}}` or `<style>` tags. Use Tailwind utilities or a token. (The pre-paint
-  block in `index.html` is the one exception, and [layout-stability.md](./layout-stability.md)
-  says why.)
+- Inline `style={{}}` or `<style>` tags for anything a class can express. Color, spacing,
+  type and radius come from a token or a utility. **A value computed at runtime that no class
+  can express is the exception**: a percentage width, a computed offset, a position that
+  follows the data. Tailwind emits only the utilities the source asks for, so `w-[${pct}%]`
+  compiles to nothing and the value has to reach the element as a property. `Meter.tsx:16` and
+  `SpendMeter.tsx:92` are the reference sites; `ShareCard.tsx` is a documented whole-file
+  exception for a different reason (it is rasterized through an `<img>`, where custom
+  properties do not resolve). The pre-paint block in `index.html` is the only `<style>` tag,
+  and [layout-stability.md](./layout-stability.md) says why.
 - A HeroUI `<Link href>` for an internal route: it is a full page reload. Use TanStack
   Router's `<Link to>`.
 - Manual polling with bare `setInterval`/`setTimeout`. Use TanStack Query's `refetchInterval`
@@ -132,8 +140,11 @@ can link Vite's esbuild binary at all.
   [data-fetching.md](./data-fetching.md) says why.
 - Client-side filtering/sorting/pagination of large server datasets when the endpoint can do
   it. (Small, already-loaded lists rendered in a `Table` are fine.)
-- Memoization by reflex. The React Compiler is enabled; add `useMemo`/`useCallback`/`memo`
-  only with a measurement behind it. See [performance.md](./performance.md).
+- Memoization by reflex. The React Compiler is enabled, so the default is the plain
+  expression. Not a ban: memoize where it earns its place (an expensive computation, a
+  reference something else identity-checks, a component the compiler could not optimize), and
+  weigh it against what it costs, which is a dependency array compared every render and one
+  more thing that can go stale. See [performance.md](./performance.md).
 - A second export from a route file. It defeats `autoCodeSplitting` and lands the page in the
   entry chunk. See [component-architecture.md](./component-architecture.md).
 - Barrel files, default exports, or namespace imports. See
@@ -165,7 +176,7 @@ AA for the small text a pill uses. **Brand text on the brand tint does not follo
 - [components.md](./components.md): HeroUI v3 patterns, the order to reach for when customizing (variable, shared utility, prop, then a rule into the library's DOM), internal links, the UI primitives in `design-system/`.
 - [component-architecture.md](./component-architecture.md): what a page composes, what gets its own file, route files, no duplicated markup.
 - [data-fetching.md](./data-fetching.md): TanStack Query conventions: query keys, `staleTime`, guards, invalidation, bounded pagination.
-- [typescript-and-react.md](./typescript-and-react.md): strict TS, `undefined` over `null`, discriminated unions, hook and effect hygiene.
+- [typescript-and-react.md](./typescript-and-react.md): strict TS, the empty value before `undefined` and never `null`, discriminated unions, hook and effect hygiene.
 - [responsiveness.md](./responsiveness.md): breakpoints, touch targets, tables on a phone, `rem` over `px`.
 - [layout-stability.md](./layout-stability.md): loading guards, skeletons, the pre-paint theme script, no reload-as-refresh.
 - [performance.md](./performance.md): the React Compiler, code splitting, lazy loading, bundle watch, effect cleanup.

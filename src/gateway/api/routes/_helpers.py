@@ -15,7 +15,7 @@ from gateway.core.env import otari_env
 from gateway.log_config import logger
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.tenancy import Workspace
-from gateway.services.guardrails import GuardrailsNotReachableError, run_input_guardrails
+from gateway.services.guardrails import GuardrailsNotReachableError, InProcessGuardrail, run_input_guardrails
 from gateway.services.routing.decide import RoutingSignal
 from gateway.services.url_safety import UnsafeURLError
 from gateway.services.workspace_scope import default_workspace_id
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from gateway.db import APIKey
 
 
-GUARDRAILS_RESULT_HEADER = "X-Otari-Guardrails"
+GUARDRAILS_RESULT_HEADER = "Otari-Guardrails"
 """Response header carrying a compact JSON summary of guardrail verdicts when a
 ``monitor``-mode (or otherwise non-blocking) check ran."""
 
@@ -269,6 +269,7 @@ async def apply_input_guardrails(
     config: GatewayConfig | None = None,
     credentials: Mapping[str, str] | None = None,
     mandated: Collection[str] | None = None,
+    in_process: Mapping[str, InProcessGuardrail | None] | None = None,
 ) -> None:
     """Enforce the input guardrails for a request before the provider call.
 
@@ -282,7 +283,11 @@ async def apply_input_guardrails(
     which is what decides whether a URL that fails its safety check is the
     caller's malformed request (a 400 naming their own URL) or a stored entry
     being unevaluable (governed by its ``mode`` / ``on_unavailable``, with the
-    endpoint kept out of the response).
+    endpoint kept out of the response). ``in_process`` carries the guardrails
+    this worker holds for the organization's own definitions, keyed by profile;
+    one of those is answered here rather than sent to any service, and a profile
+    whose guardrail this worker does not hold arrives as ``None`` and is
+    unevaluable.
 
     No-op when ``guardrails`` is empty/None (zero overhead for the common
     case). On a ``block``-mode flag, raises ``403`` and the provider is never
@@ -326,6 +331,7 @@ async def apply_input_guardrails(
             default_url=default_url,
             credentials=credentials,
             mandated=mandated,
+            in_process=in_process,
         )
     except UnsafeURLError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -359,10 +365,7 @@ async def apply_input_guardrails(
         # Non-blocking: surface the verdict for observability (monitor mode, or
         # a passing block-mode check). Header value is kept compact and free of
         # the freeform `explanation` to avoid oversized / non-ASCII headers.
-        summary = [
-            {"profile": r.profile, "mode": r.mode, "valid": r.valid, "score": r.score}
-            for r in verdict.results
-        ]
+        summary = [{"profile": r.profile, "mode": r.mode, "valid": r.valid, "score": r.score} for r in verdict.results]
         response.headers[GUARDRAILS_RESULT_HEADER] = json.dumps(summary, separators=(",", ":"))
 
 
@@ -380,9 +383,7 @@ async def resolve_managed_workspace_id(db: AsyncSession, workspace_id: uuid.UUID
     """
     if workspace_id is None:
         return await default_workspace_id(db)
-    named = (
-        await db.execute(select(col(Workspace.id)).where(col(Workspace.id) == workspace_id))
-    ).scalar_one_or_none()
+    named = (await db.execute(select(col(Workspace.id)).where(col(Workspace.id) == workspace_id))).scalar_one_or_none()
     if named is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

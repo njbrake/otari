@@ -33,7 +33,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.core.config import GatewayConfig
 from gateway.core.env import otari_env
 from gateway.log_config import logger
-from gateway.models.entities import RuntimeSetting
+from gateway.models.platform import RuntimeSetting
+from gateway.models.tools import CodeExecutor
 from gateway.services.runtime_settings_service import SettingValue
 
 WEB_SEARCH_URL = "web_search_url"
@@ -45,6 +46,7 @@ WEB_SEARCH_INTERCEPT = "web_search_intercept"
 SANDBOX_URL = "sandbox_url"
 SANDBOX_PURPOSE_HINT = "sandbox_purpose_hint"
 SANDBOX_SESSION_IMAGE = "sandbox_session_image"
+CODE_EXECUTION_EXECUTOR = "code_execution_executor"
 GUARDRAILS_URL = "guardrails_url"
 
 
@@ -54,11 +56,13 @@ class _ToolSpec:
 
     ``type`` is one of ``"url" | "str" | "int" | "bool"``. Every field is
     nullable (an empty value clears the override); ``ge`` is an inclusive lower
-    bound for ``int`` fields, mirroring the ``GatewayConfig`` field's constraint.
+    bound for ``int`` fields, mirroring the ``GatewayConfig`` field's constraint,
+    and ``options`` closes a ``str`` field to a fixed set of values.
     """
 
     type: str
     ge: int | None = None
+    options: tuple[str, ...] | None = None
 
 
 # The tool/guardrail config fields the dashboard may edit. These are the ``*_url``
@@ -73,6 +77,7 @@ _TOOL_SPECS: dict[str, _ToolSpec] = {
     WEB_SEARCH_PURPOSE_HINT: _ToolSpec("str"),
     SANDBOX_PURPOSE_HINT: _ToolSpec("str"),
     SANDBOX_SESSION_IMAGE: _ToolSpec("str"),
+    CODE_EXECUTION_EXECUTOR: _ToolSpec("str", options=tuple(executor.value for executor in CodeExecutor)),
     WEB_SEARCH_MAX_RESULTS: _ToolSpec("int", ge=1),
     WEB_SEARCH_EXTRACT: _ToolSpec("bool"),
     WEB_SEARCH_INTERCEPT: _ToolSpec("bool"),
@@ -91,6 +96,7 @@ _FIELD_SERVICE: dict[str, str] = {
     SANDBOX_URL: "sandbox",
     SANDBOX_PURPOSE_HINT: "sandbox",
     SANDBOX_SESSION_IMAGE: "sandbox",
+    CODE_EXECUTION_EXECUTOR: "sandbox",
     GUARDRAILS_URL: "guardrails",
 }
 
@@ -166,6 +172,12 @@ def validate_value(key: str, value: SettingValue) -> SettingValue:
         raise ValueError(msg)
     if spec.type == "url":
         return validate_url(value)
+    if spec.options is not None:
+        normalized = value.strip().lower()
+        if normalized not in spec.options:
+            msg = f"{key} must be one of {', '.join(spec.options)}."
+            raise ValueError(msg)
+        return normalized
     return value
 
 
@@ -197,8 +209,10 @@ async def load_overrides(session: AsyncSession) -> dict[str, SettingValue]:
     # Filter to the tool keys in the query: the runtime_settings table also holds
     # unrelated settings, so there is no need to fetch and scan those in Python.
     rows = (
-        await session.execute(select(RuntimeSetting).where(RuntimeSetting.key.in_(TOOL_SETTABLE_KEYS)))
-    ).scalars().all()
+        (await session.execute(select(RuntimeSetting).where(RuntimeSetting.key.in_(TOOL_SETTABLE_KEYS))))
+        .scalars()
+        .all()
+    )
     overrides: dict[str, SettingValue] = {}
     for row in rows:
         try:
@@ -283,3 +297,9 @@ def field_service(key: str) -> str:
 def field_type(key: str) -> str:
     """The display/validation type of a field ('url' | 'str' | 'int' | 'bool')."""
     return _TOOL_SPECS[key].type
+
+
+def get_field_options(key: str) -> list[str] | None:
+    """Return the fixed values a field accepts, or ``None`` when it accepts any value of its type."""
+    options = _TOOL_SPECS[key].options
+    return list(options) if options is not None else None

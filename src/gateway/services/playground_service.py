@@ -25,13 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.core.config import GatewayConfig
-from gateway.core.env import otari_env
-from gateway.models.entities import (
-    User,
-    WorkspaceCodeExecutionPolicy,
-    WorkspaceMcpServer,
-    WorkspaceWebSearchConfig,
-)
+from gateway.exceptions import TenancyConflictError, TenancyForbiddenError
+from gateway.exceptions.organizations_exceptions import WorkspaceNotFoundError
 from gateway.models.playground import (
     MAX_FAVORITE_MODELS,
     MAX_SAVED_COMPARISONS,
@@ -50,14 +45,11 @@ from gateway.models.playground import (
     PlaygroundMessagePublic,
 )
 from gateway.models.tenancy import User as TenancyUser
+from gateway.models.tools import WorkspaceCodeExecutionPolicy, WorkspaceMcpServer, WorkspaceWebSearchConfig
+from gateway.models.users import User
 from gateway.repositories.users_repository import get_or_create_attribution_user
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import resolve_workspace_in_organization
-from gateway.services.tenancy.errors import (
-    TenancyConflictError,
-    TenancyForbiddenError,
-    WorkspaceNotFoundError,
-)
 from gateway.services.workspace_scope import organization_default_workspace_id
 from gateway.types.session_principal import SessionPrincipal
 
@@ -67,7 +59,7 @@ RetainedContent = Literal["conversations", "comparisons"]
 # ``HTTPException``, because this slice authorizes through ``services/tenancy/``
 # and that family is what the handler registered in ``gateway.main`` renders.
 # The status belongs to the condition rather than to the endpoint, which is the
-# rule ``services/tenancy/errors.py`` states.
+# rule ``gateway.exceptions`` states.
 _SPEND_IDENTITY_REVOKED = "Your spend identity has been deactivated on this deployment; ask an operator to restore it."
 _NO_WORKSPACE = "You are not a member of a workspace on this deployment; ask an operator to add you to one."
 
@@ -95,7 +87,7 @@ async def resolve_playground_workspace(
     Every Playground route resolves through here, reads included, so a read and a
     completion can never disagree about which workspace a caller reached.
     """
-    organizations = OrganizationService(db)
+    organizations = OrganizationService(db, membership_listener=None)
     organization = await organizations.get_active_organization_for_user(identity)
 
     resolved = workspace_id
@@ -239,9 +231,9 @@ async def resolve_tool_availability(
     reachability probe belongs to the request that needs the backend, not to
     drawing a menu.
     """
-    # The same resolution the request path uses: the effective config value
-    # falling back to the env var, so a pure-env deployment reports accurately.
-    sandbox_configured = bool(config.sandbox_url or otari_env("SANDBOX_URL"))
+    # The same question the request path asks, asked the same way, so the menu
+    # cannot hide a tool a request would then be allowed to use.
+    sandbox_configured = config.sandbox_configured()
     web_search_configured = config.web_search_configured()
 
     web_search_row = (
@@ -493,10 +485,7 @@ async def read_conversation_messages(
         .scalars()
         .all()
     )
-    return [
-        PlaygroundMessagePublic(role=row.role, content=row.content, reasoning=row.reasoning)
-        for row in rows
-    ]
+    return [PlaygroundMessagePublic(role=row.role, content=row.content, reasoning=row.reasoning) for row in rows]
 
 
 async def delete_conversation(

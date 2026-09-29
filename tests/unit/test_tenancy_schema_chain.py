@@ -21,6 +21,11 @@ which rebuilds that table to tighten a column to NOT NULL and point it at
 swaps the alias and policy uniqueness constraints (a batch rebuild with the
 partial indexes taken out and put back around it), the other adds
 ``workspace_id`` to three more tables.
+
+The guardrail definitions revision is here for the same reason and one more: it
+is the first to put a *check constraint* and a *composite* foreign key on a
+table that already exists, neither of which SQLite can add without rebuilding
+it, and the table it rebuilds is one another table's foreign key points at.
 """
 
 import json
@@ -39,7 +44,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import SQLModel
 
 import gateway.models  # noqa: F401  (registers every table on the shared metadata)
-from gateway.models.tenancy import UtcDateTime
+from gateway.models.base import UtcDateTime
 
 _ALEMBIC_DIR = Path(__file__).resolve().parents[2] / "alembic"
 _TENANCY_REVISION = "c4b6d8e0f2a3"
@@ -67,6 +72,12 @@ _ALIAS_WIDEN_REVISION = "c1e4a7b9d3f6"
 _SURVIVALS_REVISION = "d2f5b8c0e4a7"
 _SURVIVAL_TABLES = ("routing_memory", "router_preferences", "file_objects")
 
+_GUARDRAIL_DEFINITIONS_REVISION = "a9c4e7b2d5f8"
+_DEFINITIONS_TABLE = "organization_guardrail_definitions"
+_MANDATES_TABLE = "organization_guardrails"
+_MANDATES_BACKEND_CHECK = "ck_organization_guardrails_single_backend"
+_MANDATES_DEFINITION_FK = "fk_organization_guardrails_definition"
+
 
 def _parent_of(revision: str) -> str:
     """The revision immediately below ``revision``, read from the chain itself.
@@ -82,6 +93,7 @@ def _parent_of(revision: str) -> str:
     parent = ScriptDirectory.from_config(_alembic_config("sqlite://")).get_revision(revision).down_revision
     assert isinstance(parent, str), f"{revision} should have exactly one parent, got {parent!r}"
     return parent
+
 
 _TOKEN_REVISION = "db8fbf901ee0"
 _BEFORE_TOKENS = "c8e2a4f6b0d3"
@@ -192,7 +204,7 @@ def test_upgrade_downgrade_upgrade_round_trips(sqlite_at_head: tuple[Config, Eng
 def test_naming_one_model_module_registers_them_all() -> None:
     """``Base.metadata`` is whole however few model modules the caller imported.
 
-    ``alembic/env.py`` names only ``gateway.models.entities`` and relies on the
+    ``alembic/env.py`` names only ``gateway.models.base`` and relies on the
     package ``__init__`` to pull in the rest. If that import chain breaks, the
     metadata silently loses the tenancy tables and autogenerate proposes
     ``DROP TABLE`` for them, which is data-loss-class and invisible until
@@ -200,7 +212,7 @@ def test_naming_one_model_module_registers_them_all() -> None:
     a test runs in this one every model module is already imported.
     """
     source = (
-        "from gateway.models.entities import Base;"
+        "from gateway.models.base import Base;"
         "import json,sys;"
         "sys.stdout.write(json.dumps(sorted(Base.metadata.tables)))"
     )
@@ -248,8 +260,7 @@ def test_workspace_scope_seeds_a_default_and_backfills_existing_rows(tmp_path: P
     with engine.begin() as connection:
         seeded = connection.execute(
             text(
-                "SELECT w.id FROM workspace w "
-                "JOIN organization o ON o.id = w.organization_id WHERE o.slug = 'default'"
+                "SELECT w.id FROM workspace w JOIN organization o ON o.id = w.organization_id WHERE o.slug = 'default'"
             )
         ).scalar_one()
         assert connection.execute(text("SELECT workspace_id FROM api_keys")).scalar_one() == seeded
@@ -297,10 +308,7 @@ def _insert_identity(connection: Connection, *, email: str | None = None, token:
     organization_id = uuid.uuid4().hex
     user_id = uuid.uuid4().hex
     connection.execute(
-        text(
-            "INSERT INTO organization (id, name, slug, created_at) "
-            "VALUES (:id, :name, :slug, CURRENT_TIMESTAMP)"
-        ),
+        text("INSERT INTO organization (id, name, slug, created_at) VALUES (:id, :name, :slug, CURRENT_TIMESTAMP)"),
         {"id": organization_id, "name": f"Org {organization_id[:6]}", "slug": organization_id[:6]},
     )
     connection.execute(
@@ -337,9 +345,7 @@ def test_the_verification_token_is_uniquely_indexed(sqlite_at_head: tuple[Config
     """Unique like the platform's, because a shared token confirms the wrong address."""
     _, engine = sqlite_at_head
     indexes = [
-        index
-        for index in inspect(engine).get_indexes("user")
-        if index["column_names"] == ["email_verification_token"]
+        index for index in inspect(engine).get_indexes("user") if index["column_names"] == ["email_verification_token"]
     ]
 
     assert [index["name"] for index in indexes] == [_TOKEN_INDEX]
@@ -389,13 +395,17 @@ def test_an_existing_database_upgrades_with_its_rows_untouched(tmp_path: Path) -
     command.upgrade(config, _CREDENTIAL_REVISION)
 
     with engine.begin() as connection:
-        row = connection.execute(
-            text(
-                "SELECT email, full_name, is_active, hashed_password, terms_accepted_at, oauth_provider, "
-                'email_verification_token, email_verified_at FROM "user" WHERE id = :id'
-            ),
-            {"id": user_id},
-        ).mappings().one()
+        row = (
+            connection.execute(
+                text(
+                    "SELECT email, full_name, is_active, hashed_password, terms_accepted_at, oauth_provider, "
+                    'email_verification_token, email_verified_at FROM "user" WHERE id = :id'
+                ),
+                {"id": user_id},
+            )
+            .mappings()
+            .one()
+        )
 
     assert (row["email"], row["full_name"], row["is_active"]) == ("ada@example.com", "Ada", 1)
     assert all(row[column] is None for column in _CREDENTIAL_COLUMNS)
@@ -476,13 +486,17 @@ def test_an_existing_database_upgrades_with_its_token_columns_untouched(tmp_path
     command.upgrade(config, _TOKEN_REVISION)
 
     with engine.begin() as connection:
-        row = connection.execute(
-            text(
-                "SELECT email_verification_token_hash, email_verification_token_expires_at, "
-                'password_reset_token_hash, password_reset_token_expires_at FROM "user" WHERE id = :id'
-            ),
-            {"id": user_id},
-        ).mappings().one()
+        row = (
+            connection.execute(
+                text(
+                    "SELECT email_verification_token_hash, email_verification_token_expires_at, "
+                    'password_reset_token_hash, password_reset_token_expires_at FROM "user" WHERE id = :id'
+                ),
+                {"id": user_id},
+            )
+            .mappings()
+            .one()
+        )
 
     assert all(row[column] is None for column in _TOKEN_COLUMNS)
     engine.dispose()
@@ -669,10 +683,7 @@ def _two_workspaces(connection: Connection) -> tuple[str, str]:
     so the returned ids are what the ``workspace_id`` columns actually hold.
     """
     default = connection.execute(
-        text(
-            "SELECT w.id FROM workspace w JOIN organization o ON o.id = w.organization_id "
-            "WHERE o.slug = 'default'"
-        )
+        text("SELECT w.id FROM workspace w JOIN organization o ON o.id = w.organization_id WHERE o.slug = 'default'")
     ).scalar_one()
     organization_id = connection.execute(
         text("SELECT organization_id FROM workspace WHERE id = :id"), {"id": default}
@@ -811,9 +822,7 @@ def test_the_widening_round_trips(sqlite_at_head: tuple[Config, Engine]) -> None
 
     inspector = inspect(engine)
     for table in ("model_aliases", "routing_policies"):
-        assert {c["name"] for c in inspector.get_unique_constraints(table)} == {
-            f"uq_{table}_workspace_name_user"
-        }
+        assert {c["name"] for c in inspector.get_unique_constraints(table)} == {f"uq_{table}_workspace_name_user"}
 
 
 def test_the_survivals_carry_a_restricting_workspace_foreign_key(
@@ -914,8 +923,7 @@ def test_existing_survival_rows_are_backfilled_onto_the_default_workspace(tmp_pa
     with engine.begin() as connection:
         default = connection.execute(
             text(
-                "SELECT w.id FROM workspace w "
-                "JOIN organization o ON o.id = w.organization_id WHERE o.slug = 'default'"
+                "SELECT w.id FROM workspace w JOIN organization o ON o.id = w.organization_id WHERE o.slug = 'default'"
             )
         ).scalar_one()
         for table in _SURVIVAL_TABLES:
@@ -958,3 +966,143 @@ def test_the_migrated_survival_tables_match_their_models(sqlite_at_head: tuple[C
         declared = SQLModel.metadata.tables[table]
         migrated = {column["name"] for column in inspect(engine).get_columns(table)}
         assert migrated == set(declared.columns.keys()), table
+
+
+def test_the_guardrail_definitions_table_matches_its_model(sqlite_at_head: tuple[Config, Engine]) -> None:
+    """Hand-written revision, so nothing else would notice the two drifting apart."""
+    _, engine = sqlite_at_head
+
+    declared = SQLModel.metadata.tables[_DEFINITIONS_TABLE]
+    migrated = {column["name"] for column in inspect(engine).get_columns(_DEFINITIONS_TABLE)}
+    assert migrated == set(declared.columns.keys())
+
+
+def test_the_definition_link_survives_the_batch_rebuild(sqlite_at_head: tuple[Config, Engine]) -> None:
+    """Everything the mandate table carried before the rebuild, plus what it gained.
+
+    ``copy_from`` in the revision is what guarantees this. Without it the rebuild
+    reflects the table, and a constraint or index reflection renders differently
+    is one SQLite quietly drops.
+    """
+    _, engine = sqlite_at_head
+    inspector = inspect(engine)
+
+    assert _MANDATES_BACKEND_CHECK in {check["name"] for check in inspector.get_check_constraints(_MANDATES_TABLE)}
+    assert "uq_organization_guardrails_org_profile" in {
+        constraint["name"] for constraint in inspector.get_unique_constraints(_MANDATES_TABLE)
+    }
+    assert "ix_organization_guardrails_organization_id" in {
+        index["name"] for index in inspector.get_indexes(_MANDATES_TABLE)
+    }
+
+    targets = {
+        (fk["referred_table"], tuple(fk["constrained_columns"])) for fk in inspector.get_foreign_keys(_MANDATES_TABLE)
+    }
+    assert ("organization", ("organization_id",)) in targets
+    assert (_DEFINITIONS_TABLE, ("organization_id", "definition_id")) in targets
+
+    # The rebuild renames the mandate table out from under this one's foreign
+    # key and back again, which is the failure mode the rebuild has here that it
+    # did not have on the earlier revisions.
+    scoped = {fk["referred_table"] for fk in inspector.get_foreign_keys("organization_guardrail_workspaces")}
+    assert {_MANDATES_TABLE, "workspace"} <= scoped
+
+
+def test_the_definition_is_pinned_to_its_own_organization(sqlite_at_head: tuple[Config, Engine]) -> None:
+    """The unique constraint the composite foreign key above is only possible because of."""
+    _, engine = sqlite_at_head
+    constraints = {
+        constraint["name"]: tuple(constraint["column_names"])
+        for constraint in inspect(engine).get_unique_constraints(_DEFINITIONS_TABLE)
+    }
+    assert constraints["uq_org_guardrail_definitions_org_id"] == ("organization_id", "id")
+    assert constraints["uq_org_guardrail_definitions_org_name"] == ("organization_id", "name")
+
+
+def test_a_mandate_cannot_name_both_a_url_and_a_definition(sqlite_at_head: tuple[Config, Engine]) -> None:
+    """The check constraint, exercised rather than only reflected.
+
+    SQLite enforces a check constraint whatever ``PRAGMA foreign_keys`` says, so
+    this is the one half of the shape rule reachable here; the composite foreign
+    key is covered against PostgreSQL in
+    ``tests/integration/test_organization_guardrail_definitions.py``.
+    """
+    _, engine = sqlite_at_head
+
+    with engine.begin() as connection:
+        organization = _default_organization(connection)
+        _insert_mandate(connection, organization, profile="remote-only", url="https://example.invalid/guardrails")
+        _insert_mandate(connection, organization, profile="in-process", definition_id=uuid.uuid4().hex)
+        with pytest.raises(IntegrityError):
+            _insert_mandate(
+                connection,
+                organization,
+                profile="both",
+                url="https://example.invalid/guardrails",
+                definition_id=uuid.uuid4().hex,
+            )
+
+
+def _default_organization(connection: Connection) -> str:
+    """The organization the chain seeds, so this test needs no tenancy fixtures."""
+    return str(connection.execute(text("SELECT id FROM organization WHERE slug = 'default'")).scalar_one())
+
+
+def _insert_mandate(
+    connection: Connection,
+    organization: str,
+    *,
+    profile: str,
+    url: str | None = None,
+    definition_id: str | None = None,
+) -> None:
+    connection.execute(
+        text(
+            "INSERT INTO organization_guardrails "
+            "(id, organization_id, profile, url, definition_id, mode, on_unavailable, enabled, "
+            " applies_to_all_workspaces, created_at, updated_at) "
+            "VALUES (:id, :organization_id, :profile, :url, :definition_id, 'monitor', 'block', 1, 1, "
+            " CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ),
+        {
+            "id": uuid.uuid4().hex,
+            "organization_id": organization,
+            "profile": profile,
+            "url": url,
+            "definition_id": definition_id,
+        },
+    )
+
+
+def test_the_guardrail_definitions_revision_round_trips(sqlite_at_head: tuple[Config, Engine]) -> None:
+    """Down drops the table and unwinds the rebuild; up puts both back.
+
+    Two rebuilds in a row is the part worth exercising: the downgrade rebuilds
+    the mandate table to take the constraints off before the definitions table it
+    points at can be dropped, and the second upgrade has to find nothing left
+    over to collide with.
+    """
+    config, engine = sqlite_at_head
+    parent = _parent_of(_GUARDRAIL_DEFINITIONS_REVISION)
+
+    command.downgrade(config, parent)
+
+    inspector = inspect(engine)
+    assert _DEFINITIONS_TABLE not in set(inspector.get_table_names())
+    assert "definition_id" not in {column["name"] for column in inspector.get_columns(_MANDATES_TABLE)}
+    assert _MANDATES_BACKEND_CHECK not in {check["name"] for check in inspector.get_check_constraints(_MANDATES_TABLE)}
+    assert _MANDATES_DEFINITION_FK not in {fk["name"] for fk in inspector.get_foreign_keys(_MANDATES_TABLE)}
+    # The rebuild that takes the new constraints off must not take these with them.
+    assert "uq_organization_guardrails_org_profile" in {
+        constraint["name"] for constraint in inspector.get_unique_constraints(_MANDATES_TABLE)
+    }
+    assert "ix_organization_guardrails_organization_id" in {
+        index["name"] for index in inspector.get_indexes(_MANDATES_TABLE)
+    }
+
+    command.upgrade(config, "head")
+
+    inspector = inspect(engine)
+    assert _DEFINITIONS_TABLE in set(inspector.get_table_names())
+    assert "definition_id" in {column["name"] for column in inspector.get_columns(_MANDATES_TABLE)}
+    assert _MANDATES_DEFINITION_FK in {fk["name"] for fk in inspector.get_foreign_keys(_MANDATES_TABLE)}

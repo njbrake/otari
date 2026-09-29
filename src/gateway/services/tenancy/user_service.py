@@ -55,31 +55,30 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import GatewayConfig
-from gateway.models.tenancy import User
-from gateway.repositories.tenancy import UserRepository
-from gateway.services.dashboard_session_service import revoke_user_dashboard_sessions
-from gateway.services.mail import Mailer
-from gateway.services.password_service import (
-    MAX_PASSWORD_BYTES,
-    MIN_PASSWORD_LENGTH,
-    hash_password_async,
-    verify_absent_password_async,
-    verify_password_async,
-)
-from gateway.services.tenancy.email_address import validated_email
-from gateway.services.tenancy.errors import (
+from gateway.exceptions.identity_exceptions import (
     CurrentPasswordIncorrectError,
     EmailAlreadyInUseError,
     EmailNotVerifiedError,
     InvalidCredentialsError,
     PasswordNotSetError,
-    PasswordPolicyError,
     ResetTokenInvalidError,
     SignInAddressRequiredError,
     UnmodifiedPasswordError,
     VerificationTokenInvalidError,
 )
+from gateway.models.tenancy import User
+from gateway.repositories.tenancy import UserRepository
+from gateway.services.dashboard_session_service import revoke_user_dashboard_sessions
+from gateway.services.mail import Mailer
+from gateway.services.password_service import (
+    hash_password_async,
+    verify_absent_password_async,
+    verify_password_async,
+)
+from gateway.services.tenancy.email_address import validated_email
+from gateway.services.tenancy.membership_listener import MembershipListener
 from gateway.services.tenancy.organization_service import OrganizationService
+from gateway.services.tenancy.password_policy import validate_new_password
 from gateway.services.tenancy.password_reset_email import render_password_reset_email
 from gateway.services.tenancy.provisioning_service import load_bootstrap_identity
 from gateway.services.tenancy.tokens import generate_token, hash_token
@@ -199,7 +198,7 @@ async def set_password(
     change elsewhere (the operator recovers the account before the link is
     opened, say) would still work, letting whoever holds it undo the change.
     """
-    _validate_password(new_password)
+    validate_new_password(new_password)
     vouches_for_the_address = email is not None or identity.hashed_password is None
     if email is not None:
         identity.email = await _claimable_email(db, identity, email)
@@ -260,6 +259,7 @@ async def create_user_for_signup(
     *,
     email: str,
     password: str,
+    membership_listener: MembershipListener,
     full_name: str | None = None,
     terms_accepted: bool = False,
 ) -> User | None:
@@ -311,7 +311,7 @@ async def create_user_for_signup(
     """
     mailer = Mailer(config)
     mailer.require_ready()
-    _validate_password(password)
+    validate_new_password(password)
 
     address = validated_email(email)
     identity = await UserRepository(db).get_by_email(address)
@@ -336,7 +336,7 @@ async def create_user_for_signup(
         # committed here and nowhere else would be live, password-less and
         # unverifiable.
         try:
-            identity = await OrganizationService(db).provision_signup_tenancy(
+            identity = await OrganizationService(db, membership_listener=membership_listener).provision_signup_tenancy(
                 email=address,
                 full_name=full_name,
             )
@@ -357,17 +357,30 @@ async def create_user_for_signup(
                 raise
             return None
 
-    identity.full_name = identity.full_name or full_name
-    identity.hashed_password = await hash_password_async(password)
-    if terms_accepted:
-        identity.terms_accepted_at = datetime.now(UTC)
     token = generate_token()
-    identity.email_verification_token_hash = hash_token(token)
-    identity.email_verification_token_expires_at = datetime.now(UTC) + timedelta(
-        hours=config.email_verification_expiry_hours
+    values: dict[str, str | datetime | None] = {
+        "full_name": identity.full_name or full_name,
+        "email_verification_token_hash": hash_token(token),
+        "email_verification_token_expires_at": datetime.now(UTC)
+        + timedelta(hours=config.email_verification_expiry_hours),
+    }
+    if terms_accepted:
+        values["terms_accepted_at"] = datetime.now(UTC)
+    # Conditional rather than a plain write: the check above raced any other
+    # first-credential write on this address (another signup, an invitation
+    # accepted with a password), and this is what decides between them. The
+    # loser answers like every other enumeration-safe path.
+    claimed = await UserRepository(db).claim_first_password(
+        identity.id,
+        hashed_password=await hash_password_async(password),
+        require_unverified=False,
+        values=values,
     )
-    db.add(identity)
+    if not claimed:
+        await db.rollback()
+        return None
     await db.commit()
+    await db.refresh(identity)
 
     await mailer.send(
         to=address,
@@ -529,7 +542,7 @@ async def reset_password(db: AsyncSession, *, token: str, new_password: str) -> 
         raise ResetTokenInvalidError
     if identity.password_reset_token_expires_at < datetime.now(UTC):
         raise ResetTokenInvalidError
-    _validate_password(new_password)
+    validate_new_password(new_password)
 
     identity.hashed_password = await hash_password_async(new_password)
     identity.password_reset_token_hash = None
@@ -586,17 +599,6 @@ async def password_sign_in_possible(db: AsyncSession) -> bool:
     answer, and the master-key branch of the sign-in screen is the only one.
     """
     return await UserRepository(db).any_active_with_password()
-
-
-def _validate_password(password: str) -> None:
-    """Refuse a password bcrypt would reject or that is too short to be one."""
-    if len(password) < MIN_PASSWORD_LENGTH:
-        raise PasswordPolicyError(f"A password must be at least {MIN_PASSWORD_LENGTH} characters")
-    if len(password.encode()) > MAX_PASSWORD_BYTES:
-        raise PasswordPolicyError(
-            f"A password must be at most {MAX_PASSWORD_BYTES} bytes; "
-            "accented and non-Latin characters count for more than one each"
-        )
 
 
 def _is_email_conflict(exc: IntegrityError) -> bool:

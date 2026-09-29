@@ -39,9 +39,10 @@ export OTARI_MASTER_KEY="..."
 export OTARI_DEFAULT_PRICING=true
 ```
 
-Provider SDKs also read their native credential variables, including
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MISTRAL_API_KEY`, and
-`GEMINI_API_KEY`.
+Provider credentials come from the environment through `${VAR}` references
+in the `providers` map (see [Provider configuration](#provider-configuration)).
+Setting a provider's native variable, such as `OPENAI_API_KEY`, without
+declaring the provider is deprecated; see [Models](models.md#configuring-a-provider).
 
 Booleans accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and
 `off`, without regard to case.
@@ -84,7 +85,8 @@ the corresponding startup value after the database is available.
 | `mode` | `standalone`, `hosted`, or `hybrid`. See [Modes](modes.md). |
 
 For every field, its current default, validation, and description live on
-`GatewayConfig` in `src/gateway/core/config.py`. Operators can read the
+`GatewayConfig` in `src/gateway/core/config.py`, or in the per-domain module
+under `src/gateway/core/settings/` that it inherits. Operators can read the
 non-secret effective set through `GET /api/v1/settings`.
 
 ### Database connections
@@ -222,17 +224,28 @@ Default pricing is off because provider catalogs and reseller rates change.
 With `require_pricing: true`, a budgeted request with no effective price is
 rejected instead of bypassing the budget.
 
+With `require_pricing: false`, such a request is served, its model tokens carry
+no cost, and its response carries no inline `cost_usd`. The usage row records no
+cost unless the request also ran priced gateway tools, whose charges are still
+recorded. The gateway logs a warning for each unpriced model at most once an
+hour per process, and the dashboard shows operators a banner naming the models
+that served unpriced traffic in the selected workspace in the last 24 hours
+and still have no stored price, linked to those requests in Activity, where
+each can be priced.
+
 ### Keeping the defaults current
 
 `pricing_refresh` decides what the gateway does with a newer genai-prices
 snapshot on its own:
 
-- `manual` (the default) never fetches. An operator checks for updates on Model
-  pricing and accepts or rejects what it finds.
+- `manual` (the default) never fetches. An operator checks for updates with
+  `POST /api/v1/pricing/refresh` and accepts or rejects what it finds with
+  `/refresh/confirm` or `/refresh/reject`. The dashboard has no page for this.
 - `review` fetches every `pricing_refresh_interval_seconds` (default one day,
-  minimum five minutes) and holds a changed snapshot for review. Model pricing
-  shows the pending update; nothing is metered differently until an operator
-  accepts it.
+  minimum five minutes) and holds a changed snapshot for review.
+  `GET /api/v1/pricing/refresh/pending` is what reads it; nothing is metered
+  differently until an operator accepts it. On a deployment with nobody to make
+  that call, prefer `auto`.
 - `auto` fetches on the same schedule and applies a changed snapshot at once.
 
 Rejecting a pending update means "not now": nothing remembers what was
@@ -257,7 +270,8 @@ every restart is distinguishable from one set in the dashboard.
 `public_catalog: true` serves `GET /api/v1/catalog/models` and the dashboard's
 Models page to a visitor with no credential, so a deployment can show what it
 serves before anyone signs up. A visitor sees the configured `providers:`
-instances only, priced at the deployment's rates, and never an organization's
+instances and any hosted models the deployment serves, priced at the
+deployment's rates, and never an organization's
 override, key-scoped allow-list, or usage. A caller who sends a credential is
 served as that caller, valid or not. The setting is off by default, off in
 hybrid mode, and can be changed at runtime.
@@ -277,7 +291,9 @@ running N workers serves up to N times the configured number.
 
 In hosted mode a visitor sees the same thing a visitor sees anywhere else: the
 process-wide `providers:` instances, which in that mode are the deployment's
-own rather than any tenant's, priced at the deployment's rates. No
+own rather than any tenant's, and the deployment-wide roster of the hosted
+models it pays for (what `ModelProviderPort.get_hosted_models` answers with no
+organization), priced at the deployment's rates. No
 organization's providers, overrides, or usage are public, whatever the flag is
 set to.
 
@@ -330,8 +346,10 @@ an HTTPS `api_base`; a keyless local SearXNG endpoint may use HTTP.
 
 ## Mail
 
-Mail is optional. Invitations still return an accept link when no transport is
-configured.
+Mail is optional. Invitations always return an accept link, and an invitee who
+has never signed in chooses a password on the page it opens, so members can join
+a deployment with no transport configured. Without mail, signup, email verification, and password
+reset are unavailable.
 
 SMTP needs the deployment's public URL, a host, and a sender:
 
@@ -370,10 +388,13 @@ address nobody has added.
 The Tools pages and `GET /api/v1/tool-settings` show effective sandbox, web-search,
 and guardrail configuration. Common startup settings are:
 
-- `sandbox_url`
+- `sandbox_provider` and `sandbox_url`
+- `sandbox_container_idle_ttl_sec` and `sandbox_container_max_lifetime_sec`
+- `code_execution_executor`
 - `web_search_url`
 - `web_search_provider` and `web_search_provider_api_key`
 - `guardrails_url`
+- `guardrail_thread_pool_size`
 - `mcp_allow_loopback` and `mcp_allow_private_hosts`
 - `web_search_allow_private_hosts`
 - `provider_allow_private_hosts`
@@ -403,7 +424,16 @@ Each is independent. Unset, the Terms of service row is absent and the Data &
 Privacy row stays disabled. A deployment whose dashboard sits beside a site that
 owns the documents points at that site. `GET /api/v1/bootstrap` publishes both
 addresses unauthenticated, so a credential in either is refused at startup, the
-way `data_plane_url` refuses one. The same check covers `docs_url`.
+way `data_plane_url` refuses one. The same check covers `docs_url` and
+`site_url`.
+
+## The public site
+
+A deployment with a website of its own (a landing page beside the dashboard)
+sets `site_url` or `OTARI_SITE_URL` to its absolute HTTP or HTTPS address. The
+logo on the pages a visitor reaches without an account (the sign-in pages and
+the public model catalog) then links there. Unset, it links to the catalog where
+the deployment publishes one, and is not a link otherwise.
 
 ## The interface address
 
@@ -422,8 +452,16 @@ ui_base_url: "https://app.example.com/dashboard"
 
 Unset, `public_base_url` answers for it. Supply an absolute http(s) URL with no
 trailing slash; a relative one would survive the redirect and mean nothing in an
-inbox. Credentials, query strings and fragments are refused: this value travels
-in a redirect and into outgoing mail.
+inbox. Credentials and fragments are refused: this value travels in a redirect
+and into outgoing mail. A query string is kept and placed ahead of the hash
+route in every link (`https://app.example.com/dashboard/?edge=a#/verify-email?token=…`),
+for an edge that serves one interface for several deployments and needs each
+link to say which one built it.
+
+A dashboard served from a sibling host of this process may hold a session here
+only when that host is listed in `cors_allow_origins`: the session cookie is
+`SameSite=Strict`, and a same-site request from any origin not on that list is
+refused.
 
 Left unset on a split deployment, an OAuth callback lands the browser on an
 origin holding none of the sign-in state it started with, and the sign-in fails
@@ -461,3 +499,10 @@ This is executable code, not a feature flag. Install the module in the gateway
 environment, pin it to a compatible Otari release, and authenticate every
 contributed route. See [Architecture](../ARCHITECTURE.md) for the extension
 boundary.
+
+## Product feedback
+
+This fork removes upstream's in-product feedback, which forwarded messages to
+`api.otari.ai`. There is no `feedback_enabled` setting and no feedback route,
+and the dashboard never shows the entry. `tests/unit/test_no_feedback_forwarding.py`
+fails if an upstream sync brings it back.

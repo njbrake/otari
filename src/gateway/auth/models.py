@@ -1,93 +1,36 @@
 import hashlib
-import re
-import secrets
 
-# Number of leading plaintext characters kept as a display-only fingerprint
-# (``gw-`` plus 7 random chars). The key is ``gw-`` + token_urlsafe(48) = 67 chars,
-# so exposing 10 leaves ~57 secret chars; the prefix never gates auth and cannot be
-# recovered from the stored SHA-256 hash.
-KEY_PREFIX_LENGTH = 10
+# Prefix stamped on every key the open-source build mints. ``gw_`` is the other
+# credential, the gateway's own token to the platform, so a user key must not
+# share it. The format itself lives behind ``ApiKeyFormatPort``; this constant
+# is the default adapter's, kept here so tests and the dashboard can name it.
+API_KEY_PREFIX = "tk-"
 
-# Number of trailing plaintext characters kept alongside the prefix, so a key can be
-# told apart from another sharing its prefix. Four, matching the ``last4`` that
-# provider credentials have always stored; it takes the unexposed remainder from
-# ~342 bits to ~318 and, like the prefix, never gates auth.
+# Minimum length of a minted key; ``token_urlsafe(48)`` yields 64 characters.
+MIN_API_KEY_LENGTH = 50
+
+# Number of trailing plaintext characters kept alongside the fingerprint, so a
+# key can be told apart from another sharing its prefix. Four, matching the
+# ``last4`` that provider credentials have always stored; it takes the unexposed
+# remainder from ~342 bits to ~318 and, like the fingerprint, never gates auth.
 KEY_SUFFIX_LENGTH = 4
-
-
-def generate_api_key() -> str:
-    """Generate a new API key with prefix.
-
-    Returns:
-        A new API key with format 'gw-' followed by 48 random characters
-
-    Raises:
-        RuntimeError: If generated key doesn't match expected format (should never happen)
-
-    """
-    api_key = f"gw-{secrets.token_urlsafe(48)}"
-
-    try:
-        validate_api_key_format(api_key)
-    except ValueError as e:
-        msg = f"Generated API key failed validation: {e}"
-        raise RuntimeError(msg) from e
-
-    return api_key
-
-
-def key_prefix(api_key: str) -> str:
-    """Return the display-only fingerprint (leading characters) of an API key.
-
-    Called at every key-mint site so the stored prefix length cannot drift. The
-    prefix is shown in the dashboard to recognize a key after its one-time reveal;
-    it is not a secret and is never used for authentication.
-    """
-    return api_key[:KEY_PREFIX_LENGTH]
 
 
 def key_suffix(api_key: str) -> str:
     """Return the display-only trailing characters of an API key.
 
     Called at every key-mint site, rotation included, so a rotated row never keeps
-    the suffix of the secret it replaced. Like the prefix it is not a secret, is
-    never used for authentication, and cannot be recovered from the stored hash.
+    the suffix of the secret it replaced. Like the fingerprint it is not a secret,
+    is never used for authentication, and cannot be recovered from the stored hash.
     """
     return api_key[-KEY_SUFFIX_LENGTH:]
-
-
-def validate_api_key_format(api_key: str) -> None:
-    """Validate API key format.
-
-    Args:
-        api_key: The API key to validate
-
-    Raises:
-        ValueError: If the API key format is invalid
-
-    """
-    if not isinstance(api_key, str):
-        msg = f"API key must be a string, got {type(api_key).__name__}"
-        raise ValueError(msg)
-
-    if not (api_key.startswith("gw-") or api_key.startswith("gw_")):
-        msg = "API key must start with 'gw-' or 'gw_' prefix"
-        raise ValueError(msg)
-
-    if len(api_key) < 50:
-        msg = f"API key is too short. Expected at least 50 characters, got {len(api_key)}"
-        raise ValueError(msg)
-
-    if not re.match(r"^gw[-_][A-Za-z0-9_-]+$", api_key):
-        msg = "API key contains invalid characters. Must match pattern: gw[-_][A-Za-z0-9_-]+"
-        raise ValueError(msg)
 
 
 def hash_key(api_key: str) -> str:
     """Hash an API key using SHA-256.
 
     Deliberately does not validate the key's format. Format is a mint-time
-    concern (``generate_api_key`` validates what it generates); on the verify
+    concern (the bound ``ApiKeyFormatPort`` validates what it mints); on the verify
     path a shape check only decides which error a wrong key gets, and it would
     reject a key minted elsewhere whose hash is legitimately on a row.
 

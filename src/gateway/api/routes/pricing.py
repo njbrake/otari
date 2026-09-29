@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import get_config, get_db, require_deployment_operator, verify_catalog_reader
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import ModelPricing
+from gateway.core.surface import Surface
 from gateway.models.money import as_float, to_usd, to_usd_or_none
+from gateway.models.pricing import API_ORIGIN, ModelPricing
 from gateway.models.pricing_schemas import PricingTier
 from gateway.services.alias_service import all_alias_names, resolve_effective_alias
 from gateway.services.policy_store import all_policy_names, resolve_effective_policy
@@ -27,6 +28,7 @@ from gateway.services.pricing_refresh_service import (
 )
 from gateway.services.pricing_service import (
     GATEWAY_TOOL_PRICING_PROVIDER,
+    current_rates_page,
     default_model_pricing,
     default_pricing_enabled,
     default_pricing_reference,
@@ -50,6 +52,8 @@ catalog_router = APIRouter(
     tags=["pricing"],
     dependencies=[Depends(verify_catalog_reader)],
 )
+
+SURFACE = Surface("pricing")
 
 
 class SetPricingRequest(BaseModel):
@@ -197,8 +201,7 @@ def _preview_response(preview: PricingRefreshPreview, protected_model_count: int
         removed_count=preview.removed_count,
         protected_model_count=protected_model_count,
         changes=[
-            PricingRefreshChangeResponse(model_key=change.model_key, change=change.change)
-            for change in preview.changes
+            PricingRefreshChangeResponse(model_key=change.model_key, change=change.change) for change in preview.changes
         ],
         changes_truncated=preview.changes_truncated,
     )
@@ -252,9 +255,7 @@ async def preview_pricing_refresh(
             detail="Unable to fetch the latest genai-prices data",
         ) from None
 
-    protected_model_count = (
-        await db.execute(select(func.count(distinct(ModelPricing.model_key))))
-    ).scalar_one()
+    protected_model_count = (await db.execute(select(func.count(distinct(ModelPricing.model_key))))).scalar_one()
     return _preview_response(preview, protected_model_count)
 
 
@@ -276,9 +277,7 @@ async def get_pending_pricing_refresh(
         ) from None
     if preview is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No pending genai-prices refresh")
-    protected_model_count = (
-        await db.execute(select(func.count(distinct(ModelPricing.model_key))))
-    ).scalar_one()
+    protected_model_count = (await db.execute(select(func.count(distinct(ModelPricing.model_key))))).scalar_one()
     return _preview_response(preview, protected_model_count)
 
 
@@ -313,9 +312,7 @@ async def list_pricing_drift(
     now = normalize_effective_at(None)
     rows: list[PricingDriftRow] = []
     defaults_on = default_pricing_enabled()
-    in_force = await rates_in_force(
-        db, as_of=now, limit=limit, exclude_key_prefix=f"{GATEWAY_TOOL_PRICING_PROVIDER}:"
-    )
+    in_force = await rates_in_force(db, as_of=now, limit=limit, exclude_key_prefix=f"{GATEWAY_TOOL_PRICING_PROVIDER}:")
     for pricing in in_force:
         provider_part, separator, model_part = pricing.model_key.partition(":")
         provider = provider_part if separator else None
@@ -532,7 +529,7 @@ async def set_pricing(
         pricing.cache_write_1h_price_per_million = cache_write_1h
         pricing.pricing_tiers = pricing_tiers
         pricing.unit = request.unit
-        pricing.origin = "api"
+        pricing.origin = API_ORIGIN
     else:
         pricing = ModelPricing(
             model_key=normalized_key,
@@ -544,7 +541,7 @@ async def set_pricing(
             cache_write_1h_price_per_million=cache_write_1h,
             pricing_tiers=pricing_tiers,
             unit=request.unit,
-            origin="api",
+            origin=API_ORIGIN,
         )
         db.add(pricing)
 
@@ -578,6 +575,35 @@ async def list_pricing(
     pricings = result.scalars().all()
 
     return [PricingResponse.from_model(pricing) for pricing in pricings]
+
+
+class CurrentPricingPage(BaseModel):
+    """One page of current model prices, with the total number of priced models."""
+
+    data: list[PricingResponse]
+    count: int
+
+
+# Declared above the ``{model_key:path}`` routes below, which would otherwise
+# match ``current`` as a model key.
+@catalog_router.get("/current")
+async def list_current_pricing(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+) -> CurrentPricingPage:
+    """List the rate each priced model is metered at, one row per model key.
+
+    Listing prices answers the stored history, one row per ``effective_at``, so a
+    page of that is a page of revisions rather than a page of models. This
+    answers one row per key: the newest rate that has taken effect, or the
+    earliest scheduled rate for a key that has none yet. ``count`` is the number
+    of priced models, so a caller can page without reading the collection to
+    learn how long it is.
+    """
+
+    rows, count = await current_rates_page(db, skip=skip, limit=limit)
+    return CurrentPricingPage(data=[PricingResponse.from_model(row) for row in rows], count=count)
 
 
 @catalog_router.get("/{model_key:path}/history")

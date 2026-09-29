@@ -101,7 +101,7 @@ def test_a_pending_update_is_previewed_without_fetching_and_accepting_it_is_reme
     db_session_factory: Callable[[], Session],
 ) -> None:
     """What the scheduled refresh leaves behind under the review policy."""
-    from gateway.models.entities import PricingSnapshot
+    from gateway.models.pricing import PricingSnapshot
     from gateway.services.pricing_refresh_service import GENAI_PRICES_PENDING_SOURCE, reset_price_refresh_state
 
     session = db_session_factory()
@@ -138,7 +138,7 @@ def test_the_history_keeps_only_the_newest_snapshots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Each accept is the whole dataset, so the history is a window."""
-    from gateway.models.entities import PricingSnapshot
+    from gateway.models.pricing import PricingSnapshot
     from gateway.services import pricing_refresh_service as refresh
 
     monkeypatch.setattr(refresh, "PRICING_SNAPSHOT_HISTORY_KEEP", 2)
@@ -163,9 +163,7 @@ def test_the_history_keeps_only_the_newest_snapshots(
         refresh.reset_price_refresh_state()
 
 
-def test_drift_puts_a_stored_rate_beside_todays_default(
-    client: TestClient, master_key_header: dict[str, str]
-) -> None:
+def test_drift_puts_a_stored_rate_beside_todays_default(client: TestClient, master_key_header: dict[str, str]) -> None:
     turned_on = client.patch(f"{API_ROOT}/settings", json={"default_pricing": True}, headers=master_key_header)
     assert turned_on.status_code == 200, turned_on.text
     try:

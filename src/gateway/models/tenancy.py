@@ -5,17 +5,10 @@ The reconciled control plane's tenancy core, rehomed from the platform
 graph: an ``organization`` owns ``workspace`` rows, and ``user`` rows join both
 through ``organization_member`` and ``workspace_member``.
 
-**Why SQLModel here and plain SQLAlchemy in `entities.py`.** SQLModel is
-SQLAlchemy underneath, so these classes bind to the gateway's ``AsyncSession``
-unchanged while keeping the ``Create``/``Update``/``Public`` schema layer the
-routes and the generated dashboard client are built on. Converting them to
-`entities.py`'s declarative style would have rewritten every endpoint contract
-in the slice for no behavioral gain. `entities.py` stays as it is: the two
-styles coexist deliberately, and new *gateway* tables still belong there.
-
-**One MetaData, two styles.** `entities.py`'s ``Base`` shares
-``SQLModel.metadata`` (see the note there), so Alembic, ``create_all`` and
-``drop_all`` see one schema no matter which style declared a table.
+**Two styles.** Tables whose ``Create``/``Update``/``Public`` schemas are endpoint
+contracts use SQLModel. ``DashboardSession`` and ``WorkspaceActivationState``
+have no such contract, so they use the declarative ``Base``. Both share
+``SQLModel.metadata``.
 
 Three deliberate departures from the platform's models, applied on arrival:
 
@@ -25,7 +18,7 @@ Three deliberate departures from the platform's models, applied on arrival:
   ``datetime.now(UTC)`` into it: the offset is silently dropped on the way in,
   and the value reads back as local-looking UTC. That is a latent bug, not a
   style difference, so it is fixed here rather than carried. ``timezone=True``
-  alone does not fix it, which is why ``UtcDateTime`` below exists: PostgreSQL
+  alone does not fix it, which is why ``UtcDateTime`` exists: PostgreSQL
   honors the flag and SQLite ignores it, and SQLite is what the OSS edition
   ships by default, so on that engine the departure would have been a comment
   rather than a behavior. ``tests/unit/test_tenancy_timestamps.py`` is what
@@ -60,7 +53,7 @@ exactly as the platform's own tenancy models do.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import field_validator
 from sqlalchemy import (
@@ -75,9 +68,10 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.engine.interfaces import Dialect
-from sqlalchemy.types import TypeDecorator
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlmodel import Field, SQLModel
+
+from gateway.models.base import Base, CreatedAtMixin, PrimaryKeyMixin, UpdatedAtMixin, UtcDateTime, _timestamp_field
 
 ORGANIZATION_MEMBER_ROLES = {"owner", "admin", "member", "viewer"}
 ORGANIZATION_MEMBER_STATUSES = {"active", "invited", "suspended"}
@@ -109,6 +103,9 @@ OrganizationMemberSettableStatus = Literal["active", "suspended"]
 # the read endpoints put on repeatable filters (``MAX_FILTER_VALUES``).
 MAX_WORKSPACE_ASSIGNMENTS = 50
 
+# How many addresses one bulk invitation may carry.
+MAX_BULK_INVITATIONS = 100
+
 # Roles that may manage an organization or a workspace. Fixed roles are the
 # settled OSS line; anything finer-grained is overlay depth.
 MANAGEMENT_ROLES = frozenset({"owner", "admin"})
@@ -119,102 +116,6 @@ def _validate_membership(value: str, *, allowed: set[str], kind: str) -> str:
         msg = f"Invalid {kind}: {value}"
         raise ValueError(msg)
     return value
-
-
-class UtcDateTime(TypeDecorator[datetime]):
-    """A timestamp that reads back UTC-aware on every engine.
-
-    ``DateTime(timezone=True)`` alone is not enough, and the gap is the whole
-    reason this exists. PostgreSQL honors it and hands back an aware value;
-    SQLite has no timestamp type at all, so SQLAlchemy stores an ISO string and
-    the flag is a no-op, and a value written as ``datetime.now(UTC)`` reads back
-    with ``tzinfo=None``. A naive datetime then serializes with no offset, and a
-    browser parses an offset-less timestamp as **local** time, so every tenancy
-    timestamp in the dashboard would be wrong by the deployment's UTC offset on
-    the engine the OSS edition ships by default.
-
-    Both directions are handled: an aware value is normalized to UTC before it
-    is stored, so a caller in another zone cannot write a wall-clock time that
-    means something else, and a naive value read back is stamped UTC, because
-    UTC is what everything here writes.
-
-    The rendered DDL is exactly ``impl``'s, so this changes no migration and
-    ``compare_metadata`` stays clean.
-    """
-
-    impl = DateTime(timezone=True)
-    cache_ok = True
-
-    def process_bind_param(self, value: datetime | None, dialect: Dialect) -> datetime | None:
-        if value is None:
-            return None
-        if value.utcoffset() is None:
-            # Refused rather than assumed. Reading a naive value back as UTC is
-            # safe, because UTC is what everything here writes; writing one is
-            # not, because the engines disagree about what it means. PostgreSQL
-            # interprets it in the *session* time zone, so the same value lands
-            # as a different instant depending on who connected, while SQLite
-            # stores the wall clock as written. Silently picking one is how a
-            # timestamp ends up hours off with nothing to show for it.
-            msg = "A tenancy timestamp must be timezone-aware; got a naive datetime"
-            raise ValueError(msg)
-        return value.astimezone(UTC)
-
-    def process_result_value(self, value: datetime | None, dialect: Dialect) -> datetime | None:
-        if value is not None and value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value
-
-
-def _timestamp_field(*, default: Any = None, default_factory: Any = None, column_kwargs: dict[str, Any]) -> Any:
-    """Build a timezone-aware timestamp field.
-
-    Two things are worked around here, once, instead of at five inheriting
-    tables. SQLModel's ``Field`` overloads type ``sa_type`` as a *class*, while
-    the type we want is an *instance* (the runtime accepts either and hands it
-    straight to ``Column``). And the type has to arrive as ``sa_type`` rather
-    than a ready-made ``sa_column``, because a ``Column`` instance declared on a
-    mixin cannot be attached to more than one table; ``sa_type`` plus kwargs
-    lets SQLModel build a fresh column per model.
-    """
-    if default_factory is not None:
-        return Field(  # type: ignore[call-overload]
-            default_factory=default_factory,
-            sa_type=UtcDateTime(),
-            sa_column_kwargs=column_kwargs,
-        )
-    return Field(  # type: ignore[call-overload]
-        default=default,
-        sa_type=UtcDateTime(),
-        sa_column_kwargs=column_kwargs,
-    )
-
-
-class PrimaryKeyMixin:
-    """A UUID primary key, rendered as CHAR(32) on SQLite and native on PostgreSQL."""
-
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-
-
-class CreatedAtMixin:
-    """Creation timestamp, defaulted in Python and in the database."""
-
-    created_at: datetime = _timestamp_field(
-        default_factory=lambda: datetime.now(UTC),
-        column_kwargs={"server_default": func.now()},
-    )
-
-
-class UpdatedAtMixin:
-    """Last-modification timestamp, stamped by the database on update.
-
-    ``default=None`` and not merely a nullable annotation: without an explicit
-    default the field is *required* on the pydantic side, which a table class
-    hides (table models skip construction validation) and any schema inheriting
-    this mixin would not.
-    """
-
-    updated_at: datetime | None = _timestamp_field(default=None, column_kwargs={"onupdate": func.now()})
 
 
 # =============================================================================
@@ -252,7 +153,7 @@ class UserCreate(UserBase):
 class User(UserBase, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, table=True):
     """An identity in the reconciled control plane.
 
-    Not to be confused with `entities.User`, the gateway's own string-keyed
+    Not to be confused with `users.User`, the gateway's own string-keyed
     per-request spend identity, which is what keys, budgets, and usage attach to.
     Both exist, and how they converge is no longer settled: otari-ai#1719 made
     otari's schema the survivor, which retired the pre-flip plan of re-parenting
@@ -523,9 +424,9 @@ class CallerIdentityPublic(SQLModel):
     names. Publishing it costs nothing either, since it is the caller's own
     identity and they are holding the credential that resolved to it.
 
-    Both fields are nullable, and for opposite reasons. A local operator
-    identity has no address, because first boot provisions it with a name and
-    nothing to sign in with but the master key; a member added to the roster by
+    ``email`` and ``full_name`` are nullable for opposite reasons. A local
+    operator identity has no address, because first boot provisions it with a
+    name and nothing to sign in with but the master key; a member added by
     address has no name until they claim the identity and supply one. So a shell
     has to be ready to draw either one alone.
     """
@@ -533,6 +434,32 @@ class CallerIdentityPublic(SQLModel):
     user_id: uuid.UUID
     email: str | None = None
     full_name: str | None = None
+    # Whether a password exists, never anything derived from its value. It is
+    # here rather than left to the deployment-wide ``sign_in_methods``, which
+    # answers what this gateway accepts and not what the caller holds: somebody
+    # who signed in with Google, GitHub or a passkey has no current password to
+    # type into the change form (mozilla-ai/otari-ai#2099).
+    #
+    # Required rather than defaulted, because the safe-looking default is the
+    # wrong one: "no password" for an identity that holds one selects the form
+    # the gateway refuses.
+    has_password: bool = Field(
+        description=(
+            "Whether this identity holds a dashboard password. False for one that signs in "
+            "only through an OAuth provider or a passkey, and for a roster entry nobody has "
+            "claimed yet. PUT /api/v1/auth/password requires current_password from a "
+            "cookie-authenticated caller exactly while this is true."
+        ),
+    )
+    # Required for the reason ``has_password`` is: a default of False tells the
+    # operator that claiming the deployment is an ordinary password change.
+    claims_deployment: bool = Field(
+        description=(
+            "Whether setting this identity's password claims the deployment, which stops the "
+            "master key signing in to the dashboard. True for the deployment's operator until it "
+            "holds a password, whether or not it already has an address; false for everybody else."
+        ),
+    )
 
 
 class OrganizationMembershipContextPublic(SQLModel):
@@ -690,6 +617,48 @@ class OrganizationMembersPublic(SQLModel):
     count: int
 
 
+class MemberCeilingPublic(SQLModel):
+    """The spend ceiling on one workspace membership, as the roster reports it.
+
+    Three fields rather than the whole ``scoped_budgets`` row: the figure the
+    roster prints, the budget its editor picks, and the id that edit writes to.
+    """
+
+    id: str
+    budget_id: str
+    max_budget: float | None
+
+
+class MemberWorkspacePlacementPublic(SQLModel):
+    """One workspace a member is in, with their role and ceiling there.
+
+    A ceiling is keyed on the *membership*, not on the person, so a member of two
+    workspaces has two of them. The membership id is carried in its own right
+    rather than read back off the ceiling, because it is needed precisely when
+    there is no ceiling yet and one is about to be created.
+    """
+
+    workspace_id: uuid.UUID
+    workspace_name: str
+    workspace_member_id: uuid.UUID
+    role: str
+    ceiling: MemberCeilingPublic | None = None
+
+
+class MemberAttributionPublic(SQLModel):
+    """What the gateway identity behind a membership has spent, and may reach.
+
+    Deployment-wide facts, so they are withheld from a caller who does not
+    operate the deployment rather than zeroed: ``/api/v1/users`` refuses them,
+    and a zero here would read as a member who has spent nothing.
+    """
+
+    spend: float
+    reserved: float
+    blocked: bool
+    allowed_models: list[str] | None = None
+
+
 class ActiveOrganizationMemberPublic(SQLModel):
     """A member row joined to the identity behind it, as the roster shows it.
 
@@ -720,6 +689,8 @@ class ActiveOrganizationMemberPublic(SQLModel):
     status: str
     created_at: datetime
     updated_at: datetime | None = None
+    workspaces: list[MemberWorkspacePlacementPublic] = Field(default_factory=list)
+    attribution: MemberAttributionPublic | None = None
 
 
 class ActiveOrganizationMembersPublic(SQLModel):
@@ -1096,6 +1067,12 @@ class InvitationPreviewPublic(SQLModel):
     organization_name: str
     role: str
     expires_at: datetime
+    needs_password: bool = Field(
+        description=(
+            "Whether the invited address has never signed in here, so accepting should also set its "
+            "password. False when the address already has a way in, and then accept refuses one."
+        )
+    )
 
 
 class InviteOrganizationMemberRequest(SQLModel):
@@ -1135,6 +1112,31 @@ class InviteOrganizationMemberResultPublic(SQLModel):
     created_at: datetime
 
 
+class BulkInviteOrganizationMembersRequest(SQLModel):
+    """Invite several addresses at once, all with the same role and workspace assignments."""
+
+    emails: list[str] = Field(min_length=1, max_length=MAX_BULK_INVITATIONS)
+    role: OrganizationMemberRole = "member"
+    workspace_assignments: list[WorkspaceAssignmentRequest] | None = Field(
+        default=None,
+        max_length=MAX_WORKSPACE_ASSIGNMENTS,
+    )
+
+
+class BulkInvitationFailurePublic(SQLModel):
+    """An address the bulk invite could not invite, and why."""
+
+    email: str
+    detail: str
+
+
+class BulkInviteOrganizationMembersResultPublic(SQLModel):
+    """What a bulk invite produced: one entry per submitted address, repeats included, in one of the two lists."""
+
+    invited: list[InviteOrganizationMemberResultPublic]
+    failed: list[BulkInvitationFailurePublic]
+
+
 class ValidateInvitationRequest(SQLModel):
     """The preview lookup's body.
 
@@ -1147,21 +1149,40 @@ class ValidateInvitationRequest(SQLModel):
     token: str
 
 
+# The same sanity ceiling signup and the password routes put on a submitted
+# password; the policy itself is ``validate_new_password``'s, so its readable
+# refusal survives rather than a 422 from a schema bound.
+_MAX_SUBMITTED_PASSWORD = 1024
+
+
 class AcceptInvitationRequest(SQLModel):
     token: str
+    password: str | None = Field(
+        default=None,
+        max_length=_MAX_SUBMITTED_PASSWORD,
+        description=(
+            "Sets the invited identity's password in the same step, when the preview reported "
+            "needs_password. Needs no mail: the link is the proof, whether it was emailed or an "
+            "admin handed it over."
+        ),
+    )
+    full_name: str | None = Field(
+        default=None, max_length=MAX_FULL_NAME_LENGTH, description="Filled in only if not already set."
+    )
+    terms_accepted: bool = Field(default=False, description="Whether the caller accepted this deployment's terms.")
 
 
 class AcceptInvitationResultPublic(SQLModel):
     """What accepting produces: enough for the accept page to say where the visitor landed.
 
-    No session and no token: accepting resolves the membership to ``active``
-    and stops there. The identity it resolves to is password-less on the roster
-    until it is claimed, so the next step is a sign-up on the
-    invited address, not a sign-in.
+    No session and no token. When the request carried a password, the identity
+    can sign in straight away; otherwise it stays password-less until claimed by
+    signup or a provider sign-in.
     """
 
     organization_name: str
     role: str
+    password_set: bool = Field(default=False, description="Whether this accept set the identity's password.")
 
 
 class PendingOrganizationInvitationPublic(SQLModel):
@@ -1501,6 +1522,94 @@ class OAuthPendingState(SQLModel, table=True):
     expires_at: datetime = Field(sa_type=UtcDateTime(), index=True)  # type: ignore[call-overload]
 
 
+class DashboardSession(Base):
+    """A server-side admin-dashboard sign-in session, held by one identity.
+
+    Minted when an operator signs in to the dashboard with the master key: the
+    browser holds only an opaque token in an HttpOnly cookie and this table
+    stores the token's SHA-256 hash, so neither the master key nor a usable
+    session credential is ever persisted in JS-readable storage. Sessions
+    expire on a TTL and are revoked on sign-out and on master-key rotation.
+
+    ``user_id`` is what lets a session resolve a caller rather than only prove
+    that the master key was presented once. It names a tenancy identity
+    (`models.tenancy.User`), whose ``active_organization_id`` is the
+    organization the session acts in, so a tenancy surface reads its scope off
+    the session. Master-key sign-in binds the session to the deployment's
+    bootstrap operator; a per-user sign-in flow binds it to whoever
+    authenticated.
+
+    NOT NULL on purpose: a session that names nobody cannot answer "who is
+    calling", which is the whole point of the column, and the migration that
+    added it bound existing sessions to that same bootstrap operator. CASCADE
+    on the foreign key, so deleting an identity revokes its sessions rather
+    than leaving a live cookie pointing at a row that is gone.
+    """
+
+    __tablename__ = "dashboard_sessions"
+
+    token_hash: Mapped[str] = mapped_column(primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class WorkspaceActivationState(Base):
+    """What the dashboard's first-request setup guide remembers about a workspace.
+
+    The guide walks a workspace from "no traffic" to its first successful
+    request (`services/tenancy/workspace_activation_service.py`). Only what
+    cannot be observed elsewhere is stored here: whether someone dismissed it,
+    when it last handed out a key, and which key that was. Whether the workspace
+    has *activated* is deliberately not a column, because ``usage_logs`` already
+    records it: the first successful gateway request in the workspace is the
+    evidence, so there is no second copy of it to backfill or to disagree with
+    the Activity page.
+
+    Ported from the platform's ``workspace_activation_state`` /
+    ``workspace_activation_experience_state`` pair
+    (`otari-ai` `backend/app/models/workspace_activation.py`), which does carry
+    the attempt telemetry as columns, because its usage pipeline is asynchronous
+    and crosses services. Here the usage row is written by this process into this
+    database, so the derivation is exact.
+
+    One row per workspace, not per workspace and viewer: the guide is about a
+    workspace's first request, so dismissing it says "this workspace is set up,
+    stop offering the guide" for everyone who can manage it.
+    """
+
+    __tablename__ = "workspace_activation_state"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("workspace.id", ondelete="CASCADE"), primary_key=True
+    )
+    # When the guide first and last minted an API key for this workspace. The
+    # first is what an operator reads as "when was this offered"; the last is
+    # what makes a rotation visible next to the key it rotated.
+    first_presented_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
+    last_presented_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
+    # Set by Skip, and permanent: the guide is a first-run offer, so a workspace
+    # that turned it down is not asked again on the next page load.
+    dismissed_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
+    # The key the guide issued, rotated in place on each presentation so a
+    # workspace collects one "Setup guide" key rather than one per page load.
+    # ``SET NULL`` because deleting that key from the Keys page is a legitimate
+    # thing to do, and it must not take this row (or the dismissal on it) with it.
+    api_key_id: Mapped[str | None] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="SET NULL"), default=None, index=True
+    )
+    # Gotcha: a plain DateTime(timezone=True) reads back naive on SQLite. The dashboard
+    # then shows it as local time.
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 __all__ = [
     "DeploymentAdminAccessPublic",
     "DeploymentUserOrganizationPublic",
@@ -1534,6 +1643,7 @@ __all__ = [
     "CallerOrganizationMembershipPublic",
     "CallerOrganizationMembershipsPublic",
     "CallerWorkspaceMembershipPublic",
+    "DashboardSession",
     "Invitation",
     "InvitationCreate",
     "InvitationPreviewPublic",
@@ -1578,6 +1688,7 @@ __all__ = [
     "WebAuthnCredentialsPublic",
     "Workspace",
     "WorkspaceActivationClassification",
+    "WorkspaceActivationState",
     "WorkspaceAssignmentRequest",
     "WorkspaceCreate",
     "WorkspaceMember",

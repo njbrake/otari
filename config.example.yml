@@ -86,8 +86,15 @@ providers:
 # File and image normalization. See docs/files.md.
 # files_enabled: true
 # files_local_dir: "./otari-files"
+# Any fsspec filesystem instead of a local directory or boto3 S3:
+# files_backend: fsspec
+# files_url: "gcs://my-bucket/otari-files"
+# files_storage_options: { project: "my-project" }
 # files_max_bytes: 536870912
+# files_output_max_files: 20
+# files_output_max_bytes: 67108864
 # files_retention_hours: 168
+# files_sweep_interval_sec: 3600
 # vision_strategy: describe
 # vision_describe_model: "ollama:qwen2-vl"
 # model_capabilities:
@@ -95,9 +102,23 @@ providers:
 #     supports_image: true
 #     supports_pdf: false
 
+# Managed Web Fetch permits model-directed outbound requests to public web
+# destinations. It is disabled by default. See docs/tools.md.
+# web_fetch_enabled: true
+
 # Direct search tools. Model-initiated web search uses web_search_url instead.
 # See docs/tools.md.
 # search_tools:
 #   local:
 #     provider: searxng
 #     api_base: "http://searxng:8080"
+
+# What runs code-execution tool calls: "protocol" (the default) talks to the
+# backend at sandbox_url, "e2b" runs them on E2B from this process and needs
+# the e2b extra plus E2B_API_KEY. See docs/tools.md.
+# sandbox_provider: protocol
+# How long a sandbox is held after its request so the next request can resume
+# it by container id, and the longest one may live from its first lease.
+# 0 releases every sandbox when its request ends.
+# sandbox_container_idle_ttl_sec: 600
+# sandbox_container_max_lifetime_sec: 3600

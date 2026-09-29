@@ -1,13 +1,17 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import App from "@/app/App"
 import { Provider } from "@/app/provider"
-import { API_ROOT, apiFetch } from "@/shared/api/client"
+import {
+  rememberModel,
+  takeRememberedModel,
+} from "@/features/models/publicCatalog"
+import { API_ROOT, apiFetch, siteFetch } from "@/shared/api/client"
 import { bootstrap } from "@/tests/fixtures"
 
 vi.mock("@/shared/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/shared/api/client")>()
-  return { ...actual, apiFetch: vi.fn() }
+  return { ...actual, apiFetch: vi.fn(), siteFetch: vi.fn() }
 })
 
 vi.mock("@/features/overview/OverviewPage", async () => {
@@ -32,10 +36,14 @@ describe("App", () => {
 
   it("shows a loading state while the current route loads", async () => {
     window.localStorage.setItem("otari.dashboard.hasSession", "1")
+    // The build poll goes through `siteFetch`, not `apiFetch`: it is served at
+    // the gateway's own root rather than under the API. Stubbed here so the
+    // shell's poll does not reach a real fetch under jsdom.
+    vi.mocked(siteFetch).mockResolvedValue({
+      build: "test-build",
+      version: "1.0.0",
+    } as never)
     vi.mocked(apiFetch).mockImplementation(async (path) => {
-      if (path === "/dashboard-build.json") {
-        return { build: "test-build" } as never
-      }
       if (path === "/settings") {
         return { default_pricing: true, require_pricing: false } as never
       }
@@ -49,12 +57,50 @@ describe("App", () => {
     expect(document.title).toBe("Overview · Otari")
   })
 
+  it("reopens the model a visitor chose once their session starts", async () => {
+    window.localStorage.setItem("otari.dashboard.hasSession", "1")
+    vi.mocked(siteFetch).mockResolvedValue({
+      build: "test-build",
+      version: "1.0.0",
+    } as never)
+    vi.mocked(apiFetch).mockResolvedValue([] as never)
+    rememberModel("z-ai/glm-5.3")
+    window.location.hash = "#/"
+
+    renderApp(bootstrap())
+
+    await waitFor(() =>
+      expect(window.location.hash).toBe("#/models/z-ai/glm-5.3"),
+    )
+    expect(takeRememberedModel()).toBeNull()
+  })
+
+  it("lets a deep link win over the remembered model", () => {
+    window.localStorage.setItem("otari.dashboard.hasSession", "1")
+    vi.mocked(siteFetch).mockResolvedValue({
+      build: "test-build",
+      version: "1.0.0",
+    } as never)
+    vi.mocked(apiFetch).mockResolvedValue([] as never)
+    rememberModel("z-ai/glm-5.3")
+    window.location.hash = "#/keys"
+
+    renderApp(bootstrap())
+
+    // Decided on the first render, before the router mounts.
+    expect(window.location.hash).toBe("#/keys")
+    // Forgotten all the same: it was this session's to use or lose.
+    expect(takeRememberedModel()).toBeNull()
+  })
+
   it("asks a local-operator deployment to sign in", () => {
     // No stored session marker, so the shell is not reachable yet.
     renderApp(bootstrap())
     expect(document.title).toBe("Sign in · Otari")
 
-    expect(screen.getByRole("heading", { name: "Otari" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("heading", { name: "Sign in to Otari" }),
+    ).toBeInTheDocument()
   })
 
   it("renders the data-plane landing page for a hybrid gateway", () => {
@@ -97,7 +143,9 @@ describe("App", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       /does not know what it is connected to/,
     )
-    expect(screen.queryByRole("heading", { name: "Otari" })).toBeNull()
+    expect(
+      screen.queryByRole("heading", { name: "Sign in to Otari" }),
+    ).toBeNull()
   })
 
   it("renders the accept-invitation page ahead of the sign-in screen", async () => {
@@ -123,7 +171,9 @@ describe("App", () => {
     // token in the link is this visitor's whole credential, not a session.
     expect(await screen.findByText("Acme")).toBeInTheDocument()
     expect(document.title).toBe("Accept invitation · Otari")
-    expect(screen.queryByRole("heading", { name: "Otari" })).toBeNull()
+    expect(
+      screen.queryByRole("heading", { name: "Sign in to Otari" }),
+    ).toBeNull()
   })
 
   it("renders the public catalog ahead of the sign-in screen where the deployment opens it", async () => {
@@ -145,8 +195,9 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Models" }),
     ).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Sign in" })).toBeInTheDocument()
-    expect(screen.queryByRole("heading", { name: "Otari" })).toBeNull()
+    expect(
+      screen.queryByRole("heading", { name: "Sign in to Otari" }),
+    ).toBeNull()
   })
 
   it("keeps the catalog behind the sign-in screen by default", () => {
@@ -154,7 +205,9 @@ describe("App", () => {
 
     renderApp(bootstrap())
 
-    expect(screen.getByRole("heading", { name: "Otari" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("heading", { name: "Sign in to Otari" }),
+    ).toBeInTheDocument()
     expect(screen.queryByRole("heading", { name: "Models" })).toBeNull()
   })
 
@@ -169,7 +222,9 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Email verified" }),
     ).toBeInTheDocument()
-    expect(screen.queryByRole("heading", { name: "Otari" })).toBeNull()
+    expect(
+      screen.queryByRole("heading", { name: "Sign in to Otari" }),
+    ).toBeNull()
   })
 
   it("sends a completed OAuth sign-in on to the dashboard rather than leaving it on the callback page", async () => {
@@ -276,7 +331,9 @@ describe("a bootstrap from an older gateway", () => {
   it("still renders the sign-in screen without oauth_providers", () => {
     const { container } = renderApp(older("oauth_providers"))
 
-    expect(screen.getByRole("heading", { name: "Otari" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("heading", { name: "Sign in to Otari" }),
+    ).toBeInTheDocument()
     expect(container).not.toBeEmptyDOMElement()
   })
 

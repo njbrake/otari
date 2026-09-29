@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from gateway.api.routes.otlp import _MAX_EVENTS_PER_EXPORT
 from gateway.core.config import API_ROOT
-from gateway.models.entities import AgentTelemetry, UsageLog, User
+from gateway.models.usage import AgentTelemetry, UsageLog
+from gateway.models.users import User
 
 from .otlp_helpers import log_record, logs_export
 
@@ -256,9 +257,7 @@ def test_capture_toggle_off_blocks_behavioral_row_but_not_usage(
     assert db_session.query(AgentTelemetry).count() == 0
     assert db_session.query(UsageLog).count() == 1
 
-    patch = client.patch(
-        f"{API_ROOT}/keys/{key_id}", json={"capture_agent_telemetry": None}, headers=master_key_header
-    )
+    patch = client.patch(f"{API_ROOT}/keys/{key_id}", json={"capture_agent_telemetry": None}, headers=master_key_header)
     assert patch.status_code == 200, patch.text
     assert patch.json()["capture_agent_telemetry"] is None
 

@@ -93,7 +93,7 @@ export const Large: Story = {
           <CodeBlock
             label="curl"
             arrangement="bare"
-            value={`curl 'https://gateway.example.com/api/v1/chat/completions' \\\n  -H "Otari-Key: gw-..."`}
+            value={`curl 'https://gateway.example.com/api/v1/chat/completions' \\\n  -H "Otari-Key: tk-..."`}
           />
         </DialogSection>
       </>
@@ -108,6 +108,22 @@ export const Large: Story = {
     ),
     footerStart: <p className="text-caption">Skipping keeps the key.</p>,
     actions: <Button variant="ghost">Skip this guide</Button>,
+  },
+}
+
+export const Scanning: Story = {
+  args: {
+    ...Large.args,
+    isScanning: true,
+  },
+}
+
+/** The wait continues after a failed attempt, and the arc reports it. */
+export const ScanningFailed: Story = {
+  args: {
+    ...Large.args,
+    isScanning: true,
+    scanTone: "danger",
   },
 }
 

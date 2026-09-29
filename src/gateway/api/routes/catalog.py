@@ -27,7 +27,8 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal
+from enum import StrEnum
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -36,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.api.deps import (
+    ModelProviderPortDep,
     get_config,
     get_db,
     get_session_identity,
@@ -44,9 +46,12 @@ from gateway.api.deps import (
 )
 from gateway.core.config import HOSTED_OFFERING_INSTANCE, GatewayConfig
 from gateway.core.metered_pricing import effective_rates
-from gateway.models.entities import APIKey, PricingSnapshot, UsageLog
+from gateway.models.api_keys import APIKey
+from gateway.models.pricing import PriceSource, PricingSnapshot
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
+from gateway.models.usage import UsageLog
+from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.services.catalog_selectors import (
     current_selector_index,
     model_selector_for_slug,
@@ -55,7 +60,6 @@ from gateway.services.catalog_selectors import (
 from gateway.services.merged_catalog_service import (
     MergedCatalog,
     ModelPricingInfo,
-    PriceSource,
     build_merged_catalog,
     viewer_price,
 )
@@ -87,8 +91,8 @@ from gateway.services.selector_index_service import (
 from gateway.services.workspace_scope import organization_for_key_id
 
 # ``verify_catalog_reader_or_public`` rather than ``verify_catalog_reader``: a
-# visitor reads too while ``public_catalog`` is on, and is answered from the
-# configured instances alone. Every other route in the process keeps its gate.
+# visitor reads too while ``public_catalog`` is on, and is answered from what
+# the deployment itself serves. Every other route in the process keeps its gate.
 router = APIRouter(
     prefix="/catalog",
     tags=["catalog"],
@@ -107,10 +111,14 @@ operator_router = APIRouter(
 # it as "nobody" rather than as a key that failed to verify.
 CatalogCaller = tuple[APIKey | None, bool] | None
 
-# The reserved instance a hosted edition serves deployment-owned offerings under;
-# the base gateway never configures one, so the label only ever appears where an
-# overlay contributes such an offering.
-Credential = Literal["deployment", "organization", "hosted"]
+
+class CatalogCredential(StrEnum):
+    """Who may price a catalog offering."""
+
+    DEPLOYMENT = "deployment"
+    ORGANIZATION = "organization"
+    HOSTED = "hosted"
+
 
 # The window the viewer's own usage is rolled up over on a detail read.
 _USAGE_WINDOW = timedelta(days=30)
@@ -153,17 +161,19 @@ class CatalogOffering(BaseModel):
     short_selector: str | None = Field(
         default=None,
         description=(
-            "A shorter spelling the gateway also accepts: the instance with the model's cleaned id "
-            "(`fireworks:gpt-oss-120b`). Null where two offerings on the instance would share it, or "
-            "until the gateway has indexed the catalog."
+            "The pinned spelling the gateway also accepts for this offering: the instance with the model's catalog "
+            "id (`fireworks:openai/gpt-oss-120b`), which pins the instance and reaches the model's cheapest offering "
+            "on it. Null for a dearer sibling on the same instance, or until the gateway has indexed the catalog."
         ),
     )
     provider: str = Field(description="The provider instance the selector names.")
     provider_type: str = Field(description="The any-llm implementation behind the instance.")
-    credential: Credential = Field(
+    credential: CatalogCredential = Field(
         description=(
-            "Whose key serves it: `deployment` for a `providers:` instance the operator configured, "
-            "`organization` for a key the viewer's organization holds."
+            "Who may price it: `deployment` for a `providers:` instance the operator configured, "
+            "`hosted` for a provider the deployment pays for in any workspace of the viewer's organization, "
+            "`organization` for one the viewer's organization may set its own rate for. "
+            "A workspace can still call a `hosted` provider with the organization's own key."
         ),
     )
     discovered: bool = Field(description="Whether the provider itself reported this model.")
@@ -202,7 +212,8 @@ class CatalogModelSummary(BaseModel):
     selector: str | None = Field(
         default=None,
         description=(
-            "The id as a selector: send it as `model` and the model's cheapest offering answers. "
+            "The id as a selector: send it as `model` and the model's cheapest offering the caller can reach "
+            "answers, the vendor's own provider first where it serves the model. "
             "Null until the gateway has indexed the catalog."
         ),
     )
@@ -262,6 +273,9 @@ class CatalogResponse(BaseModel):
     )
     metadata_available: bool = Field(
         description="False when models.dev could not be read; descriptions are then absent."
+    )
+    count: int = Field(
+        description="Models matching the search, before the window, so a caller can page without reading them all."
     )
     models: list[CatalogModelSummary]
 
@@ -381,7 +395,7 @@ class SelectorIndexResponse(BaseModel):
     """What the rebuilt index knows."""
 
     offerings: int = Field(description="Selectors the deployment serves.")
-    short_selectors: int = Field(description="Offerings with an unambiguous short spelling.")
+    pinned_selectors: int = Field(description="Pinned spellings, one per instance a model is offered on.")
     models: int = Field(description="Slugs that resolve to an offering.")
 
 
@@ -389,12 +403,13 @@ class SelectorIndexResponse(BaseModel):
 async def refresh_selector_index(
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
+    model_provider: ModelProviderPortDep,
 ) -> SelectorIndexResponse:
     """Re-index the short spellings now, rather than on the refresher's next tick."""
-    await rebuild_selector_index(db, config, fetch=True)
+    await rebuild_selector_index(db, config, model_provider=model_provider, fetch=True)
     index = current_selector_index()
     return SelectorIndexResponse(
-        offerings=len(index.full), short_selectors=len(index.short), models=len(index.models)
+        offerings=len(index.full), pinned_selectors=len(index.pinned), models=len(index.models)
     )
 
 
@@ -425,17 +440,15 @@ async def _group(
         seed, metadata, instance, model_id, provider_type = offering_seed(config, catalog, obj)
         seeds.append(seed)
 
-        pricing, source, reference = viewer_price(
-            obj, overrides, instance=instance, model_id=model_id, as_of=now
-        )
+        pricing, source, reference = viewer_price(obj, overrides, instance=instance, model_id=model_id, as_of=now)
 
         offerings[obj.id] = _Offering(
             wire=CatalogOffering(
                 selector=obj.id,
-                short_selector=short_selector_for(obj.id),
+                short_selector=short_selector_for(obj.id, organization_id=organization_id),
                 provider=instance,
                 provider_type=provider_type,
-                credential=_credential(config, instance),
+                credential=_get_credential(config, instance, deployment_managed=obj.deployment_managed),
                 discovered=obj.id in merged.discovered_keys,
                 context_window=(metadata.context_window if metadata else None) or obj.context_window,
                 max_output_tokens=metadata.max_output_tokens if metadata else None,
@@ -476,16 +489,17 @@ async def _with_usage(db: AsyncSession, grouped: _Grouped, members: list[_Offeri
     return [member.wire.model_copy(update={"usage_30d": usage.get(member.wire.selector)}) for member in members]
 
 
-def _credential(config: GatewayConfig, instance: str) -> Credential:
-    """Whose key an instance runs on, from its name alone.
+def _get_credential(config: GatewayConfig, instance: str, *, deployment_managed: bool) -> CatalogCredential:
+    """Returns who may price an offering.
 
-    The reserved name is the seam: ``config`` refuses it in ``providers:``
-    precisely so that an offering carrying it came from an overlay, which is
-    what makes the name readable here without the route knowing the overlay.
+    ``config`` refuses the reserved hosted instance name in ``providers:``,
+    so an offering carrying it came from an overlay.
     """
     if instance == HOSTED_OFFERING_INSTANCE:
-        return "hosted"
-    return "deployment" if instance in config.providers else "organization"
+        return CatalogCredential.HOSTED
+    if instance in config.providers:
+        return CatalogCredential.DEPLOYMENT
+    return CatalogCredential.HOSTED if deployment_managed else CatalogCredential.ORGANIZATION
 
 
 def _first(values: Iterable[str | None]) -> str | None:
@@ -508,7 +522,13 @@ def _rates_at_context(pricing: ModelPricingInfo, at_context: int | None) -> tupl
     return (float(rates.input_price_per_million), float(rates.output_price_per_million))
 
 
-def _summary(identity: ModelIdentity, members: list[_Offering], at_context: int | None = None) -> CatalogModelSummary:
+def _summary(
+    identity: ModelIdentity,
+    members: list[_Offering],
+    at_context: int | None = None,
+    *,
+    organization_id: uuid.UUID | None = None,
+) -> CatalogModelSummary:
     """Fold a group's offerings into the model they are offerings of.
 
     A limit is the largest any offering serves, because the model can do that
@@ -524,7 +544,7 @@ def _summary(identity: ModelIdentity, members: list[_Offering], at_context: int 
     winners = [entry for entry in described if entry.name and entry.name.rsplit("/", 1)[-1] == identity.name]
     contexts = [member.wire.context_window for member in members if member.wire.context_window is not None]
     outputs = [member.wire.max_output_tokens for member in members if member.wire.max_output_tokens is not None]
-    resolves_to = model_selector_for_slug(identity.id)
+    resolves_to = model_selector_for_slug(identity.id, organization_id=organization_id)
     return CatalogModelSummary(
         id=identity.id,
         selector=identity.id if resolves_to is not None else None,
@@ -593,11 +613,39 @@ def _elsewhere(grouped: _Grouped, key: str, offered_types: set[str]) -> list[Cat
 
 
 async def _merged_for(
-    db: AsyncSession, config: GatewayConfig, caller: CatalogCaller, session_identity: TenancyUser | None
+    db: AsyncSession,
+    config: GatewayConfig,
+    caller: CatalogCaller,
+    session_identity: TenancyUser | None,
+    model_provider: ModelProviderPort,
 ) -> MergedCatalog:
     if caller is None:
-        return await build_merged_catalog(db, config, auth=(None, False), session_identity=None, anonymous=True)
-    return await build_merged_catalog(db, config, auth=caller, session_identity=session_identity)
+        return await build_merged_catalog(
+            db, config, auth=(None, False), session_identity=None, anonymous=True, model_provider=model_provider
+        )
+    return await build_merged_catalog(
+        db, config, auth=caller, session_identity=session_identity, model_provider=model_provider
+    )
+
+
+def _matches(model: CatalogModelSummary, search: str | None) -> bool:
+    """Whether a catalog row answers this search.
+
+    The name, the catalog id and every selector, because a person picking a
+    model types whichever of those they know: the vendor-qualified name they
+    read in the list, or the ``provider:model`` selector they will send.
+
+    Matched here rather than in the browser, which is what this parameter is
+    for (otari#1380): a picker filtering the page it had fetched offered a
+    subset of the catalog and said nothing about it.
+    """
+
+    term = (search or "").strip().lower()
+    if not term:
+        return True
+    if term in model.name.lower() or term in model.id.lower():
+        return True
+    return any(term in selector.lower() for selector in model.selectors)
 
 
 @router.get("/models")
@@ -606,6 +654,7 @@ async def list_catalog(
     config: Annotated[GatewayConfig, Depends(get_config)],
     caller: Annotated[CatalogCaller, Depends(verify_catalog_reader_or_public)],
     session_identity: Annotated[TenancyUser | None, Depends(get_session_identity)],
+    model_provider: ModelProviderPortDep,
     at_context: Annotated[
         int | None,
         Query(
@@ -616,26 +665,47 @@ async def list_catalog(
             ),
         ),
     ] = None,
+    search: Annotated[
+        str | None,
+        Query(
+            max_length=200,
+            description=(
+                "Narrow to models whose name, catalog id or any selector contains this text, case-insensitively."
+            ),
+        ),
+    ] = None,
+    skip: Annotated[int, Query(ge=0, description="Number of models to skip")] = 0,
+    limit: Annotated[int, Query(ge=1, le=1000, description="Maximum number of models to return")] = 100,
 ) -> CatalogResponse:
     """The models this caller may use, one entry each however many providers serve it.
 
     Prices are the caller's: an organization's override where one applies, else
     the deployment's row, else the genai-prices default. Aliases and routing
     policies are not models and are not listed; see Routing. A visitor, where
-    the catalog is public, sees the configured instances at the deployment's
-    rates and nothing that belongs to a tenant.
+    the catalog is public, sees the configured instances and the hosted
+    models at the deployment's rates, and nothing that belongs to a tenant.
     """
-    merged = await _merged_for(db, config, caller, session_identity)
+    merged = await _merged_for(db, config, caller, session_identity, model_provider)
     grouped = await _group(db, config, merged, caller=caller, session_identity=session_identity)
     models = [
-        _summary(identity, [grouped.offerings[selector] for selector in identity.selectors], at_context)
+        _summary(
+            identity,
+            [grouped.offerings[selector] for selector in identity.selectors],
+            at_context,
+            organization_id=grouped.organization_id,
+        )
         for identity in grouped.identities.values()
     ]
+    matched = sorted(
+        (model for model in models if _matches(model, search)),
+        key=lambda m: (m.name.lower(), m.id),
+    )
     return CatalogResponse(
         default_pricing=default_pricing_enabled(),
         defaults_as_of=await _defaults_as_of(db),
         metadata_available=grouped.catalog is not None,
-        models=sorted(models, key=lambda m: (m.name.lower(), m.id)),
+        count=len(matched),
+        models=matched[skip : skip + limit],
     )
 
 
@@ -646,6 +716,7 @@ async def get_catalog_model(
     config: Annotated[GatewayConfig, Depends(get_config)],
     caller: Annotated[CatalogCaller, Depends(verify_catalog_reader_or_public)],
     session_identity: Annotated[TenancyUser | None, Depends(get_session_identity)],
+    model_provider: ModelProviderPortDep,
 ) -> CatalogModelDetail:
     """One model and every offering of it this caller may use.
 
@@ -660,14 +731,14 @@ async def get_catalog_model(
     A signed-in caller's offerings also carry their organization's own usage of
     each over the last 30 days.
     """
-    merged = await _merged_for(db, config, caller, session_identity)
+    merged = await _merged_for(db, config, caller, session_identity, model_provider)
     grouped = await _group(db, config, merged, caller=caller, session_identity=session_identity)
     identity = next((identity for identity in grouped.identities.values() if identity.id == model_id), None)
     if identity is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Model '{model_id}' not found")
 
     members = [grouped.offerings[selector] for selector in identity.selectors]
-    summary = _summary(identity, members)
+    summary = _summary(identity, members, organization_id=grouped.organization_id)
     # The cheapest offering first, unpriced ones last, so the comparison the
     # page exists for is the order the rows arrive in.
     offerings = sorted(

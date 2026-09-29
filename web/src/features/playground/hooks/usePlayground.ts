@@ -2,7 +2,7 @@ import type { FormEvent, KeyboardEvent } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import type { PlaygroundComparisonPreference } from "@/client"
-import { useModels } from "@/shared/api/models"
+import { useCatalog } from "@/shared/api/models"
 import {
   fetchPlaygroundConversation,
   useDeletePlaygroundComparison,
@@ -70,7 +70,9 @@ export function usePlayground() {
   const { selected, isLoading: isLoadingWorkspace } = useSelectedWorkspace()
   const workspaceId = selected?.workspace_id
 
-  const catalog = useModels()
+  // The grouped catalog, not the flat `/models` listing; playgroundModels.ts
+  // says why.
+  const catalog = useCatalog()
   const models = buildPlaygroundModels(catalog.data)
 
   const consent = usePlaygroundConsent()
@@ -97,7 +99,6 @@ export function usePlayground() {
   const [panelA, setPanelA] = useState<PanelState>(EMPTY_PANEL)
   const [panelB, setPanelB] = useState<PanelState>(EMPTY_PANEL)
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
-  const [isComparisonHistoryOpen, setIsComparisonHistoryOpen] = useState(false)
   const [isNewChatConfirmOpen, setIsNewChatConfirmOpen] = useState(false)
   const [isConversationSaved, setIsConversationSaved] = useState(false)
   // The id the last Save recorded, so deleting that row from history re-arms
@@ -106,9 +107,27 @@ export function usePlayground() {
   const [savedConversationId, setSavedConversationId] = useState<
     string | undefined
   >(undefined)
-  const [ratingState, setRatingState] = useState<
+  const [ratingState, setRatingStateNow] = useState<
     "none" | "acknowledged" | "dismissed"
   >("none")
+  // The acknowledgement dismisses itself on a timer, which has to die with the
+  // hook and be cancelled by anything that moves the state itself. Without the
+  // second half a pending dismissal lands after the state has already gone back
+  // to "none" (editing the exchange, or loading a stored transcript) and
+  // overwrites it three seconds later.
+  const ratingDismissal = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  )
+  useEffect(() => () => clearTimeout(ratingDismissal.current), [])
+  // Stable, which is what lets `invalidateSavedState` below name it as a
+  // dependency without re-creating itself on every render.
+  const setRatingState = useCallback(
+    (next: "none" | "acknowledged" | "dismissed") => {
+      clearTimeout(ratingDismissal.current)
+      setRatingStateNow(next)
+    },
+    [],
+  )
   const [pendingConsent, setPendingConsent] = useState<
     PendingConsent | undefined
   >(undefined)
@@ -132,7 +151,7 @@ export function usePlayground() {
     setRatingState("none")
     setIsConversationSaved(false)
     setSavedConversationId(undefined)
-  }, [])
+  }, [setRatingState])
 
   /** Put both panels back to empty, keeping whichever models they hold. */
   const clearPanels = useCallback(() => {
@@ -163,9 +182,7 @@ export function usePlayground() {
     invalidateSavedState()
   }, [workspaceId, stop, invalidateSavedState])
 
-  // Seed each panel's model once the catalog answers: A from what this browser
-  // last used here, B from the first model that is not A's, so opening compare
-  // never starts with the same model twice.
+  // Restore A from this browser; B stays empty until explicitly chosen.
   const defaultModel = models[0]?.key ?? ""
   useEffect(() => {
     if (!defaultModel || !workspaceId) return
@@ -177,7 +194,6 @@ export function usePlayground() {
             model: pickInitialModel(readRememberedModel(workspaceId), models),
           },
     )
-    setPanelB((prev) => (prev.model ? prev : { ...prev, model: defaultModel }))
   }, [defaultModel, workspaceId, models])
 
   useEffect(() => {
@@ -193,16 +209,13 @@ export function usePlayground() {
       // The send *button* becomes Stop while a reply is in flight, so the only
       // way in here is the Enter key, and a second stream into the same panel
       // interleaves two replies into one turn.
-      if (isBusy) return
+      if (isBusy || (isComparing && !panelB.model)) return
       const turn: ChatTurn = { role: "user", content: trimmed }
 
       setDraft("")
       invalidateSavedState()
 
-      // Both panels are sent the same question and stream independently, which
-      // is what makes a side-by-side comparison a comparison. A panel with no
-      // model is skipped rather than given an error turn: compare can leave B
-      // without one when A is changed to B's model.
+      // Both comparison panels receive the same question and stream independently.
       await Promise.all([
         streamReply(setPanelA, panelA.model, [...panelA.turns, turn]),
         ...(isComparing && panelB.model
@@ -300,7 +313,7 @@ export function usePlayground() {
         {
           onSuccess: () => {
             setRatingState("acknowledged")
-            window.setTimeout(
+            ratingDismissal.current = setTimeout(
               () => setRatingState("dismissed"),
               RATING_ACKNOWLEDGEMENT_MS,
             )
@@ -308,7 +321,7 @@ export function usePlayground() {
         },
       )
     },
-    [workspaceId, panelA, panelB, saveComparison],
+    [workspaceId, panelA, panelB, saveComparison, setRatingState],
   )
 
   const requestRate = (preference: PlaygroundComparisonPreference) => {
@@ -345,6 +358,18 @@ export function usePlayground() {
   }
 
   const loadConversation = async (conversationId: string) => {
+    setIsHistoryOpen(false)
+    const saved = conversations.data?.data.find(
+      (item) => item.id === conversationId,
+    )
+    if (!saved) {
+      setLoadError(
+        new Error(
+          "This conversation is no longer available. Reopen history and try again.",
+        ),
+      )
+      return
+    }
     setLoadError(undefined)
     // Before the fetch, not after: a reply still streaming would otherwise
     // patch its next fragment onto the transcript that replaced it.
@@ -359,15 +384,20 @@ export function usePlayground() {
       setLoadError(error)
       return
     }
-    setPanelA((prev) => ({
-      ...prev,
+    setIsComparing(false)
+    setPanelB(EMPTY_PANEL)
+    setPanelA({
+      ...EMPTY_PANEL,
+      // Through the same guard the seeding effect uses: a transcript can
+      // outlive the model that produced it, and restoring a key the catalog no
+      // longer serves leaves the picker blank while Send still dispatches it.
+      model: pickInitialModel(saved.model, models),
       turns: loaded.data.map((message) => ({
         role: message.role === "assistant" ? "assistant" : "user",
         content: message.content,
         reasoning: message.reasoning ?? undefined,
       })),
-    }))
-    setIsHistoryOpen(false)
+    })
     // A loaded transcript is already stored, so Save is disarmed rather than
     // offering to store a second copy of it.
     setIsConversationSaved(true)
@@ -375,15 +405,12 @@ export function usePlayground() {
     setRatingState("none")
   }
 
-  const removeConversation = (conversationId: string) => {
-    deleteConversation.mutate(conversationId, {
-      onSuccess: () => {
-        if (conversationId === savedConversationId) {
-          setIsConversationSaved(false)
-          setSavedConversationId(undefined)
-        }
-      },
-    })
+  const removeConversation = async (conversationId: string) => {
+    await deleteConversation.mutateAsync(conversationId)
+    if (conversationId === savedConversationId) {
+      setIsConversationSaved(false)
+      setSavedConversationId(undefined)
+    }
   }
 
   const toggleCompare = () => {
@@ -393,17 +420,14 @@ export function usePlayground() {
     stop()
     setIsComparing(next)
     if (next) {
-      // Both columns start empty, and this is the one place the port departs
-      // from the hosted original, which kept the first panel's transcript. It
-      // has to: the two models are sent their own panel's history, so a column
-      // carrying an earlier conversation is answering a different prompt from
-      // the one beside it. The comparison would not be a comparison, and the
-      // rating it records is a judgment over an unequal contest, which is worse
-      // than losing an on-screen transcript nobody asked to keep. A saved one
-      // is still in the history.
-      const other = models.find((model) => model.key !== panelA.model)
+      // Both columns start empty, which is where this port departs from the
+      // hosted original: that one kept panel A's transcript. Each model is sent
+      // its own panel's history, so a column carrying an earlier conversation
+      // answers a different prompt from the one beside it, and the rating would
+      // be a judgment over an unequal contest. A saved transcript is still in
+      // the history.
       setPanelA((prev) => ({ ...prev, turns: [] }))
-      setPanelB((prev) => ({ ...prev, model: other?.key ?? "", turns: [] }))
+      setPanelB((prev) => ({ ...prev, model: "", turns: [] }))
       invalidateSavedState()
     }
   }
@@ -456,7 +480,7 @@ export function usePlayground() {
       saveConversation.error ?? saveComparison.error ?? loadError ?? undefined,
     // The catalog read's own error, so the gate notice can report the failure
     // rather than a generic one: it is the only gate with something to say.
-    catalogError: catalog.error,
+    catalogError: catalog.error ?? undefined,
     workspaceId,
     isBusy,
     canChat: workspaceId !== undefined && panelA.model !== "",
@@ -493,6 +517,10 @@ export function usePlayground() {
 
     // Saved transcripts
     conversations: conversations.data?.data ?? [],
+    isHistoryLoading:
+      (conversations.isPending && !conversations.data) ||
+      (comparisons.isPending && !comparisons.data),
+    historyError: conversations.error ?? comparisons.error ?? undefined,
     isHistoryOpen,
     setIsHistoryOpen,
     loadConversation,
@@ -500,8 +528,6 @@ export function usePlayground() {
     isSavePending: saveConversation.isPending,
     isConversationSaved,
     removeConversation,
-    isDeletingConversation: deleteConversation.isPending,
-    deleteConversationError: deleteConversation.error ?? undefined,
 
     // New chat
     isNewChatConfirmOpen,
@@ -516,11 +542,7 @@ export function usePlayground() {
 
     // Saved comparisons
     comparisons: comparisons.data?.data ?? [],
-    isComparisonHistoryOpen,
-    setIsComparisonHistoryOpen,
-    removeComparison: deleteComparison.mutate,
-    isDeletingComparison: deleteComparison.isPending,
-    deleteComparisonError: deleteComparison.error ?? undefined,
+    removeComparison: (id: string) => deleteComparison.mutateAsync(id),
 
     // Just-in-time retention consent
     pendingConsent,

@@ -4,8 +4,16 @@ import { FiX } from "react-icons/fi"
 
 import { Button } from "../actions/Button"
 
-/** `sm` 440px, `md` 520px (the default), `lg` 640px. */
-export type DialogSize = "sm" | "md" | "lg"
+/** `sm` 440px, `md` 520px (the default), `lg` 640px, `xl` 928px. */
+export type DialogSize = "sm" | "md" | "lg" | "xl"
+
+/** Which ink the scanning arc is drawn in. */
+export type ScanTone = "accent" | "danger"
+
+const SCAN_INK: Record<ScanTone, string> = {
+  accent: "[--scan-ink:var(--color-primary)]",
+  danger: "[--scan-ink:var(--color-danger)]",
+}
 
 /**
  * One band of a dialog's body, divided from the one above it by a hairline that
@@ -58,6 +66,15 @@ export interface DialogProps {
    * get-started strip, a first-run panel", and a first-run sheet is it.
    */
   isAnnouncement?: boolean
+  /** Sweeps the outer border while awaiting an external event. */
+  isScanning?: boolean
+  /**
+   * Which ink the traveling arc is drawn in, so the sweep reports the last
+   * attempt rather than only the fact of waiting. Through a variable rather
+   * than a second rule, which is how a caller turns it red without the
+   * stylesheet having to know what a failure is.
+   */
+  scanTone?: ScanTone
   /** Whether Escape, a backdrop press and the close control dismiss it. */
   isDismissable?: boolean
   /**
@@ -100,7 +117,7 @@ export interface DialogProps {
  * Controlled only, like every dialog here, and it mounts its body only while
  * open so one opening's state cannot survive into the next.
  *
- * It shares `FormDialog`'s geometry class family in `globals.css`, which is why
+ * It shares `FormDialog`'s geometry class family in `design-system.css`, which is why
  * both sit at the same height, cap at the same viewport budget and become the
  * same full-screen sheet on a phone. A second set of numbers under a second
  * prefix would be one edit away from two dialogs that no longer match.
@@ -113,6 +130,8 @@ export function Dialog({
   size = "md",
   mark,
   isAnnouncement = false,
+  isScanning = false,
+  scanTone = "accent",
   isDismissable = true,
   status,
   footerStart,
@@ -151,7 +170,9 @@ export function Dialog({
         >
           <Modal.Dialog
             aria-describedby={description ? descriptionId : undefined}
-            className={`otari-dialog otari-dialog--${size} flex flex-col p-0`}
+            className={`otari-dialog otari-dialog--${size} relative flex flex-col p-0 ${
+              isScanning ? `otari-scan-border ${SCAN_INK[scanTone]}` : ""
+            }`}
           >
             <header
               className={`flex shrink-0 items-start justify-between gap-4 px-6 pt-5 pb-4 ${

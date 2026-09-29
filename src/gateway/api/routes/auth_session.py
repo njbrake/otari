@@ -48,12 +48,13 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import get_config, get_db, is_valid_master_key
+from gateway.api.deps import get_config, get_db, is_valid_master_key, record_auth_failure
 from gateway.core.config import GatewayConfig
+from gateway.exceptions.identity_exceptions import EmailNotVerifiedError, InvalidCredentialsError
 from gateway.log_config import logger
-from gateway.metrics import record_auth_failure
 from gateway.models.tenancy import User as TenancyUser
 from gateway.rate_limit import RateLimiter
+from gateway.services.budgets import WorkspaceBudgetDefaultService
 from gateway.services.dashboard_session_service import (
     SESSION_COOKIE_NAME,
     apply_session_cookie,
@@ -65,7 +66,6 @@ from gateway.services.dashboard_session_service import (
 from gateway.services.maintenance_mode_service import is_maintenance_mode
 from gateway.services.password_service import MAX_PASSWORD_BYTES
 from gateway.services.tenancy.email_address import MAX_EMAIL_LENGTH
-from gateway.services.tenancy.errors import EmailNotVerifiedError, InvalidCredentialsError
 from gateway.services.tenancy.organization_domain_service import OrganizationDomainService
 from gateway.services.tenancy.provisioning_service import ensure_bootstrap_identity
 from gateway.services.tenancy.user_service import authenticate, operator_has_password
@@ -96,11 +96,7 @@ class CreateSessionRequest(BaseModel):
     which is the one shape the validator below refuses.
     """
 
-    model_config = {
-        "json_schema_extra": {
-            "example": {"email": "operator@example.com", "password": "a-real-password"}
-        }
-    }
+    model_config = {"json_schema_extra": {"example": {"email": "operator@example.com", "password": "a-real-password"}}}
 
     # Every field is bounded, because this endpoint is unauthenticated and the
     # validator below settles which credential arrived rather than how large it
@@ -230,7 +226,7 @@ async def _sign_in_with_master_key(
     # Provisions the tenancy root on a first-ever sign-in, and resolves the same
     # operator every time after that. It commits its own work, which is why it
     # runs before the session row is staged rather than beside it.
-    return await ensure_bootstrap_identity(db)
+    return await ensure_bootstrap_identity(db, membership_listener=WorkspaceBudgetDefaultService(db))
 
 
 async def _sign_in_with_password(email: str, password: str, request: Request, db: AsyncSession) -> TenancyUser:
@@ -318,9 +314,7 @@ async def create_session(
         # racing, which the service settles on its own, and a database that
         # cannot stage this cannot stage the session row either.
         await OrganizationDomainService(db).auto_join_for_user(identity)
-        token, expires_at = await create_dashboard_session(
-            db, config.dashboard_session_ttl_hours, user_id=identity.id
-        )
+        token, expires_at = await create_dashboard_session(db, config.dashboard_session_ttl_hours, user_id=identity.id)
         await db.commit()
     except SQLAlchemyError:
         await db.rollback()

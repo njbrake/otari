@@ -13,9 +13,11 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-from gateway.models.entities import MAX_COUNT_LIMIT, Budget, ModelPricing, User
+from gateway.models.budgets import MAX_COUNT_LIMIT, Budget
+from gateway.models.pricing import ModelPricing
+from gateway.models.users import User
 from gateway.repositories.users_repository import get_active_user
-from gateway.services.budget_service import (
+from gateway.services.budgets import (
     estimate_cost,
     increase_reservation,
     reconcile_reservation,
@@ -44,7 +46,7 @@ async def test_reserve_budget_reads_user_without_locking(
     await async_db.commit()
 
     with patch(
-        "gateway.services.budget_service.get_active_user",
+        "gateway.services.budgets._reservations.get_active_user",
         wraps=get_active_user,
     ) as mock_get_active_user:
         handle = await reserve_budget(async_db, "race-user", 0.5, strategy="cas")
@@ -353,9 +355,7 @@ async def test_a_free_model_still_spends_a_token_budget(async_db: Any) -> None:
     async_db.add(User(user_id="free-model-user", budget_id="free-tokens"))
     await async_db.commit()
 
-    handle = await reserve_budget(
-        async_db, "free-model-user", 5.0, model="openai:free-model", estimated_tokens=400
-    )
+    handle = await reserve_budget(async_db, "free-model-user", 5.0, model="openai:free-model", estimated_tokens=400)
 
     # The dollar axis is not held: the request cannot spend.
     assert handle.estimate == Decimal(0)
@@ -370,9 +370,7 @@ async def test_a_free_model_still_spends_a_token_budget(async_db: Any) -> None:
 
     # And the cap binds: three more of these do not fit under 1000.
     with pytest.raises(HTTPException) as refusal:
-        await reserve_budget(
-            async_db, "free-model-user", 5.0, model="openai:free-model", estimated_tokens=700
-        )
+        await reserve_budget(async_db, "free-model-user", 5.0, model="openai:free-model", estimated_tokens=700)
 
     assert refusal.value.status_code == 403
 
@@ -427,20 +425,14 @@ async def test_a_free_model_refusal_names_the_axis_that_gated_it(async_db: Any) 
     Reporting it anyway named the one cap with room as the one that refused,
     which is worse than the unqualified word the axis naming replaced.
     """
-    async_db.add(
-        ModelPricing(model_key="openai:free-axis", input_price_per_million=0.0, output_price_per_million=0.0)
-    )
+    async_db.add(ModelPricing(model_key="openai:free-axis", input_price_per_million=0.0, output_price_per_million=0.0))
     # Both caps are spent, so a paid request would legitimately report either.
     async_db.add(Budget(budget_id="both-spent", max_budget=10.0, token_limit=1_000))
-    async_db.add(
-        User(user_id="free-axis-user", budget_id="both-spent", spend=Decimal("10.0"), current_tokens=1_000)
-    )
+    async_db.add(User(user_id="free-axis-user", budget_id="both-spent", spend=Decimal("10.0"), current_tokens=1_000))
     await async_db.commit()
 
     with pytest.raises(HTTPException) as refusal:
-        await reserve_budget(
-            async_db, "free-axis-user", 5.0, model="openai:free-axis", estimated_tokens=1
-        )
+        await reserve_budget(async_db, "free-axis-user", 5.0, model="openai:free-axis", estimated_tokens=1)
 
     assert "token limit" in str(refusal.value.detail)
 

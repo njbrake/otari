@@ -30,34 +30,19 @@ export function cacheSums(points: UsageSeriesPoint[]): {
   read: number
   write: number
 } {
-  let input = 0
-  let read = 0
-  let write = 0
-  for (const p of points) {
-    input += p.input_tokens ?? 0
-    read += p.cache_read_tokens ?? 0
-    write += p.cache_write_tokens ?? 0
-  }
-  return { input, read, write }
+  return points.reduce(
+    (sums, p) => ({
+      input: sums.input + (p.input_tokens ?? 0),
+      read: sums.read + (p.cache_read_tokens ?? 0),
+      write: sums.write + (p.cache_write_tokens ?? 0),
+    }),
+    { input: 0, read: 0, write: 0 },
+  )
 }
 
 export function cacheHitRate(points: UsageSeriesPoint[]): number | undefined {
   const { input, read } = cacheSums(points)
   return input > 0 ? read / input : undefined
-}
-
-// Latency is nullable on the wire (null when no row recorded one). The page
-// renders the em-dash placeholder to keep table cells aligned; the card drops the
-// stat instead, so this returns undefined rather than a placeholder and each
-// surface decides how to show "no value".
-export function formatLatency(ms: number | null): string | undefined {
-  if (ms === null) {
-    return undefined
-  }
-  if (ms < 1000) {
-    return `${Math.round(ms)} ms`
-  }
-  return `${(ms / 1000).toFixed(2)} s`
 }
 
 // Whether a published cost figure needs its "N unpriced" caveat. `undefined`

@@ -9,28 +9,57 @@ with separate sessions rather than asserting the branch in isolation.
 
 import asyncio
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 
 import pytest
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 from sqlmodel import col
 
+from gateway.adapters.api_key_format_adapter import DefaultApiKeyFormatAdapter
+from gateway.api.routes.scoped_budgets import create_scoped_budget
 from gateway.auth.models import hash_key
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import APIKey, WorkspaceActivationState
+from gateway.core.unit_of_work import UnitOfWork
+from gateway.exceptions.budget_exceptions import OrganizationScopeNotFoundError
+from gateway.exceptions.identity_exceptions import (
+    EmailAlreadyInUseError,
+    ResetTokenInvalidError,
+    VerificationTokenInvalidError,
+)
+from gateway.exceptions.organizations_exceptions import (
+    ForeignTenancyError,
+    InvitationAlreadyPendingError,
+    InvitationAlreadyUsedError,
+    InvitationPasswordNotAcceptedError,
+    LastWorkspaceError,
+    MembershipUpdateError,
+    NotAuthorizedError,
+    OrganizationMemberAlreadyExistsError,
+    WorkspaceAlreadyExistsError,
+    WorkspaceMemberAlreadyExistsError,
+)
+from gateway.models.api_keys import APIKey
+from gateway.models.budgets import SCOPE_WORKSPACE, SCOPE_WORKSPACE_MEMBER, ScopedBudget, ScopeType
 from gateway.models.tenancy import (
     ActiveOrganizationMemberCreateRequest,
     ActiveOrganizationMemberUpdateRequest,  # noqa: E402
     InviteOrganizationMemberRequest,
     Organization,
     User,
+    WorkspaceActivationState,
     WorkspaceAssignmentRequest,
     WorkspaceCreate,
+    WorkspaceMember,
+    WorkspacePublic,
 )
+from gateway.repositories.api_keys import ApiKeyRepository
+from gateway.repositories.budgets import BudgetRepositories
 from gateway.repositories.tenancy import (
     InvitationRepository,
     OrganizationMemberRepository,
@@ -39,22 +68,17 @@ from gateway.repositories.tenancy import (
     WorkspaceMemberRepository,
     WorkspaceRepository,
 )
+from gateway.schemas.budgets import (
+    CreateScopedBudgetRequest,
+    OrganizationBudgetCreate,
+    OrganizationScopedBudgetCreate,
+    OrganizationScopedBudgetPublic,
+    WorkspaceMemberBudgetPolicyCreate,
+)
+from gateway.services.api_keys import ApiKeyService
+from gateway.services.budgets import BudgetService, WorkspaceBudgetDefaultService
 from gateway.services.password_service import verify_password_async
 from gateway.services.tenancy import OrganizationService, WorkspaceService, user_service
-from gateway.services.tenancy.errors import (
-    EmailAlreadyInUseError,
-    ForeignTenancyError,
-    InvitationAlreadyPendingError,
-    InvitationAlreadyUsedError,
-    LastWorkspaceError,
-    MembershipUpdateError,
-    NotAuthorizedError,
-    OrganizationMemberAlreadyExistsError,
-    ResetTokenInvalidError,
-    VerificationTokenInvalidError,
-    WorkspaceAlreadyExistsError,
-    WorkspaceMemberAlreadyExistsError,
-)
 from gateway.services.tenancy.provisioning_service import (
     BOOTSTRAP_IDENTITY_KEY,
     ensure_bootstrap_identity,
@@ -66,9 +90,22 @@ from gateway.services.tenancy.workspace_activation_service import (
     WorkspaceActivationService,
 )
 
+from .tenancy_helpers import create_budget, create_member
+
 pytestmark = pytest.mark.asyncio
 
+# The open-source format, which is what a service built outside a request would get.
+KEY_FORMAT = DefaultApiKeyFormatAdapter(None)
+
 _RACERS = 4
+
+# How long the delete waits for the writer racing it, once that writer has reached its checkpoint.
+# Paid in full on every passing run, because the writer blocks on the workspace lock until the delete commits.
+# It only has to cover the writer's insert and commit when nothing holds the lock, which is fast.
+_WRITER_WINDOW = 0.25
+
+# Bounds a writer that never reaches its checkpoint. A healthy run never waits this long.
+_CHECKPOINT_TIMEOUT = 5.0
 
 
 async def _seed_owner(db: AsyncSession) -> tuple[Organization, User]:
@@ -123,7 +160,8 @@ async def test_concurrent_workspace_creates_conflict_rather_than_fail(
     async def attempt(session: AsyncSession) -> object:
         user = await UserRepository(session).get(owner.id)
         assert user is not None
-        return await WorkspaceService(session).create_workspace(
+        service = WorkspaceService(session, membership_listener=WorkspaceBudgetDefaultService(session))
+        return await service.create_workspace(
             user=user,
             workspace_create=WorkspaceCreate(name="Research"),
         )
@@ -171,11 +209,7 @@ async def test_concurrent_claims_of_one_address_leave_exactly_one_holder(
 
     users = UserRepository(async_db)
     racer_ids = [
-        (
-            await users.create_local_identity(
-                full_name=f"Claimer {index}", active_organization_id=organization.id
-            )
-        ).id
+        (await users.create_local_identity(full_name=f"Claimer {index}", active_organization_id=organization.id)).id
         for index in range(_RACERS)
     ]
     await async_db.commit()
@@ -209,9 +243,7 @@ async def test_concurrent_claims_of_one_address_leave_exactly_one_holder(
     # what makes this a test of the mapping and not of the pre-check.
     assert mapped == [True] * (_RACERS - 1), mapped
 
-    holders = (
-        (await async_db.execute(select(User).where(col(User.email) == "contested@example.com"))).scalars().all()
-    )
+    holders = (await async_db.execute(select(User).where(col(User.email) == "contested@example.com"))).scalars().all()
     assert len(holders) == 1
 
 
@@ -225,7 +257,9 @@ async def test_concurrent_member_adds_create_one_identity(
     async def attempt(session: AsyncSession) -> object:
         user = await UserRepository(session).get(owner.id)
         assert user is not None
-        return await OrganizationService(session).create_active_organization_member_for_user(
+        return await OrganizationService(
+            session, membership_listener=WorkspaceBudgetDefaultService(session)
+        ).create_active_organization_member_for_user(
             user=user,
             request=ActiveOrganizationMemberCreateRequest(email="ada@example.com"),
         )
@@ -244,14 +278,15 @@ async def test_concurrent_workspace_member_adds_conflict(
     sessions: async_sessionmaker[AsyncSession],
 ) -> None:
     _, owner = await _seed_owner(async_db)
-    service = OrganizationService(async_db)
+    service = OrganizationService(async_db, membership_listener=WorkspaceBudgetDefaultService(async_db))
     owner_row = await UserRepository(async_db).get(owner.id)
     assert owner_row is not None
     added = await service.create_active_organization_member_for_user(
         user=owner_row,
         request=ActiveOrganizationMemberCreateRequest(email="ada@example.com"),
     )
-    workspace = await WorkspaceService(async_db).create_workspace(
+    workspace_service = WorkspaceService(async_db, membership_listener=WorkspaceBudgetDefaultService(async_db))
+    workspace = await workspace_service.create_workspace(
         user=owner_row,
         workspace_create=WorkspaceCreate(name="Research"),
     )
@@ -260,7 +295,7 @@ async def test_concurrent_workspace_member_adds_conflict(
     async def attempt(session: AsyncSession) -> object:
         user = await UserRepository(session).get(owner.id)
         assert user is not None
-        return await WorkspaceService(session).add_member(
+        return await WorkspaceService(session, membership_listener=WorkspaceBudgetDefaultService(session)).add_member(
             user=user,
             workspace_id=workspace.id,
             user_id=added.user_id,  # type: ignore[arg-type]
@@ -291,7 +326,7 @@ async def test_provisioning_refuses_to_shadow_an_organization_it_did_not_create(
         await _seed_owner(db)
 
         with pytest.raises(ForeignTenancyError) as raised:
-            await ensure_bootstrap_identity(db)
+            await ensure_bootstrap_identity(db, membership_listener=WorkspaceBudgetDefaultService(db))
 
         # The message has to name the organization and the way out, because the
         # marker is not a settable key and nothing else can repoint it.
@@ -305,7 +340,7 @@ async def test_provisioning_still_runs_on_an_empty_database(
 ) -> None:
     """The guard must not break first boot, which is the ordinary path."""
     async with sessions() as db:
-        operator = await ensure_bootstrap_identity(db)
+        operator = await ensure_bootstrap_identity(db, membership_listener=WorkspaceBudgetDefaultService(db))
 
         assert operator.full_name == "Operator"
 
@@ -347,7 +382,8 @@ async def test_concurrent_demotions_cannot_strip_the_last_owner(
         async def attempt(session: AsyncSession) -> object:
             actor = await UserRepository(session).get(actor_id)
             assert actor is not None
-            return await OrganizationService(session).update_active_organization_member_for_user(
+            service = OrganizationService(session, membership_listener=WorkspaceBudgetDefaultService(session))
+            return await service.update_active_organization_member_for_user(
                 user=actor,
                 organization_member_id=target_membership_id,
                 request=ActiveOrganizationMemberUpdateRequest(role="member"),
@@ -385,7 +421,7 @@ async def test_concurrent_deletes_cannot_remove_the_last_workspace(
 ) -> None:
     """Two workspaces, deleted concurrently. One has to survive."""
     organization, owner = await _seed_owner(async_db)
-    service = WorkspaceService(async_db)
+    service = WorkspaceService(async_db, membership_listener=WorkspaceBudgetDefaultService(async_db))
     workspace_ids = [
         (await service.create_workspace(user=owner, workspace_create=WorkspaceCreate(name=name))).id
         for name in ("One", "Two")
@@ -396,7 +432,8 @@ async def test_concurrent_deletes_cannot_remove_the_last_workspace(
             user = await UserRepository(session).get(owner.id)
             assert user is not None
             try:
-                await WorkspaceService(session).delete_workspace(user=user, workspace_id=workspace_id)
+                service = WorkspaceService(session, membership_listener=WorkspaceBudgetDefaultService(session))
+                await service.delete_workspace(user=user, workspace_id=workspace_id)
             except Exception as exc:  # noqa: BLE001 - the outcome is the assertion
                 return exc
             return None
@@ -407,6 +444,349 @@ async def test_concurrent_deletes_cannot_remove_the_last_workspace(
     assert len(refused) == 1
     _, remaining = await WorkspaceRepository(async_db).get_by_organization(organization.id, limit=1)
     assert remaining == 1
+
+
+class _PausingListener:
+    """Delegates to the real listener, then holds the delete open until the racing writer settles.
+
+    The orphan only appears when that writer commits between the delete's ceiling
+    sweep and the row delete, so that interleaving is pinned rather than raced for.
+    """
+
+    def __init__(self, inner: WorkspaceBudgetDefaultService, let_the_writer_run: Callable[[], Awaitable[None]]) -> None:
+        self._inner = inner
+        self._let_the_writer_run = let_the_writer_run
+
+    async def member_joined(self, member: WorkspaceMember) -> None:
+        await self._inner.member_joined(member)
+
+    async def member_removed(self, member: WorkspaceMember) -> None:
+        await self._inner.member_removed(member)
+
+    async def workspace_deleted(self, workspace_id: uuid.UUID, member_ids: Sequence[uuid.UUID]) -> None:
+        await self._inner.workspace_deleted(workspace_id, member_ids)
+        await self._let_the_writer_run()
+
+
+async def test_a_join_during_a_workspace_delete_leaves_no_orphaned_ceiling(
+    async_db: AsyncSession,
+    sessions: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ceiling must not outlive the membership it caps.
+
+    ``scoped_budgets.scope_id`` is not a foreign key, so nothing cascades an
+    orphan away, it holds a RESTRICT reference that refuses its budget's
+    deletion, and no page lists it.
+    """
+    organization, owner = await _seed_owner(async_db)
+    service = WorkspaceService(async_db, membership_listener=WorkspaceBudgetDefaultService(async_db))
+    target = await service.create_workspace(user=owner, workspace_create=WorkspaceCreate(name="Target"))
+    await service.create_workspace(user=owner, workspace_create=WorkspaceCreate(name="Survivor"))
+    joiner = await create_member(async_db, organization, role="member", full_name="Joiner")
+    await WorkspaceBudgetDefaultService(async_db).create_default(
+        user=owner,
+        workspace_id=target.id,
+        request=WorkspaceMemberBudgetPolicyCreate(budget_id=await create_budget(async_db, max_budget=10.0)),
+    )
+    await async_db.commit()
+
+    # A positive control: the final assertion is a negative, and would pass on nothing at all.
+    materialized = (
+        (await async_db.execute(select(ScopedBudget).where(ScopedBudget.scope_type == "workspace_member")))
+        .scalars()
+        .all()
+    )
+    assert len(materialized) == 1, "the default must have given the owner a ceiling before the delete"
+
+    swept = asyncio.Event()
+    at_lock = asyncio.Event()
+
+    async def join() -> object:
+        await swept.wait()
+        async with sessions() as session:
+            actor = await UserRepository(session).get(owner.id)
+            assert actor is not None
+            adder = WorkspaceService(session, membership_listener=WorkspaceBudgetDefaultService(session))
+            take_lock = adder.workspaces.lock
+
+            async def signal_then_lock(workspace_id: uuid.UUID) -> None:
+                at_lock.set()
+                await take_lock(workspace_id)
+
+            monkeypatch.setattr(adder.workspaces, "lock", signal_then_lock)
+            try:
+                return await adder.add_member(user=actor, workspace_id=target.id, user_id=joiner.id)
+            except Exception as exc:  # noqa: BLE001 - the outcome is the assertion
+                return exc
+
+    joining = asyncio.create_task(join())
+
+    async def let_the_join_run() -> None:
+        swept.set()
+        # The window opens only once the join is at the lock, so its setup time cannot use it up.
+        await asyncio.wait_for(at_lock.wait(), timeout=_CHECKPOINT_TIMEOUT)
+        await asyncio.wait({joining}, timeout=_WRITER_WINDOW)
+
+    async with sessions() as session:
+        actor = await UserRepository(session).get(owner.id)
+        assert actor is not None
+        deleter = WorkspaceService(
+            session,
+            membership_listener=_PausingListener(WorkspaceBudgetDefaultService(session), let_the_join_run),
+        )
+        await deleter.delete_workspace(user=actor, workspace_id=target.id)
+    await joining
+
+    ceilings = (
+        (await async_db.execute(select(ScopedBudget).where(ScopedBudget.scope_type == "workspace_member")))
+        .scalars()
+        .all()
+    )
+    memberships = {
+        str(member_id) for member_id in (await async_db.execute(select(col(WorkspaceMember.id)))).scalars().all()
+    }
+    assert [ceiling.scope_id for ceiling in ceilings if ceiling.scope_id not in memberships] == []
+
+
+def _budget_service(db: AsyncSession, organizations: OrganizationService | None = None) -> BudgetService:
+    uow = UnitOfWork(db)
+    return BudgetService(
+        uow,
+        BudgetRepositories.on(uow),
+        organizations or OrganizationService(db, membership_listener=None),
+        ApiKeyService(ApiKeyRepository(uow)),
+    )
+
+
+class _RaceOutcome(NamedTuple):
+    """What the producer returned, and whether it was still running when the delete's window closed."""
+
+    produced: object
+    contended: bool
+
+
+async def _race_a_workspace_delete(
+    *,
+    owner: User,
+    workspace_id: uuid.UUID,
+    sessions: async_sessionmaker[AsyncSession],
+    produce: Callable[[AsyncSession, asyncio.Event], Awaitable[object]],
+) -> _RaceOutcome:
+    """Delete the workspace while ``produce`` runs on a session of its own.
+
+    The delete pauses after its ceiling sweep, which is the window an orphan needs.
+    ``produce`` sets the event it is passed immediately before the call under test, so the
+    pause covers that call alone and not the setup around it.
+    ``contended`` is false when the producer finished inside the pause, which is what a
+    producer that takes no lock does.
+    """
+    swept = asyncio.Event()
+    at_checkpoint = asyncio.Event()
+    finished_early = False
+
+    async def race() -> object:
+        await swept.wait()
+        async with sessions() as session:
+            # The first statement pays the connection cost, which must not come out of the window.
+            await session.execute(select(1))
+            try:
+                return await produce(session, at_checkpoint)
+            except Exception as exc:  # noqa: BLE001 - the outcome is the assertion
+                return exc
+
+    racing = asyncio.create_task(race())
+
+    async def let_the_producer_run() -> None:
+        nonlocal finished_early
+        swept.set()
+        await asyncio.wait_for(at_checkpoint.wait(), timeout=_CHECKPOINT_TIMEOUT)
+        done, _ = await asyncio.wait({racing}, timeout=_WRITER_WINDOW)
+        finished_early = bool(done)
+
+    try:
+        async with sessions() as session:
+            actor = await UserRepository(session).get(owner.id)
+            assert actor is not None
+            deleter = WorkspaceService(
+                session,
+                membership_listener=_PausingListener(WorkspaceBudgetDefaultService(session), let_the_producer_run),
+            )
+            await deleter.delete_workspace(user=actor, workspace_id=workspace_id)
+    finally:
+        # Awaited even when the delete raised, so a real failure is not buried under a
+        # task whose exception was never retrieved.
+        produced = await racing
+    return _RaceOutcome(produced=produced, contended=not finished_early)
+
+
+async def _seed_a_workspace_to_delete(db: AsyncSession) -> tuple[User, WorkspacePublic, WorkspaceMember]:
+    """An owner, the workspace a test deletes, a second one so the delete is allowed, and the owner's membership."""
+    _, owner = await _seed_owner(db)
+    workspaces = WorkspaceService(db, membership_listener=WorkspaceBudgetDefaultService(db))
+    target = await workspaces.create_workspace(user=owner, workspace_create=WorkspaceCreate(name="Target"))
+    await workspaces.create_workspace(user=owner, workspace_create=WorkspaceCreate(name="Survivor"))
+    membership = await WorkspaceMemberRepository(db).get_by_workspace_and_user(target.id, owner.id)
+    assert membership is not None
+    return owner, target, membership
+
+
+@pytest.mark.parametrize("scope_type", [SCOPE_WORKSPACE, SCOPE_WORKSPACE_MEMBER])
+async def test_an_organization_ceiling_created_during_a_workspace_delete_leaves_no_orphan(
+    async_db: AsyncSession,
+    sessions: async_sessionmaker[AsyncSession],
+    scope_type: ScopeType,
+) -> None:
+    """A ceiling must not outlive the workspace or membership it caps.
+
+    Creating one checks the scope exists and then inserts, so a deletion committing
+    between the two leaves a ceiling that nothing sweeps and no page lists.
+    """
+    owner, target, membership = await _seed_a_workspace_to_delete(async_db)
+    budget = await _budget_service(async_db).create_organization_budget(
+        user=owner,
+        request=OrganizationBudgetCreate(name="Cap", max_budget=10.0),
+    )
+    await async_db.commit()
+
+    scope_id = str(target.id if scope_type == SCOPE_WORKSPACE else membership.id)
+
+    async def create(session: AsyncSession, ready: asyncio.Event) -> object:
+        actor = await UserRepository(session).get(owner.id)
+        assert actor is not None
+        creator = _budget_service(session)
+        ready.set()
+        return await creator.create_organization_ceiling(
+            user=actor,
+            request=OrganizationScopedBudgetCreate(
+                scope_type=scope_type,
+                scope_id=scope_id,
+                budget_id=budget.budget_id,
+            ),
+        )
+
+    race = await _race_a_workspace_delete(
+        owner=owner,
+        workspace_id=target.id,
+        sessions=sessions,
+        produce=create,
+    )
+
+    gone = {str(target.id), str(membership.id)}
+    ceilings = (await async_db.execute(select(ScopedBudget))).scalars().all()
+    assert [ceiling.scope_id for ceiling in ceilings if ceiling.scope_id in gone] == []
+    # The negative above would pass on a create that never contended. These say it did.
+    assert race.contended
+    assert isinstance(race.produced, OrganizationScopeNotFoundError)
+
+
+@pytest.mark.parametrize("scope_type", [SCOPE_WORKSPACE, SCOPE_WORKSPACE_MEMBER])
+async def test_a_deployment_ceiling_created_during_a_workspace_delete_leaves_no_orphan(
+    async_db: AsyncSession,
+    sessions: async_sessionmaker[AsyncSession],
+    scope_type: ScopeType,
+) -> None:
+    """A ceiling created through the operator's route must not outlive its scope either.
+
+    The route checks the scope exists and then inserts on a session of its own, so a
+    deletion committing between the two leaves a ceiling that nothing sweeps.
+    """
+    owner, target, membership = await _seed_a_workspace_to_delete(async_db)
+    budget_id = await create_budget(async_db, max_budget=10.0)
+    await async_db.commit()
+
+    scope_id = str(target.id if scope_type == SCOPE_WORKSPACE else membership.id)
+
+    async def create(session: AsyncSession, ready: asyncio.Event) -> object:
+        ready.set()
+        return await create_scoped_budget(
+            CreateScopedBudgetRequest(scope_type=scope_type, scope_id=scope_id, budget_id=budget_id),
+            session,
+            OrganizationService(session, membership_listener=None),
+        )
+
+    race = await _race_a_workspace_delete(
+        owner=owner,
+        workspace_id=target.id,
+        sessions=sessions,
+        produce=create,
+    )
+
+    gone = {str(target.id), str(membership.id)}
+    ceilings = (await async_db.execute(select(ScopedBudget))).scalars().all()
+    assert [ceiling.scope_id for ceiling in ceilings if ceiling.scope_id in gone] == []
+    # The negative above would pass on a create that never contended. These say it did.
+    assert race.contended
+    assert isinstance(race.produced, HTTPException)
+    assert race.produced.status_code == status.HTTP_404_NOT_FOUND
+
+
+async def test_a_workspace_delete_sweeps_a_ceiling_that_won_the_lock(
+    async_db: AsyncSession,
+    sessions: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other order the lock allows: the create wins it, and the delete sweeps what it left.
+
+    That only holds while the delete takes the lock before it reads the memberships it
+    sweeps. Reverse those two and this is the ordering that strands a ceiling.
+    """
+    owner, target, _ = await _seed_a_workspace_to_delete(async_db)
+    budget = await _budget_service(async_db).create_organization_budget(
+        user=owner,
+        request=OrganizationBudgetCreate(name="Cap", max_budget=10.0),
+    )
+    await async_db.commit()
+
+    holding = asyncio.Event()
+    may_finish = asyncio.Event()
+
+    async def create() -> object:
+        async with sessions() as session:
+            actor = await UserRepository(session).get(owner.id)
+            assert actor is not None
+            organizations = OrganizationService(session, membership_listener=None)
+            creator = _budget_service(session, organizations)
+            take_lock = organizations.lock_workspace
+
+            async def hold_then_continue(workspace_id: uuid.UUID) -> None:
+                await take_lock(workspace_id)
+                holding.set()
+                await may_finish.wait()
+
+            monkeypatch.setattr(organizations, "lock_workspace", hold_then_continue)
+            return await creator.create_organization_ceiling(
+                user=actor,
+                request=OrganizationScopedBudgetCreate(
+                    scope_type=SCOPE_WORKSPACE,
+                    scope_id=str(target.id),
+                    budget_id=budget.budget_id,
+                ),
+            )
+
+    creating = asyncio.create_task(create())
+    await asyncio.wait_for(holding.wait(), timeout=_CHECKPOINT_TIMEOUT)
+
+    async def delete() -> None:
+        async with sessions() as session:
+            actor = await UserRepository(session).get(owner.id)
+            assert actor is not None
+            deleter = WorkspaceService(session, membership_listener=WorkspaceBudgetDefaultService(session))
+            await deleter.delete_workspace(user=actor, workspace_id=target.id)
+
+    deleting = asyncio.create_task(delete())
+    try:
+        blocked, _ = await asyncio.wait({deleting}, timeout=_WRITER_WINDOW)
+        assert not blocked, "the delete must wait on the lock the create holds"
+        may_finish.set()
+        created = await creating
+        await deleting
+    finally:
+        may_finish.set()
+
+    assert isinstance(created, OrganizationScopedBudgetPublic)
+    ceilings = (await async_db.execute(select(ScopedBudget))).scalars().all()
+    assert [ceiling.scope_id for ceiling in ceilings if ceiling.scope_id == str(target.id)] == []
 
 
 async def test_concurrent_invites_to_a_suspended_membership_produce_one_pending_invitation(
@@ -426,13 +806,17 @@ async def test_concurrent_invites_to_a_suspended_membership_produce_one_pending_
     organization, owner = await _seed_owner(async_db)
     owner_row = await UserRepository(async_db).get(owner.id)
     assert owner_row is not None
-    added = await OrganizationService(async_db).create_active_organization_member_for_user(
+    added = await OrganizationService(
+        async_db, membership_listener=WorkspaceBudgetDefaultService(async_db)
+    ).create_active_organization_member_for_user(
         user=owner_row,
         request=ActiveOrganizationMemberCreateRequest(email="grace@example.com"),
     )
     assert added.organization_member_id is not None
     assert added.user_id is not None
-    await OrganizationService(async_db).remove_active_organization_member_for_user(
+    await OrganizationService(
+        async_db, membership_listener=WorkspaceBudgetDefaultService(async_db)
+    ).remove_active_organization_member_for_user(
         user=owner_row,
         organization_member_id=added.organization_member_id,
     )
@@ -441,7 +825,9 @@ async def test_concurrent_invites_to_a_suspended_membership_produce_one_pending_
     async def attempt(session: AsyncSession) -> object:
         user = await UserRepository(session).get(owner.id)
         assert user is not None
-        return await OrganizationService(session).invite_active_organization_member_for_user(
+        return await OrganizationService(
+            session, membership_listener=WorkspaceBudgetDefaultService(session)
+        ).invite_active_organization_member_for_user(
             user=user,
             request=InviteOrganizationMemberRequest(email="grace@example.com"),
             config=config,
@@ -484,12 +870,15 @@ async def test_concurrent_accepts_of_one_invitation_produce_one_active_membershi
     organization, owner = await _seed_owner(async_db)
     owner_row = await UserRepository(async_db).get(owner.id)
     assert owner_row is not None
-    workspace = await WorkspaceService(async_db).create_workspace(
+    service = WorkspaceService(async_db, membership_listener=WorkspaceBudgetDefaultService(async_db))
+    workspace = await service.create_workspace(
         user=owner_row,
         workspace_create=WorkspaceCreate(name="Research"),
     )
     config = GatewayConfig()
-    invited = await OrganizationService(async_db).invite_active_organization_member_for_user(
+    invited = await OrganizationService(
+        async_db, membership_listener=WorkspaceBudgetDefaultService(async_db)
+    ).invite_active_organization_member_for_user(
         user=owner_row,
         request=InviteOrganizationMemberRequest(
             email="hank@example.com",
@@ -500,7 +889,9 @@ async def test_concurrent_accepts_of_one_invitation_produce_one_active_membershi
     token = invited.accept_link.split("token=")[1]
 
     async def attempt(session: AsyncSession) -> object:
-        return await OrganizationService(session).accept_invitation(token)
+        return await OrganizationService(
+            session, membership_listener=WorkspaceBudgetDefaultService(session)
+        ).accept_invitation(token)
 
     outcomes = await _race(sessions, attempt)
 
@@ -525,6 +916,76 @@ async def test_concurrent_accepts_of_one_invitation_produce_one_active_membershi
     assert len(workspace_members) == 1
 
 
+async def test_a_signup_racing_a_password_accept_never_overwrites_the_winner(
+    async_db: AsyncSession,
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    """Both paths set a first password on the same unclaimed identity; exactly one may.
+
+    Each checks "no password yet" and then hashes, which takes long enough for
+    the other to pass its own check meanwhile. Written as plain assignments, the
+    later commit replaced the earlier password, and when the accept went first
+    that left a verified address signing in with the signup caller's password.
+    """
+    _, owner = await _seed_owner(async_db)
+    owner_row = await UserRepository(async_db).get(owner.id)
+    assert owner_row is not None
+    config = GatewayConfig(mail_transport="console", public_base_url="https://gw.example.com")
+    invited = await OrganizationService(
+        async_db, membership_listener=WorkspaceBudgetDefaultService(async_db)
+    ).invite_active_organization_member_for_user(
+        user=owner_row,
+        request=InviteOrganizationMemberRequest(email="iris@example.com"),
+        config=config,
+    )
+    token = invited.accept_link.split("token=")[1]
+
+    async def accept() -> object:
+        async with sessions() as session:
+            try:
+                return await OrganizationService(
+                    session, membership_listener=WorkspaceBudgetDefaultService(session)
+                ).accept_invitation(token, password="accepted-password")
+            except Exception as exc:  # noqa: BLE001 - the outcome is the assertion
+                return exc
+
+    async def signup(index: int) -> object:
+        async with sessions() as session:
+            try:
+                return await user_service.create_user_for_signup(
+                    session,
+                    config,
+                    email="iris@example.com",
+                    password=f"signup-password-{index}",
+                    membership_listener=WorkspaceBudgetDefaultService(session),
+                )
+            except Exception as exc:  # noqa: BLE001 - the outcome is the assertion
+                return exc
+
+    accepted, *signed_up = await asyncio.gather(accept(), *(signup(index) for index in range(_RACERS)))
+
+    signup_winners = [index for index, outcome in enumerate(signed_up) if isinstance(outcome, User)]
+    assert all(outcome is None or isinstance(outcome, User) for outcome in signed_up), signed_up
+    async_db.expire_all()
+    membership = await OrganizationMemberRepository(async_db).get(invited.organization_member_id)
+    assert membership is not None
+    row = await UserRepository(async_db).get(membership.user_id)
+    assert row is not None and row.hashed_password is not None
+    if isinstance(accepted, InvitationPasswordNotAcceptedError):
+        # A signup got there first: one of them holds the password, and the
+        # address is still waiting on its verification link.
+        assert len(signup_winners) == 1
+        assert row.email_verified_at is None
+        assert await verify_password_async(f"signup-password-{signup_winners[0]}", row.hashed_password)
+        assert membership.status == "invited"
+    else:
+        assert not isinstance(accepted, Exception), accepted
+        assert signup_winners == []
+        assert row.email_verified_at is not None
+        assert await verify_password_async("accepted-password", row.hashed_password)
+        assert membership.status == "active"
+
+
 async def test_concurrent_accept_and_revoke_of_one_invitation_produce_one_consistent_outcome(
     async_db: AsyncSession,
     sessions: async_sessionmaker[AsyncSession],
@@ -546,7 +1007,9 @@ async def test_concurrent_accept_and_revoke_of_one_invitation_produce_one_consis
     organization, owner = await _seed_owner(async_db)
     owner_row = await UserRepository(async_db).get(owner.id)
     assert owner_row is not None
-    invited = await OrganizationService(async_db).invite_active_organization_member_for_user(
+    invited = await OrganizationService(
+        async_db, membership_listener=WorkspaceBudgetDefaultService(async_db)
+    ).invite_active_organization_member_for_user(
         user=owner_row,
         request=InviteOrganizationMemberRequest(email="ivy@example.com"),
         config=GatewayConfig(),
@@ -555,13 +1018,17 @@ async def test_concurrent_accept_and_revoke_of_one_invitation_produce_one_consis
     assert invited.invitation_id is not None
 
     async def accept(session: AsyncSession) -> object:
-        return await OrganizationService(session).accept_invitation(token)
+        return await OrganizationService(
+            session, membership_listener=WorkspaceBudgetDefaultService(session)
+        ).accept_invitation(token)
 
     async def revoke(session: AsyncSession) -> object:
         user = await UserRepository(session).get(owner.id)
         assert user is not None
         assert invited.invitation_id is not None
-        await OrganizationService(session).revoke_organization_member_invitation_for_user(
+        await OrganizationService(
+            session, membership_listener=WorkspaceBudgetDefaultService(session)
+        ).revoke_organization_member_invitation_for_user(
             user=user,
             invitation_id=invited.invitation_id,
         )
@@ -712,7 +1179,7 @@ async def test_concurrent_first_issuance_leaves_one_setup_key(
     async def attempt(session: AsyncSession) -> object:
         user = await UserRepository(session).get(owner.id)
         assert user is not None
-        return await WorkspaceActivationService(session, GatewayConfig()).issue_api_key(
+        return await WorkspaceActivationService(session, GatewayConfig(), KEY_FORMAT).issue_api_key(
             user=user,
             workspace_id=workspace.id,
         )

@@ -25,8 +25,16 @@ row has a reason:
 | --- | --- | --- |
 | Master key, in a header | no | nothing further: the claim |
 | Master key, in a header | yes | nothing further: operator recovery |
-| Session cookie | no | nothing further: only a master-key sign-in could have minted that session |
+| Session cookie | no | nothing further: the session itself is the proof |
 | Session cookie | yes | the current password |
+
+A cookie-authenticated caller with no password is the ordinary state of somebody
+who signs in through Google, GitHub or a passkey, and of a roster entry that
+never set one. There is no old password to prove, and the session in hand is
+already a completed sign-in, so this is where such an identity gains a password
+rather than a wall it cannot get past (mozilla-ai/otari-ai#2099). The dashboard
+renders that form from ``has_password`` on the membership context's ``caller``,
+which is the same question asked ahead of the request.
 
 The master key never has to present the current one because it is the
 deployment-wide credential: a caller holding it can already do anything the
@@ -43,10 +51,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import CurrentIdentity, get_db, verify_master_key
+from gateway.exceptions.identity_exceptions import CurrentPasswordRequiredError, EmailChangeNotSupportedError
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 from gateway.services.password_service import MIN_PASSWORD_LENGTH
 from gateway.services.tenancy.email_address import MAX_EMAIL_LENGTH, validated_email
-from gateway.services.tenancy.errors import CurrentPasswordRequiredError, EmailChangeNotSupportedError
 from gateway.services.tenancy.provisioning_service import load_bootstrap_identity
 from gateway.services.tenancy.user_service import set_password, update_password
 
@@ -56,7 +64,7 @@ from gateway.services.tenancy.user_service import set_password, update_password
 # A deliberately generous ceiling, and deliberately *not* ``MAX_PASSWORD_BYTES``.
 # The real limit is counted in bytes, so the readable refusal ("at most 72 bytes;
 # accented characters count for more than one") has to come from
-# ``_validate_password`` in the service rather than from a character count here.
+# ``validate_new_password`` in the service rather than from a character count here.
 # A schema bound of 72 would pre-empt it with a less useful 422 and would refuse
 # a 73-character password with the wrong explanation. This bound exists only to
 # stop an absurd body being buffered and hashed, which is a different job from

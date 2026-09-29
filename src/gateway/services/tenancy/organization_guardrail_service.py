@@ -59,37 +59,55 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.models.entities import OrganizationGuardrail, OrganizationGuardrailWorkspace
-from gateway.models.guardrails import GuardrailConfig
+from gateway.exceptions.guardrails_exceptions import (
+    OrganizationGuardrailAlreadyExistsError,
+    OrganizationGuardrailCheckFailedError,
+    OrganizationGuardrailCredentialNeedsUrlError,
+    OrganizationGuardrailDefinitionNotFoundError,
+    OrganizationGuardrailLimitReachedError,
+    OrganizationGuardrailNoEndpointError,
+    OrganizationGuardrailNotFoundError,
+    OrganizationGuardrailScopeConflictError,
+    OrganizationGuardrailSingleBackendError,
+    OrganizationGuardrailTestsItsDefinitionError,
+    OrganizationGuardrailUnsafeUrlError,
+)
+from gateway.exceptions.organizations_exceptions import WorkspaceNotFoundError
+from gateway.exceptions.shared_exceptions import SecretBoxUnavailableTenancyError
+from gateway.log_config import logger
+from gateway.models.guardrails import (
+    GuardrailConfig,
+    OrganizationGuardrail,
+    OrganizationGuardrailDefinition,
+    OrganizationGuardrailWorkspace,
+)
 from gateway.models.secret_fields import redact_secret_like_values, restore_redacted_values
 from gateway.models.tenancy import User
 from gateway.repositories.tenancy import WorkspaceRepository
+from gateway.services.guardrails import GuardrailsNotReachableError, run_input_guardrails
 from gateway.services.secret_box import (
     SecretBoxUnavailableError,
     decrypt_secret,
     encrypt_secret,
-)
-from gateway.services.tenancy.errors import (
-    OrganizationGuardrailAlreadyExistsError,
-    OrganizationGuardrailCredentialNeedsUrlError,
-    OrganizationGuardrailLimitReachedError,
-    OrganizationGuardrailNotFoundError,
-    OrganizationGuardrailScopeConflictError,
-    OrganizationGuardrailUnsafeUrlError,
-    SecretBoxUnavailableTenancyError,
-    WorkspaceNotFoundError,
 )
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.url_safety import UnsafeURLError, validate_mcp_url
 
 # What one organization may mandate. Every guardrail in scope for a workspace is
 # one more call the request waits on before the provider is reached, and
-# `run_input_guardrails` awaits them one after another with a 30s timeout each,
-# so the number is a fan-out bound and *not* the latency bound an earlier
-# comment here claimed: entries that fail open (monitor, or block with
-# `on_unavailable="monitor"`) each spend their timeout before the next one
-# starts. A fail-closed entry raises on the first failure, so the bad case needs
-# a scope full of observing entries pointed at something unreachable.
+# `run_input_guardrails` awaits them one after another, so the number is a
+# fan-out bound and *not* the latency bound an earlier comment here claimed:
+# entries that fail open (monitor, or block with `on_unavailable="monitor"`)
+# each spend their whole deadline before the next one starts. A fail-closed
+# entry raises on the first failure, so the bad case needs a scope full of
+# observing entries pointed at something unreachable.
+#
+# How long that deadline is depends on the shape of the row, which is why no
+# single number belongs in the sentence above. A remote entry gets the
+# guardrails service's 30 seconds. A definition this gateway builds and runs
+# itself gets the runner's 10, and spends them holding one of
+# `guardrail_thread_pool_size` threads, a second bound that is across the
+# worker rather than within one request.
 #
 # Chosen to sit near the 8 a single request may carry in its own `guardrails`
 # field, since that is the fan-out this path was already built to absorb. The
@@ -106,6 +124,9 @@ MAX_SCOPED_WORKSPACES = 500
 
 _MAX_LIST_LIMIT = 1000
 
+# A test is one request's worth of text, as a definition's test is.
+_MAX_TEST_TEXT = 10_000
+
 # Sentinel for "this PATCH did not mention the field", which is not the same as
 # "this PATCH cleared it": see `OrganizationGuardrailUpdate`.
 _UNSET = object()
@@ -116,7 +137,7 @@ class OrganizationGuardrailCreate(BaseModel):
 
     ``credential`` is never stored as sent: it is encrypted with
     ``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention
-    `entities.WorkspaceMcpServer` and `entities.ProviderCredential` use. It is
+    `tools.WorkspaceMcpServer` and `providers.ProviderCredential` use. It is
     sent to the endpoint as ``Authorization: Bearer`` when the guardrail runs,
     so it authenticates this gateway to the guardrails service the entry names.
     A guardrail *vendor's* own key is not this: the guardrails service builds
@@ -168,6 +189,14 @@ class OrganizationGuardrailCreate(BaseModel):
             "which is commonly a same-host http sidecar. Encrypted at rest, never returned"
         ),
     )
+    definition_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "A guardrail definition of this organization for Otari to build and run itself, "
+            "instead of calling a profile on a guardrails service. Mutually exclusive with url "
+            "and credential, which name a service"
+        ),
+    )
     mode: Literal["block", "monitor"] = Field(
         default="monitor",
         description="block rejects a flagged request with 403; monitor annotates the response and forwards it",
@@ -177,7 +206,11 @@ class OrganizationGuardrailCreate(BaseModel):
         description="What a block-mode entry does when the guardrails service cannot be reached at all",
     )
     validate_kwargs: dict[str, Any] | None = Field(
-        default=None, description="Extra kwargs forwarded to the guardrails service /validate call"
+        default=None,
+        description=(
+            "Extra kwargs for the check itself, sent to the guardrails service or handed to the "
+            "guardrail this entry's definition builds"
+        ),
     )
     enabled: bool = Field(default=True, description="False stops the guardrail everywhere without discarding it")
     applies_to_all_workspaces: bool = Field(
@@ -218,6 +251,12 @@ class OrganizationGuardrailUpdate(BaseModel):
     credential it was never shown.
 
     ``workspace_ids`` replaces the scope whole when sent; ``[]`` clears it.
+
+    ``definition_id`` diverges: an explicit ``null`` **clears** it. The rule
+    above protects a field the client was never shown, and this one is returned
+    on every read, so a form sending ``null`` is sending back a field it was
+    given rather than an empty box it never filled in. Omitting it still leaves
+    the link alone.
     """
 
     # Same reason as the create body above: a credential requires an https
@@ -242,6 +281,13 @@ class OrganizationGuardrailUpdate(BaseModel):
     ) = None
     url: str | None = Field(default=None, max_length=2048)
     credential: str | None = Field(default=None, max_length=8192)
+    definition_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "The organization's own definition this mandate runs. Unlike url and credential, "
+            "an explicit null clears the link; omit the field to leave it as it is"
+        ),
+    )
     mode: Literal["block", "monitor"] | SkipJsonSchema[None] = None
     on_unavailable: Literal["block", "monitor"] | SkipJsonSchema[None] = None
     validate_kwargs: dict[str, Any] | None = Field(
@@ -292,13 +338,17 @@ class OrganizationGuardrailPublic(BaseModel):
     profile: str
     url: str | None
     has_credential: bool
+    # Returned in clear, which is what makes an explicit null on the update
+    # schema a clear rather than the "leave it alone" the fields above it mean.
+    definition_id: uuid.UUID | None
     mode: str
     on_unavailable: str
     validate_kwargs: dict[str, Any] | None = Field(
         description=(
-            "Extra kwargs forwarded to the guardrails service /validate call. A parameter whose "
-            "name looks credential-shaped comes back as *** rather than its stored value; sending "
-            "that *** back keeps what is stored"
+            "Extra kwargs for the check itself, sent to the guardrails service or handed to the "
+            "guardrail this entry's definition builds. A parameter whose name looks "
+            "credential-shaped comes back as *** rather than its stored value; sending that *** "
+            "back keeps what is stored"
         ),
     )
     enabled: bool
@@ -320,6 +370,7 @@ class OrganizationGuardrailPublic(BaseModel):
             profile=guardrail.profile,
             url=guardrail.url,
             has_credential=guardrail.encrypted_credential is not None,
+            definition_id=guardrail.definition_id,
             mode=guardrail.mode,
             on_unavailable=guardrail.on_unavailable,
             validate_kwargs=redact_secret_like_values(guardrail.validate_kwargs),
@@ -336,6 +387,31 @@ class OrganizationGuardrailsPublic(BaseModel):
     count: int
 
 
+class OrganizationGuardrailTest(BaseModel):
+    """Text to run one mandate's check over, as a request would."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: Annotated[str, StringConstraints(min_length=1, max_length=_MAX_TEST_TEXT)] = Field(
+        description="The input to check, as a request's user text would reach it"
+    )
+    validate_kwargs: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Per-check arguments to send in place of the stored ones; omitted sends the stored ones. "
+            "A *** keeps the value stored under that name"
+        ),
+    )
+
+
+class OrganizationGuardrailTestResult(BaseModel):
+    """The guardrails service's verdict on the text, in the fields a request's check reports."""
+
+    valid: bool | None = Field(description="False when the guardrail flagged the text, null when it gave no verdict")
+    explanation: str | None = Field(description="The service's reason, when it gives one")
+    score: float | None = Field(description="The service's score, when it gives one")
+
+
 @dataclass(frozen=True)
 class ResolvedOrganizationGuardrail:
     """One organization guardrail as the request path reads it.
@@ -350,10 +426,17 @@ class ResolvedOrganizationGuardrail:
     would be one a caller could set, which would turn the guardrail list into a
     way to make this gateway send a secret to an endpoint of the caller's
     choosing.
+
+    ``definition_id`` is set when this organization runs the guardrail itself,
+    and it is the whole of what the request path needs: the runner holds the
+    built guardrail under that id, so nothing here reads the definition row or
+    decrypts anything it stores. An entry that names one carries no ``url`` and
+    no credential, which the write path enforces.
     """
 
     config: GuardrailConfig
     credential: str | None
+    definition_id: uuid.UUID | None
 
 
 async def resolve_organization_guardrails(
@@ -413,6 +496,7 @@ async def resolve_organization_guardrails(
                 validate_kwargs=row.validate_kwargs or {},
             ),
             credential=decrypt_secret(row.encrypted_credential) if row.encrypted_credential else None,
+            definition_id=row.definition_id,
         )
         for row in rows
     ]
@@ -450,6 +534,23 @@ def _require_url_for_credential(url: str | None, has_credential: bool) -> None:
         raise OrganizationGuardrailCredentialNeedsUrlError()
 
 
+def _require_single_backend(url: str | None, has_credential: bool, definition_id: uuid.UUID | None) -> None:
+    """Refuse a mandate that names both a guardrails service and a definition.
+
+    Both unset stays the ordinary row, the one falling back to the deployment's
+    ``guardrails_url``, which is why ``ck_organization_guardrails_single_backend``
+    is not an XOR either.
+
+    The credential arm has no counterpart in that constraint, and is the reason
+    this is checked before :func:`_require_url_for_credential` rather than after:
+    a credential sent beside a definition would otherwise be answered "a
+    credential needs a url", sending the caller to add the very field that makes
+    the contradiction explicit.
+    """
+    if definition_id is not None and (url is not None or has_credential):
+        raise OrganizationGuardrailSingleBackendError()
+
+
 async def _validate_url(url: str, *, has_credential: bool) -> None:
     """Run the same SSRF/TLS check a request-body guardrail URL faces, at write time.
 
@@ -477,7 +578,7 @@ class OrganizationGuardrailService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.organizations = OrganizationService(db)
+        self.organizations = OrganizationService(db, membership_listener=None)
 
     async def _manageable_organization_id(self, user: User) -> uuid.UUID:
         """The caller's organization, having checked they may manage its guardrails.
@@ -502,6 +603,31 @@ class OrganizationGuardrailService:
         if guardrail is None or guardrail.organization_id != organization_id:
             raise OrganizationGuardrailNotFoundError(guardrail_id)
         return guardrail
+
+    async def _require_definition_in_organization(self, organization_id: uuid.UUID, definition_id: uuid.UUID) -> None:
+        """Refuse a mandate naming a definition this organization does not hold.
+
+        Not the isolation control: ``fk_organization_guardrails_definition``
+        carries ``organization_id`` into the reference, so another
+        organization's definition is unreachable whatever this checks. This is
+        the *answer*. A foreign key violation arrives as the same
+        ``IntegrityError`` the profile index raises, and the write path reports
+        one of those as a profile collision, so without this a caller who
+        mistyped an id is told something false about a field they got right.
+
+        A definition in another organization reads as not found, as everywhere
+        else, so this is not an existence oracle across tenants.
+        """
+        found = (
+            await self.db.execute(
+                select(OrganizationGuardrailDefinition.id).where(
+                    OrganizationGuardrailDefinition.id == definition_id,
+                    OrganizationGuardrailDefinition.organization_id == organization_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if found is None:
+            raise OrganizationGuardrailDefinitionNotFoundError(definition_id)
 
     async def _scope_ids(self, guardrail_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[uuid.UUID]]:
         """The scoped workspace ids for a page of guardrails, in one query.
@@ -618,9 +744,12 @@ class OrganizationGuardrailService:
 
         url = _blank_to_none(request.url)
         credential = _blank_to_none(request.credential)
+        _require_single_backend(url, credential is not None, request.definition_id)
         _require_url_for_credential(url, credential is not None)
         if url is not None:
             await _validate_url(url, has_credential=credential is not None)
+        if request.definition_id is not None:
+            await self._require_definition_in_organization(organization_id, request.definition_id)
         workspace_ids = await self._require_workspaces_in_organization(
             organization_id, [] if request.applies_to_all_workspaces else request.workspace_ids
         )
@@ -630,6 +759,7 @@ class OrganizationGuardrailService:
             profile=request.profile,
             url=url,
             encrypted_credential=_encrypted(credential) if credential else None,
+            definition_id=request.definition_id,
             mode=request.mode,
             on_unavailable=request.on_unavailable,
             # Nothing stored to restore from, so this keeps whatever was sent:
@@ -674,12 +804,21 @@ class OrganizationGuardrailService:
         if "url" in fields and request.url is not None:
             new_url = _blank_to_none(request.url)
         effective_url = new_url if new_url is not _UNSET else guardrail.url
+        # Read through `model_fields_set` rather than against None, because
+        # here a sent null is the clear: see this request model's docstring.
+        new_definition_id: Any = request.definition_id if "definition_id" in fields else _UNSET
+        effective_definition_id = new_definition_id if new_definition_id is not _UNSET else guardrail.definition_id
         # Checked against the *pair* rather than either half, so the two ways in
         # are both closed: adding a credential to an entry that has no endpoint,
-        # and clearing the endpoint from one that keeps its credential.
+        # and clearing the endpoint from one that keeps its credential. Same for
+        # the backends: a request naming one of them is refused against the one
+        # already stored, which the request alone cannot see.
+        _require_single_backend(effective_url, effective_has_credential, effective_definition_id)
         _require_url_for_credential(effective_url, effective_has_credential)
         if effective_url is not None:
             await _validate_url(effective_url, has_credential=effective_has_credential)
+        if new_definition_id is not _UNSET and new_definition_id is not None:
+            await self._require_definition_in_organization(organization_id, new_definition_id)
 
         applies_to_all = (
             request.applies_to_all_workspaces
@@ -703,6 +842,8 @@ class OrganizationGuardrailService:
             guardrail.url = new_url
         if new_credential is not _UNSET:
             guardrail.encrypted_credential = _encrypted(new_credential) if new_credential else None
+        if new_definition_id is not _UNSET:
+            guardrail.definition_id = new_definition_id
         if request.profile is not None:
             guardrail.profile = request.profile
         if request.mode is not None:
@@ -746,6 +887,66 @@ class OrganizationGuardrailService:
             raise OrganizationGuardrailAlreadyExistsError(attempted_profile) from exc
         await self.db.refresh(guardrail)
         return await self._public(guardrail)
+
+    async def test_guardrail(
+        self,
+        *,
+        user: User,
+        guardrail_id: uuid.UUID,
+        request: OrganizationGuardrailTest,
+        default_url: str | None,
+    ) -> OrganizationGuardrailTestResult:
+        """Post some text to the service a mandate names and return its verdict.
+
+        The endpoint, credential and safety check a request would use, but run
+        as ``block`` with ``on_unavailable="block"`` whatever is stored, so a
+        failure is reported rather than recorded as inconclusive. Works on a
+        paused mandate too: pausing stops it running, not being checked.
+        """
+        organization_id = await self._manageable_organization_id(user)
+        guardrail = await self._get_or_404(organization_id, guardrail_id)
+        if guardrail.definition_id is not None:
+            raise OrganizationGuardrailTestsItsDefinitionError()
+        url = guardrail.url
+        if url is None and not default_url:
+            raise OrganizationGuardrailNoEndpointError()
+        profile = guardrail.profile
+        credential = decrypt_secret(guardrail.encrypted_credential) if guardrail.encrypted_credential else None
+        stored_kwargs = guardrail.validate_kwargs
+        validate_kwargs = (
+            restore_redacted_values(request.validate_kwargs, stored_kwargs)
+            if "validate_kwargs" in request.model_fields_set
+            else stored_kwargs
+        ) or {}
+        # Ends the read, so no transaction idles over a call of up to 30 seconds.
+        await self.db.rollback()
+
+        config = GuardrailConfig(
+            profile=profile, url=url, mode="block", on_unavailable="block", validate_kwargs=validate_kwargs
+        )
+        try:
+            verdict = await run_input_guardrails(
+                [config],
+                request.text,
+                default_url=default_url,
+                credentials={profile: credential} if credential else None,
+            )
+        except UnsafeURLError as exc:
+            raise OrganizationGuardrailUnsafeUrlError(str(exc)) from exc
+        except GuardrailsNotReachableError as exc:
+            # Not the message: it can quote the service's result, which may echo
+            # the text or the arguments sent, credentials included.
+            reason = type(exc.__cause__ or exc).__name__
+            logger.warning("Testing organization guardrail %s failed: %s", profile, reason)
+            raise OrganizationGuardrailCheckFailedError() from exc
+        result = verdict.results[0]
+        return OrganizationGuardrailTestResult(
+            valid=result.valid,
+            explanation=None if result.explanation is None else str(result.explanation),
+            score=float(result.score)
+            if isinstance(result.score, int | float) and not isinstance(result.score, bool)
+            else None,
+        )
 
     async def delete_guardrail(self, *, user: User, guardrail_id: uuid.UUID) -> None:
         """Drop the guardrail and its scope rows, which cascade with it."""

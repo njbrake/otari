@@ -4,7 +4,7 @@ from typing import Any
 
 __all__ = ["SERVED_MODEL_HEADER", "relabel_model", "served_model_headers"]
 
-SERVED_MODEL_HEADER = "X-Otari-Served-Model"
+SERVED_MODEL_HEADER = "Otari-Served-Model"
 
 
 def relabel_model(obj: Any, display_model: str) -> Any:

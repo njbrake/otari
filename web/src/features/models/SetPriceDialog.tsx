@@ -4,6 +4,7 @@ import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { useDirtySnapshot } from "@/design-system/forms/useDirtySnapshot"
 import { ModelComboBox } from "@/features/models/ModelComboBox"
+import { formatNumber } from "@/shared/helpers/format"
 
 // Per-1M rates entered by an operator to reprice imported usage rows. Input and
 // output are required; the cache rates are optional (blank folds those tokens
@@ -94,7 +95,7 @@ export interface SetPriceDialogProps {
 }
 
 const defaultDescription = (count: number): string =>
-  `Recompute cost for ${count.toLocaleString()} imported ${
+  `Recompute cost for ${formatNumber(count)} imported ${
     count === 1 ? "row" : "rows"
   } from each row's own token counts at these per-1M rates. Enforced gateway rows are never affected.`
 
@@ -134,7 +135,7 @@ export function SetPriceDialog({
 
   const keyInvalid = collectModelKey && !isValidModelKey(modelKey)
 
-  const invalid =
+  const isInvalid =
     keyInvalid ||
     inputRate === null ||
     Number.isNaN(inputRate) ||
@@ -149,7 +150,7 @@ export function SetPriceDialog({
   const [failure, setFailure] = useState<unknown>(undefined)
 
   const submit = () => {
-    if (invalid || inputRate === null || outputRate === null) return
+    if (isInvalid || inputRate === null || outputRate === null) return
     if (isSaving) return
     setFailure(undefined)
     setIsSaving(true)
@@ -180,7 +181,7 @@ export function SetPriceDialog({
       submitLabel={submitLabel}
       onSubmit={submit}
       isPending={isSaving}
-      isSubmitDisabled={invalid}
+      isSubmitDisabled={isInvalid}
       isDirty={isDirty}
       error={failure}
     >

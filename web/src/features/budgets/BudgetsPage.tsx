@@ -52,10 +52,12 @@ import {
   useAllWorkspaceBudgetDefaults,
   useWorkspaces,
 } from "@/shared/api/workspaces"
+import { formatDateTime, formatUsd } from "@/shared/helpers/format"
 import {
   resolveSelectedIds,
   useTableSelection,
 } from "@/shared/helpers/tableSelection"
+
 import {
   budgetLabel,
   budgetLabeler,
@@ -66,16 +68,6 @@ import { OrganizationBudgetsPage } from "./OrganizationBudgetsPage"
 import { hasNoLimit, limitLabel } from "./organizationBudget"
 
 // ---------- formatting ----------
-
-const usd = new Intl.NumberFormat(undefined, {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 2,
-})
-
-function formatUSD(value: number): string {
-  return usd.format(value)
-}
 
 const DAY = 86_400
 const HOUR = 3_600
@@ -91,17 +83,11 @@ const PERIOD_PRESETS: { label: string; seconds: number | null }[] = [
 
 function formatDuration(seconds: number | null): string {
   if (seconds === null) return "No reset"
-  const preset = PERIOD_PRESETS.find((p) => p.seconds === seconds)
+  const preset = PERIOD_PRESETS.find((preset) => preset.seconds === seconds)
   if (preset) return preset.label
   if (seconds % DAY === 0) return `Every ${seconds / DAY} days`
   if (seconds % HOUR === 0) return `Every ${seconds / HOUR} hours`
   return `Every ${seconds}s`
-}
-
-function absolute(iso: string | null): string {
-  if (!iso) return "—"
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString()
 }
 
 // The segment that opens the custom-days field. A sentinel rather than a number,
@@ -113,12 +99,12 @@ const CUSTOM_PERIOD = "custom"
 
 // A non-negative dollar amount, empty for "unlimited". Parsed leniently; the
 // caller decides what an empty or invalid value means.
-function parseLimit(raw: string): { value: number | null; valid: boolean } {
+function parseLimit(raw: string): { value: number | null; isValid: boolean } {
   const trimmed = raw.trim()
-  if (trimmed === "") return { value: null, valid: true }
+  if (trimmed === "") return { value: null, isValid: true }
   const n = Number(trimmed)
-  if (!Number.isFinite(n) || n < 0) return { value: null, valid: false }
-  return { value: n, valid: true }
+  if (!Number.isFinite(n) || n < 0) return { value: null, isValid: false }
+  return { value: n, isValid: true }
 }
 
 // Whole-day string for a duration, or "" when it is not a whole number of days,
@@ -139,7 +125,7 @@ function PeriodPicker({
   // clear the committed period on save).
   onInvalidChange?: (invalid: boolean) => void
 }) {
-  const isPreset = PERIOD_PRESETS.some((p) => p.seconds === value)
+  const isPreset = PERIOD_PRESETS.some((preset) => preset.seconds === value)
   const [custom, setCustom] = useState(!isPreset)
   // The custom field's own draft, so an in-progress, not-yet-valid entry (e.g.
   // "1.5") stays on screen to be flagged rather than being coerced. It is seeded
@@ -300,8 +286,8 @@ function BudgetForm({
   // the form cannot be sent, and `submit` refuses while that OR a save is in
   // flight. Pending is not part of `blocked` because a request in flight is not
   // a reason to paint the button as refused.
-  const blocked = !parsed.valid || periodInvalid
-  const canSubmit = !isPending && !blocked
+  const isBlocked = !parsed.isValid || periodInvalid
+  const canSubmit = !isPending && !isBlocked
   // Everything the operator can change, in one snapshot. The people are sorted
   // into it because the picker appends in click order, and a guard that read
   // two orderings of one selection as a change would arm on the way back to
@@ -318,7 +304,7 @@ function BudgetForm({
   // description rather than as the placeholder, which design/forms.md reserves
   // for an example of what to type.
   const unnamedLabel = unnamedBudgetLabel({
-    max_budget: parsed.valid ? parsed.value : null,
+    max_budget: parsed.isValid ? parsed.value : null,
     token_limit: uneditedLimits?.token_limit ?? null,
     request_limit: uneditedLimits?.request_limit ?? null,
     reset_alignment: null,
@@ -350,7 +336,7 @@ function BudgetForm({
       submitLabel={submitLabel}
       onSubmit={submit}
       isPending={isPending}
-      isSubmitDisabled={blocked}
+      isSubmitDisabled={isBlocked}
       isDirty={isDirty}
       returnFocusRef={returnFocusRef}
       error={error}
@@ -369,7 +355,7 @@ function BudgetForm({
         onChange={setLimit}
         placeholder="100.00"
         description={
-          parsed.valid ? (
+          parsed.isValid ? (
             "The most a single user on this budget may spend per period. Leave blank for no limit."
           ) : (
             <span className="text-danger">
@@ -414,7 +400,7 @@ function UsageCell({ budget }: { budget: Budget }) {
   if (budget.max_budget === null) {
     return (
       <span className="text-xs text-foreground">
-        {formatUSD(spent)} spent
+        {formatUsd(spent)} spent
         {/* "dollar", because this cell is a spend bar and the budget may still
             cap tokens or requests: the Limit column beside it names those, and
             an unqualified "no limit" here contradicts it. */}
@@ -425,14 +411,14 @@ function UsageCell({ budget }: { budget: Budget }) {
   const allocated = budget.max_budget * budget.user_count
   const state = spendState(spent, allocated)
   return (
-    <div className="flex min-w-[140px] flex-col gap-1">
+    <div className="flex min-w-[8.75rem] flex-col gap-1">
       <div className="flex items-baseline justify-between gap-2 text-xs">
         {/* The one number in this product that changes color, and only in the
             state that has already gone past the limit. */}
         <span className={state === "over" ? "text-danger" : "text-foreground"}>
-          {formatUSD(spent)}
+          {formatUsd(spent)}
         </span>
-        <span className="text-muted">of {formatUSD(allocated)}</span>
+        <span className="text-muted">of {formatUsd(allocated)}</span>
       </div>
       <SpendMeter
         spent={spent}
@@ -526,13 +512,13 @@ function ResetHistory({
                   )}
                 </td>
                 <td className="py-1.5 pr-4 text-foreground">
-                  {formatUSD(log.previous_spend)}
+                  {formatUsd(log.previous_spend)}
                 </td>
                 <td className="py-1.5 pr-4 text-muted">
-                  {absolute(log.reset_at)}
+                  {formatDateTime(log.reset_at)}
                 </td>
                 <td className="py-1.5 text-muted">
-                  {absolute(log.next_reset_at)}
+                  {formatDateTime(log.next_reset_at)}
                 </td>
               </tr>
             )
@@ -546,7 +532,7 @@ function ResetHistory({
 // ---------- page ----------
 
 // Stable row-key getter so DataTable's per-row cache holds across re-renders.
-const getBudgetRowKey = (b: Budget): string => b.budget_id
+const getBudgetRowKey = (budget: Budget): string => budget.budget_id
 
 // Whose budget a row is: a tenant's carries an organization, the deployment's own
 // carries none. `/users` refuses to cap a gateway user at a tenant's
@@ -597,14 +583,14 @@ function DeploymentBudgetsPage() {
     setAddOpenCount((n) => n + 1)
     setAddOpen(true)
   }
-  const [editing, setEditing] = useState<string | null>(null)
-  const [historyOpen, setHistoryOpen] = useState<string | null>(null)
+  const [editing, setEditing] = useState<string>()
+  const [historyOpen, setHistoryOpen] = useState<string>()
   const [pendingDelete, setPendingDelete] = useState<Budget>()
-  const [assignmentError, setAssignmentError] = useState<Error | null>(null)
+  const [assignmentError, setAssignmentError] = useState<Error>()
   const [pendingAssignments, setPendingAssignments] = useState<{
     budgetId: string
     userIds: string[]
-  } | null>(null)
+  }>()
   const [assigningUsers, setAssigningUsers] = useState(false)
   const selection = useTableSelection()
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
@@ -636,27 +622,28 @@ function DeploymentBudgetsPage() {
         workspace.name,
       ]),
     )
-    const byBudget = new Map<string, string[]>()
-    for (const { workspaceId, default: row } of workspaceDefaults.data) {
-      const name = names.get(workspaceId) ?? workspaceId.slice(0, 8)
-      const label = row.provider_key_id
-        ? `${name} (${row.provider_key_id})`
-        : name
-      byBudget.set(row.budget_id, [
-        ...(byBudget.get(row.budget_id) ?? []),
-        label,
-      ])
-    }
-    return byBudget
+    return workspaceDefaults.data.reduce(
+      (byBudget, { workspaceId, default: row }) => {
+        const name = names.get(workspaceId) ?? workspaceId.slice(0, 8)
+        const label = row.provider_key_id
+          ? `${name} (${row.provider_key_id})`
+          : name
+        const labels = byBudget.get(row.budget_id)
+        if (labels) labels.push(label)
+        else byBudget.set(row.budget_id, [label])
+        return byBudget
+      },
+      new Map<string, string[]>(),
+    )
   }, [workspaces.data, workspaceDefaults.data])
-  const editingBudget = rows.find((b) => b.budget_id === editing) ?? null
-  const historyBudget = rows.find((b) => b.budget_id === historyOpen) ?? null
+  const editingBudget = rows.find((budget) => budget.budget_id === editing)
+  const historyBudget = rows.find((budget) => budget.budget_id === historyOpen)
   // Not gated on the dialog being closed: react-aria returns focus to the
   // element that opened the dialog, and an empty-state CTA that unmounts on
   // open leaves it nothing to return to, so focus lands on body and Tab
   // restarts at the top of the document.
   const showOnboarding = !loading && rows.length === 0
-  const selectableKeys = rows.map((b) => b.budget_id)
+  const selectableKeys = rows.map((budget) => budget.budget_id)
   const selectedIds = resolveSelectedIds(selection.selectedKeys, selectableKeys)
 
   const onBulkDelete = async () => {
@@ -685,12 +672,12 @@ function DeploymentBudgetsPage() {
         id: "budget",
         header: "Budget",
         isRowHeader: true,
-        cell: (b) => (
+        cell: (budget) => (
           <div className="flex flex-col gap-0.5">
             <span className="font-medium text-foreground">
-              {b.name ?? <span className="text-muted">(unnamed)</span>}
+              {budget.name ?? <span className="text-muted">(unnamed)</span>}
             </span>
-            {isOrganizationOwned(b) ? (
+            {isOrganizationOwned(budget) ? (
               // Not a warning: the budget is a real one this page may still
               // relabel and refigure, it is simply not one a gateway user can be
               // held to. The mirror of the tenant page's "Set at the deployment
@@ -701,9 +688,9 @@ function DeploymentBudgetsPage() {
             ) : null}
             {/* Only a prefix is rendered, so the id an API call needs is not on the
               page in full; the copy hands over the whole thing. */}
-            <CopyableValue value={b.budget_id} label="budget id">
-              <code className="text-mono-micro" title={b.budget_id}>
-                {shortBudgetId(b.budget_id)}
+            <CopyableValue value={budget.budget_id} label="budget id">
+              <code className="text-mono-micro" title={budget.budget_id}>
+                {shortBudgetId(budget.budget_id)}
               </code>
             </CopyableValue>
           </div>
@@ -712,31 +699,33 @@ function DeploymentBudgetsPage() {
       {
         id: "limit",
         header: "Limit (per user)",
-        cell: (b) => (
-          <span className={hasNoLimit(b) ? "text-muted" : undefined}>
-            {limitLabel(b)}
+        cell: (budget) => (
+          <span className={hasNoLimit(budget) ? "text-muted" : undefined}>
+            {limitLabel(budget)}
           </span>
         ),
       },
       {
         id: "reset",
         header: "Reset",
-        cell: (b) => (
+        cell: (budget) => (
           <span className="text-muted">
-            {formatDuration(b.budget_duration_sec)}
+            {formatDuration(budget.budget_duration_sec)}
           </span>
         ),
       },
       {
         id: "users",
         header: "People",
-        cell: (b) => <span className="text-muted">{b.user_count}</span>,
+        cell: (budget) => (
+          <span className="text-muted">{budget.user_count}</span>
+        ),
       },
       {
         id: "default-for",
         header: "Default for",
-        cell: (b) => {
-          const holders = defaultFor.get(b.budget_id)
+        cell: (budget) => {
+          const holders = defaultFor.get(budget.budget_id)
           if (!holders || holders.length === 0) {
             return <span className="text-caption">&mdash;</span>
           }
@@ -758,19 +747,25 @@ function DeploymentBudgetsPage() {
           )
         },
       },
-      { id: "usage", header: "Usage", cell: (b) => <UsageCell budget={b} /> },
+      {
+        id: "usage",
+        header: "Usage",
+        cell: (budget) => <UsageCell budget={budget} />,
+      },
       {
         id: "actions",
         header: "Actions",
         align: "end",
-        cell: (b) => (
+        cell: (budget) => (
           <RowActionRow>
             <RowAction
               icon={FiClock}
-              label={historyOpen === b.budget_id ? "Hide history" : "History"}
+              label={
+                historyOpen === budget.budget_id ? "Hide history" : "History"
+              }
               onPress={() =>
                 setHistoryOpen((current) =>
-                  current === b.budget_id ? null : b.budget_id,
+                  current === budget.budget_id ? undefined : budget.budget_id,
                 )
               }
             />
@@ -779,13 +774,13 @@ function DeploymentBudgetsPage() {
               label="Edit"
               onPress={() => {
                 setAddOpen(false)
-                setEditing(b.budget_id)
+                setEditing(budget.budget_id)
               }}
             />
             <RowAction
               icon={FiTrash2}
               label="Delete"
-              onPress={() => setPendingDelete(b)}
+              onPress={() => setPendingDelete(budget)}
             />
           </RowActionRow>
         ),
@@ -810,11 +805,11 @@ function DeploymentBudgetsPage() {
     const added = userIds.filter((id) => !previousUserIds.includes(id))
     const removed = previousUserIds.filter((id) => !userIds.includes(id))
     if (added.length === 0 && removed.length === 0) {
-      setPendingAssignments(null)
+      setPendingAssignments(undefined)
       return true
     }
     setAssigningUsers(true)
-    setAssignmentError(null)
+    setAssignmentError(undefined)
     const targets = [
       ...added.map((id) => ({ id, budgetId: budgetId as string | null })),
       ...removed.map((id) => ({ id, budgetId: null })),
@@ -844,7 +839,7 @@ function DeploymentBudgetsPage() {
       return false
     }
 
-    setPendingAssignments(null)
+    setPendingAssignments(undefined)
     return true
   }
 
@@ -859,9 +854,9 @@ function DeploymentBudgetsPage() {
             // own copy of it: the dialog is over the page.
             variant="primary"
             onPress={() => {
-              setEditing(null)
-              setAssignmentError(null)
-              setPendingAssignments(null)
+              setEditing(undefined)
+              setAssignmentError(undefined)
+              setPendingAssignments(undefined)
               openCreate()
             }}
           >
@@ -897,9 +892,9 @@ function DeploymentBudgetsPage() {
           description="A budget caps how much a user may spend and, optionally, resets that spend on a schedule. Create one, then assign it to users to enforce a limit."
           actionLabel="Create your first budget"
           onAction={() => {
-            setEditing(null)
-            setAssignmentError(null)
-            setPendingAssignments(null)
+            setEditing(undefined)
+            setAssignmentError(undefined)
+            setPendingAssignments(undefined)
             openCreate()
           }}
         />
@@ -918,11 +913,11 @@ function DeploymentBudgetsPage() {
         pendingAssignments={pendingAssignments}
         returnFocusRef={createButtonRef}
         assignUsers={assignUsers}
-        onAssignmentReset={() => setAssignmentError(null)}
+        onAssignmentReset={() => setAssignmentError(undefined)}
         users={users.data ?? []}
         onClose={() => {
-          setAssignmentError(null)
-          setPendingAssignments(null)
+          setAssignmentError(undefined)
+          setPendingAssignments(undefined)
           setAddOpen(false)
         }}
       />
@@ -936,15 +931,15 @@ function DeploymentBudgetsPage() {
           rosterReady={rosterReady}
           assignUsers={assignUsers}
           onAssignmentReset={() => {
-            setAssignmentError(null)
-            setPendingAssignments(null)
+            setAssignmentError(undefined)
+            setPendingAssignments(undefined)
           }}
           assignmentError={assignmentError}
           assigningUsers={assigningUsers}
           onClose={() => {
-            setAssignmentError(null)
-            setPendingAssignments(null)
-            setEditing(null)
+            setAssignmentError(undefined)
+            setPendingAssignments(undefined)
+            setEditing(undefined)
           }}
         />
       ) : null}
@@ -996,7 +991,7 @@ function DeploymentBudgetsPage() {
             <Button
               size="sm"
               variant="ghost"
-              onPress={() => setHistoryOpen(null)}
+              onPress={() => setHistoryOpen(undefined)}
             >
               Close
             </Button>
@@ -1077,7 +1072,7 @@ function EditBudgetDialog({
     previousUserIds?: string[],
   ) => Promise<boolean>
   onAssignmentReset: () => void
-  assignmentError: Error | null
+  assignmentError: Error | undefined
   assigningUsers: boolean
   onClose: () => void
 }) {
@@ -1155,9 +1150,9 @@ function CreateBudgetDialog({
     previousUserIds?: string[],
   ) => Promise<boolean>
   onAssignmentReset: () => void
-  assignmentError: Error | null
+  assignmentError: Error | undefined
   assigningUsers: boolean
-  pendingAssignments: { budgetId: string; userIds: string[] } | null
+  pendingAssignments?: { budgetId: string; userIds: string[] }
 }) {
   const createBudget = useCreateBudget()
 

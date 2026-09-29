@@ -18,6 +18,18 @@ plane connected to an external control plane such as otari.ai.
 `GET /api/v1/bootstrap` publishes the effective mode, sign-in methods, available
 management surfaces, and the management or data-plane URL the dashboard needs.
 
+## Mode and who runs it
+
+The mode says what a process serves. It does not say who runs the process.
+
+- A **self-hosted** gateway is one you run on your own infrastructure. It runs in
+  standalone mode, or in hybrid mode when it connects to otari.ai.
+- **otari.ai's own gateway** is the one mozilla.ai runs to serve otari.ai's
+  inference. It runs in hybrid mode.
+
+"Hosted" names the control-plane mode. It is not the opposite of
+"self-hosted": a hosted deployment serves no inference, and anyone can run one.
+
 ## Standalone
 
 Standalone is the default when neither `OTARI_MODE` nor `OTARI_AI_TOKEN` is
@@ -40,8 +52,8 @@ inference, files, batches, or other data-plane operations. Those paths return a
 descriptive `404`. Set `data_plane_url` so the error and dashboard snippets
 point clients to the correct gateway.
 
-The dashboard hides deployment-wide provider management and exposes
-organization-scoped provider keys instead. It also hides the Playground, whose
+The dashboard hides deployment-wide provider management, leaving the
+organization-scoped provider keys that a standalone deployment also has. It also hides the Playground, whose
 whole purpose is to dispatch a completion. Deployment-wide APIs still require
 operator authority; organization-scoped APIs apply membership and role checks.
 
@@ -68,8 +80,9 @@ otari serve
 
 Hybrid serves health, bootstrap, Chat Completions, Messages, and Responses. It
 does not initialize the local management database or use local provider
-configuration. Clients authenticate with an otari.ai user token in
-`Authorization: Bearer <token>`.
+configuration. Clients authenticate with an otari.ai user
+token, accepted in the same header forms as standalone mode
+(`Authorization: Bearer`, `Otari-Key`, or `x-api-key`).
 
 The gateway asks the platform to resolve an ordered set of provider attempts,
 tries retryable fallbacks before a response begins, and reports each outcome.
@@ -80,14 +93,14 @@ plane.
 
 Hybrid mode can receive two kinds of provider credential:
 
-- A workspace's own provider key. The upstream provider bills that workspace,
-  and the key may be used through a self-hosted gateway.
-- A mozilla.ai-managed credential. Usage is billed through otari.ai and the
-  credential is returned only to the gateway operated by mozilla.ai.
+- A workspace's own provider key. The upstream provider bills that workspace.
+  Any hybrid gateway can use it, including a self-hosted one.
+- A mozilla.ai-managed credential. Usage is billed through otari.ai. Only
+  otari.ai's own gateway receives it.
 
-Managed model identifiers use the catalog values published by otari.ai. A
-self-hosted gateway that requests a managed credential is refused; this prevents
-platform-owned secrets from leaving managed infrastructure.
+Managed model identifiers use the catalog values published by otari.ai. otari.ai
+refuses a managed credential to a self-hosted gateway, so platform-owned secrets
+never leave mozilla.ai's infrastructure.
 
 ## Internal protocol
 

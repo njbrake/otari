@@ -20,9 +20,9 @@ import {
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useAutosave } from "@/shared/hooks/useAutosave"
 
-// The layer above the deployment-wide web-search settings this group sits
-// under: the settings above say which backend runs a search, this says which
-// workspaces may ask for one and how far it may reach. A row can only narrow,
+// The layer above the deployment-wide Web Access settings this group sits
+// under: the settings above say which backends can reach the web, this says
+// which workspaces may ask and how far they may reach. A row can only narrow,
 // so there is no control here that turns anything on the deployment has not
 // configured.
 //
@@ -70,12 +70,12 @@ const parseDomains: Parse<string[] | null> = (raw) => {
 }
 
 /**
- * Whether requests billed to this workspace may search the web, and how far a
- * search may reach.
+ * Whether requests billed to this workspace may access the web, and how far
+ * Search and Fetch may reach.
  *
- * Blocking covers both doors: the `otari_web_search` tool and `POST /api/v1/search`.
- * The rest narrows the in-loop tool only. Nothing here grants a backend the
- * deployment has not configured, and nothing here holds a credential.
+ * Blocking covers `otari_web_search`, `otari_web_fetch`, and `POST /api/v1/search`.
+ * Nothing here grants a backend the deployment has not configured, and nothing
+ * here holds a credential.
  */
 export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
   const { selected, isLoading: workspaceLoading } = useSelectedWorkspace()
@@ -118,7 +118,7 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
       <InfoBanner>
         {workspaceLoading
           ? "Reading the workspaces you belong to."
-          : "Per-workspace web search is set on a workspace you belong to. An owner or admin can add you to one on the Workspaces page."}
+          : "Per-workspace web access is set on a workspace you belong to. An owner or admin can add you to one on the Workspaces page."}
       </InfoBanner>
     )
   }
@@ -126,7 +126,7 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
   if (!manages) {
     return (
       <InfoBanner>
-        Web search for {selected.name} is set by an owner or admin of the
+        Web access for {selected.name} is set by an owner or admin of the
         workspace, or of the organization.
       </InfoBanner>
     )
@@ -142,8 +142,8 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
   // Disabled until the read has succeeded. Without that a failed GET leaves the
   // rows sitting at "Deployment default" over a workspace that may well have a
   // stored row, and one blur issues the write that drops it.
-  const unreadable = query.isLoading || query.isError || !config
-  const narrowingDisabled = unreadable || stance === "default"
+  const isUnreadable = query.isLoading || query.isError || !config
+  const narrowingDisabled = isUnreadable || stance === "default"
 
   // `enabled` is the one field a patch always restates: the stance select is
   // the only control that changes it, and every other row must not flip it.
@@ -159,7 +159,7 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
 
   return (
     <SettingsGroup
-      bounded
+      isBounded
       title="This workspace"
       description={`Narrows what the deployment allows for requests billed to ${selected.name}. Never widens it, and holds no credential.`}
       docsHref={docsHref}
@@ -168,15 +168,17 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
         <div className="px-4 py-3">
           <InfoBanner>
             This deployment has no in-loop search backend configured, so
-            otari_web_search is unavailable here whatever this workspace allows.
-            Blocking still takes effect on POST /api/v1/search.
+            otari_web_search is unavailable here. otari_web_fetch is available
+            only if this deployment has enabled it and this workspace policy
+            allows it. Blocking still takes effect on POST /api/v1/search, which
+            runs off the search tools below.
           </InfoBanner>
         </div>
       ) : null}
 
       <SettingRow
-        label="Web search"
-        help="Allow or block the otari_web_search tool and POST /api/v1/search for requests billed here."
+        label="Web access"
+        help="Allow or block otari_web_search, otari_web_fetch, and POST /api/v1/search for requests billed here."
         error={
           stanceSave.error ||
           (query.isError
@@ -186,7 +188,7 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
         control={
           <FilterSelect
             fullWidth
-            ariaLabel="Web search for this workspace"
+            ariaLabel="Web access for this workspace"
             value={stance}
             onChange={(next) => setStance(next as Stance)}
             options={[
@@ -195,9 +197,12 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
               // Named for what it covers: an admin choosing this is also
               // switching off the workspace's POST /api/v1/search calls, which
               // "Blocked" alone would not have told them.
-              { value: "blocked", label: "Blocked (tool and /api/v1/search)" },
+              {
+                value: "blocked",
+                label: "Blocked (tools and /api/v1/search)",
+              },
             ]}
-            disabled={unreadable || stanceSave.isSaving}
+            disabled={isUnreadable || stanceSave.isSaving}
           />
         }
       />
@@ -205,9 +210,9 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
       <PolicyRow
         key={`results-${selected.workspace_id}`}
         label="Max results"
-        help="Lowers how many results one search returns. Never raises it."
+        help="Search only. Lowers how many results one search returns; it never raises the number."
         placeholder="10"
-        numeric
+        isNumeric
         committed={
           config?.max_results == null ? "" : String(config.max_results)
         }
@@ -218,7 +223,7 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
       <PolicyRow
         key={`hint-${selected.workspace_id}`}
         label="Prompt hint"
-        help="Used when a request declares otari_web_search without a hint of its own."
+        help="Search only. Used when a request declares otari_web_search without a hint of its own."
         placeholder="Prefer official sources"
         committed={config?.purpose_hint ?? ""}
         parse={parsePhrase}
@@ -228,9 +233,9 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
       <PolicyRow
         key={`allowed-${selected.workspace_id}`}
         label="Allowed domains"
-        help="Results are kept only from these; a request's own list is narrowed to both."
+        help="Filters Search results and constrains initial and redirected Fetch destinations. A request list can only narrow this policy."
         placeholder="mozilla.org, wikipedia.org"
-        machine
+        isMachineReadable
         committed={(config?.allowed_domains ?? []).join(", ")}
         parse={parseDomains}
         commit={(allowed_domains) => commitField({ allowed_domains })}
@@ -239,9 +244,9 @@ export function WorkspaceWebSearchCard({ docsHref }: { docsHref: string }) {
       <PolicyRow
         key={`blocked-${selected.workspace_id}`}
         label="Blocked domains"
-        help="Always dropped, whatever a request asks for."
+        help="Filters Search results and blocks initial and redirected Fetch destinations, whatever a request asks for."
         placeholder="reddit.com, pinterest.com"
-        machine
+        isMachineReadable
         committed={(config?.blocked_domains ?? []).join(", ")}
         parse={parseDomains}
         commit={(blocked_domains) => commitField({ blocked_domains })}

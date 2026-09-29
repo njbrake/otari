@@ -82,7 +82,7 @@ export function OAuthCallbackPage({
 }) {
   const { login } = useAuth()
   const { recordEvent } = useTelemetry()
-  const [failure, setFailure] = useState<string | null>(null)
+  const [failure, setFailure] = useState<string>()
   // The effect below signs somebody in, so it must run once and not once per
   // render. React's development StrictMode mounts an effect twice on purpose,
   // and the second run would post a code the first already spent, turning every
@@ -141,7 +141,7 @@ export function OAuthCallbackPage({
     void (async () => {
       try {
         const result = await completeOAuthSignIn(provider, code, state)
-        if (result.ok) {
+        if (result.isOk) {
           recordEvent(TELEMETRY_EVENTS.LOGIN_SUCCESS, {
             authentication_method: provider,
           })
@@ -172,7 +172,7 @@ export function OAuthCallbackPage({
     })()
   }, [provider, hash, login, recordEvent])
 
-  if (failure === null) {
+  if (failure === undefined) {
     return (
       <PublicAuthLayout
         title={`Finishing your ${oauthProviderLabel(provider)} sign-in`}

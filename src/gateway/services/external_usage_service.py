@@ -33,7 +33,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.core.config import API_ROOT
 from gateway.core.metered_pricing import BillableUsage, ChargeLine, billable_usage, price_billable_usage
 from gateway.log_config import logger
-from gateway.models.entities import APIKey, ModelPricing, UsageLog, User
+from gateway.models.api_keys import APIKey
+from gateway.models.pricing import ModelPricing
+from gateway.models.usage import UsageLog
+from gateway.models.users import User
 from gateway.services.pricing_service import (
     OverridePeriod,
     default_model_pricing,
@@ -44,10 +47,11 @@ from gateway.services.pricing_service import (
 )
 from gateway.services.workspace_scope import organization_for_workspace_id, resolve_workspace_id
 
-# Bounds. Batch size mirrors the /v1/usage list `limit` cap; the error list is
-# capped so one bad batch can't return an unbounded payload; the IN() list is
-# chunked to stay under SQLite's default variable limit (999).
-MAX_EVENTS_PER_BATCH = 1000
+# Bounds. The batch cap is owned by the CLI's distribution (see
+# otari_agent.usage_import) and re-exported here for the OTLP route; the error
+# list is capped so one bad batch can't return an unbounded payload; the IN()
+# list is chunked to stay under SQLite's default variable limit (999).
+from otari_agent.usage_import import MAX_EVENTS_PER_BATCH as MAX_EVENTS_PER_BATCH
 
 # Rows per INSERT statement. A batch is bounded by MAX_EVENTS_PER_BATCH and each
 # row binds around two dozen parameters, so one statement for a whole batch would
@@ -89,8 +93,7 @@ def reserved_source_reason(value: str) -> str | None:
     for prefix in RESERVED_SOURCE_PREFIXES:
         if lowered.startswith(prefix.lower()):
             return (
-                f"source prefix '{prefix}' is reserved for provenance tags otari.ai writes itself; "
-                "pick another slug."
+                f"source prefix '{prefix}' is reserved for provenance tags otari.ai writes itself; pick another slug."
             )
     return None
 
@@ -222,13 +225,17 @@ async def _existing_event_ids(db: AsyncSession, source: str, event_ids: list[str
         if not chunk:
             continue
         rows = (
-            await db.execute(
-                select(UsageLog.source_event_id).where(
-                    UsageLog.source == source,
-                    UsageLog.source_event_id.in_(chunk),
+            (
+                await db.execute(
+                    select(UsageLog.source_event_id).where(
+                        UsageLog.source == source,
+                        UsageLog.source_event_id.in_(chunk),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         found.update(row for row in rows if row is not None)
     return found
 
@@ -280,9 +287,7 @@ async def _load_pricing_index(
         chunk = list(keys)[start : start + _IN_CHUNK]
         if not chunk:
             continue
-        rows = (
-            await db.execute(select(ModelPricing).where(ModelPricing.model_key.in_(chunk)))
-        ).scalars().all()
+        rows = (await db.execute(select(ModelPricing).where(ModelPricing.model_key.in_(chunk)))).scalars().all()
         for row in rows:
             index.setdefault(row.model_key, []).append((normalize_effective_at(row.effective_at), row))
     for entries in index.values():
@@ -541,9 +546,9 @@ async def ingest_external_events(
     for start in range(0, len(candidate_users), _IN_CHUNK):
         chunk = candidate_users[start : start + _IN_CHUNK]
         active_users.update(
-            (
-                await db.execute(select(User.user_id).where(User.user_id.in_(chunk), User.deleted_at.is_(None)))
-            ).scalars().all()
+            (await db.execute(select(User.user_id).where(User.user_id.in_(chunk), User.deleted_at.is_(None))))
+            .scalars()
+            .all()
         )
     # The organization comes off the workspace the key named, never off the
     # request: the organization decides what an event costs, so taking it from

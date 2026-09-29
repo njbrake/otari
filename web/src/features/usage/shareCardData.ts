@@ -1,17 +1,13 @@
 import type { UsageGroupRow, UsageSeriesPoint, UsageTotals } from "@/client"
 
 import {
+  formatLatency,
   formatNumber,
   formatPct,
   formatTokens,
   formatUsdHeadline,
 } from "@/shared/helpers/format"
-import {
-  billedTokenTotal,
-  cacheHitRate,
-  costNeedsCaveat,
-  formatLatency,
-} from "./usageTotals"
+import { billedTokenTotal, cacheHitRate, costNeedsCaveat } from "./usageTotals"
 
 // Derivations for the share card. Everything here is pure so the numbers the card
 // publishes can be tested without a browser: the rasterizer cannot run in jsdom,
@@ -75,7 +71,7 @@ export interface CardStat {
   label: string
   value: string
   /** True when the value carries a caveat the card must show (currently only unpriced cost). */
-  caveated?: boolean
+  isCaveated?: boolean
 }
 
 export interface StatInputs {
@@ -108,7 +104,7 @@ export function availableStats(inputs: StatInputs): CardStat[] {
       id: "cost",
       label: "Spend",
       value: formatUsdHeadline(totals.cost),
-      caveated: costNeedsCaveat(totals),
+      isCaveated: costNeedsCaveat(totals),
     })
   }
   if (totals.request_count > 0) {

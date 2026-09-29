@@ -7,38 +7,66 @@ Chat-Completions, Anthropic Messages, and OpenAI Responses endpoints so
 handling regardless of wire shape.
 
 The explicit ``otari_*`` tool types always trigger gateway-side execution.
-Every other tool type — the short forms (``code_execution`` / ``web_search``)
-and the provider-native keywords (``code_interpreter`` /
-``code_execution_<date>`` / ``web_search_<date>``) — is left untouched in
-``tools[]`` and forwarded to the upstream provider, which runs it server-side.
-For code execution the keyword alone says who runs it: no flag, no env toggle.
+A provider-native web-search keyword (``web_search`` / ``web_search_<date>``)
+is forwarded to the upstream provider unless ``web_search_intercept`` is on or
+:data:`WEB_SEARCH_HEADER` asks otherwise. The header takes ``CodeExecutor``'s
+vocabulary: ``auto`` claims the keyword only when a provider in the chain cannot
+run it (Anthropic's dated keyword on Messages, OpenAI's on Responses are the
+native pairings), ``otari`` always, ``provider`` never, and none of them can
+undo interception. Interception is off by default because turning it on
+silently takes a search away from a provider that would have run it (see
+``docs/tools.md``). An OpenAI ``function`` named ``web_search`` is deliberately
+*not* claimed even then: that is a caller's own tool, and hijacking it means the
+caller's handler never fires and it never gets back a ``tool_call`` it can
+dispatch.
 
-Web search has one opt-in exception. A client that cannot be told to say
-``otari_web_search`` (Claude Code, the Anthropic SDK, anything speaking a
-provider's native vocabulary) would otherwise never reach a configured gateway
-backend. Setting ``web_search_intercept`` makes the gateway also claim the
-provider-named web-search keywords, so those clients work unchanged. It is off
-by default because turning it on silently takes a search away from a provider
-that would have run it (see ``docs/tools.md``). An OpenAI ``function`` named
-``web_search`` is deliberately *not* claimed even then: that is a caller's own
-tool, and hijacking it means the caller's handler never fires and it never gets
-back a ``tool_call`` it can dispatch.
+A provider-native code-execution keyword (``code_execution``,
+``code_interpreter``, ``code_execution_<date>``) is decided by the request's
+**executor** instead (:class:`gateway.models.tools.CodeExecutor`): the
+provider, Otari's sandbox, or ``auto``, which picks the provider only when it
+runs that tool natively for the dispatched model. ``auto`` is the default, and
+it is what lets a request written against a frontier model's own sandbox keep
+working when the model is swapped for one that has none. The deployment sets
+the default, a workspace policy may pin a value, and :data:`CODE_EXECUTION_HEADER`
+chooses per request where the workspace has not.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Sequence
 from enum import StrEnum, auto
 from typing import TYPE_CHECKING, Any
 
 from gateway.api.routes._schema_derive import SENSITIVE_PARAM_FIELDS
+from gateway.core.config import parse_bool_env
 from gateway.core.env import otari_env
 from gateway.log_config import logger
+from gateway.models.tools import CodeExecutor
 from gateway.services.tool_usage import ToolUsageTally
-from gateway.services.web_search_backend import DEFAULT_MAX_RESULTS, WEB_SEARCH_TOOL_NAME, WebSearchBackend
+from gateway.services.tools import Dialect
+from gateway.services.web_retrieval_backend import (
+    DEFAULT_MAX_RESULTS,
+    WEB_SEARCH_NATIVE_TYPE_PREFIX,
+    WEB_SEARCH_TOOL_NAME,
+    WebRetrievalBackend,
+    WebRetrievalCounter,
+)
+from gateway.services.web_retrieval_policy import DomainPolicy
 
 if TYPE_CHECKING:
     from gateway.core.config import GatewayConfig
+
+# Per-request choice of who runs a provider-native code-execution declaration.
+# A header rather than a body field so the body stays the untouched payload a
+# provider's own SDK sends; every SDK can add a default header without a code
+# change. One of ``CodeExecutor``'s values, case-insensitive.
+CODE_EXECUTION_HEADER = "Otari-Code-Execution"
+
+# Per-request choice of who runs a provider-named web-search declaration, in the
+# same vocabulary and for the same reason as ``CODE_EXECUTION_HEADER``. It can
+# add a claim but never remove one ``web_search_intercept`` makes.
+WEB_SEARCH_HEADER = "Otari-Web-Search"
 
 
 class Tool(StrEnum):
@@ -55,6 +83,7 @@ class Tool(StrEnum):
         return f"otari_{name.lower()}"
 
     CODE_EXECUTION = auto()  # -> "otari_code_execution"
+    WEB_FETCH = auto()  # -> "otari_web_fetch"
     WEB_SEARCH = auto()  # -> "otari_web_search"
 
 
@@ -63,7 +92,6 @@ class Tool(StrEnum):
 # future Anthropic versions (``web_search_20991231``) and OpenAI's Responses
 # spellings (``web_search_preview``) working without a release here.
 _BARE_WEB_SEARCH_TYPE = "web_search"
-_VERSIONED_WEB_SEARCH_PREFIX = "web_search_"
 
 
 def _is_web_search_tool_type(type_value: Any) -> bool:
@@ -87,7 +115,7 @@ def _is_provider_web_search_tool_type(type_value: Any) -> bool:
     """
     if not isinstance(type_value, str):
         return False
-    return type_value == _BARE_WEB_SEARCH_TYPE or type_value.startswith(_VERSIONED_WEB_SEARCH_PREFIX)
+    return type_value == _BARE_WEB_SEARCH_TYPE or type_value.startswith(WEB_SEARCH_NATIVE_TYPE_PREFIX)
 
 
 def _is_any_web_search_tool_type(type_value: Any) -> bool:
@@ -95,33 +123,116 @@ def _is_any_web_search_tool_type(type_value: Any) -> bool:
     return _is_web_search_tool_type(type_value) or _is_provider_web_search_tool_type(type_value)
 
 
-def declares_native_web_search(tool_entry: dict[str, Any] | None) -> bool:
-    """Whether the caller declared web search in a provider's *native* vocabulary.
+# Where a provider-named web-search keyword is the provider's own: Anthropic's
+# dated keyword on Messages, OpenAI's bare and preview keywords on Responses.
+# Every other pairing, a keyword in the other provider's words included, names a
+# search the dispatched provider cannot run.
+_ANTHROPIC_WEB_SEARCH_TYPE = re.compile(r"web_search_\d{8}")
+_OPENAI_WEB_SEARCH_PREVIEW_PREFIX = "web_search_preview"
 
-    True for a dated/preview keyword (``web_search_20250305``), which is what the
-    Anthropic SDK, Claude Code, and Claude Desktop send and what makes them expect
-    ``server_tool_use`` / ``web_search_tool_result`` blocks back so a citations
-    panel has something to render. False for ``otari_web_search`` and for the bare
-    ``web_search`` short form: neither implies the native response shape, so those
-    callers keep receiving the plain-text result they always have.
+
+def _native_web_search_pairing(type_value: Any) -> tuple[str, Dialect] | None:
+    """The ``(provider, dialect)`` a provider-named web-search keyword is native to."""
+    if not isinstance(type_value, str):
+        return None
+    if type_value == _BARE_WEB_SEARCH_TYPE or type_value.startswith(_OPENAI_WEB_SEARCH_PREVIEW_PREFIX):
+        return ("openai", Dialect.RESPONSES)
+    if _ANTHROPIC_WEB_SEARCH_TYPE.fullmatch(type_value):
+        return ("anthropic", Dialect.MESSAGES)
+    return None
+
+
+def first_provider_web_search_tool(tools: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """The first provider-named web-search declaration in ``tools``, if any."""
+    for entry in tools or []:
+        if isinstance(entry, dict) and _is_provider_web_search_tool_type(entry.get("type")):
+            return entry
+    return None
+
+
+def provider_runs_web_search_natively(
+    tool_entry: dict[str, Any] | None, *, provider: str | None, dialect: Dialect
+) -> bool:
+    """Whether the dispatched provider would run this web-search declaration itself.
+
+    The web-search counterpart of :func:`provider_runs_code_natively`. ``None``
+    for the provider reads as not native, as it does there.
     """
-    if not tool_entry:
+    if provider is None or tool_entry is None:
         return False
-    type_value = tool_entry.get("type")
-    return isinstance(type_value, str) and type_value.startswith(_VERSIONED_WEB_SEARCH_PREFIX)
+    native = _native_web_search_pairing(tool_entry.get("type"))
+    return native is not None and native == (provider.lower(), dialect)
+
+
+def parse_web_search_header(value: str | None) -> CodeExecutor | None:
+    """Who a request asked to run its web search, ``None`` when it asked for no one.
+
+    Raises ``ValueError`` for a value outside the vocabulary, as
+    :func:`parse_code_execution_header` does.
+    """
+    if value is None or not value.strip():
+        return None
+    executor = CodeExecutor.parse(value)
+    if executor is None:
+        msg = f"{WEB_SEARCH_HEADER} must be one of {', '.join(e.value for e in CodeExecutor)}"
+        raise ValueError(msg)
+    return executor
+
+
+def claims_provider_web_search(
+    tool_entry: dict[str, Any] | None,
+    *,
+    requested: CodeExecutor | None,
+    intercept: bool,
+    backend_configured: bool,
+    providers: Sequence[str | None],
+    dialect: Dialect,
+) -> bool:
+    """Whether the gateway runs a provider-named web-search declaration itself.
+
+    Only with a backend to run it on. Interception claims every keyword, and the
+    request's :data:`WEB_SEARCH_HEADER` cannot take that back (see
+    :func:`web_search_header_conflicts`); without interception the header decides,
+    and without either nothing is claimed. ``auto`` claims a keyword unless every
+    candidate in ``providers`` (the fallback chain, head first) runs it natively,
+    so a chain that falls back to a model with no search of its own never
+    forwards it a search nobody will run.
+    """
+    if tool_entry is None or not backend_configured:
+        return False
+    if intercept:
+        return True
+    if requested is CodeExecutor.AUTO:
+        return not providers or not all(
+            provider_runs_web_search_natively(tool_entry, provider=provider, dialect=dialect) for provider in providers
+        )
+    return requested is CodeExecutor.OTARI
+
+
+def web_search_header_conflicts(requested: CodeExecutor | None, *, intercept: bool) -> bool:
+    """Whether the request asked the provider to run a search the deployment claims.
+
+    ``web_search_intercept`` is what puts every search under the workspace's
+    web-search policy and tool pricing, so a caller's header may not opt out of it.
+    """
+    return intercept and requested is CodeExecutor.PROVIDER
 
 
 def _is_code_execution_tool_type(type_value: Any) -> bool:
     """Recognize the explicit gateway-managed code-execution tool type.
 
-    Matches only ``"otari_code_execution"``. Provider-named keywords
-    (``"code_execution"``, ``"code_interpreter"``, ``"code_execution_<date>"``)
-    are *not* matched — they pass through unchanged to the upstream provider,
-    which runs the code in its own native sandbox.
+    Matches only ``"otari_code_execution"``. The provider-named keywords are
+    :func:`_is_provider_code_execution_tool_type`'s, and whether the gateway
+    claims one is the executor's decision, not the keyword's.
     """
     if not isinstance(type_value, str):
         return False
     return type_value == Tool.CODE_EXECUTION
+
+
+def _is_web_fetch_tool_type(type_value: Any) -> bool:
+    """Recognize only the canonical gateway-managed Fetch declaration."""
+    return isinstance(type_value, str) and type_value == Tool.WEB_FETCH
 
 
 # The provider-named code-execution keywords: OpenAI's ``code_interpreter``, the
@@ -130,28 +241,146 @@ def _is_code_execution_tool_type(type_value: Any) -> bool:
 # here, mirroring the web-search keywords above.
 _BARE_CODE_EXECUTION_TYPES = frozenset({"code_execution", "code_interpreter"})
 _VERSIONED_CODE_EXECUTION_PREFIX = "code_execution_"
+_OPENAI_CODE_INTERPRETER_TYPE = "code_interpreter"
+# The one provider each native vocabulary belongs to, and the wire format it is
+# native in. Anthropic's dated ``code_execution_<date>`` is a Messages server
+# tool; OpenAI's ``code_interpreter`` is a Responses built-in tool. Neither has a
+# native form on Chat Completions, and the bare ``code_execution`` short form is
+# nobody's, so a request declaring it is never natively served and ``auto``
+# always runs it here.
+_NATIVE_CODE_EXECUTION: dict[str, tuple[str, Dialect]] = {
+    _VERSIONED_CODE_EXECUTION_PREFIX: ("anthropic", Dialect.MESSAGES),
+    _OPENAI_CODE_INTERPRETER_TYPE: ("openai", Dialect.RESPONSES),
+}
 
 
-def has_provider_code_execution_tool(tools: list[dict[str, Any]] | None) -> bool:
-    """Whether ``tools`` still asks the provider to run code in its own sandbox.
+def _is_provider_code_execution_tool_type(type_value: Any) -> bool:
+    """Recognize a provider-named code-execution keyword.
 
     Matched on the tool ``type`` alone, never on a caller's ``function`` named
     ``code_execution``: that is the caller's own tool, the same carve-out
     :func:`_is_web_search_tool_type` makes for a function named ``web_search``.
-
-    Called on what is left after :func:`_extract_code_execution_tool` has taken
-    the gateway-managed entry, so a true answer means the request asks two
-    separate sandboxes to run code.
+    Does not match ``otari_code_execution``, which
+    :func:`_is_code_execution_tool_type` owns.
     """
-    if not tools:
+    if not isinstance(type_value, str):
         return False
-    for entry in tools:
-        type_value = entry.get("type") if isinstance(entry, dict) else None
-        if not isinstance(type_value, str):
-            continue
-        if type_value in _BARE_CODE_EXECUTION_TYPES or type_value.startswith(_VERSIONED_CODE_EXECUTION_PREFIX):
-            return True
-    return False
+    return type_value in _BARE_CODE_EXECUTION_TYPES or type_value.startswith(_VERSIONED_CODE_EXECUTION_PREFIX)
+
+
+def _is_any_code_execution_tool_type(type_value: Any) -> bool:
+    """The gateway-managed type or a provider-named keyword."""
+    return _is_code_execution_tool_type(type_value) or _is_provider_code_execution_tool_type(type_value)
+
+
+def declares_code_execution(tools: list[dict[str, Any]] | None) -> bool:
+    """Whether ``tools`` asks for code execution in any vocabulary, the gateway's or a provider's."""
+    return any(isinstance(entry, dict) and _is_any_code_execution_tool_type(entry.get("type")) for entry in tools or [])
+
+
+def first_provider_code_execution_tool(tools: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """The first provider-named code-execution entry in ``tools``, left in place."""
+    for entry in tools or []:
+        if isinstance(entry, dict) and _is_provider_code_execution_tool_type(entry.get("type")):
+            return entry
+    return None
+
+
+def native_code_execution_dialect(tool_entry: dict[str, Any] | None) -> Dialect | None:
+    """The wire format whose native result blocks the caller expects, or ``None``.
+
+    ``"messages"`` for Anthropic's dated keyword, which is what the Anthropic SDK
+    and Claude Code send and what makes them expect ``server_tool_use`` and
+    ``code_execution_tool_result`` blocks back. ``"responses"`` for OpenAI's
+    ``code_interpreter``, whose callers expect a ``code_interpreter_call`` item.
+    ``None`` for ``otari_code_execution`` and for the bare ``code_execution``
+    short form, neither of which implies a native response shape, so those
+    callers keep receiving the plain tool-loop result they always have.
+    """
+    type_value = tool_entry.get("type") if tool_entry else None
+    if not isinstance(type_value, str):
+        return None
+    if type_value.startswith(_VERSIONED_CODE_EXECUTION_PREFIX):
+        return _NATIVE_CODE_EXECUTION[_VERSIONED_CODE_EXECUTION_PREFIX][1]
+    if type_value == _OPENAI_CODE_INTERPRETER_TYPE:
+        return _NATIVE_CODE_EXECUTION[_OPENAI_CODE_INTERPRETER_TYPE][1]
+    return None
+
+
+def provider_runs_code_natively(tool_entry: dict[str, Any] | None, *, provider: str | None, dialect: Dialect) -> bool:
+    """Whether the dispatched provider would run this declaration in its own sandbox.
+
+    True only when the keyword is the provider's own vocabulary *and* the request
+    arrived in the wire format that vocabulary is native to: Anthropic's dated
+    keyword on Messages against an Anthropic model, OpenAI's ``code_interpreter``
+    on Responses against an OpenAI model. Everything else (a Mistral model asked
+    in Anthropic's words, any keyword on Chat Completions, an unknown provider)
+    is a declaration the provider cannot honor, which is exactly when ``auto``
+    brings the code here.
+    """
+    if provider is None or tool_entry is None:
+        return False
+    type_value = tool_entry.get("type")
+    if not isinstance(type_value, str):
+        return False
+    key = _VERSIONED_CODE_EXECUTION_PREFIX if type_value.startswith(_VERSIONED_CODE_EXECUTION_PREFIX) else type_value
+    native = _NATIVE_CODE_EXECUTION.get(key)
+    return native is not None and native == (provider.lower(), dialect)
+
+
+def parse_code_execution_header(value: str | None) -> CodeExecutor | None:
+    """The executor a request asked for, ``None`` when it asked for none.
+
+    Raises ``ValueError`` for a value outside the vocabulary: a misspelled header
+    is a caller mistake to report, not a default to fall back to.
+    """
+    if value is None or not value.strip():
+        return None
+    executor = CodeExecutor.parse(value)
+    if executor is None:
+        msg = f"{CODE_EXECUTION_HEADER} must be one of {', '.join(e.value for e in CodeExecutor)}"
+        raise ValueError(msg)
+    return executor
+
+
+def resolve_code_executor_preference(
+    *,
+    requested: CodeExecutor | None,
+    workspace: CodeExecutor | None,
+    deployment: CodeExecutor,
+) -> tuple[CodeExecutor, bool]:
+    """Compose the three layers into one preference, and say whether they clashed.
+
+    A workspace pin wins over the request, and the request wins over the
+    deployment default: the workspace's owner set the pin for a billing or data
+    reason a caller may not override, while the deployment default is only what
+    applies when nobody closer to the request said otherwise. The second value is
+    true when the request asked for something the workspace pinned away, so the
+    caller can refuse out loud rather than silently run elsewhere.
+    """
+    if workspace is not None:
+        return workspace, requested is not None and requested != workspace
+    return requested or deployment, False
+
+
+def decide_code_executor(
+    preference: CodeExecutor,
+    *,
+    sandbox_configured: bool,
+    native_available: bool,
+) -> CodeExecutor:
+    """Turn a preference into who runs the code: ``OTARI`` or ``PROVIDER``.
+
+    ``AUTO`` prefers the provider when it serves the tool natively, and with no
+    sandbox configured it also leaves the provider in charge, because there is
+    nothing to bring the code to; an explicit ``OTARI`` is returned as asked so
+    the caller can refuse it with the missing-sandbox detail instead.
+    """
+    if preference is not CodeExecutor.AUTO:
+        return preference
+    if native_available or not sandbox_configured:
+        return CodeExecutor.PROVIDER
+    return CodeExecutor.OTARI
 
 
 # Gateway-internal fields the provider SDKs (any-llm, anthropic, openai, …)
@@ -252,14 +481,36 @@ def _extract_first_matching_tool(
 
 def _extract_code_execution_tool(
     tools: list[dict[str, Any]] | None,
+    *,
+    intercept: bool = False,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None]:
-    """Pull the first ``{"type": "otari_code_execution"}`` entry out of ``tools``.
+    """Pull the first gateway-run code-execution entry out of ``tools``.
 
-    Only the explicit gateway-managed type is extracted (and run in the
-    gateway sandbox). Provider-named code-execution keywords stay in
-    ``tools[]`` and reach the upstream provider unchanged.
+    With ``intercept`` off (the default) only the explicit
+    ``{"type": "otari_code_execution"}`` is extracted; provider-named keywords
+    stay in ``tools[]`` and reach the upstream provider unchanged. With it on,
+    which is what an executor decision of ``OTARI`` means, the provider-named
+    keywords are claimed too, so a client speaking a provider's vocabulary
+    reaches the gateway's sandbox.
     """
-    return _extract_first_matching_tool(tools, _is_code_execution_tool_type)
+    predicate = _is_any_code_execution_tool_type if intercept else _is_code_execution_tool_type
+    return _extract_first_matching_tool(tools, predicate)
+
+
+def code_execution_declaration_forms(config: GatewayConfig | None = None) -> list[str]:
+    """Every ``tools[].type`` this deployment may route to the sandbox.
+
+    Advertised by ``GET /api/v1/tools``. The provider-named keywords appear
+    unless the deployment's executor is ``provider``; under ``auto`` they are
+    routed here only for a model whose provider does not run them natively,
+    which the listing cannot say per model, so it lists the forms the gateway
+    is prepared to claim.
+    """
+    forms = [str(Tool.CODE_EXECUTION)]
+    executor = config.effective_code_executor() if config is not None else CodeExecutor.AUTO
+    if executor is not CodeExecutor.PROVIDER:
+        forms += sorted(_BARE_CODE_EXECUTION_TYPES) + [f"{_VERSIONED_CODE_EXECUTION_PREFIX}<date>"]
+    return forms
 
 
 def _extract_web_search_tool(
@@ -280,6 +531,13 @@ def _extract_web_search_tool(
     """
     predicate = _is_any_web_search_tool_type if intercept else _is_web_search_tool_type
     return _extract_first_matching_tool(tools, predicate)
+
+
+def _extract_web_fetch_tool(
+    tools: list[dict[str, Any]] | None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None]:
+    """Pull the first canonical Fetch declaration, leaving native types alone."""
+    return _extract_first_matching_tool(tools, _is_web_fetch_tool_type)
 
 
 def _retargeted_tool_choice(tool_choice: Any, declared_name: str) -> Any:
@@ -332,7 +590,7 @@ def web_search_declaration_forms(config: GatewayConfig | None = None) -> list[st
     """
     forms = [str(Tool.WEB_SEARCH)]
     if _web_search_intercept_enabled(config):
-        forms += [_BARE_WEB_SEARCH_TYPE, f"{_VERSIONED_WEB_SEARCH_PREFIX}<date>"]
+        forms += [_BARE_WEB_SEARCH_TYPE, f"{WEB_SEARCH_NATIVE_TYPE_PREFIX}<date>"]
     return forms
 
 
@@ -378,15 +636,18 @@ def web_search_max_results_baseline(config: GatewayConfig | None) -> int:
     return DEFAULT_MAX_RESULTS
 
 
-def _build_web_search_backend(
+def _build_web_retrieval_backend(
     *,
     base_url: str | None,
-    tool_entry: dict[str, Any],
+    search_tool_entry: dict[str, Any] | None,
+    fetch_tool_entry: dict[str, Any] | None = None,
+    fetch_policy: DomainPolicy | None = None,
+    counter: WebRetrievalCounter | None = None,
     auth_token: str | None = None,
     config: GatewayConfig | None = None,
     tally: ToolUsageTally | None = None,
-) -> WebSearchBackend:
-    """Construct a WebSearchBackend honoring env-level + per-tool config.
+) -> WebRetrievalBackend:
+    """Construct a WebRetrievalBackend honoring env-level + per-tool config.
 
     Per-tool entry fields (``max_results``, ``allowed_domains``,
     ``blocked_domains``, ``purpose_hint``) override env-level defaults.
@@ -394,14 +655,22 @@ def _build_web_search_backend(
 
       * ``OTARI_WEB_SEARCH_ENGINES`` — comma-separated SearXNG engine list
       * ``OTARI_WEB_SEARCH_MAX_RESULTS`` — default cap on returned hits
-      * ``OTARI_WEB_SEARCH_EXTRACT`` — "0"/"false" to disable in-process
-        content extraction (snippet-only mode).
+      * ``OTARI_WEB_SEARCH_EXTRACT``: "0"/"false" disables local result-page
+        extraction (snippet-only mode).
       * ``OTARI_WEB_SEARCH_PURPOSE_HINT`` — per-deployment hint override.
 
     ``base_url`` may be ``None`` when the deployment configured a licensed
     search provider instead, which the backend then calls directly.
     """
-    kwargs: dict[str, Any] = {"base_url": base_url, "tally": tally}
+    kwargs: dict[str, Any] = {
+        "base_url": base_url,
+        "tally": tally,
+        "trust_env_proxy": (
+            config.web_retrieval_trust_env_proxy
+            if config is not None
+            else parse_bool_env(otari_env("WEB_RETRIEVAL_TRUST_ENV_PROXY", "false"))
+        ),
+    }
 
     # A licensed provider this deployment holds the key for wins over the URL,
     # and is how a deployment searches with no backend service in front of it.
@@ -419,6 +688,7 @@ def _build_web_search_backend(
             kwargs["engines"] = engines
 
     kwargs["max_results"] = web_search_max_results_baseline(config)
+    tool_entry = search_tool_entry or {}
     req_max = tool_entry.get("max_results")
     if isinstance(req_max, int) and req_max > 0:
         kwargs["max_results"] = req_max
@@ -453,4 +723,9 @@ def _build_web_search_backend(
     if auth_token:
         kwargs["auth_token"] = auth_token
 
-    return WebSearchBackend(**kwargs)
+    kwargs["enable_search"] = search_tool_entry is not None
+    kwargs["enable_fetch"] = fetch_tool_entry is not None
+    kwargs["fetch_policy"] = fetch_policy
+    kwargs["counter"] = counter
+
+    return WebRetrievalBackend(**kwargs)

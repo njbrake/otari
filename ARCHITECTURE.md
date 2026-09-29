@@ -39,7 +39,7 @@ Provider resolution is the seam on the request hot path, but it is not the only 
 
 Today the control plane resolves two ways, selected by [mode](docs/modes.md):
 
-- **Standalone** (default): the gateway resolves against its own local database (users, keys, budgets, usage in `src/gateway/models/entities.py`). This is the open-source control plane in its simplest form.
+- **Standalone** (default): the gateway resolves against its own local database (users, keys, budgets, usage in `src/gateway/models/`). This is the open-source control plane in its simplest form.
 - **Hybrid** (`OTARI_AI_TOKEN` set): the gateway delegates resolution to a peer over HTTP (`src/gateway/api/routes/_platform.py`). Any service that implements the protocol can answer; otari.ai is the reference peer.
 
 Hybrid mode is a *network* form of this seam, and it is worth not conflating it with an overlay. In hybrid mode a remote control plane answers the resolve protocol over HTTP, out of the gateway's process; the peer can be any service that implements the protocol. An overlay, by contrast, is an *in-process* build that binds its own adapters into the composition container (see [How a port is resolved](#how-a-port-is-resolved)) and runs in the same process as the core. Both let something other than the plain local logic answer; the difference is whether that something runs over the network or in the same process. So a hybrid peer and an overlay are two ways to reach the seam, not the same thing.
@@ -80,10 +80,12 @@ A **port** is a domain-named interface (a Python `Protocol`), named for what it 
 | `IdentityProviderPort` | Authenticating users/sign-in. |
 | `RoutingPort` | Choosing the provider/model attempts for a request. |
 | `ModelProviderPort` | Resolving the deployment-owned credential that serves a request bringing none. |
-| `CodeExecutionPort` | Running model-generated code in a sandbox. |
+| `CodeExecutionPort` | Running model-generated code in a sandbox. Two core adapters: the published protocol over HTTP, and E2B's hosted sandboxes. |
 | `BillingPort` | Metering and charging for usage. |
 | `GrowthSignalPort` | Telling an outside CRM or support messenger about a user's lifecycle. |
 | `TelemetryStoragePort` | Where captured agent telemetry is stored and read back. |
+| `FileStoragePort` | Where the bytes behind an uploaded file are kept. Three core adapters: a local directory, S3, and any fsspec filesystem. |
+| `ApiKeyFormatPort` | The shape of the API keys a build mints, and where a presented key is checked. |
 
 The cardinal property: **every port ships with a working adapter in Otari's core**, a real lightweight implementation or an honest [Null Object](https://en.wikipedia.org/wiki/Null_object_pattern). Otari must stand alone with no overlay present. `BillingPort`, for example, is a Null Object in the core: it is present and callable, and does nothing, so nothing in the core needs to know whether real billing exists anywhere.
 
@@ -108,6 +110,8 @@ flowchart LR
         BP[BillingPort]
         GP[GrowthSignalPort]
         TP[TelemetryStoragePort]
+        FP[FileStoragePort]
+        KP[ApiKeyFormatPort]
     end
     UI --> API --> SVC --> REPO --> MOD
     SVC --> AP
@@ -119,9 +123,11 @@ flowchart LR
     SVC --> BP
     SVC --> GP
     SVC --> TP
+    SVC --> FP
+    SVC --> KP
 ```
 
-> **Where the ports are today.** `src/gateway/ports/` holds six of them, `ModelProviderPort`, `BillingPort`, `EntitlementPort`, `GrowthSignalPort`, `TelemetryStoragePort` and `IdentityProviderPort`, each with a working core adapter in `src/gateway/adapters/`. Three have core callers. `TelemetryStoragePort` is resolved by the OTLP receiver, the telemetry read endpoints and the purge paths. `ModelProviderPort` is asked on the standalone dispatch path (`resolve_dispatch_provider` in `api/routes/_pipeline.py`) for a candidate the credential ladder could not serve, after an organization's key, a stored instance and `config.yml` have all missed; a routed multi-candidate chain does not reach it yet, because those candidates are credentialed by the routing compiler, which is synchronous and does no I/O. `IdentityProviderPort` is resolved by the OAuth sign-in route, whose core adapter answers with the base build's roster policy (sign in as an account an operator already added; never provision one). The other three are still the seam's mechanism rather than its surface, so the choices they describe (when to meter, what a deployment is entitled to) are made by the mode switch and the hand-wired dependencies described next. The remaining ports in the table above arrive as they gain callers.
+> **Where the ports are today.** `src/gateway/ports/` holds nine of them, `ModelProviderPort`, `BillingPort`, `EntitlementPort`, `GrowthSignalPort`, `TelemetryStoragePort`, `IdentityProviderPort`, `ApiKeyFormatPort`, `CodeExecutionPort` and `FileStoragePort`, each with a working core adapter in `src/gateway/adapters/`. Seven have core callers. `ApiKeyFormatPort` is asked by every key-mint site (the two key routers, the setup guide, the playground and the first-run bootstrap) and by the verify path, which routes a presented key before it looks it up; the core adapter mints the open-source `tk-` shape and checks every key locally, and a hosted overlay binds a region-tagged, checksummed format behind it (otari-ai#1665). `TelemetryStoragePort` is resolved by the OTLP receiver, the telemetry read endpoints and the purge paths. `ModelProviderPort` is asked on the standalone dispatch path (`resolve_dispatch_provider` in `api/routes/_pipeline.py`) for a candidate the credential ladder could not serve, after an organization's key, a stored instance and `config.yml` have all missed; a routed multi-candidate chain does not reach it yet, because those candidates are credentialed by the routing compiler, which is synchronous and does no I/O. It is also asked on every catalog read (`catalog_scope` in `services/merged_catalog_service.py`) for the models the deployment advertises, and by the selector-index lifespan worker, which resolves it per tick through a closure over the container that `main.py` hands in, rather than through `gateway.api.deps`. `IdentityProviderPort` is resolved by the OAuth sign-in route, whose core adapter answers with the base build's roster policy (sign in as an account an operator already added; never provision one). `CodeExecutionPort` is resolved on the completion path, and only where the deployment configured a sandbox to reach. `FileStoragePort` is bound from `files_backend` and resolved twice: by the lifespan, which hands the request path its store, and by the retention sweep. The binding builds one store per app and reuses it, so the bytes a request wrote are the bytes the sweep reclaims. Above it, the `/v1/files` routes, the content normalizer resolving a `file_id` back to bytes, and the sandbox file bridge all take that store as a dependency. The other two, `BillingPort` and `EntitlementPort`, are still the seam's mechanism rather than its surface, so the choices they describe (when to meter, what a deployment is entitled to) are made by the mode switch and the hand-wired dependencies described next. The remaining ports in the table above arrive as they gain callers.
 >
 > `IdentityProviderPort` is also where the table's own wording is narrower than it reads. It is listed as "authenticating users/sign-in", but authenticating is not behind it: proving somebody controls a Google or GitHub account is protocol work that does not vary by edition, so it stays a plain service. What the port carries is the *policy* applied to a proven identity, which is the half an overlay replaces.
 
@@ -217,13 +223,62 @@ These are the rules that keep the boundary from eroding. They apply to anyone ad
 6. **An overlay never edits an Otari source file.** It registers into the extension points Otari exposes (the container, the router list, the nav registry) and supplies configuration. If extending an overlay *requires* editing an Otari file, that is a missing seam, and the seam belongs in Otari. Supplying configuration or a bootstrap module is not editing the core.
 7. **Introduce a port only when it earns one.** A port that will only ever have one implementation is ceremony with no benefit. A capability earns a port only when a genuine second implementation is real, or a hard boundary (intellectual property, or a hosted service) runs through it. Plain CRUD and infrastructure (user, team, and trace management, and the bulk of orgs/workspaces management) stay concrete in the core. "Most of the management plane is core" and "most services are not ports" are the same statement.
 
+### The patterns these rules are built from
+
+The rules above are this codebase's wording of four patterns. Naming them saves a contributor from deriving the shape again, and gives a review something to appeal to.
+
+- **Ports and adapters**, also called hexagonal architecture (Cockburn). A port names a capability in domain terms; adapters implement it; the composition root picks one. Rules 1 through 5 are this pattern.
+- **Gateway** (Fowler, *Patterns of Enterprise Application Architecture*). An object that encapsulates access to an external system. `services/control_plane/` is one: it holds how a deployment asks a peer for policy and credentials, so no module that asks has to know a peer is reached over HTTP. Usage reporting and the sandbox and web-search URL checks still build their own calls, and moving them is the remaining work.
+- **Anticorruption layer** (Evans, *Domain-Driven Design*). A translation at the edge, so a peer's vocabulary does not spread inward. A Gateway here raises this codebase's own errors rather than the peer's HTTP statuses, and the API layer renders them. Without it, the peer's protocol reaches every caller and rule 4 is lost.
+- **Replace conditional with polymorphism** (Fowler, *Refactoring*). Where a deployment's mode is read to choose behavior, the choice belongs in the binding rather than at the branch. A mode branch repeated across modules is the smell this removes.
+
 These rules are enforced mechanically, not only in review. The boundary check (`scripts/check_architecture.py`, run by `make lint` in CI) asserts the layering: ports may import models, exceptions, and core, but not services, the API, or any adapter; services may import ports but not a concrete adapter; only the composition root may import an adapter. This document is the human-readable companion to that check; the two are kept in step so the boundary the doc describes is the boundary CI enforces.
+
+## The modular monolith
+
+Otari's backend is a modular monolith: one process and one deploy, with the code cut into modules by domain (Simon Brown, "Package by component and architecturally-aligned testing", 2016, republished as "The Missing Chapter" in Robert C. Martin, *Clean Architecture*, 2017; Brown, "Modular Monoliths", GOTO Berlin 2018; <https://simonbrown.je/modular-monolith/>). Otari differs from Brown in one way: he packages by component first, and Otari keeps the layers as the top-level folders under `src/gateway/` and packages by domain inside the service and repository layers. A domain is held together across layers by its name and by the import rules below.
+
+Services and repositories are one package per domain inside their layer, and a service package's root exports the domain's one service. Routes, schemas, exceptions and models are one module per domain, because they hold no hidden implementation. [docs/domains.md](docs/domains.md#the-target-shape) gives the path and job of each layer, assigns every backend module to its domain, and gives the steps for moving one. The [backend standards](.github/skills/backend-standards/SKILL.md#layering) give the rules for writing code in each layer, including how a service is built and who commits.
+
+**Layer and import rules.**
+
+1. Nothing under `services/` imports `sqlalchemy` or `sqlmodel`.
+2. Nothing under `api/routes/` imports `sqlalchemy` or `sqlmodel`.
+3. Only the Unit of Work calls `commit()` or `rollback()`, only a repository imports `session_for`, and only `get_unit_of_work` or a worker factory constructs a `UnitOfWork`. The [backend standards](.github/skills/backend-standards/SKILL.md#who-commits) say how it is used.
+4. Only a domain's own service package and the builders in `api/deps.py` import `repositories.<domain>`.
+5. Code outside a domain imports only the package root of `services.<domain>`. A module whose name starts with `_` is private to its package.
+6. Domain service packages never import each other in a cycle.
+
+A service imports its own domain's repositories, the services of other domains, ports, models and exceptions, and never the API layer or an adapter. A repository imports models, and never a service or the API layer. A route imports its domain's service, schemas and exceptions.
+
+**What the boundary check enforces.** `scripts/check_architecture.py` enforces part of the rules above today. It refuses a service that imports the API layer or an adapter, a repository that imports a service or the API layer, and a route that imports `sqlalchemy.orm`. It enforces rules 1 and 2. SQLModel counts as well as SQLAlchemy because it re-exports `select` and `Session`. Each of the two starts from a baseline, `SERVICE_DATABASE_IMPORT_BASELINE` and `ROUTE_DATABASE_IMPORT_BASELINE`, which names the modules still in the old shape, and a baseline only shrinks. It also refuses a new top-level module in `services/` or `repositories/`, so new code goes in its domain's package, starting from `FLAT_MODULE_BASELINE`, the flat modules still in those layers. It enforces rule 3 from `TRANSACTION_CONTROL_BASELINE`, the modules that still end a transaction themselves, and refuses an import of `session_for` outside `repositories/`, which needs no baseline. It also refuses a `UnitOfWork(...)` call outside `get_unit_of_work` and the module that defines the Unit of Work, where the worker factories live, so a request or a job has exactly one. Rules 4 to 6 are review rules until the check covers them. No check can tell whether a service's API is small, so review carries that rule too. New and moved code follows the target shape, and never copies code named on a baseline. One package sits outside these layers by design: the laptop-side CLI at `cli/` (distribution `otari-agent`), which the gateway depends on for the Agent Guardrails evaluator and which the check keeps from importing the gateway or its server stack back, so the `otari` command can ship alone.
+
+**The feature registry.** A core feature is a domain in this shape plus one entry in `src/gateway/features.py`, the one wiring list for optional features. That list is a literal tuple edited by hand. The app asks each listed feature once, when it is built, whether it is enabled, and router registration, the lifespan and the deployment bootstrap all use that one answer. A feature's switch is therefore a startup setting, never one the dashboard can change. A listed feature mounts as core routes, ungated, and hosts its surface when its own setting enables it. `OTARI_BOOTSTRAP` is not involved. Nothing is discovered from installed packages, and a feature never registers itself on import.
+
+## Where new code goes
+
+Choose the mechanism by what you are adding, not by the extension point you already know.
+
+| You are adding | Home | Mechanism |
+|---|---|---|
+| An optional feature any deployment may run, with its own routes, tables, settings, worker or page | Core | An entry in `src/gateway/features.py`, switched by a startup setting. See [How to add a core feature](#how-to-add-a-core-feature). |
+| An always-on route or service with one implementation, such as a new endpoint in an existing domain | Core | The domain's own modules, with a new router registered in `register_routers` (`src/gateway/api/main.py`). No port and no registry entry. |
+| A second implementation of work the core hands off, such as billing, code execution or an identity policy | A port and its adapters | See [How to add a capability](#how-to-add-a-capability). |
+| An adapter, route or page that only an overlay ships | The overlay | `OTARI_BOOTSTRAP`: bind a port, or contribute a router gated on a capability. Pages register through the dashboard's overlay modules (see [Deployment and entitlements](#deployment-and-entitlements)). |
+| A built-in tool the model calls inside the tool loop | Core | **Planned:** one built-in tool interface that the tool loop dispatches through. Today each built-in tool is wired by hand into the tool loop (`src/gateway/services/mcp_loop.py` and its per-dialect siblings). |
+| Code loaded at runtime from an installed package, a directory or a download | Not supported | None. The boundary check refuses `importlib.metadata`, `importlib_metadata` and `pkg_resources` under `src/gateway/`. |
+
+`OTARI_BOOTSTRAP` is the overlay's hook, and it never loads or switches a core feature. It takes one module and an overlay already holds it, so a feature wired through it either displaces the overlay or makes the overlay register the feature a second time. A capability gates a route on what a deployment is entitled to, not on whether a feature is switched on, so a core feature names none.
+
+A feature that lives in this repository lives under `src/gateway/`. The boundary check refuses any other top-level package under `src/`, where none of its layer rules would reach.
+
+A new service or repository module goes in its domain's package, `src/gateway/services/<domain>/` or `src/gateway/repositories/<domain>/`, never beside the flat modules already in those layers. The boundary check refuses a new top-level module in either layer.
 
 ## How to add a capability
 
 A step-by-step recipe for adding a capability without crossing the boundary. The `AuthzPort` seam is the reference template every later capability copies.
 
-1. **Decide whether you need a port at all.** Apply rule 7. If the capability is plain management CRUD with no second implementation on the horizon, skip the ceremony: write a normal service and repository in the core and stop here. Only continue if a second implementation is genuinely on the table, or a hard boundary runs through it.
+1. **Decide whether you need a port at all.** Apply rule 7. If the capability is plain management CRUD with no second implementation on the horizon, skip the ceremony: write a normal service and repository in the core and stop here. An optional feature follows [How to add a core feature](#how-to-add-a-core-feature). Only continue if a second implementation is genuinely on the table, or a hard boundary runs through it.
 2. **Define the port.** Add a domain-named `Protocol` to `src/gateway/ports/`, one module per port. Its methods are `async`. It may depend on models, exceptions, and core only, never on services, the API, or an adapter.
 3. **Route callers through the port.** Services depend on the port, resolved from the container; they never name a concrete adapter.
 4. **Ship a working core adapter.** Add a real lightweight implementation, or an honest Null Object, to `src/gateway/adapters/`. Verify the capability behaves correctly with only this adapter present.
@@ -232,6 +287,19 @@ A step-by-step recipe for adding a capability without crossing the boundary. The
 7. **Verify Otari still stands alone.** It must boot standalone with only the core adapters bound (no overlay bootstrap configured) and pass its smoke suite, and the boundary check must pass. Both are automated: `uv run --frozen --no-dev python scripts/oss_edition_smoke.py` is the smoke suite (run by `.github/workflows/otari-oss-edition.yml` on any pull request that touches the app, the migrations, or dependency resolution), and `make check-architecture` is the boundary check.
 
 Once the seam exists, an overlay adds its own adapter by registering it through these same extension points, with zero edits to Otari's source. Building the seam is core work; using it is overlay work.
+
+## How to add a core feature
+
+A recipe for an optional feature the core ships. [The modular monolith](#the-modular-monolith) defines a core feature; a capability that needs a port follows [How to add a capability](#how-to-add-a-capability) instead.
+
+1. **Write the feature's modules** in its domain's shape, as [The modular monolith](#the-modular-monolith) lays it out. One of them declares the feature's `CoreFeature` (`src/gateway/core/feature.py`). None of them imports `src/gateway/features.py`: the boundary check refuses a service or a route that imports the registry. Its queries go in its repository package, and its service is built with its own repositories and a Unit of Work, never the database session. The boundary check refuses a service or a route that imports `sqlalchemy` or `sqlmodel`, so neither can build a query or name the session type.
+2. **Add its settings.** A setting goes in its domain's module under `src/gateway/core/settings/`. A domain with no module there adds one, and adds its class to the bases of `GatewayConfig` in `src/gateway/core/config.py`. Every field declares its settings view (`src/gateway/core/settings_view.py`). The feature's switch is one of these settings, and it stays out of `_SPECS` in `src/gateway/services/runtime_settings_service.py`, because `enabled` is asked once when the app is built and a dashboard override would never take effect.
+3. **Add its tables.** A table goes in its domain's model module under `src/gateway/models/`, and a new module joins the import list in `src/gateway/models/__init__.py`. Its migration goes in `alembic/versions/`, chained to the current head. The tables live on core's metadata and core's chain, so switching the feature off leaves its tables and rows in place, and switching it back on changes no schema.
+4. **Declare its metrics** in the module that increments them, on `REGISTRY` from `src/gateway/metrics.py`.
+5. **List it.** Add the feature's `CoreFeature` to `CORE_FEATURES` in `src/gateway/features.py`. The entry gives the feature's name, its `surface` (a `Surface` from `src/gateway/core/surface.py`, or `None` for a feature with no page), its `enabled` check, its routers and an optional worker. Its routers mount beside the management routers and its worker runs under the lifespan, in standalone and hosted mode only; a hybrid gateway runs neither.
+6. **Add its page.** Its nav entry in `web/src/app/nav/registry.ts` names the feature's surface, so wherever the feature is off the dashboard hides the entry and answers its route with a panel rather than a page. A surface whose name is not its route prefix needs an entry in `SURFACE_ROUTE_PREFIXES` (`tests/unit/test_deployment_bootstrap.py`), which checks that every published surface names a mounted route.
+7. **Regenerate the artifacts** a new route owes, as "Generated Artifacts" in [AGENTS.md](AGENTS.md) lists them.
+8. **Verify it switched on and switched off:** `make lint`, the tests, and `uv run --frozen --no-dev python scripts/oss_edition_smoke.py`.
 
 ## Glossary
 

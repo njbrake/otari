@@ -8,24 +8,20 @@
  */
 
 import { Link } from "@tanstack/react-router"
-import { type ReactNode, type RefObject, useMemo, useState } from "react"
+import { type RefObject, useMemo, useState } from "react"
 import { FiTrash2 } from "react-icons/fi"
 
 import type { PolicyGuardrail, PolicySpec, User } from "@/client"
 import { Button } from "@/design-system/actions/Button"
+import { IconButton } from "@/design-system/actions/IconButton"
 import { errorMessage } from "@/design-system/feedback/errorMessage"
 import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { Field } from "@/design-system/forms/Field"
 import { FieldAction } from "@/design-system/forms/FieldAction"
-import {
-  ControlField,
-  FieldMessages,
-} from "@/design-system/forms/FieldMessages"
+import { ControlField } from "@/design-system/forms/FieldMessages"
 import { useDirtySnapshot } from "@/design-system/forms/useDirtySnapshot"
-import { Tab, TabRow } from "@/design-system/navigation/TabRow"
-import { ModelComboBox, useModelCatalog } from "@/features/models/ModelComboBox"
+import { ModelComboBox } from "@/features/models/ModelComboBox"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
-import { UserMultiSelect } from "@/features/users/UserMultiSelect"
 import { userOptionText } from "@/features/users/userOptions"
 import {
   useCreateAlias,
@@ -36,17 +32,23 @@ import {
 import { useToolSettings } from "@/shared/api/tools"
 import { useUsers } from "@/shared/api/users"
 
+import { ModeToggle } from "./ModeToggle"
 import {
-  defaultTargetOf,
-  initialPool,
+  buildInitialPool,
+  computeShares,
+  describePartialScopeSave,
+  findBudgetConditions,
+  findFallthroughIndex,
+  findFallthroughTarget,
+  findRouterBackend,
+  findWeights,
   KNN_BACKEND,
   MAX_CANDIDATES,
   type RoutingRow,
-  routerBackendOf,
-  sharesOf,
   WEIGHTED_BACKEND,
-  weightsOf,
 } from "./policyModel"
+import { ScopePicker } from "./ScopePicker"
+import { SectionRow } from "./SectionRow"
 
 type RouterBackend = typeof KNN_BACKEND | typeof WEIGHTED_BACKEND
 
@@ -63,7 +65,7 @@ type RouterBackend = typeof KNN_BACKEND | typeof WEIGHTED_BACKEND
  *  enabled, which reads as a bug.
  */
 function useGuardrailsConfigured(enabled: boolean): {
-  configured: boolean
+  isConfigured: boolean
   isLoading: boolean
 } {
   const settings = useToolSettings(enabled)
@@ -72,7 +74,7 @@ function useGuardrailsConfigured(enabled: boolean): {
   )
   const value = typeof field?.value === "string" ? field.value.trim() : ""
   return {
-    configured: settings.isLoading || value !== "",
+    isConfigured: settings.isLoading || value !== "",
     isLoading: settings.isLoading,
   }
 }
@@ -96,167 +98,22 @@ function SectionRemove({
   onRemove: () => void
 }) {
   return (
-    // `shrink-0`, because this is a flex item beside a `ControlField` whose
-    // description is a sentence: the row hands the text the width it asks for
-    // and squeezes the button, which keeps its 36px height and loses its width.
-    // Measured at 19px in one section and 21px in another, each following that
-    // section's own wording. A ghost button's hover is its own box, so what an
-    // operator sees is not a square lighting up but a tall narrow slab around
-    // the glyph, which reads as a clipped rectangle.
-    <Button
+    // `IconButton` for the 44px box, and `shrink-0` beside it because this is a
+    // flex item next to a `ControlField` whose description is a sentence: the
+    // row hands the text the width it asks for and squeezes whatever can give,
+    // which leaves a tall narrow slab lighting up on hover instead of a square.
+    // No `md:` step down: all four call sites are `items-start` rows whose
+    // other child is a heading over a sentence, so the taller box does not grow
+    // the row at any width.
+    <IconButton
       variant="ghost"
       isIconOnly
       className="shrink-0"
-      aria-label={label}
+      label={label}
       onPress={onRemove}
     >
       <FiTrash2 aria-hidden />
-    </Button>
-  )
-}
-
-/**
- * One repeated row of a policy section, with the model catalog's hint under the
- * whole row rather than under the picker inside it.
- *
- * The hint is a sentence ("Could not list models for X. Check that provider's
- * credentials, ..."), and at this dialog's width it wraps. A wrapped message
- * makes its field taller than the siblings it shares an `items-end` row with,
- * which lifts that field's input line clear of theirs: measured at 40px on the
- * pool rows and 20px on the chain. `web/design/forms.md` ("Control rows") names
- * the break and this remedy. The picker keeps its empty caption line, so every
- * child of the row still reserves exactly one, and the hint is announced with
- * the input through `describedBy` because text outside a field never reaches
- * its description slot.
- */
-function SectionRow({
-  id,
-  modelValue,
-  children,
-}: {
-  id: string
-  modelValue: string
-  children: ReactNode
-}) {
-  const { hint } = useModelCatalog(modelValue)
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap items-end gap-3">{children}</div>
-      {hint ? (
-        <FieldMessages reserve={false}>
-          <span id={id} className="text-muted">
-            {hint}
-          </span>
-        </FieldMessages>
-      ) : null}
-    </div>
-  )
-}
-
-/** Which entry of `initialPool` serves when the router declines. */
-function initialSafeIndex(spec: PolicySpec): number {
-  const index = initialPool(spec).indexOf(defaultTargetOf(spec))
-  return index === -1 ? 0 : index
-}
-
-/** The conditional entries, i.e. everything that is not the fallthrough. */
-function conditionsOf(
-  spec: PolicySpec,
-): { threshold: number; target: string }[] {
-  return spec.select
-    .filter(
-      (entry) =>
-        entry.when?.budget_used_pct?.gte !== undefined &&
-        entry.target !== undefined,
-    )
-    .map((entry) => ({
-      threshold: entry.when!.budget_used_pct!.gte!,
-      target: entry.target!,
-    }))
-}
-
-/** Who a policy applies to. Same control and wording as assigning a budget,
- *  because naming the people something applies to is the same decision.
- *
- *  Three states, not two. `null` is every caller, which is one policy with no
- *  scope. A list is the scoped case, and because a policy's key is its name
- *  plus its user, each person in it is a row of their own. An empty list is
- *  therefore scoped with nobody chosen yet, which is not "every caller" and is
- *  not something the form will submit.
- */
-function ScopePicker({
-  userIds,
-  users,
-  onChange,
-  isSettled,
-}: {
-  userIds: string[] | null
-  users: User[]
-  onChange: (userIds: string[] | null) => void
-  /**
-   * Whether a write under this name has already landed, which freezes the
-   * scope. See the branch below for why it cannot be changed after that.
-   */
-  isSettled: boolean
-}) {
-  const isScoped = userIds !== null
-
-  return (
-    <div className="flex flex-col gap-3">
-      <ControlField
-        label="Applies to"
-        description="A global policy resolves for every caller. A scoped one resolves only for the people named, and takes precedence over a global policy of the same name."
-      />
-      {isSettled ? (
-        // Withheld, not disabled: there is no write that takes a policy back,
-        // so a control offering to change who this applies to would be
-        // offering something this form cannot do. Taking a person out of the
-        // selection would leave the policy already written for them in place,
-        // and choosing every caller would leave it in place AND outranking the
-        // global one for exactly that person, which is the precedence rule
-        // stated above. Stated rather than greyed out, because a disabled
-        // control with no reason beside it teaches nothing.
-        <p className="text-caption">
-          Some policies under this name have already been created, and this form
-          cannot take one back, so who it applies to is fixed now. Create policy
-          writes the ones still missing. To remove one you did not mean to
-          create, close this and delete it from the list.
-        </p>
-      ) : (
-        <>
-          <TabRow>
-            {/* Each tab acts only on a change of state: pressing the one
-                already active would otherwise throw away the people chosen
-                under it. */}
-            <Tab
-              isActive={!isScoped}
-              onPress={() => {
-                if (isScoped) onChange(null)
-              }}
-            >
-              Every caller
-            </Tab>
-            <Tab
-              isActive={isScoped}
-              onPress={() => {
-                if (!isScoped) onChange([])
-              }}
-            >
-              Specific users
-            </Tab>
-          </TabRow>
-          {userIds === null ? null : (
-            <UserMultiSelect
-              label="Users"
-              value={userIds}
-              onChange={onChange}
-              users={users}
-              description="One policy is written per person, each resolving only for them."
-            />
-          )}
-        </>
-      )}
-    </div>
+    </IconButton>
   )
 }
 
@@ -277,63 +134,6 @@ function useUserLabel(users: User[]): (userId: string) => string {
   }
 }
 
-/** The account of a save that wrote some of its scopes and not the others.
- *
- *  Both halves by name, because "it failed" over a part-written save leaves the
- *  operator to work out which rows exist by reading the table. The ones that
- *  landed are remembered, so the retry the last sentence promises is real
- *  rather than a second pass over everything.
- */
-function partialScopeReport(
-  written: string[],
-  failed: { userId: string; reason: string }[],
-  labelFor: (userId: string) => string,
-): string {
-  const created =
-    written.length > 0
-      ? `Created for ${written.map(labelFor).join(", ")}. `
-      : ""
-  const missing = failed
-    .map((entry) => `${labelFor(entry.userId)} (${entry.reason})`)
-    .join(", ")
-  return `${created}Not created for ${missing}. Submitting again retries only the ones still missing.`
-}
-
-const MODE_VALUES = ["block", "monitor"] as const
-
-/** A two-value mode switch. The codebase has no Select component and four
- *  hand-rolled `aria-pressed` groups, so this follows that pattern rather than
- *  introducing a fifth idiom. */
-function ModeToggle({
-  label,
-  hint,
-  value,
-  onChange,
-}: {
-  label: string
-  hint?: string
-  value: "block" | "monitor"
-  onChange: (value: "block" | "monitor") => void
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-body">{label}</span>
-      <TabRow>
-        {MODE_VALUES.map((mode) => (
-          <Tab
-            key={mode}
-            isActive={value === mode}
-            onPress={() => onChange(mode)}
-          >
-            {mode}
-          </Tab>
-        ))}
-      </TabRow>
-      {hint === undefined ? null : <span className="text-caption">{hint}</span>}
-    </div>
-  )
-}
-
 /** Create or edit a policy.
  *
  *  Reading order mirrors the schema so the form and the YAML teach the same
@@ -347,7 +147,7 @@ export function PolicyForm({
   initialTarget = "",
   isOpen = true,
   returnFocusRef,
-  deploymentWide,
+  isDeploymentWide,
   workspaceId,
   onClose,
 }: {
@@ -372,7 +172,7 @@ export function PolicyForm({
    * a user scope. Both mutation pairs are always created, as hooks must be, and
    * only the pair this names is ever mutated.
    */
-  deploymentWide: boolean
+  isDeploymentWide: boolean
   /**
    * The workspace the write lands in, on either surface.
    *
@@ -387,8 +187,8 @@ export function PolicyForm({
   const saveAlias = useCreateAlias()
   const saveOrgPolicy = useSetOrganizationRoutingPolicy()
   const saveOrgAlias = useCreateOrganizationAlias()
-  const tenantScoped = !deploymentWide
-  const editing = existing !== null
+  const isTenantScoped = !isDeploymentWide
+  const isEditing = existing !== null
   // Editing an alias writes back through the alias API: it is still a row in
   // model_aliases, and silently rewriting it as a policy would leave the original
   // behind under the same name.
@@ -402,7 +202,7 @@ export function PolicyForm({
   // operator route, so asking for it as a tenant admin buys a 403 for a picker
   // this form does not offer them, and an edit cannot move a scope so it does
   // not offer one either.
-  const canScope = !editing && !tenantScoped
+  const canScope = !isEditing && !isTenantScoped
   // Read here rather than inside the picker, because the account of a
   // part-written save names the same people the chips do and so needs the same
   // roster, and two reads on one key would be two gates that have to agree.
@@ -441,11 +241,11 @@ export function PolicyForm({
   )
   const [isWritingScopes, setIsWritingScopes] = useState(false)
   const [target, setTarget] = useState(
-    existing ? defaultTargetOf(existing.spec) : initialTarget,
+    existing ? findFallthroughTarget(existing.spec) : initialTarget,
   )
   const [chain, setChain] = useState<string[]>(existing?.spec.on_failure ?? [])
   const [conditions, setConditions] = useState(
-    existing ? conditionsOf(existing.spec) : [],
+    existing ? findBudgetConditions(existing.spec) : [],
   )
   const [guardrails, setGuardrails] = useState<PolicyGuardrail[]>(
     existing?.spec.guardrails ?? [],
@@ -457,16 +257,16 @@ export function PolicyForm({
   // disagree with themselves. This mirrors what the gateway does with the spec,
   // where the default target joins the pool if it was left out.
   const [candidates, setCandidates] = useState<string[]>(
-    existing ? initialPool(existing.spec) : [],
+    existing ? buildInitialPool(existing.spec) : [],
   )
   const [safeIndex, setSafeIndex] = useState<number>(
-    existing ? initialSafeIndex(existing.spec) : 0,
+    existing ? findFallthroughIndex(existing.spec) : 0,
   )
   // Which backend orders the pool. The two share the pool control, because both are
   // "these models, one of them per request"; they differ in what decides and in
   // whether a share sits next to each entry.
   const [backend, setBackend] = useState<RouterBackend>(
-    existing && routerBackendOf(existing.spec) === WEIGHTED_BACKEND
+    existing && findRouterBackend(existing.spec) === WEIGHTED_BACKEND
       ? WEIGHTED_BACKEND
       : KNN_BACKEND,
   )
@@ -476,13 +276,13 @@ export function PolicyForm({
   // as "7") and turns a cleared field into a silent 0. Parsed once, below.
   const [weights, setWeights] = useState<string[]>(() => {
     if (existing === null) return []
-    const declared = weightsOf(existing.spec)
-    return initialPool(existing.spec).map((selector) =>
+    const declared = findWeights(existing.spec)
+    return buildInitialPool(existing.spec).map((selector) =>
       String(declared[selector] ?? 0),
     )
   })
-  const routed = candidates.length > 0
-  const weighted = routed && backend === WEIGHTED_BACKEND
+  const isRouted = candidates.length > 0
+  const isWeighted = isRouted && backend === WEIGHTED_BACKEND
   // An empty field parses to NaN rather than 0, so a share the operator cleared is
   // unfinished rather than a drain they did not ask for. "Infinity" and a negative
   // are rejected here too, matching what the API refuses.
@@ -492,22 +292,22 @@ export function PolicyForm({
   const weightsWellFormed = weightValues.every(
     (value) => Number.isFinite(value) && value >= 0,
   )
-  const shares = sharesOf(
+  const shares = computeShares(
     weightValues.map((value) =>
       Number.isFinite(value) ? Math.max(0, value) : 0,
     ),
   )
   // With a router, the fallthrough is the marked model; without one it is the single
   // "Serves" field.
-  const effectiveTarget = routed ? (candidates[safeIndex] ?? "") : target
+  const effectiveTarget = isRouted ? (candidates[safeIndex] ?? "") : target
 
   const nameHasDelimiter = /[:/]/.test(name)
   // A policy's name is its key, so a rename is a move rather than an edit: the API
   // takes it as `rename_from` on the same write as the spec. Aliases have no such
   // verb, so their name stays fixed here.
   const previousName = existing?.name ?? ""
-  const renaming =
-    editing &&
+  const isRenaming =
+    isEditing &&
     !editingAlias &&
     name.trim() !== "" &&
     name.trim() !== previousName
@@ -516,9 +316,14 @@ export function PolicyForm({
   // and quietly mean the opposite of what the tab says.
   const scopeReady = userIds === null || userIds.length > 0
   const conditionsReady = conditions.every(
-    (c) => c.target.trim() !== "" && c.threshold > 0 && c.threshold < 100,
+    (condition) =>
+      condition.target.trim() !== "" &&
+      condition.threshold > 0 &&
+      condition.threshold < 100,
   )
-  const guardrailsReady = guardrails.every((g) => g.profile.trim() !== "")
+  const guardrailsReady = guardrails.every(
+    (guardrail) => guardrail.profile.trim() !== "",
+  )
   // A model named twice is refused by the API, and on a weighted policy it would
   // also collapse in the weight map: two rows, one key, so the split submitted is
   // not the split the form showed. Checked over the named rows only, so a pair of
@@ -530,7 +335,7 @@ export function PolicyForm({
     new Set(namedCandidates).size !== namedCandidates.length
   // Two, not one: ranking a single model is not a decision, and the API refuses it.
   const candidatesReady =
-    !routed ||
+    !isRouted ||
     (candidates.length >= 2 &&
       candidates.every((entry) => entry.trim() !== "") &&
       !duplicateCandidate &&
@@ -538,7 +343,8 @@ export function PolicyForm({
   // An all-zero split would select nothing and the policy would always serve its
   // default, so the API refuses it. Caught here so the form cannot author it.
   const splitReady =
-    !weighted || (weightsWellFormed && weightValues.some((value) => value > 0))
+    !isWeighted ||
+    (weightsWellFormed && weightValues.some((value) => value > 0))
   // The server caps the compiled plan at MAX_CANDIDATES, counting the routed pool
   // plus the failure chain. Enforced here too so the form cannot author a policy it
   // then fails to save: a rule the UI knows about should not arrive as a 400.
@@ -569,7 +375,7 @@ export function PolicyForm({
         // After the conditions, before the fallthrough: an explicit tier-down is
         // the operator overriding the router, and the router is what runs when no
         // condition applies.
-        ...(routed
+        ...(isRouted
           ? [
               {
                 router: backend,
@@ -577,7 +383,7 @@ export function PolicyForm({
                 // Keyed by selector, which is how the server reads it. Only for the
                 // weighted backend: a weight map on a knn entry is refused, because
                 // it would read as a split and do nothing.
-                ...(weighted
+                ...(isWeighted
                   ? {
                       weights: Object.fromEntries(
                         candidates.map((entry, index) => {
@@ -603,9 +409,9 @@ export function PolicyForm({
     [
       conditions,
       candidates,
-      routed,
+      isRouted,
       backend,
-      weighted,
+      isWeighted,
       weightValues,
       effectiveTarget,
       chain,
@@ -639,7 +445,7 @@ export function PolicyForm({
       conditions.length > 0 ||
       guardrails.length > 0 ||
       candidates.length > 0)
-  const pending =
+  const isPending =
     save.isPending ||
     saveAlias.isPending ||
     saveOrgPolicy.isPending ||
@@ -683,7 +489,9 @@ export function PolicyForm({
       onClose()
       return
     }
-    setPartialFailure(new Error(partialScopeReport(done, failed, labelForUser)))
+    setPartialFailure(
+      new Error(describePartialScopeSave(done, failed, labelForUser)),
+    )
   }
 
   const submit = () => {
@@ -694,7 +502,7 @@ export function PolicyForm({
     setPartialFailure(undefined)
     const scope = userIds === null ? null : (userIds[0] ?? null)
     if (editingAlias) {
-      if (tenantScoped && workspaceId !== null) {
+      if (isTenantScoped && workspaceId !== null) {
         saveOrgAlias.mutate(
           {
             name: name.trim(),
@@ -716,13 +524,13 @@ export function PolicyForm({
       )
       return
     }
-    if (tenantScoped && workspaceId !== null) {
+    if (isTenantScoped && workspaceId !== null) {
       saveOrgPolicy.mutate(
         {
           name: name.trim(),
           spec,
           workspace_id: workspaceId,
-          ...(renaming ? { rename_from: previousName } : {}),
+          ...(isRenaming ? { rename_from: previousName } : {}),
         },
         { onSuccess: onClose },
       )
@@ -730,7 +538,7 @@ export function PolicyForm({
     }
     // Only on create: an edit is one row, whose scope is half its key and so
     // cannot move, and a rename has to travel on that one write.
-    if (!editing && userIds !== null) {
+    if (!isEditing && userIds !== null) {
       void writeUserScopes(userIds)
       return
     }
@@ -740,7 +548,7 @@ export function PolicyForm({
         spec,
         user_id: scope,
         workspace_id: workspaceId,
-        ...(renaming ? { rename_from: previousName } : {}),
+        ...(isRenaming ? { rename_from: previousName } : {}),
       },
       { onSuccess: onClose },
     )
@@ -759,14 +567,14 @@ export function PolicyForm({
       // would read as a different dialog each time.
       size="lg"
       title={
-        editing
+        isEditing
           ? `Edit ${existing.kind === "alias" ? "alias" : "policy"}`
           : "New policy"
       }
       // The policy's identity, in the mono face that says it is a value rather
       // than prose. Here rather than in the title because `title` is a string.
       description={
-        editing ? (
+        isEditing ? (
           <>
             <code>{existing.name}</code>
             {existing.user_id ? (
@@ -783,9 +591,9 @@ export function PolicyForm({
           </>
         )
       }
-      submitLabel={editing ? "Save" : "Create policy"}
+      submitLabel={isEditing ? "Save" : "Create policy"}
       onSubmit={submit}
-      isPending={pending}
+      isPending={isPending}
       isSubmitDisabled={!canSubmit || outgrewAlias}
       isDirty={isDirty}
       // All four writers, not two: an organization-scoped save fails through its
@@ -826,19 +634,19 @@ export function PolicyForm({
             // Only on create. Dropping an operator who clicked Edit to change a
             // target into the name box invites a typo in the one field that is
             // the policy's identity.
-            autoFocus={!editing}
+            autoFocus={!isEditing}
             description={
               nameHasDelimiter ? (
                 <span className="text-danger">
                   A policy name cannot contain “:” or “/”.
                 </span>
-              ) : renaming ? (
+              ) : isRenaming ? (
                 <span>
                   Renames <code>{previousName}</code> on save. Callers have to
                   send the new name from then on, and usage already recorded
                   keeps the old one.
                 </span>
-              ) : editing ? (
+              ) : isEditing ? (
                 <>
                   What callers send as <code>model</code>. Change it to rename
                   the policy.
@@ -851,7 +659,7 @@ export function PolicyForm({
             }
           />
         )}
-        {routed ? (
+        {isRouted ? (
           <div className="flex flex-col gap-1">
             <span className="text-body">Serves</span>
             <span className="text-sm text-foreground">
@@ -864,7 +672,7 @@ export function PolicyForm({
               )}
             </span>
             <span className="text-xs text-muted">
-              {weighted
+              {isWeighted
                 ? "The split picks per request, so this policy has no single target. The model marked below is what serves a caller who opts out."
                 : "A router picks per request, so this policy has no single target. The model marked below is what serves when the router does not choose."}
             </span>
@@ -880,12 +688,12 @@ export function PolicyForm({
         )}
       </div>
 
-      {editing ? (
+      {isEditing ? (
         <p className="text-caption">
           Who this applies to is the other half of the key. It cannot be changed
           here: delete and recreate to move it between scopes.
         </p>
-      ) : tenantScoped ? (
+      ) : isTenantScoped ? (
         // Withheld rather than disabled: a user id is a deployment-wide
         // identifier, so the tenant-scoped writer refuses one outright and
         // an organization's entries are workspace-wide. Offering the picker
@@ -988,12 +796,12 @@ export function PolicyForm({
           <div className="flex items-start justify-between gap-3">
             <ControlField
               label={
-                weighted
+                isWeighted
                   ? "Split traffic between"
                   : "The router chooses between"
               }
               description={
-                weighted
+                isWeighted
                   ? "Each request goes to one of these, drawn in proportion to its share. Shares are relative, so 70 and 30 mean the same as 7 and 3. No pricing needed."
                   : "For each request, the cheapest of these that past scoring says is good enough. Every model here needs pricing, because the router weighs quality against cost."
               }
@@ -1027,7 +835,7 @@ export function PolicyForm({
                   isRequired
                 />
               </div>
-              {weighted ? (
+              {isWeighted ? (
                 <div className="flex items-end gap-2">
                   <Field
                     label="Share"
@@ -1059,7 +867,7 @@ export function PolicyForm({
                     checked={safeIndex === index}
                     onChange={() => setSafeIndex(index)}
                   />
-                  {weighted ? "Serves on opt-out" : "Serves when unsure"}
+                  {isWeighted ? "Serves on opt-out" : "Serves when unsure"}
                 </label>
               </FieldAction>
               <FieldAction>
@@ -1081,7 +889,7 @@ export function PolicyForm({
             </SectionRow>
           ))}
           <p className="text-caption">
-            {weighted ? (
+            {isWeighted ? (
               <>
                 The marked model serves a caller who sends{" "}
                 <code>Otari-Router: off</code>, which is the way to pin traffic
@@ -1101,24 +909,24 @@ export function PolicyForm({
           {candidates.length < 2 ? (
             <p className="text-caption text-danger">
               Name at least two models.{" "}
-              {weighted ? "Splitting traffic one way" : "Ranking one"} is not a
-              routing decision.
+              {isWeighted ? "Splitting traffic one way" : "Ranking one"} is not
+              a routing decision.
             </p>
           ) : null}
           {duplicateCandidate ? (
             <p className="text-caption text-danger">
               Name each model once.{" "}
-              {weighted
+              {isWeighted
                 ? "A model listed twice has one share, not two, so the split saved would not be the one shown."
                 : "A pool that repeats a model is refused."}
             </p>
           ) : null}
-          {weighted && !weightsWellFormed ? (
+          {isWeighted && !weightsWellFormed ? (
             <p className="text-caption text-danger">
               Every share is a number of zero or more. Use 0 to drain a model
               without removing it.
             </p>
-          ) : weighted && !splitReady ? (
+          ) : isWeighted && !splitReady ? (
             <p className="text-caption text-danger">
               Give at least one model a share above zero, or this policy can
               never send traffic anywhere but its marked model.
@@ -1231,7 +1039,7 @@ export function PolicyForm({
                 Runs on every request through this policy. Callers can add their
                 own guardrails but cannot weaken these.
               </p>
-              {guardrails_.configured ? null : (
+              {guardrails_.isConfigured ? null : (
                 <p className="mt-1 text-caption text-warning">
                   No guardrails service is configured, so these cannot run. With{" "}
                   <code>if the service is down</code> set to block, every
@@ -1378,12 +1186,12 @@ export function PolicyForm({
           <span className="flex flex-wrap items-baseline gap-2">
             <button
               type="button"
-              disabled={!guardrails_.configured}
+              disabled={!guardrails_.isConfigured}
               aria-describedby={
-                guardrails_.configured ? undefined : "guardrails-unavailable"
+                guardrails_.isConfigured ? undefined : "guardrails-unavailable"
               }
               className={
-                guardrails_.configured
+                guardrails_.isConfigured
                   ? "text-link hover:underline"
                   : "cursor-not-allowed text-muted opacity-60"
               }
@@ -1395,7 +1203,7 @@ export function PolicyForm({
             >
               + Add guardrails
             </button>
-            {guardrails_.configured ? null : (
+            {guardrails_.isConfigured ? null : (
               <span id="guardrails-unavailable" className="text-caption">
                 No guardrails service is configured, so there would be nothing
                 to call.{" "}
@@ -1412,7 +1220,7 @@ export function PolicyForm({
       {/* Each of these explains a mode chosen above it, so it belongs beside
           that choice. The footer's caption is the one sentence about the save
           itself. */}
-      {routed && !weighted ? (
+      {isRouted && !isWeighted ? (
         <p className="text-caption">
           A new router serves the model above until it has scored examples.
           Recording them is an API job for now (
@@ -1420,7 +1228,7 @@ export function PolicyForm({
           <b>Examples</b> on the row afterwards to watch it warm up.
         </p>
       ) : null}
-      {weighted ? (
+      {isWeighted ? (
         <p className="text-caption">
           Each request is drawn independently, so the shares hold over traffic
           rather than over any ten requests, and they behave the same behind any

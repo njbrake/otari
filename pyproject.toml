@@ -6,22 +6,24 @@ build-backend = "setuptools.build_meta"
 # Distribution + import package stay `gateway`: the `otari` name on PyPI is the
 # Otari client SDK (a transitive dep via any-llm-sdk), so a top-level `otari`
 # package here would collide with it. User-facing names (CLI, env vars, docs)
-# are `otari`; only the internal import path remains `gateway`.
+# are `otari`; only the internal import path remains `gateway`. The laptop-side
+# CLI is the workspace member at cli/ (distribution `otari-agent`, import
+# package `otari_agent`), which owns the `otari` console script.
 name = "gateway"
 version = "0.0.0"
 description = "otari, an OpenAI-compatible LLM gateway"
 requires-python = ">=3.13"
 dependencies = [
-    "any-llm-sdk[all]>=1.27.1",
-    # The guardrail catalog only (`services/guardrail_catalog.py`). Its
-    # `parameter_registry` is a stdlib+pydantic leaf built so a consumer can
-    # render a configuration form without importing a model backend, so no
-    # extra is taken and nothing here ever constructs a guardrail: this
-    # gateway runs them against the operator's any-guardrail sidecar. What is
-    # imported is `GuardrailName` and `get_parameter_schema`, and the shape of
-    # the `ParameterSpec` they return; bounded below 0.8 rather than trusting a
-    # 0.x minor to keep those three.
-    "any-guardrail>=0.7.7,<0.8.0",
+    "any-llm-sdk[all]>=1.29.0",
+    # The built-in guardrail catalog (`services/guardrail_catalog.py`) and the
+    # runner that builds an organization's definitions from it
+    # (`services/tenancy/organization_guardrail_runner.py`). The extras are the
+    # vendor SDKs of the guardrails that catalog lists, the ones reached over a
+    # hosted API; alinia, lakera_guard and patronus need only `requests`, and
+    # any_llm only any-llm. Not `all`: it adds torch and transformers for the
+    # local-model guardrails, which run in the sidecar and never here. Bounded
+    # below 0.8 rather than trusting a 0.x minor to keep the registry's shape.
+    "any-guardrail[azure-content-safety,bedrock,openai,watsonx]>=0.7.7,<0.8.0",
     "alembic>=1.13.0",
     "aiosqlite>=0.19.0",
     # OAuth protocol mechanics for dashboard sign-in: provider endpoints, the
@@ -78,6 +80,10 @@ dependencies = [
     # Artifacts").
     "mcp>=1.28.1,<1.29.0",
     "opentelemetry-api>=1.39.1",
+    # The laptop-side CLI, a workspace member at cli/. The gateway needs it for
+    # the Agent Gates evaluator the Hook Server runs (otari_agent.domain) and
+    # so that `uv sync` installs the `otari` console script it owns.
+    "otari-agent",
     "pillow>=12.3.0",
     "pypdfium2>=4.30.0",
     "prometheus-client>=0.20.0",
@@ -103,10 +109,30 @@ ocr = [
 ]
 # S3-compatible (AWS S3 or MinIO/any S3-compatible endpoint) files backend.
 # boto3 is already present transitively via any-llm-sdk[all] (Bedrock), but
-# this extra is what build_file_store checks for and documents, so the S3
-# backend stays decoupled from that implementation detail.
+# this extra is what the S3 adapter checks for and documents, so the backend
+# stays decoupled from that implementation detail.
 s3 = [
     "boto3>=1.42.0",
+]
+# The generic files backend (`FsspecFileStore`): one URL reaches whichever
+# filesystem the operator has an fsspec implementation installed for. fsspec
+# is already in the tree through any-llm-sdk[all], but as with s3 the extra is
+# what the fsspec adapter names and documents, so the backend does not depend
+# on that implementation detail. The protocol's own package (gcsfs, adlfs, s3fs,
+# paramiko, ...) is the operator's to install.
+fsspec = [
+    "fsspec>=2024.6.0",
+]
+# Hosted sandboxes through E2B, for a deployment that cannot run the reference
+# code-execution container with the isolation untrusted code needs. Selected
+# with `sandbox_provider: e2b`; the adapter imports the SDK only then.
+# The adapter walks a listing with `depth=`, and reads `size` and
+# `modified_time` off its entries, none of which the 1.x SDK has, so the floor
+# is the line it was written against rather than the first release to carry the
+# names.
+e2b = [
+    "e2b>=2.0.0",
+    "e2b-code-interpreter>=2.0.0",
 ]
 
 [dependency-groups]
@@ -131,11 +157,11 @@ dev = [
     "pytest-timeout",
     "pytest-xdist>=3.6.1",
     "ruff>=0.15.9",
+    # The fsspec file store test reaches a real S3-compatible store through s3fs.
+    # Its aiobotocore dependency pins botocore, so it also bounds the boto3 this lock can take.
+    "s3fs>=2026.3.0",
     "testcontainers[postgres]>=4.0.0",
 ]
-
-[project.scripts]
-otari = "gateway.cli:main"
 
 [tool.uv]
 # Otari is deployed as a Linux server and developed on Linux / macOS; it is
@@ -164,6 +190,12 @@ environments = [
 # own maintainer sets the real floor. Revisit if Otari is ever published as a
 # wheel people pip-install directly.
 constraint-dependencies = ["authlib>=1.7.2"]
+
+[tool.uv.workspace]
+members = ["cli"]
+
+[tool.uv.sources]
+otari-agent = { workspace = true }
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -196,7 +228,7 @@ gateway = [
 [tool.ruff]
 target-version = "py313"
 line-length = 120
-src = ["src", "tests", "scripts"]
+src = ["src", "cli/src", "tests", "scripts"]
 # `demo/` is shell scripts; nothing for ruff to do there.
 extend-exclude = ["demo/"]
 
@@ -210,7 +242,7 @@ select = ["E", "F", "I", "PERF"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["src", "tests", "scripts"]
+files = ["src", "cli/src", "tests", "scripts"]
 # Standalone web-search adapters are independent services (own Dockerfile +
 # requirements), not part of the gateway package. They each ship a top-level
 # `app.py`, so type-checking them together trips mypy's duplicate-module guard.
@@ -223,6 +255,17 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["trafilatura.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# fsspec ships no stubs; the file store drives it through a handful of calls.
+module = ["fsspec", "fsspec.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The E2B SDK ships no stubs and is an optional extra, so it is absent from the
+# default environment the type check runs in.
+module = ["e2b", "e2b.*", "e2b_code_interpreter", "e2b_code_interpreter.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

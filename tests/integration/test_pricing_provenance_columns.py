@@ -26,7 +26,7 @@ from sqlalchemy.exc import DataError
 from sqlalchemy.orm import Session
 
 from conftest import seed_workspace_id
-from gateway.models.entities import UsageLog
+from gateway.models.usage import UsageLog
 
 _RAN_AT = datetime(2026, 8, 1, 9, 30, tzinfo=UTC)
 # Later than _RAN_AT on purpose: an amount can be settled or repriced well after
@@ -121,4 +121,3 @@ def test_a_source_longer_than_the_platform_s_column_is_refused(test_db: Session)
 
     with pytest.raises(DataError):
         test_db.commit()
-

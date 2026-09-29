@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from gateway.api.routes import providers as providers_route
 from gateway.core.config import API_ROOT
-from gateway.models.entities import ProviderCredential
+from gateway.models.providers import ProviderCredential
 from gateway.services.model_discovery_service import ProviderDiscovery
 from gateway.services.provider_store_service import reset_provider_cache
 from gateway.services.secret_box import decrypt_secret, generate_secret_key
@@ -208,9 +208,12 @@ def test_patch_and_delete_missing_are_404(
     client: TestClient, master_key_header: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _with_key(monkeypatch)
-    assert client.patch(
-        f"{API_ROOT}/provider-credentials/nope", json={"api_base": "x"}, headers=master_key_header
-    ).status_code == 404
+    assert (
+        client.patch(
+            f"{API_ROOT}/provider-credentials/nope", json={"api_base": "x"}, headers=master_key_header
+        ).status_code
+        == 404
+    )
     assert client.delete(f"{API_ROOT}/provider-credentials/nope", headers=master_key_header).status_code == 404
 
 

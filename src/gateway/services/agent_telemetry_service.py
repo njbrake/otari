@@ -13,7 +13,7 @@ from typing import Any, Iterable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.models.entities import APIKey
+from gateway.models.api_keys import APIKey
 from gateway.ports.telemetry_storage_port import IngestResult, TelemetryRecord, TelemetryStoragePort
 from gateway.repositories.users_repository import get_active_user
 
@@ -265,9 +265,6 @@ def compute_series_increment(
     return float(
         sum(increment for _, increment in series_point_increments(points, temporality, series_start=series_start))
     )
-
-
-
 
 
 async def ingest(

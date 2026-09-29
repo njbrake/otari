@@ -77,7 +77,8 @@ export const NAV_TRANSITION =
  * The keyboard ring, on every row whatever else it is wearing, which is why it
  * lives in the base and not in one of the state constants below.
  *
- * The ring itself is `focus-ring`, defined once in globals.css. Its values are
+ * The ring itself is `otari-focus-ring`, defined once in the design system's
+ * own stylesheet. Its values are
  * not spelled here and must not be: call sites that spell their own disagree
  * about which token a ring comes from. What is spelled here is why this row
  * cannot use the base rule instead.
@@ -217,29 +218,29 @@ const ROW_ANCESTOR = `border-transparent text-foreground hover:bg-surface-alt ${
  * `h-full` because a row's 44px floor is shorter than a band's 56px.
  */
 export function navBandRowClass({
-  collapsed = false,
+  isCollapsed = false,
 }: {
-  collapsed?: boolean
+  isCollapsed?: boolean
 } = {}): string {
-  return `h-full w-full! ${collapsed ? "px-0" : "px-6"}`
+  return `h-full w-full! ${isCollapsed ? "px-0" : "px-6"}`
 }
 
 /** The class list for one sidebar row. */
 export function navRowClass({
   isActive = false,
-  ancestor = false,
-  collapsed = false,
-  nested = false,
-  band = false,
+  isAncestor = false,
+  isCollapsed = false,
+  isNested = false,
+  isBand = false,
   expandedJustify,
 }: {
   isActive?: boolean
   /** This row is the group holding the selected row, not the selected row. */
-  ancestor?: boolean
-  collapsed?: boolean
-  nested?: boolean
+  isAncestor?: boolean
+  isCollapsed?: boolean
+  isNested?: boolean
   /** This row is the whole of a chrome band rather than one row in a list. */
-  band?: boolean
+  isBand?: boolean
   /**
    * How the row's contents sit along its main axis while the rail is expanded.
    * Collapsed rows are always centered, so the icon column holds whether or not
@@ -257,14 +258,14 @@ export function navRowClass({
 } = {}): string {
   return [
     ROW_BASE,
-    isActive ? ROW_SELECTED : ancestor ? ROW_ANCESTOR : ROW_RESTING,
-    nested ? "pl-[3.125rem]" : "",
-    collapsed
+    isActive ? ROW_SELECTED : isAncestor ? ROW_ANCESTOR : ROW_RESTING,
+    isNested ? "pl-[3.125rem]" : "",
+    isCollapsed
       ? "min-w-11 justify-center"
       : expandedJustify === "start"
         ? "justify-start"
         : "",
-    band ? navBandRowClass({ collapsed }) : collapsed ? "px-0" : "px-3",
+    isBand ? navBandRowClass({ isCollapsed }) : isCollapsed ? "px-0" : "px-3",
   ]
     .filter(Boolean)
     .join(" ")

@@ -64,8 +64,8 @@ for a component, not for those.
 | `metrics/SeverityMark` | `SeverityMark`, and the `Severity` type |
 | `metrics/TrendChip` | `TrendChip`, `trendState`, and the `Trend*` types |
 | `metrics/charts` | `TrendChart`, `Sparkline`, `ChartLegend`, and the `SeriesDef` / `StackedPoint` types |
-| `feedback/ErrorBanner` · `/InfoBanner` · `/EmptyState` · `/EmptyMessage` · `/PageLoading` · `/PageError` · `/ConfirmDialog` · `/FormDialog` · `/ScanBorder` · `/ErrorBoundary` · `/Skeleton` · `/errorMessage` | one each |
-| `feedback/Dialog` | `Dialog`, `DialogSection`, and the `DialogSize` type |
+| `feedback/ErrorBanner` · `/InfoBanner` · `/EmptyState` · `/EmptyMessage` · `/PageLoading` · `/PageError` · `/ConfirmDialog` · `/FormDialog` · `/ErrorBoundary` · `/Skeleton` · `/errorMessage` | one each |
+| `feedback/Dialog` | `Dialog`, `DialogSection`, and the `DialogSize` / `ScanTone` types |
 | `forms/Field` · `/SecretField` · `/TextArea` · `/SearchField` · `/FieldAction` | one component each |
 | `forms/Select` | `Select`, and the `SelectOption` type |
 | `forms/ComboBoxField` | `ComboBoxField`, and the `ComboBoxOption` type |
@@ -135,13 +135,35 @@ Everything else moved, including two things that look like they should not have:
   `ApiError extends Error`, so the first branch could never change an answer.
   Deleting the dead branch was the whole cost of moving it, and `ErrorBanner`
   came with it.
-- **`formatPct` and `formatRelative`** live in `design-system/helpers/format`
-  because `TrendChip` and `RefreshButton` need them. `@/shared/helpers/format`
-  is still the module a page reaches for and still the only one named above: it
-  re-exports those two, so there is one implementation and no call site moved.
-  The rest of it (`formatUsd`, `formatTokens`, `formatCost`, `formatContext`)
-  stayed, because a spend figure and a token count are this product's vocabulary
-  rather than a design system's.
+- **`formatPct`, `formatRelative` and `formatNumber`** live in
+  `design-system/helpers/format` because components in this layer need them:
+  the first two for `TrendChip` and `RefreshButton`, the grouped count for
+  `TablePagination` and `BulkActionBar`. `@/shared/helpers/format` is still the
+  module a page reaches for and still the only one named above: it re-exports
+  all three, so there is one implementation and no call site moved. The rest of
+  it (`formatUsd`, `formatTokens`, `formatCost`, `formatContext`) stayed,
+  because a spend figure and a token count are this product's vocabulary where a
+  grouped integer is not.
+
+**The stylesheet is the half the import rule cannot see.** Biome checks imports and does not
+read CSS, so the twenty-one `.otari-*` classes the primitives wear (`otari-dialog` and its
+family, `otari-form-dialog` and its family, `otari-table`, `otari-pagination`, `otari-toolbar`,
+`otari-bulk-bar`, `otari-checkbox-box`, the three `otari-detail-*`, `otari-scan-border`,
+`otari-settings`, `otari-bleed`, `otari-focus-ring`) are declared in
+`src/design-system/design-system.css`, inside the directory, and `src/architecture.test.ts`
+reads that file rather than the application's. A rule deleted or renamed out from under a
+primitive fails by name; a fifth `DialogSize` with no rule to match fails too; and a rule put
+back in `globals.css` fails, which is what keeps the folder move a folder move. That file's
+header names the classes and says why each one that stayed behind stayed.
+
+Two things the package still takes from its host, and both are ordinary for a Tailwind
+library. The tokens, the `@theme` block and the `@utility` type scale are configuration for
+the whole application, which a consuming app supplies and a primitive reads through a class
+name the way a page does. And source order: `globals.css` imports the stylesheet ahead of
+everything else, which CSS requires and which nothing reports if you get it wrong, so a rule
+in the application now wins a tie against a rule in the library. A library rule that has to
+outrank an application one has to say so in its selector or bring the rule it outranks with
+it. `Dialog`'s sizing is the worked example, and `design-system.css` explains it there.
 
 **What a component here may not do.** It is presentational and stateless: no
 TanStack Query, no `useDeployment`, no router, no context of the app's. State is

@@ -35,7 +35,7 @@ from gateway.services._tool_loop import (
     run_tool_loop,
     run_tool_loop_stream,
 )
-from gateway.services.web_search_budget import MAX_USES_EXCEEDED_ERROR, WebSearchBudget, is_capped_search
+from gateway.services.tools import MAX_USES_EXCEEDED_ERROR, ToolUseBudget, is_capped_call
 
 if TYPE_CHECKING:
     from any_llm.types.completion import ChatCompletion, ChatCompletionChunk
@@ -182,7 +182,7 @@ async def _execute_mcp_calls(
     pool: ToolBackend,
     mcp_calls: list[dict[str, Any]],
     *,
-    budget: WebSearchBudget | None = None,
+    budget: ToolUseBudget | None = None,
 ) -> list[dict[str, Any]]:
     """Run each MCP tool call and return the resulting tool-role messages.
 
@@ -205,12 +205,14 @@ async def _execute_mcp_calls(
             args = json.loads(tc["function"]["arguments"] or "{}")
         except json.JSONDecodeError:
             args = {}
-        capped = is_capped_search(budget, pool, name)
+        capped = is_capped_call(budget, pool, name)
         if capped and budget is not None and budget.exhausted():
             out.append({"role": "tool", "tool_call_id": tc["id"] or "", "content": MAX_USES_EXCEEDED_ERROR})
             continue
         try:
             text = await pool.call_tool(name, args)
+        except MaxToolIterationsExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 — see docstring
             logger.warning("MCP tool %s execution failed: %s", name, exc)
             text = f"[tool error] {exc}"
@@ -271,7 +273,7 @@ class _ChatToolLoopStrategy:
 
     transcript_key = "messages"
 
-    def __init__(self, *, budget: WebSearchBudget | None = None) -> None:
+    def __init__(self, *, budget: ToolUseBudget | None = None) -> None:
         # Absent unless the caller capped the searches, which keeps the shared
         # instance in ``_strategy_for`` free of per-request state.
         self._budget = budget
@@ -325,9 +327,7 @@ class _ChatToolLoopStrategy:
     def exit_after_split(self, result: ChatCompletion) -> bool:
         return False
 
-    async def execute_owned(
-        self, pool: ToolBackend, owned: list[Any], acc: Any = None
-    ) -> list[dict[str, Any]]:
+    async def execute_owned(self, pool: ToolBackend, owned: list[Any], acc: Any = None) -> list[dict[str, Any]]:
         # ``acc`` is accepted for interface parity and unused: this format has no
         # native vocabulary for a server-side tool call to report on a mixed batch.
         return await _execute_mcp_calls(pool, owned, budget=self._budget)
@@ -517,7 +517,7 @@ class _ChatToolLoopStrategy:
 _CHAT_STRATEGY = _ChatToolLoopStrategy()
 
 
-def _strategy_for(budget: WebSearchBudget | None) -> _ChatToolLoopStrategy:
+def _strategy_for(budget: ToolUseBudget | None) -> _ChatToolLoopStrategy:
     """The shared strategy, or a per-request one when the caller capped searches.
 
     Only a capped request has anything per-request to hold, so every other request
@@ -533,7 +533,7 @@ async def mcp_tool_loop_stream(
     completion_kwargs: dict[str, Any],
     pool: ToolBackend,
     max_iterations: int,
-    web_search_budget: WebSearchBudget | None = None,
+    use_budget: ToolUseBudget | None = None,
 ) -> AsyncGenerator[ChatCompletionChunk, None]:
     """Yield chunks across multiple `acompletion(stream=True)` calls, with MCP execution between rounds.
 
@@ -555,7 +555,7 @@ async def mcp_tool_loop_stream(
     # instead of waiting for event-loop async-generator finalization.
     async with aclosing(
         run_tool_loop_stream(
-            strategy=_strategy_for(web_search_budget),
+            strategy=_strategy_for(use_budget),
             completion_kwargs=completion_kwargs,
             pool=pool,
             max_iterations=max_iterations,
@@ -571,7 +571,7 @@ async def mcp_tool_loop(
     pool: ToolBackend,
     max_iterations: int,
     on_first_response: Callable[[], None] | None = None,
-    web_search_budget: WebSearchBudget | None = None,
+    use_budget: ToolUseBudget | None = None,
 ) -> ChatCompletion:
     """Non-streaming variant. Accumulates usage across iterations into the returned completion.
 
@@ -580,7 +580,7 @@ async def mcp_tool_loop(
     loop in :mod:`gateway.api.routes.chat` is the consumer.
     """
     return await run_tool_loop(
-        strategy=_strategy_for(web_search_budget),
+        strategy=_strategy_for(use_budget),
         completion_kwargs=completion_kwargs,
         pool=pool,
         max_iterations=max_iterations,

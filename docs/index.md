@@ -46,7 +46,12 @@ Calling the gateway from your own code.
 - [MCP](mcp.md): connect MCP servers to chat, messages, and responses requests,
   or drive them from your own application through the caller-orchestrated endpoints.
 - [Files](files.md): file uploads and document understanding for local models.
-- [Guardrails](guardrails.md): request-level checks like prompt-injection detection.
+- [Inference Guardrails](guardrails.md): request-level checks like prompt-injection detection.
+- [Agent Guardrails](agent-guardrails.md): repository-owned rules checked against what a
+  coding agent actually did to the working tree. `otari hook` runs beside Claude Code or
+  Codex and evaluates them locally, with no server and no credential.
+- [Agent Guardrails reference](agent-guardrails-reference.md): every gate type and field,
+  and what each harness can see at each event.
 - [Use with Claude Code](use-with-claude-code.md): point the Claude Code CLI at Otari.
 - [Use with Codex](use-with-codex.md): route the Codex CLI through Otari over the Responses API, or import its usage without routing.
 - [Use with opencode](use-with-opencode.md): point the opencode CLI at Otari.
@@ -62,3 +67,4 @@ Calling the gateway from your own code.
 ### For contributors
 
 - [Architecture](../ARCHITECTURE.md): the two-plane model and the extension seam (ports, adapters, and capability lines) that mark what Otari's core ships versus what an overlay can add.
+- [Backend domains](domains.md): every backend module assigned to one domain, and the layer shape each domain moves toward.

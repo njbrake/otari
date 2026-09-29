@@ -39,10 +39,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from gateway.api.deps import get_config, get_db_if_needed, verify_api_key_or_master_key
-from gateway.api.routes._platform import (
-    _extract_platform_user_token,
-    _resolve_platform_mcp_server,
+from gateway.api.deps import (
+    McpServerPortDep,
+    extract_credential_token,
+    get_config,
+    get_db_if_needed,
+    verify_api_key_or_master_key,
 )
 
 # ``GatewayConfig`` and ``AsyncSession`` are imported at runtime rather than
@@ -50,11 +52,14 @@ from gateway.api.routes._platform import (
 # resolves a route signature at import time to decide what each parameter is.
 # Left as strings it cannot resolve, it reads both dependencies as query
 # parameters and every request fails validation before the handler runs.
-from gateway.core.config import API_ROOT, GatewayConfig
+from gateway.core.config import API_ROOT, REQUEST_ID_HEADER, GatewayConfig
 from gateway.core.database import release_session
+from gateway.exceptions.control_plane_exceptions import ControlPlaneError, ControlPlaneRefusedError
+from gateway.exceptions.tools_exceptions import McpServerResolutionFailedError
 from gateway.inflight import track_request
 from gateway.log_config import logger
-from gateway.models.entities import APIKey
+from gateway.models.api_keys import APIKey
+from gateway.ports.mcp_server_port import McpServerPort, McpServerScope
 from gateway.rate_limit import check_rate_limit
 from gateway.repositories.users_repository import get_active_user
 
@@ -71,6 +76,7 @@ from gateway.services.mcp_stateless import (
     CODE_DISCOVERY_LIMIT_EXCEEDED,
     CODE_FORBIDDEN,
     CODE_INVALID_REQUEST,
+    CODE_MISDIRECTED_REQUEST,
     CODE_OUTCOME_UNKNOWN,
     CODE_PAYMENT_REQUIRED,
     CODE_RATE_LIMIT_EXCEEDED,
@@ -92,7 +98,6 @@ from gateway.services.mcp_stateless import (
     execute_stored_tool,
 )
 from gateway.services.secret_box import SecretBoxUnavailableError, SecretDecryptionError
-from gateway.services.tenancy.workspace_mcp_server_service import resolve_workspace_mcp_server
 from gateway.services.url_safety import UnsafeURLError, validate_mcp_url
 from gateway.services.workspace_scope import resolve_workspace_id
 
@@ -118,6 +123,7 @@ TOOLS_LABEL = "mcp.list_tools"
 SAFE_DETAILS: dict[str, str] = {
     CODE_INVALID_REQUEST: "MCP request is invalid",
     CODE_AUTHENTICATION_FAILED: "Authentication failed",
+    CODE_MISDIRECTED_REQUEST: "This API key belongs to another deployment",
     CODE_PAYMENT_REQUIRED: "Payment required",
     CODE_FORBIDDEN: "Request forbidden",
     CODE_RATE_LIMIT_EXCEEDED: "Rate limit exceeded",
@@ -185,9 +191,9 @@ class _McpRoute(APIRoute):
                     request_id,
                     headers=RETRY_AFTER_ONE if exc.code in _RETRYABLE_CAPACITY_CODES else None,
                 )
-            except StarletteHTTPException as exc:
-                code, execution_state, status_code = _classify(exc)
-                retry_after = (exc.headers or {}).get("Retry-After")
+            except (StarletteHTTPException, ControlPlaneError) as exc:
+                code, execution_state, status_code = _classify(exc.status_code)
+                retry_after = _retry_hint(exc)
                 return _error_response(
                     code,
                     execution_state,
@@ -195,7 +201,7 @@ class _McpRoute(APIRoute):
                     request_id,
                     headers={"Retry-After": retry_after} if retry_after else None,
                 )
-            response.headers["X-Otari-Request-ID"] = request_id
+            response.headers[REQUEST_ID_HEADER] = request_id
             return response
 
         return handler
@@ -215,35 +221,47 @@ def _error_response(
         execution_state=execution_state,
         request_id=request_id,
     )
-    response_headers = {"X-Otari-Request-ID": request_id}
+    response_headers = {REQUEST_ID_HEADER: request_id}
     if headers:
         response_headers.update(headers)
     return JSONResponse(status_code=status_code, content=body.model_dump(mode="json"), headers=response_headers)
 
 
-def _classify(exc: StarletteHTTPException) -> tuple[str, ExecutionState, int]:
-    """Map an authentication or platform refusal onto this contract's enums.
+def _classify(status_code: int) -> tuple[str, ExecutionState, int]:
+    """Map an authentication or control plane refusal onto this contract's enums.
 
     Every one of these is raised before dispatch, so all of them are
     ``not_started``. The platform's own detail is dropped rather than forwarded:
     it may describe a workspace, a plan, or a stored server, and R-ERR-1 lets
     nothing platform-side through.
     """
-    if exc.status_code in {400, 422}:
+    if status_code in {400, 422}:
         return CODE_INVALID_REQUEST, ExecutionState.NOT_STARTED, 422
-    if exc.status_code == 401:
+    if status_code == 401:
         return CODE_AUTHENTICATION_FAILED, ExecutionState.NOT_STARTED, 401
-    if exc.status_code == 402:
+    if status_code == 402:
         return CODE_PAYMENT_REQUIRED, ExecutionState.NOT_STARTED, 402
-    if exc.status_code == 403:
+    if status_code == 403:
         return CODE_FORBIDDEN, ExecutionState.NOT_STARTED, 403
-    if exc.status_code == 404:
+    if status_code == 404:
         return CODE_SERVER_NOT_FOUND, ExecutionState.NOT_STARTED, 404
-    if exc.status_code == 429:
+    if status_code == 421:
+        # The key names another regional deployment. The host it names travels
+        # in the detail, which this contract drops like every other detail, so a
+        # caller learns where to go from any endpoint outside this contract.
+        return CODE_MISDIRECTED_REQUEST, ExecutionState.NOT_STARTED, 421
+    if status_code == 429:
         return CODE_RATE_LIMIT_EXCEEDED, ExecutionState.NOT_STARTED, 429
-    if exc.status_code == 503:
+    if status_code == 503:
         return CODE_SERVICE_UNAVAILABLE, ExecutionState.NOT_STARTED, 503
     return CODE_RESOLUTION_FAILED, ExecutionState.NOT_STARTED, 502
+
+
+def _retry_hint(exc: StarletteHTTPException | ControlPlaneError) -> str | None:
+    """The ``Retry-After`` hint the refusal carries."""
+    if isinstance(exc, StarletteHTTPException):
+        return (exc.headers or {}).get("Retry-After")
+    return exc.retry_after if isinstance(exc, ControlPlaneRefusedError) else None
 
 
 router = APIRouter(prefix="/mcp", tags=["mcp"], route_class=_McpRoute)
@@ -314,25 +332,14 @@ async def _authenticate(
 ) -> _Principal:
     """Authenticate, and rate-limit the principal before any outbound access.
 
-    Hybrid mode carries the user token through to the platform resolver, which
-    is both the authorization and the rate-limit boundary there (R-ADM-2); Otari
-    preserves whatever 429 it returns. Standalone authenticates the key and
-    charges the request to that key's own bucket here.
-
-    A master-key request is refused. It holds no workspace of its own, so it can
-    only ever resolve a stored server through the deployment's default
-    workspace, which would let operator credentials reach one tenant's
-    configured servers. No stored server is accessible to it, and that is what
-    the 404 says.
-
-    A blocked user is refused too, and has to be refused here. ``users.blocked``
-    is read in ``budget_service.reserve_budget``, which is the only place any
-    request plane consults it, and these routes never reach it because they
-    reserve nothing. Without this, blocking someone would stop their completions
-    and leave them driving mutating MCP tools through the gateway.
+    In hybrid mode the user token passes through to the platform resolver, which authorizes and rate-limits (R-ADM-2).
+    A 429 from the platform resolver is passed on to the caller.
+    In standalone mode the key is authenticated and the request is charged to that key's bucket.
+    A master-key request is refused with a 404, because it has no workspace and would reach one tenant's servers.
+    A blocked user is refused here, because these routes reserve nothing and never reach the budget gate.
     """
     if config.is_hybrid_mode:
-        return _Principal(user_token=_extract_platform_user_token(raw_request), workspace_id=None)
+        return _Principal(user_token=extract_credential_token(raw_request), workspace_id=None)
 
     if db is None:
         raise HTTPException(
@@ -371,8 +378,7 @@ async def _refuse_blocked_user(db: AsyncSession, api_key: APIKey) -> None:
 
 async def _resolve_server(
     principal: _Principal,
-    db: AsyncSession | None,
-    config: GatewayConfig,
+    mcp_server_port: McpServerPort,
     mcp_server_id: uuid.UUID,
 ) -> ResolvedMcpServer:
     """Resolve the stored server, applying the outcome ladder both modes share (R-RES-1).
@@ -380,25 +386,19 @@ async def _resolve_server(
     No MCP network access happens here or in anything it raises, so a refusal on
     these grounds never reaches the remote server.
     """
-    if config.is_hybrid_mode:
-        server = await _resolve_platform_mcp_server(config, principal.user_token or "", mcp_server_id)
-    else:
-        if db is None or principal.workspace_id is None:  # pragma: no cover - _authenticate settles both
-            raise McpExecutionError(CODE_RESOLUTION_FAILED, ExecutionState.NOT_STARTED, 502)
-        try:
-            resolved = await resolve_workspace_mcp_server(
-                db,
-                workspace_id=principal.workspace_id,
-                server_id=mcp_server_id,
-            )
-        except (SecretDecryptionError, SecretBoxUnavailableError):
-            # Connecting without the credential the workspace configured would
-            # send an unauthenticated request to a server that expects one.
-            logger.warning("Stateless MCP stored credential unavailable server_id=%s", mcp_server_id)
-            raise McpExecutionError(CODE_CREDENTIALS_UNAVAILABLE, ExecutionState.NOT_STARTED, 500) from None
-        if resolved is None:
-            raise McpExecutionError(CODE_SERVER_NOT_FOUND, ExecutionState.NOT_STARTED, 404)
-        server = resolved
+    scope = McpServerScope(workspace_id=principal.workspace_id, user_token=principal.user_token)
+    try:
+        resolved = await mcp_server_port.resolve_one(scope, mcp_server_id)
+    except McpServerResolutionFailedError:
+        raise McpExecutionError(CODE_RESOLUTION_FAILED, ExecutionState.NOT_STARTED, 502) from None
+    except (SecretDecryptionError, SecretBoxUnavailableError):
+        # Connecting without the credential the workspace configured would send
+        # an unauthenticated request to a server that expects one.
+        logger.warning("Stateless MCP stored credential unavailable server_id=%s", mcp_server_id)
+        raise McpExecutionError(CODE_CREDENTIALS_UNAVAILABLE, ExecutionState.NOT_STARTED, 500) from None
+    if resolved is None:
+        raise McpExecutionError(CODE_SERVER_NOT_FOUND, ExecutionState.NOT_STARTED, 404)
+    server = resolved
 
     if not server.enabled:
         # Indistinguishable from an id naming no server, on purpose: a caller
@@ -495,6 +495,7 @@ async def list_mcp_tools(
     mcp_server_id: uuid.UUID,
     db: Annotated[AsyncSession | None, Depends(get_db_if_needed)],
     config: Annotated[GatewayConfig, Depends(get_config)],
+    mcp_server_port: McpServerPortDep,
 ) -> McpToolsResponse:
     """List the tools a stored MCP server exposes to the authenticated workspace.
 
@@ -515,7 +516,7 @@ async def list_mcp_tools(
     try:
         async with asyncio.timeout(mcp_stateless.DISCOVERY_TOTAL_TIMEOUT_S):
             principal = await _authenticate(raw_request, db, config)
-            server = await _resolve_server(principal, db, config, mcp_server_id)
+            server = await _resolve_server(principal, mcp_server_port, mcp_server_id)
 
             if server.allowed_tools == []:
                 # An operator's explicit deny-all is a complete answer already,
@@ -608,6 +609,7 @@ async def execute_mcp_tool(
     request: McpExecuteRequest,
     db: Annotated[AsyncSession | None, Depends(get_db_if_needed)],
     config: Annotated[GatewayConfig, Depends(get_config)],
+    mcp_server_port: McpServerPortDep,
 ) -> CallToolResult:
     """Execute one caller-authorized tool call against a stored MCP server.
 
@@ -634,7 +636,7 @@ async def execute_mcp_tool(
     try:
         async with asyncio.timeout(mcp_stateless.EXECUTION_TOTAL_TIMEOUT_S):
             principal = await _authenticate(raw_request, db, config)
-            server = await _resolve_server(principal, db, config, request.mcp_server_id)
+            server = await _resolve_server(principal, mcp_server_port, request.mcp_server_id)
             _require_allowed(server, request.tool_name)
             if request.server_revision != server.revision:
                 # In memory, over the resolution both modes already needed, so this

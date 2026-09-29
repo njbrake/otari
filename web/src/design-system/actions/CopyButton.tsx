@@ -1,7 +1,8 @@
-import { Button, Tooltip } from "@heroui/react"
+import { Tooltip } from "@heroui/react"
 import { useEffect, useRef, useState } from "react"
 import { FiCopy } from "react-icons/fi"
 import { copyToClipboard } from "@/design-system/helpers/clipboard"
+import { Button } from "./Button"
 
 // A compact copy control for an identifier an operator has to paste elsewhere (a
 // model id, an alias target). Table rows own click-drag for selection, so the
@@ -41,20 +42,20 @@ export function CopyButton({
   useEffect(() => () => clearTimeout(resetTimer.current), [])
 
   const copy = async () => {
-    const copied = await copyToClipboard(value)
-    if (!copied) {
+    const isCopied = await copyToClipboard(value)
+    if (!isCopied) {
       // After the attempt, never before it: `copyToClipboard`'s legacy path
       // restores the selection and focus it found on the way out, so a
       // selection made first is undone by the very fallback this exists for.
       selectOnFailure?.current?.focus()
       selectOnFailure?.current?.select()
     }
-    setState(copied ? "copied" : "failed")
+    setState(isCopied ? "copied" : "failed")
     clearTimeout(resetTimer.current)
     // A failure has something to read and act on, so it lingers longer.
     resetTimer.current = setTimeout(
       () => setState("idle"),
-      copied ? 1_500 : 5_000,
+      isCopied ? 1_500 : 5_000,
     )
   }
 
@@ -73,7 +74,7 @@ export function CopyButton({
         // a 44px row, so no two of these overlap.
         className="relative before:absolute before:-inset-1.5 before:content-['']"
       >
-        <FiCopy aria-hidden="true" className="h-3.5 w-3.5" />
+        <FiCopy aria-hidden className="size-3.5" />
       </Button>
       <Tooltip.Content placement="top" showArrow>
         {state === "failed"

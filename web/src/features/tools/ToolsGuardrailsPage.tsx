@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useRef, useState } from "react"
-import { FiCheck } from "react-icons/fi"
+import { Link } from "@tanstack/react-router"
+import { Fragment } from "react"
 import type {
   ToolServiceName,
   ToolSettingField,
@@ -11,7 +11,6 @@ import { PageIntro } from "@/design-system/layout/PageIntro"
 import { CONTROL_LANE } from "@/design-system/layout/SettingRow"
 import { SettingsGroup } from "@/design-system/layout/SettingsGroup"
 import { isDeploymentOperator } from "@/features/organization/roles"
-import { OrganizationGuardrailsCard } from "@/features/tools/OrganizationGuardrailsCard"
 import { SearchToolsCard } from "@/features/tools/SearchToolsCard"
 import type { FieldCopy } from "@/features/tools/ToolSettingRows"
 import { ToolPriceRow, ToolSettingRow } from "@/features/tools/ToolSettingRows"
@@ -27,6 +26,7 @@ import {
   useUpdateToolSettings,
 } from "@/shared/api/tools"
 import { docsSourceHref } from "@/shared/helpers/docs"
+import { useSurfaces } from "@/shared/hooks/useDeployment"
 
 // One settable field maps onto one key of the update request; cast at this one
 // boundary (the keys come from the backend's field list).
@@ -50,13 +50,13 @@ const FIELD_COPY: Record<string, FieldCopy & { defaultLabel?: string }> = {
     label: "Backend URL",
     help: "While unset, otari_web_search requests are rejected with 400.",
     placeholder: "http://searxng:8080",
-    machine: true,
+    isMachineReadable: true,
   },
   web_search_engines: {
     label: "Engines",
     help: "Comma-separated SearXNG engines. Blank uses the backend's defaults.",
     placeholder: "google,bing,duckduckgo",
-    machine: true,
+    isMachineReadable: true,
   },
   web_search_max_results: {
     label: "Max results",
@@ -80,30 +80,62 @@ const FIELD_COPY: Record<string, FieldCopy & { defaultLabel?: string }> = {
     help: "Sent to the backend when a tool entry has none of its own.",
     placeholder: "Answer from official docs",
   },
+  sandbox_provider: {
+    label: "Provider",
+    help: "What runs the code: protocol talks to the backend URL below, e2b runs it on E2B from this process and needs no backend URL.",
+    placeholder: "protocol",
+    isMachineReadable: true,
+  },
+  sandbox_container_idle_ttl_sec: {
+    label: "Hold a sandbox for (seconds)",
+    help: "How long a sandbox stays resumable after a request that asked to hold one. Requests that do not ask are never held. 0 holds nothing at all.",
+    placeholder: "600",
+    isMachineReadable: true,
+  },
+  sandbox_container_max_lifetime_sec: {
+    label: "Longest sandbox life (seconds)",
+    help: "The most a resumed sandbox may live from its first lease, whatever the idle clock says.",
+    placeholder: "3600",
+    isMachineReadable: true,
+  },
   sandbox_url: {
     label: "Backend URL",
-    help: "While unset, otari_code_execution requests are rejected with 400.",
+    help: "Where the protocol provider runs code. While unset, otari_code_execution requests are rejected with 400 unless sandbox_provider names a hosted one.",
     placeholder: "http://sandbox:8080",
-    machine: true,
+    isMachineReadable: true,
   },
   sandbox_session_image: {
     label: "Session image",
-    help: "The image a leased session runs. Blank lets the backend choose.",
+    help: "The image a leased session runs, for the protocol provider. Blank lets the backend choose.",
     placeholder: "mzdotai/otari-sandbox-container:latest",
-    machine: true,
+    isMachineReadable: true,
   },
   sandbox_purpose_hint: {
     label: "Purpose hint",
     help: "Sent to the backend when a tool entry has none of its own.",
     placeholder: "Run untrusted analysis code",
   },
+  code_execution_executor: {
+    label: "Who runs provider code tools",
+    help: "For a request that declares a provider's own code tool (Anthropic code_execution, OpenAI code_interpreter). Auto keeps it with a provider that runs it natively and brings it here otherwise.",
+    placeholder: "",
+    defaultLabel: "Default (auto)",
+    optionLabels: {
+      auto: "Auto: provider when native, else here",
+      otari: "Always here, on this sandbox",
+      provider: "Always the provider",
+    },
+  },
   guardrails_url: {
     label: "Backend URL",
     help: "Used when a request does not pass a guardrail URL of its own.",
     placeholder: "http://guardrails:8000",
-    machine: true,
+    isMachineReadable: true,
   },
 }
+
+const EXECUTOR_NEEDS_BACKEND =
+  "Takes effect once a Backend URL is set above. Until then provider code tools are always forwarded."
 
 function copyFor(field: ToolSettingField): FieldCopy & {
   defaultLabel?: string
@@ -113,9 +145,25 @@ function copyFor(field: ToolSettingField): FieldCopy & {
       label: field.key,
       help: field.description ?? "",
       placeholder: "",
-      machine: true,
+      isMachineReadable: true,
     }
   )
+}
+
+interface ManagedToolSpec {
+  toolId: string
+  pricingKey: string
+  /**
+   * Whether the service's backend URL is what this tool waits on. A tool gated
+   * on anything else must not be sent to that field, which would not turn it on.
+   */
+  urlBacked?: boolean
+  /** The unavailable status, when "no backend" is not the reason. */
+  unavailableSummary?: string
+  /** What turns the tool on, in the same case. */
+  unavailableHelp?: string
+  /** A heading in `docs/tools.md`, when the service's own is not the tool's. */
+  docsAnchor?: string
 }
 
 interface GroupSpec {
@@ -125,7 +173,7 @@ interface GroupSpec {
   docsAnchor: string
   keys: string[]
   /** The group the tool's own per-call price belongs in. */
-  priced?: boolean
+  isPriced?: boolean
   /** Where a key the backend added but this page has not been told about goes. */
   catchAll?: boolean
 }
@@ -135,10 +183,8 @@ interface ServiceSpec {
   label: string
   intro: string
   docsAnchor: string
-  /** The pricing key for a tool Otari runs itself. Guardrails is a check, not billable work. */
-  pricingKey?: string
-  /** The `/tools` id whose status heads the page. Guardrails declares none. */
-  toolId?: string
+  /** Gateway-run tools whose status and per-call prices belong to this service. */
+  managedTools?: ManagedToolSpec[]
   groups: GroupSpec[]
 }
 
@@ -147,22 +193,39 @@ const SERVICES: ServiceSpec[] = [
     key: "web_search",
     label: "Web search",
     intro:
-      "Give models a live search tool and decide which workspaces may use it. Changes apply immediately.",
+      "Give models live Search and Fetch tools and decide which workspaces may use them. Changes apply immediately.",
     docsAnchor: "web-search",
-    pricingKey: "otari:web_search",
-    toolId: "otari_web_search",
+    managedTools: [
+      {
+        toolId: "otari_web_search",
+        pricingKey: "otari:web_search",
+        urlBacked: true,
+      },
+      {
+        toolId: "otari_web_fetch",
+        pricingKey: "otari:web_fetch",
+        // Fetch has no backend of its own, so the default "no backend" reason
+        // would send an operator to a URL field that cannot turn it on. It is
+        // off unless the deployment says otherwise, and the switch is
+        // startup-only: not in SETTABLE_KEYS, so no screen here can flip it.
+        unavailableSummary: "Unavailable · not enabled",
+        unavailableHelp:
+          "Fetch is off on this gateway. Set OTARI_WEB_FETCH_ENABLED=true (or web_fetch_enabled in config.yml) and restart.",
+        docsAnchor: "web-fetch",
+      },
+    ],
     groups: [
       {
         title: "Backend",
         blurb:
-          "A SearXNG-shaped service at the URL below, or a licensed API (web_search_provider), which needs no URL.",
+          "Search uses a SearXNG-shaped service at the URL below or a licensed API. Fetch uses the gateway's bounded retrieval service and needs no separate backend.",
         docsAnchor: "web-search",
         keys: [
           "web_search_url",
           "web_search_engines",
           "web_search_max_results",
         ],
-        priced: true,
+        isPriced: true,
       },
       {
         title: "Behavior",
@@ -184,21 +247,28 @@ const SERVICES: ServiceSpec[] = [
     intro:
       "Give models a sandbox to run generated code in, and decide which workspaces may use it. Changes apply immediately.",
     docsAnchor: "code-execution",
-    pricingKey: "otari:code_execution",
-    toolId: "otari_code_execution",
+    managedTools: [
+      {
+        toolId: "otari_code_execution",
+        pricingKey: "otari:code_execution",
+        urlBacked: true,
+      },
+    ],
     groups: [
       {
         title: "Backend",
-        blurb: "The sandbox that runs generated code for otari_code_execution.",
+        blurb:
+          "The sandbox that runs generated code. Uploaded files a request references are seeded into it, and files the code writes come back through the files API.",
         docsAnchor: "code-execution",
         keys: ["sandbox_url", "sandbox_session_image"],
-        priced: true,
+        isPriced: true,
       },
       {
         title: "Behavior",
-        blurb: "What the gateway sends the sandbox when a request does not.",
-        docsAnchor: "code-execution",
-        keys: ["sandbox_purpose_hint"],
+        blurb:
+          "Who runs a provider's own code tool, and what the gateway sends the sandbox when a request does not.",
+        docsAnchor: "code-execution-executor",
+        keys: ["code_execution_executor", "sandbox_purpose_hint"],
         catchAll: true,
       },
     ],
@@ -207,7 +277,7 @@ const SERVICES: ServiceSpec[] = [
     key: "guardrails",
     label: "Guardrails",
     intro:
-      "The input-guardrails service this deployment checks requests against, and what your organization mandates.",
+      "The input-guardrails service this deployment checks requests against.",
     docsAnchor: "who-runs-a-tool",
     groups: [
       {
@@ -224,43 +294,12 @@ const SERVICES: ServiceSpec[] = [
 
 const toolsDocs = (anchor?: string) => docsSourceHref("tools.md", anchor)
 
-// Two sibling cards still submit with a Save button of their own and have no
-// row to report into, so they keep the page-level acknowledgement. The setting
-// rows do not use it: each says what happened where it happened.
-function useSaveToast(): [string | null, (message: string) => void] {
-  const [message, setMessage] = useState<string | null>(null)
-  const timer = useRef<number | undefined>(undefined)
-  useEffect(() => () => window.clearTimeout(timer.current), [])
-  return [
-    message,
-    (next: string) => {
-      setMessage(next)
-      window.clearTimeout(timer.current)
-      timer.current = window.setTimeout(() => setMessage(null), 2500)
-    },
-  ]
-}
-
-function SaveToast({ message }: { message: string | null }) {
-  if (!message) return null
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="fixed right-4 bottom-4 z-50 flex items-center gap-2 rounded-lg border border-success bg-success-subtle px-4 py-3 text-sm font-medium text-success shadow-elevation-lg"
-    >
-      <FiCheck aria-hidden="true" className="h-5 w-5" />
-      {message}
-    </div>
-  )
-}
-
 /** The frames, at the real row height, so settings arriving does not move the page. */
 function LoadingGroups() {
   return (
     <>
       {[0, 1].map((group) => (
-        <SettingsGroup bounded key={group}>
+        <SettingsGroup isBounded key={group}>
           {[0, 1, 2].map((row) => (
             <div
               key={row}
@@ -306,16 +345,17 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
   const pricing = usePricing(isOperator)
   const setPricing = useSetPricing()
   const update = useUpdateToolSettings()
-  const [toast, showToast] = useSaveToast()
+  const serves = useSurfaces()
 
   // Latest rate per key. /api/v1/pricing is history-shaped (one row per
   // effective_at), and the newest row is the one in force.
-  const currentRates = new Map<string, number>()
-  for (const row of pricing.data ?? []) {
-    if (!currentRates.has(row.model_key)) {
-      currentRates.set(row.model_key, row.input_price_per_million)
-    }
-  }
+  const currentRates = (pricing.data ?? []).reduce(
+    (rates, row) =>
+      rates.has(row.model_key)
+        ? rates
+        : rates.set(row.model_key, row.input_price_per_million),
+    new Map<string, number>(),
+  )
 
   const data = query.data
   const disabled = !data
@@ -343,9 +383,12 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
       {query.isLoading ? <LoadingGroups /> : null}
 
       {shown.map((service) => {
-        const managed = service.toolId
-          ? (tools.data?.data ?? []).find((tool) => tool.id === service.toolId)
-          : undefined
+        const managed = (service.managedTools ?? []).flatMap((spec) => {
+          const tool = (tools.data?.data ?? []).find(
+            (candidate) => candidate.id === spec.toolId,
+          )
+          return tool ? [{ spec, tool }] : []
+        })
         // Where the "no backend" case sends the operator. Found by type rather
         // than by position, so it survives a group's keys being reordered.
         const urlField = (data?.fields ?? []).find(
@@ -362,13 +405,16 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
           <Fragment key={service.key}>
             {/* The question an operator arrives with, above the settings that
                 answer it: can this deployment run the tool at all. */}
-            {managed ? (
+            {managed.map(({ spec, tool }) => (
               <ToolStatusGroup
-                tool={managed}
-                docsHref={toolsDocs(service.docsAnchor)}
-                urlFieldKey={urlField?.key}
+                key={tool.id}
+                tool={tool}
+                docsHref={toolsDocs(spec.docsAnchor ?? service.docsAnchor)}
+                urlFieldKey={spec.urlBacked ? urlField?.key : undefined}
+                unavailableSummary={spec.unavailableSummary}
+                unavailableHelp={spec.unavailableHelp}
               />
-            ) : null}
+            ))}
 
             {service.groups.map((group) => {
               const fields = [
@@ -381,12 +427,12 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
               // comes from /api/v1/pricing, whose read is still operator-gated, so
               // a member would get an editable "unpriced" row that can only
               // fail on save.
-              const pricingKey =
-                group.priced && isOperator ? service.pricingKey : undefined
-              if (fields.length === 0 && pricingKey === undefined) return null
+              const pricedTools =
+                group.isPriced && isOperator ? (service.managedTools ?? []) : []
+              if (fields.length === 0 && pricedTools.length === 0) return null
               return (
                 <SettingsGroup
-                  bounded
+                  isBounded
                   key={group.title}
                   // On the combined page the service is not otherwise named,
                   // and three groups called "Backend" say nothing about which
@@ -410,11 +456,21 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
                         }
                         disabled={disabled}
                         readOnly={!isOperator}
+                        // The executor only decides anything once there is a
+                        // sandbox to bring code to; without one every provider
+                        // declaration is forwarded whatever this says.
+                        note={
+                          field.key === "code_execution_executor" &&
+                          !urlField?.value
+                            ? EXECUTOR_NEEDS_BACKEND
+                            : undefined
+                        }
                       />
                     )
                   })}
-                  {pricingKey ? (
+                  {pricedTools.map(({ pricingKey }) => (
                     <ToolPriceRow
+                      key={pricingKey}
                       pricingKey={pricingKey}
                       configured={currentRates.get(pricingKey) ?? null}
                       commit={(perMillion) =>
@@ -437,7 +493,7 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
                           : undefined
                       }
                     />
-                  ) : null}
+                  ))}
                 </SettingsGroup>
               )
             })}
@@ -463,8 +519,21 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
                 docsHref={toolsDocs("per-workspace-code-policy")}
               />
             ) : null}
-            {service.key === "guardrails" ? (
-              <OrganizationGuardrailsCard onSaved={showToast} />
+            {service.key === "guardrails" &&
+            serves("organization_guardrails") ? (
+              // The organization's own guardrails moved to a page of their own;
+              // this rail keeps the deployment's service and says where they went.
+              <p className="text-sm text-muted">
+                The guardrails your organization runs on every request, and the
+                ones Otari runs itself, are on the organization&rsquo;s{" "}
+                <Link
+                  to="/organization/guardrails"
+                  className="font-medium text-link hover:text-link-hover"
+                >
+                  Guardrails
+                </Link>{" "}
+                page.
+              </p>
             ) : null}
           </Fragment>
         )
@@ -474,8 +543,6 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
           every narrowed view, each of which is one service. `/tools/mcp-servers`
           renders the same card. */}
       {only ? null : <WorkspaceMcpServersCard />}
-
-      <SaveToast message={toast} />
     </div>
   )
 }

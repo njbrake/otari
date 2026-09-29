@@ -13,10 +13,11 @@
 `transition-*`. A vestibular disorder is not an edge case, and the guard costs one
 utility.
 
-**Two animations run indefinitely, and both are on the same surface**: the
-first-run sheet's `ScanBorder` arc and the orb inside the panel it wraps. They
-are the shape of the exception rather than licence to add more, and what makes
-them one exception rather than two is that neither outlives the wait. Both run
+**Two animations run indefinitely, and both are on the same surface**: the arc
+sweeping the first-run sheet's own border (`Dialog`'s `isScanning`) and the orb
+in the listening panel pinned above its footer. They are the shape of the
+exception rather than licence to add more, and what makes them one exception
+rather than two is that neither outlives the wait. Both run
 only while the product is watching for a request that has not arrived, both stop
 when it does, and neither carries anything that is not also in the text beside
 it.
@@ -63,6 +64,33 @@ read as denied rather than merely quiet. The cursor is `not-allowed`.
 
 Show a control disabled rather than hiding it when its absence would be confusing,
 and only when it carries its own reason nearby.
+
+## Cost
+
+**Animate `transform` and `opacity`.** They are the two the compositor runs on its own,
+without layout and without paint, which is what makes them smooth on a phone.
+
+A property that changes geometry (`width`, `height`, `top`, `max-height`,
+`grid-template-rows`) runs layout on every frame of the animation. That is sometimes the only
+way to get the behavior, and then it is a decision with a reason in the rule's comment rather
+than a default. Two in the tree, both deliberate:
+
+- `.otari-detail-reveal` animates a grid track from `0fr` to `1fr` for 180ms, because the
+  panel has to slide out from under its row without distorting its content or needing a magic
+  `max-height`. No transform does that.
+- `.otari-scan-border::after` interpolates `--scan-angle` into a conic gradient, which is a
+  repaint per frame. `@property --scan-angle` is what makes it animate at all. It is bounded
+  to one element on one open dialog.
+
+**`will-change` is a loan, not a decoration.** It buys a compositor layer for an element that
+is about to animate, and a layer costs memory for as long as the declaration is there. Add it
+when an animation is about to start and take it off when it stops; a permanent `will-change`
+is a permanent layer, and enough of them are slower than none. There are none in the tree
+today, which is the right number until something is measured.
+
+**Every animation answers `prefers-reduced-motion`.** Not customary here, required: the three
+rules above all have an entry in the reduce block at the end of `design-system.css`, and the
+scan arc's entry is the model for stopping motion without removing meaning.
 
 ## Touch
 

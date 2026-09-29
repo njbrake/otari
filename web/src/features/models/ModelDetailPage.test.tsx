@@ -82,7 +82,7 @@ const KIMI: CatalogModelSummary = {
 function offering(overrides: Partial<CatalogOffering>): CatalogOffering {
   return {
     selector: "nebius:zai-org/GLM-5.3",
-    short_selector: "nebius:glm-5.3",
+    short_selector: "nebius:z-ai/glm-5.3",
     provider: "nebius",
     provider_type: "nebius",
     credential: "deployment",
@@ -112,7 +112,7 @@ const GLM_DETAIL: CatalogModelDetail = {
     offering({}),
     offering({
       selector: "fireworks:accounts/fireworks/models/glm-5p3",
-      short_selector: "fireworks:glm-5p3",
+      short_selector: "fireworks:z-ai/glm-5.3",
       provider: "fireworks",
       provider_type: "fireworks",
       context_window: 131_072,
@@ -137,6 +137,7 @@ const CATALOG: CatalogResponse = {
   default_pricing: true,
   defaults_as_of: null,
   metadata_available: true,
+  count: 2,
   models: [GLM, KIMI],
 }
 
@@ -232,6 +233,25 @@ describe("ModelDetailPage", () => {
     expect(screen.getByText(/Also served by Groq/)).toBeInTheDocument()
   })
 
+  it("marks each offering's provider", async () => {
+    // Keyed on the provider type, which is what the instance is named after
+    // until an operator renames it. Both offerings here resolve, so both rows
+    // carry a mark rather than a tile.
+    mockApi()
+    renderPage(<ModelDetailPage modelId="z-ai/glm-5.3" />)
+
+    const offerings = await screen.findByRole("grid", {
+      name: "Offerings of GLM-5.3",
+    })
+    const rows = within(offerings).getAllByRole("row").slice(1)
+    // Lazy geometry: the reserved box renders first and the mark follows.
+    await waitFor(() => {
+      for (const row of rows) {
+        expect(row.querySelector("svg")).not.toBeNull()
+      }
+    })
+  })
+
   it("opens the drawer with the request to send, to the gateway's pick or a pinned provider", async () => {
     mockApi()
     renderPage(<ModelDetailPage modelId="z-ai/glm-5.3" />)
@@ -260,23 +280,41 @@ describe("ModelDetailPage", () => {
     await waitFor(() =>
       expect(
         (within(drawer).getByLabelText("cURL") as HTMLTextAreaElement).value,
-      ).toContain('"model": "fireworks:glm-5p3"'),
+      ).toContain('"model": "fireworks:z-ai/glm-5.3"'),
     )
   })
 
-  it("links an operator to Model pricing to edit a rate, and nobody else", async () => {
+  it("offers a deployment operator no rate link on a deployment-supplied offering", async () => {
+    // Operating the deployment stopped being a pricing authority here when the
+    // deployment price editor went away: rates are set per model on Providers,
+    // which answers to the organization role, and a model the deployment
+    // supplies the credential for is not an organization's to re-price. So the
+    // cell states who prices it rather than offering an editor that no longer
+    // exists.
     mockApi()
     renderPage(<ModelDetailPage modelId="z-ai/glm-5.3" />)
 
-    const links = await screen.findAllByRole("link", { name: "Edit rate" })
-    expect(links.map((link) => link.getAttribute("href"))).toEqual([
-      "/organization/pricing?model=fireworks%3Aaccounts%2Ffireworks%2Fmodels%2Fglm-5p3",
-      "/organization/pricing?model=nebius%3Azai-org%2FGLM-5.3",
-    ])
+    await screen.findByRole("grid", { name: "Offerings of GLM-5.3" })
+    expect(screen.queryByRole("link", { name: "Edit rate" })).toBeNull()
+    expect(screen.getAllByText("Deployment priced").length).toBeGreaterThan(0)
     // Nothing on this page writes a price.
     expect(
       screen.queryByRole("button", { name: /set price|edit price/i }),
     ).toBeNull()
+  })
+
+  it("gives a deployment operator its organization's own rate link", async () => {
+    // On a standalone deployment the operator *is* the single organization's
+    // owner, so a gate that excluded them would leave the one caller who can set
+    // a rate without the link to set it.
+    mockApi()
+    GLM_DETAIL.offerings[0] = offering({ credential: "organization" })
+    renderPage(<ModelDetailPage modelId="z-ai/glm-5.3" />)
+
+    const links = await screen.findAllByRole("link", { name: "Set your rate" })
+    expect(links.map((link) => link.getAttribute("href"))).toContain(
+      "/organization/provider-keys?override=nebius%3Azai-org%2FGLM-5.3",
+    )
   })
 
   it("points an organization admin at its own rate override, not the deployment's price", async () => {
@@ -293,7 +331,7 @@ describe("ModelDetailPage", () => {
 
     const links = await screen.findAllByRole("link", { name: "Set your rate" })
     expect(links.map((link) => link.getAttribute("href"))).toContain(
-      "/organization/pricing?override=nebius%3Azai-org%2FGLM-5.3",
+      "/organization/provider-keys?override=nebius%3Azai-org%2FGLM-5.3",
     )
     expect(screen.queryByRole("link", { name: "Edit rate" })).toBeNull()
   })
@@ -364,13 +402,22 @@ describe("ModelDetailPage", () => {
   })
 
   it("keeps the page read-only for a member", async () => {
-    mockApi({ context: organizationContext({ deployment_operator: false }) })
+    // A member, stated as one: the fixture's default role is owner, and an owner
+    // now gets the rate link whether or not they operate the deployment, so a
+    // context that only cleared `deployment_operator` would be asserting the
+    // opposite of what this test is named for.
+    mockApi({
+      context: organizationContext({
+        role: "member",
+        deployment_operator: false,
+      }),
+    })
     renderPage(<ModelDetailPage modelId="z-ai/glm-5.3" />)
 
     await screen.findByRole("grid", { name: "Offerings of GLM-5.3" })
     expect(screen.queryByRole("link", { name: "Edit rate" })).toBeNull()
     expect(screen.queryByRole("link", { name: "Add a provider" })).toBeNull()
-    expect(screen.queryByRole("link", { name: "Model pricing" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Providers" })).toBeNull()
   })
 
   it("reports a model that does not exist rather than an empty page", async () => {

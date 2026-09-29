@@ -1,4 +1,4 @@
-import { Button } from "@heroui/react"
+import { Button, buttonVariants } from "@heroui/react"
 import { Link } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 import { useState } from "react"
@@ -20,22 +20,28 @@ import {
   MODALITY_LABELS,
   priceSourceLabel,
 } from "@/features/models/catalog"
-import { publicCatalogHref } from "@/features/models/publicCatalog"
+import {
+  publicCatalogHref,
+  rememberModel,
+} from "@/features/models/publicCatalog"
 import { UseModelDrawer } from "@/features/models/UseModelDrawer"
 import { canManage, isDeploymentOperator } from "@/features/organization/roles"
 import { useCatalogModel } from "@/shared/api/models"
 import { useOrganizationContext } from "@/shared/api/organizations"
+import { ProviderMark } from "@/shared/components/marks/BrandMark"
 import {
   formatContext,
   formatRate,
   formatReleaseDate,
 } from "@/shared/helpers/format"
 import { providerDisplayName } from "@/shared/helpers/providers"
+import { useDeployment } from "@/shared/hooks/useDeployment"
 
 // One model, on a page of its own: the header with its facts, then every
 // offering of the model this viewer may call, cheapest first, with the price
 // they would be charged and where it came from. "Use this model" opens a
-// drawer beside the table with the request to send.
+// drawer beside the table with the request to send; ahead of a session, where
+// there is no key to send it with, it starts an account instead.
 //
 // Read-only for everyone (otari-ai#2095, #2096): a rate is edited on Model
 // pricing, which the operator's link here points at, so the page that compares
@@ -187,11 +193,9 @@ function compareOfferings(
 }
 
 function offeringColumns({
-  canPrice,
   canOverride,
   withUsage,
 }: {
-  canPrice: boolean
   canOverride: boolean
   withUsage: boolean
 }): DataTableColumn<OfferingRow>[] {
@@ -208,15 +212,25 @@ function offeringColumns({
       cell: ({ offering: row }) => (
         // One line: the selector, which is as long as the provider makes it,
         // opens under the row instead of setting every row's height.
-        <span className="text-body whitespace-nowrap">
-          {providerDisplayName(row.provider)}
-          <span className="text-caption">
-            {" · "}
-            {row.provider_type !== row.provider
-              ? `${providerDisplayName(row.provider_type)} · `
-              : ""}
-            {credentialLabel(row.credential)}
-            {row.quantization ? ` · ${row.quantization}` : ""}
+        <span className="text-body flex items-center gap-2 whitespace-nowrap">
+          {/* Keyed on the type rather than the instance, which is what the
+              instance is named after until an operator renames it. The name
+              stays the instance either way, and the type is still spelled out
+              below when the two differ. */}
+          <ProviderMark
+            providerId={row.provider_type || row.provider}
+            label={providerDisplayName(row.provider)}
+          />
+          <span>
+            {providerDisplayName(row.provider)}
+            <span className="text-caption">
+              {" · "}
+              {row.provider_type !== row.provider
+                ? `${providerDisplayName(row.provider_type)} · `
+                : ""}
+              {credentialLabel(row.credential)}
+              {row.quantization ? ` · ${row.quantization}` : ""}
+            </span>
           </span>
         </span>
       ),
@@ -298,21 +312,7 @@ function offeringColumns({
         ),
     })
   }
-  if (canPrice) {
-    columns.push({
-      id: "actions",
-      header: "Actions",
-      cell: ({ offering: row }) => (
-        <Link
-          to="/organization/pricing"
-          search={{ model: row.selector }}
-          className="text-link hover:text-link-hover"
-        >
-          Edit rate
-        </Link>
-      ),
-    })
-  } else if (canOverride) {
+  if (canOverride) {
     // An organization admin cannot touch the deployment's price, but may set
     // what their own organization is billed for a model it supplies the key
     // for. An offering on one of the deployment's own instances is not one of
@@ -325,7 +325,7 @@ function offeringColumns({
       cell: ({ offering: row }) =>
         row.credential === "organization" ? (
           <Link
-            to="/organization/pricing"
+            to="/organization/provider-keys"
             search={{ override: row.selector }}
             className="text-link hover:text-link-hover"
           >
@@ -348,8 +348,15 @@ export function ModelDetailView({
   publicView?: boolean
 }) {
   const organization = useOrganizationContext(!publicView)
-  const canPrice = !publicView && isDeploymentOperator(organization.data)
-  const canOverride = !publicView && !canPrice && canManage(organization.data)
+  const { open_signup } = useDeployment()
+  // Not a pricing authority here: rates are set per model on Providers, which
+  // answers to the organization role. It decides the two hints below that point
+  // at deployment-wide pages.
+  const isOperator = !publicView && isDeploymentOperator(organization.data)
+  // Includes an operator: on a standalone deployment they are also the single
+  // organization's owner, and excluding them would leave the one caller who can
+  // set a rate without the link to set it.
+  const canOverride = !publicView && canManage(organization.data)
   const selected = useCatalogModel(modelId)
   const [quantization, setQuantization] = useState("all")
   const [useModel, setUseModel] = useState(false)
@@ -370,8 +377,8 @@ export function ModelDetailView({
   const quantizations = [
     ...new Set(
       model.offerings
-        .map((o) => o.quantization)
-        .filter((q): q is string => !!q),
+        .map((model) => model.quantization)
+        .filter((query): query is string => !!query),
     ),
   ]
   const rows: OfferingRow[] = model.offerings
@@ -386,26 +393,28 @@ export function ModelDetailView({
     }))
     .sort(compareOfferings(sort.column, sort.direction))
   const withUsage = !publicView && hasUsage(model.offerings)
-  const unpriced = model.offerings.filter((o) => o.pricing === null).length
+  const unpriced = model.offerings.filter(
+    (model) => model.pricing === null,
+  ).length
   const defaultPricing = model.default_pricing
   const capabilities = CAPABILITY_LABELS.filter(
     ({ key }) => model.capabilities[key],
   )
   const listPriceDiffers = model.offerings.some(
-    (o) =>
+    (model) =>
       listPriceNote(
-        o.pricing?.input_price_per_million,
-        o.metadata_input_price_per_million,
+        model.pricing?.input_price_per_million,
+        model.metadata_input_price_per_million,
       ) !== null ||
       listPriceNote(
-        o.pricing?.output_price_per_million,
-        o.metadata_output_price_per_million,
+        model.pricing?.output_price_per_million,
+        model.metadata_output_price_per_million,
       ) !== null,
   )
   const modalities = (list: string[]) =>
     list.length === 0
       ? "—"
-      : list.map((m) => MODALITY_LABELS[m] ?? m).join(", ")
+      : list.map((model) => MODALITY_LABELS[model] ?? model).join(", ")
   const title = model.vendor ? `${model.vendor}: ${model.name}` : model.name
   const sortDescriptor: SortDescriptor = {
     column: sort.column,
@@ -460,20 +469,30 @@ export function ModelDetailView({
               {model.deprecated ? <Badge tone="warn">Deprecated</Badge> : null}
             </div>
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            {canPrice ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-3">
+            {canOverride ? (
               <Link
-                to="/organization/pricing"
+                to="/organization/provider-keys"
                 className="inline-flex min-h-9 items-center text-sm text-link hover:text-link-hover"
               >
-                Model pricing
+                Providers
               </Link>
             ) : null}
-            {model.offerings.length > 0 ? (
+            {model.offerings.length === 0 ? null : publicView ? (
+              // Signup where the deployment offers it, sign-in otherwise; the
+              // model is reopened once the new session starts.
+              <a
+                href={open_signup ? "#/signup" : "#/"}
+                onClick={() => rememberModel(model.id)}
+                className={buttonVariants({ variant: "primary" })}
+              >
+                Use this model
+              </a>
+            ) : (
               <Button variant="primary" onPress={() => setUseModel(true)}>
                 Use this model
               </Button>
-            ) : null}
+            )}
           </div>
         </div>
         {model.description ? (
@@ -543,8 +562,10 @@ export function ModelDetailView({
             <p className="max-w-prose text-sm text-muted">
               Several providers serve the same model. Each row is one offering:
               what {publicView ? "this deployment lists it at" : "you pay"} and
-              where that price comes from. "Use this model" has the request to
-              send, to the gateway's pick or a provider you pin.{" "}
+              where that price comes from.{" "}
+              {publicView
+                ? null
+                : `"Use this model" has the request to send, to the gateway's pick or a provider you pin. `}
               {model.offering_count} on {model.provider_count}{" "}
               {model.provider_count === 1 ? "provider" : "providers"}, cheapest
               first.
@@ -559,7 +580,10 @@ export function ModelDetailView({
                   onChange={setQuantization}
                   options={[
                     { value: "all", label: "Any quantization" },
-                    ...quantizations.map((q) => ({ value: q, label: q })),
+                    ...quantizations.map((query) => ({
+                      value: query,
+                      label: query,
+                    })),
                   ]}
                 />
               </div>
@@ -568,7 +592,6 @@ export function ModelDetailView({
               <DataTable
                 ariaLabel={`Offerings of ${model.name}`}
                 columns={offeringColumns({
-                  canPrice,
                   canOverride,
                   withUsage,
                 })}
@@ -590,7 +613,7 @@ export function ModelDetailView({
             <p className="text-caption">
               Default pricing is off, so an offering with no stored rate is
               unpriced here even where genai-prices publishes one.
-              {canPrice ? " Both switches live on Settings." : ""}
+              {isOperator ? " Both switches live on Settings." : ""}
             </p>
           ) : null}
           {listPriceDiffers ? (
@@ -605,7 +628,7 @@ export function ModelDetailView({
               Also served by {elsewhere(model.also_available_from)}, which{" "}
               {model.also_available_from.length === 1 ? "is" : "are"} not
               configured here.
-              {canPrice ? (
+              {isOperator ? (
                 <>
                   {" "}
                   <Link
@@ -621,12 +644,13 @@ export function ModelDetailView({
           ) : null}
         </section>
       </div>
-      <UseModelDrawer
-        model={model}
-        isOpen={useModel}
-        onOpenChange={setUseModel}
-        publicView={publicView}
-      />
+      {publicView ? null : (
+        <UseModelDrawer
+          model={model}
+          isOpen={useModel}
+          onOpenChange={setUseModel}
+        />
+      )}
     </div>
   )
 }

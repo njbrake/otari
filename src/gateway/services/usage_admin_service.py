@@ -32,7 +32,8 @@ from gateway.core.metered_pricing import BillableUsage, billable_usage, price_bi
 from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
 from gateway.core.usage_source import not_served_here
 from gateway.log_config import logger
-from gateway.models.entities import ModelPricing, UsageLog
+from gateway.models.pricing import ModelPricing
+from gateway.models.usage import UsageLog
 from gateway.services.tool_usage import TOOL_METER_NAMESPACE
 
 # Cap on an explicit id list. Page selections drive the id path and the largest
@@ -305,13 +306,17 @@ async def set_usage_price(db: AsyncSession, request: UsageSetPriceRequest) -> Us
         last_id = ""
         while True:
             rows = (
-                await db.execute(
-                    select(UsageLog)
-                    .where(*conditions, UsageLog.id > last_id)
-                    .order_by(UsageLog.id)
-                    .limit(_REPRICE_CHUNK)
+                (
+                    await db.execute(
+                        select(UsageLog)
+                        .where(*conditions, UsageLog.id > last_id)
+                        .order_by(UsageLog.id)
+                        .limit(_REPRICE_CHUNK)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if not rows:
                 break
             for row in rows:
@@ -353,4 +358,3 @@ async def set_usage_price(db: AsyncSession, request: UsageSetPriceRequest) -> Us
         request.by_filter,
     )
     return result
-

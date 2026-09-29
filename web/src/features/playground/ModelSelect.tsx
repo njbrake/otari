@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { FiChevronDown, FiStar } from "react-icons/fi"
 
-import { Button } from "@/design-system/actions/Button"
+import { Button, type ButtonSize } from "@/design-system/actions/Button"
 import { SearchField } from "@/design-system/forms/SearchField"
 import { Popover } from "@/design-system/overlays/Popover"
 
@@ -11,8 +11,7 @@ import {
 } from "./helpers/playgroundModels"
 
 /**
- * The model picker: searchable, grouped by provider instance, with pinned
- * models on top.
+ * The model picker: searchable, grouped by vendor, with pinned models on top.
  *
  * A `Popover` holding a search field and a list of buttons rather than the
  * shared `ComboBoxField`, and this is the one deliberate departure from "reach
@@ -21,9 +20,6 @@ import {
  * react-aria collection has no room for a control inside an option (pressing
  * anywhere in one selects it). The alternative was a pin control somewhere else
  * entirely, which is what makes pinning a model something nobody discovers.
- *
- * Search matches the whole key rather than the label, so typing a provider name
- * narrows to that instance and typing a model name finds it across instances.
  */
 export function ModelSelect({
   value,
@@ -34,8 +30,9 @@ export function ModelSelect({
   unavailableKeys,
   label,
   className = "",
+  size = "md",
 }: {
-  /** The selected `instance:model` key, or "" for none. */
+  /** The selected model's selector, or "" for none. */
   value: string
   onChange: (key: string) => void
   models: readonly PlaygroundModel[]
@@ -46,13 +43,14 @@ export function ModelSelect({
   /** The accessible name, which is what tells the two compare pickers apart. */
   label: string
   className?: string
+  size?: ButtonSize
 }) {
   const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState("")
 
   const unavailable = new Set(unavailableKeys ?? [])
   const pinned = new Set(pinnedKeys)
-  const selectedLabel = models.find((model) => model.key === value)?.key ?? ""
+  const selectedLabel = models.find((model) => model.key === value)?.label ?? ""
   const groups = groupPlaygroundModels({ models, pinnedKeys, search })
 
   const select = (key: string) => {
@@ -62,6 +60,7 @@ export function ModelSelect({
 
   return (
     <Popover
+      label={label}
       isOpen={isOpen}
       onOpenChange={(next) => {
         setIsOpen(next)
@@ -72,10 +71,11 @@ export function ModelSelect({
       placement="bottom"
       trigger={
         <Button
+          size={size}
           aria-label={label}
-          className={`justify-between font-normal ${className}`}
+          className={`min-h-11 md:min-h-0 justify-between ${className}`}
         >
-          <span className="truncate">{selectedLabel || "Select a model"}</span>
+          <span className="truncate">{selectedLabel || "Choose a model"}</span>
           <FiChevronDown aria-hidden className="size-4 shrink-0 text-muted" />
         </Button>
       }
@@ -132,9 +132,7 @@ export function ModelSelect({
                         aria-pressed={isPinned}
                         onClick={() => onTogglePin(model.key)}
                         className={`flex size-11 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface hover:text-foreground ${
-                          isPinned
-                            ? "text-link"
-                            : "md:opacity-0 md:group-hover/row:opacity-100 md:group-focus-within/row:opacity-100"
+                          isPinned ? "text-link" : ""
                         }`}
                       >
                         <FiStar

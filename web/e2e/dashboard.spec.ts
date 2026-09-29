@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test"
 import { API_ROOT } from "@/shared/api/client"
 import {
   dismissComboBoxInDialog,
+  expectedKeyFingerprint,
+  gotoRoute,
   login,
   MASTER_KEY,
   nav,
@@ -52,7 +54,14 @@ test.describe("dashboard core flows", () => {
   test("the first-run sheet hands out a key, then skips for good", async ({
     page,
   }) => {
+    const mintedKey = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/activation/key") &&
+        response.request().method() === "POST" &&
+        response.ok(),
+    )
     await login(page)
+    const { key: fullKey } = await (await mintedKey).json()
 
     // A sheet over the Overview, not a panel on it: a workspace with no traffic
     // has nothing on that page worth reading yet.
@@ -66,7 +75,11 @@ test.describe("dashboard core flows", () => {
     // picks up the field's own "Show API key" toggle.
     const key = sheet.getByRole("textbox", { name: "Your API key" })
     await expect(key).toBeVisible()
-    await expect(key).not.toHaveValue(/^gw-/)
+    // The fingerprint the key-creation dialog shows, derived from the key the
+    // mint returned rather than matched by shape: a stand-in built from another
+    // key would have the same shape.
+    const concealedKey = expectedKeyFingerprint(fullKey)
+    await expect(key).toHaveValue(concealedKey)
 
     // The examples are tabs, and the agent prompt is the one offered first.
     await expect(
@@ -76,11 +89,16 @@ test.describe("dashboard core flows", () => {
     const curl = sheet.getByRole("region", { name: "curl code" })
     await expect(curl).toBeVisible()
     // Concealed in the example too, because it is the same secret.
-    await expect(curl).not.toContainText(/gw-/)
+    await expect(curl).toContainText(`Otari-Key: ${concealedKey}`)
+    await expect(curl).not.toContainText(fullKey)
 
     await sheet.getByRole("button", { name: "Show Your API key" }).click()
-    await expect(key).toHaveValue(/^gw-/)
-    await expect(curl).toContainText(/Otari-Key: gw-/)
+    await expect(key).toHaveValue(fullKey)
+    await expect(curl).toContainText(`Otari-Key: ${fullKey}`)
+    await sheet.getByRole("button", { name: "Hide Your API key" }).click()
+    await expect(key).toHaveValue(concealedKey)
+    await expect(curl).toContainText(`Otari-Key: ${concealedKey}`)
+    await expect(curl).not.toContainText(fullKey)
 
     // It is watching for the request while all of that is on screen.
     await expect(
@@ -100,15 +118,8 @@ test.describe("dashboard core flows", () => {
     await login(page)
     // The workspace rail, then the organization one. The sidebar label and the
     // page heading are no longer always the same word, so both are named.
-    for (const [link, heading] of [
-      ["Models", "Models"],
-      ["Providers", "Providers"],
-    ]) {
-      await nav(page).getByRole("link", { name: link }).click()
-      // Exact match: the Budgets onboarding heading ("No budgets yet") would
-      // otherwise also substring-match the page title.
-      await expect(pageHeading(page, heading)).toBeVisible()
-    }
+    await nav(page).getByRole("link", { name: "Models", exact: true }).click()
+    await expect(pageHeading(page, "Models")).toBeVisible()
 
     // Routing and Tools nest their pages, so each is reached through its group.
     await openNested(page, "Routing", "Policies")
@@ -122,12 +133,28 @@ test.describe("dashboard core flows", () => {
 
     await openOrganization(page)
     for (const [link, heading] of [
+      // Two provider rows on this rail, told apart by their labels: the
+      // organization's own credentials and the process-wide ones a deployment
+      // operator manages.
+      ["Providers", "Providers"],
+      ["Deployment providers", "Deployment providers"],
       ["Spend & budgets", "Budgets"],
-      ["Model pricing", "Model pricing"],
     ]) {
       await nav(page).getByRole("link", { name: link, exact: true }).click()
       await expect(pageHeading(page, heading)).toBeVisible()
     }
+
+    // The retired Model pricing path still answers, because bookmarks and links
+    // to it outlive the page. `override` named this organization's own rate for
+    // a model and still does, so it survives the redirect; `model` named the
+    // deployment's rate, whose editor went with the price table, so it is
+    // dropped rather than left in a URL nothing reads.
+    await gotoRoute(page, "/organization/pricing?override=openai:gpt-4o")
+    await expect(pageHeading(page, "Providers")).toBeVisible()
+    await expect(page).toHaveURL(/override=openai(%3A|:)gpt-4o/)
+    await gotoRoute(page, "/organization/pricing?model=openai:gpt-4o")
+    await expect(pageHeading(page, "Providers")).toBeVisible()
+    await expect(page).not.toHaveURL(/model=/)
 
     // The deployment's own rail, which neither loop above reaches: it is entered
     // from the account menu rather than from a row, and the menu closes on the
@@ -433,8 +460,24 @@ test.describe("dashboard core flows", () => {
     await expect(share).toBeVisible()
     await share.click()
 
-    const dialog = page.getByRole("alertdialog")
+    // A `dialog`, not an `alertdialog`: this is the plain frame, and an alert is
+    // reserved for a frame whose whole job is one question. Named, because the
+    // frame fills HeroUI's hidden trigger slot with the same title.
+    const dialog = page.getByRole("dialog", {
+      name: "Share this view as an image",
+    })
     await expect(dialog).toBeVisible()
+
+    // The width, not the class. `design-system.css` pins `.modal__dialog`
+    // unlayered at a 42rem cap, which is what a `w-[…]` at a call site loses to,
+    // so the only proof that this frame is the wide one is a number read after
+    // layout. It holds the preview and its controls side by side; at the cap
+    // they stack. The computed width, not the bounding box: the frame animates
+    // in on a scale transform, so a box read here is the tail of that animation
+    // and comes back a few percent large.
+    expect(await dialog.evaluate((el) => getComputedStyle(el).width)).toBe(
+      "928px",
+    )
 
     // The preview is the PNG itself, so asserting it decoded is asserting the
     // rasterizer produced a real image. naturalWidth stays 0 on a failed decode,

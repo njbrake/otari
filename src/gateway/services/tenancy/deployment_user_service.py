@@ -22,7 +22,7 @@ makes the bootstrap operator a superuser: the marker is what still admits an
 operator whose flag was cleared, by hand or by another operator, and it is the
 reason this surface cannot lock a deployment out of itself. Everyone else is
 refused with 404 rather than 403; see
-:class:`~gateway.services.tenancy.errors.DeploymentAdministrationUnavailableError`
+:class:`~gateway.exceptions.identity_exceptions.DeploymentAdministrationUnavailableError`
 for why the status is the one it is.
 
 **What it refuses.** Two lockout guards, both narrow and both directional, so a
@@ -48,6 +48,15 @@ from datetime import UTC, datetime
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.exceptions.identity_exceptions import (
+    BootstrapOperatorProtectedError,
+    DeploymentAdministrationUnavailableError,
+    DeploymentUserNotFoundError,
+    DeploymentUserOwnPasswordError,
+    DeploymentUserSelfChangeError,
+    EmptyDeploymentUserUpdateError,
+    SignInAddressRequiredError,
+)
 from gateway.log_config import logger
 from gateway.models.tenancy import (
     DeploymentUserOrganizationPublic,
@@ -61,15 +70,6 @@ from gateway.models.tenancy import (
 )
 from gateway.repositories.tenancy import OrganizationMemberRepository, UserRepository
 from gateway.services.dashboard_session_service import revoke_user_dashboard_sessions
-from gateway.services.tenancy.errors import (
-    BootstrapOperatorProtectedError,
-    DeploymentAdministrationUnavailableError,
-    DeploymentUserNotFoundError,
-    DeploymentUserOwnPasswordError,
-    DeploymentUserSelfChangeError,
-    EmptyDeploymentUserUpdateError,
-    SignInAddressRequiredError,
-)
 from gateway.services.tenancy.provisioning_service import load_bootstrap_identity
 
 # 24 URL-safe characters: 144 bits, past MIN_PASSWORD_LENGTH and inside bcrypt's 72 bytes.

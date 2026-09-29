@@ -17,12 +17,19 @@ import pytest
 from any_llm.types.completion import CompletionUsage
 from fastapi import HTTPException
 
+from conftest import InstallControlPlane
 from gateway.api.routes import _platform
-from gateway.api.routes._platform import ResolvedAttempt, ResolvedRoute, default_attempt_kwargs, run_platform_attempts
+from gateway.api.routes._platform import (
+    ResolvedAttempt,
+    ResolvedRoute,
+    default_attempt_kwargs,
+    record_abandoned_attempt,
+    run_platform_attempts,
+)
 from gateway.core.config import GatewayConfig
 from gateway.metrics import REGISTRY
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
-from gateway.services.sandbox_backend import SandboxNotReachableError
+from gateway.services.sandbox_backend import SandboxNotReachableError, SandboxUnavailableError
 from gateway.services.web_search_backend import WebSearchNotReachableError
 
 
@@ -36,10 +43,29 @@ def _abandoned_sample(provider: str, model: str, reason: str, position: int) -> 
     )
 
 
+def test_record_abandoned_attempt_increments_counter() -> None:
+    before = _abandoned_sample("ab-prov", "ab-model", "timeout", 0)
+
+    record_abandoned_attempt("ab-prov", "ab-model", "timeout", 0)
+
+    assert _abandoned_sample("ab-prov", "ab-model", "timeout", 0) - before == 1.0
+
+
+def test_record_abandoned_attempt_labels_by_reason_and_position() -> None:
+    """Each (reason, position) pair is its own series so operators can spot which
+    plan entry and failure phase dominates the fallback waste."""
+    before_build = _abandoned_sample("ab-prov2", "ab-model2", "build_error", 1)
+    before_upstream = _abandoned_sample("ab-prov2", "ab-model2", "upstream_error", 2)
+
+    record_abandoned_attempt("ab-prov2", "ab-model2", "build_error", 1)
+    record_abandoned_attempt("ab-prov2", "ab-model2", "upstream_error", 2)
+
+    assert _abandoned_sample("ab-prov2", "ab-model2", "build_error", 1) - before_build == 1.0
+    assert _abandoned_sample("ab-prov2", "ab-model2", "upstream_error", 2) - before_upstream == 1.0
+
+
 def _single_attempt(provider: str, model: str) -> ResolvedAttempt:
-    return ResolvedAttempt(
-        attempt_id="a0", position=0, provider=provider, model=model, api_key="k", managed=False
-    )
+    return ResolvedAttempt(attempt_id="a0", position=0, provider=provider, model=model, api_key="k", managed=False)
 
 
 @pytest.mark.asyncio
@@ -294,6 +320,7 @@ async def test_locked_in_retryable_failure_marks_attempt_final() -> None:
     [
         (MaxToolIterationsExceeded("iteration cap reached"), HTTPException),
         (SandboxNotReachableError("sandbox unavailable"), SandboxNotReachableError),
+        (SandboxUnavailableError("15"), SandboxUnavailableError),
         (WebSearchNotReachableError("web search unavailable"), WebSearchNotReachableError),
     ],
 )
@@ -334,12 +361,8 @@ async def test_gateway_terminal_error_marks_current_attempt_final(
 @pytest.mark.asyncio
 async def test_fallback_reports_nonfinal_error_and_final_success() -> None:
     attempts = [
-        ResolvedAttempt(
-            attempt_id="a0", position=0, provider="openai", model="gpt-4o", api_key="bad", managed=False
-        ),
-        ResolvedAttempt(
-            attempt_id="a1", position=1, provider="openai", model="gpt-4o", api_key="good", managed=False
-        ),
+        ResolvedAttempt(attempt_id="a0", position=0, provider="openai", model="gpt-4o", api_key="bad", managed=False),
+        ResolvedAttempt(attempt_id="a1", position=1, provider="openai", model="gpt-4o", api_key="good", managed=False),
     ]
     route = ResolvedRoute(request_id="r", fallback_enabled=True, attempts=attempts)
     reports: list[tuple[Any, ...]] = []
@@ -371,9 +394,7 @@ async def test_fallback_reports_nonfinal_error_and_final_success() -> None:
 @pytest.mark.asyncio
 async def test_nonretryable_error_marks_first_attempt_final() -> None:
     attempts = [
-        ResolvedAttempt(
-            attempt_id="a0", position=0, provider="openai", model="gpt-4o", api_key="bad", managed=False
-        ),
+        ResolvedAttempt(attempt_id="a0", position=0, provider="openai", model="gpt-4o", api_key="bad", managed=False),
         ResolvedAttempt(
             attempt_id="a1", position=1, provider="openai", model="gpt-4o", api_key="unused", managed=False
         ),
@@ -434,9 +455,11 @@ def _completed_usage_body(
 
 
 @pytest.mark.asyncio
-async def test_report_platform_usage_returns_completed_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_report_platform_usage_returns_completed_cost(
+    control_plane_transport: InstallControlPlane,
+) -> None:
     post_mock = AsyncMock(return_value=httpx.Response(200, json=_completed_usage_body()))
-    monkeypatch.setattr(_platform, "_post_platform", post_mock)
+    control_plane_transport(post_mock)
 
     result = await _platform._report_platform_usage(
         _usage_config(),
@@ -450,12 +473,12 @@ async def test_report_platform_usage_returns_completed_cost(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_report_platform_usage_accepts_opaque_correlation_id(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_report_platform_usage_accepts_opaque_correlation_id(
+    control_plane_transport: InstallControlPlane,
+) -> None:
     correlation_id = "01HX1ABCDEFGHJKMNPQRSTVWXYZ"
-    post_mock = AsyncMock(
-        return_value=httpx.Response(200, json=_completed_usage_body(correlation_id=correlation_id))
-    )
-    monkeypatch.setattr(_platform, "_post_platform", post_mock)
+    post_mock = AsyncMock(return_value=httpx.Response(200, json=_completed_usage_body(correlation_id=correlation_id)))
+    control_plane_transport(post_mock)
 
     result = await _platform._report_platform_usage(
         _usage_config(),
@@ -471,11 +494,11 @@ async def test_report_platform_usage_accepts_opaque_correlation_id(monkeypatch: 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", [202, 204])
 async def test_report_platform_usage_returns_none_without_completed_cost(
-    monkeypatch: pytest.MonkeyPatch,
     status_code: int,
+    control_plane_transport: InstallControlPlane,
 ) -> None:
     post_mock = AsyncMock(return_value=httpx.Response(status_code))
-    monkeypatch.setattr(_platform, "_post_platform", post_mock)
+    control_plane_transport(post_mock)
 
     result = await _platform._report_platform_usage(
         _usage_config(),
@@ -505,15 +528,13 @@ async def test_report_platform_usage_returns_none_without_completed_cost(
     ids=["unpriced", "unavailable", "priced-zero"],
 )
 async def test_report_platform_usage_applies_pricing_source_gate(
-    monkeypatch: pytest.MonkeyPatch,
     cost_usd: str,
     usage_status: str,
     pricing_source: str | None,
     expected: _platform.SettledCost | None,
+    control_plane_transport: InstallControlPlane,
 ) -> None:
-    monkeypatch.setattr(
-        _platform,
-        "_post_platform",
+    control_plane_transport(
         AsyncMock(
             return_value=httpx.Response(
                 200,
@@ -523,7 +544,7 @@ async def test_report_platform_usage_applies_pricing_source_gate(
                     pricing_source=pricing_source,
                 ),
             )
-        ),
+        )
     )
 
     result = await _platform._report_platform_usage(
@@ -551,11 +572,11 @@ async def test_report_platform_usage_applies_pricing_source_gate(
     ids=["malformed", "gone", "correlation-mismatch"],
 )
 async def test_report_platform_usage_ignores_non_attachable_responses(
-    monkeypatch: pytest.MonkeyPatch,
     response: httpx.Response,
+    control_plane_transport: InstallControlPlane,
 ) -> None:
     post_mock = AsyncMock(return_value=response)
-    monkeypatch.setattr(_platform, "_post_platform", post_mock)
+    control_plane_transport(post_mock)
 
     result = await _platform._report_platform_usage(
         _usage_config(),
@@ -570,7 +591,9 @@ async def test_report_platform_usage_ignores_non_attachable_responses(
 
 
 @pytest.mark.asyncio
-async def test_report_platform_usage_ignores_failed_outcome_body(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_report_platform_usage_ignores_failed_outcome_body(
+    control_plane_transport: InstallControlPlane,
+) -> None:
     post_mock = AsyncMock(
         return_value=httpx.Response(
             200,
@@ -583,7 +606,7 @@ async def test_report_platform_usage_ignores_failed_outcome_body(monkeypatch: py
             },
         )
     )
-    monkeypatch.setattr(_platform, "_post_platform", post_mock)
+    control_plane_transport(post_mock)
 
     result = await _platform._report_platform_usage(
         _usage_config(),
@@ -599,6 +622,7 @@ async def test_report_platform_usage_ignores_failed_outcome_body(monkeypatch: py
 @pytest.mark.asyncio
 async def test_report_platform_usage_retries_then_returns_completed_cost(
     monkeypatch: pytest.MonkeyPatch,
+    control_plane_transport: InstallControlPlane,
 ) -> None:
     post_mock = AsyncMock(
         side_effect=[
@@ -607,7 +631,7 @@ async def test_report_platform_usage_retries_then_returns_completed_cost(
         ]
     )
     sleep_mock = AsyncMock()
-    monkeypatch.setattr(_platform, "_post_platform", post_mock)
+    control_plane_transport(post_mock)
     monkeypatch.setattr(asyncio, "sleep", sleep_mock)
 
     result = await _platform._report_platform_usage(
@@ -624,7 +648,10 @@ async def test_report_platform_usage_retries_then_returns_completed_cost(
 
 
 @pytest.mark.asyncio
-async def test_report_platform_usage_does_not_retry_on_402(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_report_platform_usage_does_not_retry_on_402(
+    monkeypatch: pytest.MonkeyPatch,
+    control_plane_transport: InstallControlPlane,
+) -> None:
     """A 402 from the usage-report endpoint is a permanent rejection (the org
     wallet is overdrawn or missing and won't recover within the retry window).
     The gateway must POST once and give up, never retry."""
@@ -637,7 +664,7 @@ async def test_report_platform_usage_does_not_retry_on_402(monkeypatch: pytest.M
     )
 
     post_mock = AsyncMock(return_value=httpx.Response(402))
-    monkeypatch.setattr(_platform, "_post_platform", post_mock)
+    control_plane_transport(post_mock)
     sleep_mock = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", sleep_mock)
 
@@ -668,9 +695,9 @@ async def test_report_platform_usage_does_not_retry_on_402(monkeypatch: pytest.M
     ],
 )
 async def test_report_platform_usage_forwards_session_label(
-    monkeypatch: pytest.MonkeyPatch,
     session_label: str | None,
     expected: str | None,
+    control_plane_transport: InstallControlPlane,
 ) -> None:
     """The caller's session label rides the usage report so the platform can
     attribute spend; blank/absent labels are omitted from the payload."""
@@ -683,7 +710,7 @@ async def test_report_platform_usage_forwards_session_label(
     )
 
     post_mock = AsyncMock(return_value=httpx.Response(204))
-    monkeypatch.setattr(_platform, "_post_platform", post_mock)
+    control_plane_transport(post_mock)
 
     await _platform._report_platform_usage(
         config,
@@ -702,7 +729,19 @@ async def test_report_platform_usage_forwards_session_label(
 
 
 @pytest.mark.asyncio
-async def test_report_platform_usage_omits_unavailable_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("ttft_ms", "expected"),
+    [
+        (42, 42),
+        (0, 0),
+        (None, None),  # omitted, same as session_label
+    ],
+)
+async def test_report_platform_usage_forwards_ttft_ms(
+    ttft_ms: int | None,
+    expected: int | None,
+    control_plane_transport: InstallControlPlane,
+) -> None:
     config = cast(
         GatewayConfig,
         SimpleNamespace(
@@ -711,7 +750,37 @@ async def test_report_platform_usage_omits_unavailable_usage(monkeypatch: pytest
         ),
     )
     post_mock = AsyncMock(return_value=httpx.Response(204))
-    monkeypatch.setattr(_platform, "_post_platform", post_mock)
+    control_plane_transport(post_mock)
+
+    await _platform._report_platform_usage(
+        config,
+        "corr-1",
+        "success",
+        None,
+        ttft_ms=ttft_ms,
+        is_final_attempt=True,
+    )
+
+    body = post_mock.call_args.kwargs["body"]
+    if expected is None:
+        assert "ttft_ms" not in body
+    else:
+        assert body["ttft_ms"] == expected
+
+
+@pytest.mark.asyncio
+async def test_report_platform_usage_omits_unavailable_usage(
+    control_plane_transport: InstallControlPlane,
+) -> None:
+    config = cast(
+        GatewayConfig,
+        SimpleNamespace(
+            platform={"base_url": "http://platform", "usage_max_retries": 3},
+            platform_token="gw-test",
+        ),
+    )
+    post_mock = AsyncMock(return_value=httpx.Response(204))
+    control_plane_transport(post_mock)
 
     await _platform._report_platform_usage(
         config,
@@ -725,7 +794,9 @@ async def test_report_platform_usage_omits_unavailable_usage(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_report_platform_usage_forwards_final_attempt_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_report_platform_usage_forwards_final_attempt_marker(
+    control_plane_transport: InstallControlPlane,
+) -> None:
     config = cast(
         GatewayConfig,
         SimpleNamespace(
@@ -734,7 +805,7 @@ async def test_report_platform_usage_forwards_final_attempt_marker(monkeypatch: 
         ),
     )
     post_mock = AsyncMock(return_value=httpx.Response(204))
-    monkeypatch.setattr(_platform, "_post_platform", post_mock)
+    control_plane_transport(post_mock)
 
     await _platform._report_platform_usage(
         config,

@@ -77,6 +77,32 @@ describe("DataTable", () => {
     expect(onRowAction).toHaveBeenCalledWith("b")
   })
 
+  it("marks a row clickable only where it has a row action", () => {
+    const inert = render(<DataTable {...base({})} />)
+    expect(screen.getByRole("row", { name: /Alpha/ })).not.toHaveClass(
+      "cursor-pointer",
+    )
+    inert.unmount()
+    render(<DataTable {...base({ onRowAction: vi.fn() })} />)
+    expect(screen.getByRole("row", { name: /Alpha/ })).toHaveClass(
+      "cursor-pointer",
+    )
+  })
+
+  it("keeps a caller's own row class beside the clickable one", () => {
+    render(
+      <DataTable
+        {...base({
+          onRowAction: vi.fn(),
+          rowClassName: () => "bg-danger-subtle",
+        })}
+      />,
+    )
+    const row = screen.getByRole("row", { name: /Alpha/ })
+    expect(row).toHaveClass("cursor-pointer")
+    expect(row).toHaveClass("bg-danger-subtle")
+  })
+
   // The press sequence is dispatched raw rather than through userEvent.click,
   // which collapses the document selection on pointer down (as a browser does
   // when a click *starts* a new selection) and so cannot model the click that
@@ -333,7 +359,9 @@ describe("DataTable", () => {
     await waitFor(() =>
       expect(detailFor("Bravo")).toContain("detail for Bravo"),
     )
-    expect(document.querySelectorAll(".otari-detail-row")).toHaveLength(1)
+    // `getByText` is the "not duplicated" half: a stranded second host renders
+    // the panel twice and the singular query throws on the multiple match.
+    expect(screen.getByText("detail for Bravo")).toBeInTheDocument()
 
     // Target filtered out: panel is removed, nothing stranded.
     rerender(
@@ -342,16 +370,15 @@ describe("DataTable", () => {
       />,
     )
     await waitFor(() =>
-      expect(document.querySelectorAll(".otari-detail-row")).toHaveLength(0),
+      expect(screen.queryByText("detail for Bravo")).not.toBeInTheDocument(),
     )
-    expect(screen.queryByText("detail for Bravo")).not.toBeInTheDocument()
 
     // Target returns (filter cleared): panel re-attaches with correct content.
     rerender(<DataTable {...base({ detailKey: "b", renderDetail })} />)
     await waitFor(() =>
       expect(detailFor("Bravo")).toContain("detail for Bravo"),
     )
-    expect(document.querySelectorAll(".otari-detail-row")).toHaveLength(1)
+    expect(screen.getByText("detail for Bravo")).toBeInTheDocument()
   })
 
   it("keeps the open detail panel mounted when the rows array is rebuilt unchanged", async () => {
@@ -375,6 +402,10 @@ describe("DataTable", () => {
     await waitFor(() =>
       expect(screen.getByText("detail for Bravo")).toBeInTheDocument(),
     )
+    // The host node itself, not its content: what this pins is that the same
+    // <tr> is reused rather than recreated, which is an implementation contract
+    // with no user-visible form (the panel remounting is what it prevents). It
+    // is the one thing here a content query cannot say, so the class stays.
     const host = document.querySelector(".otari-detail-row")
     expect(mounts).toBe(1)
 
@@ -423,11 +454,12 @@ describe("DataTable", () => {
       screen.getByText("detail for Charlie, seeded from Charlie"),
     ).toBeInTheDocument()
     expect(mounts).toBe(2)
-    // Still one host, now sitting under the row it belongs to.
-    expect(document.querySelectorAll(".otari-detail-row")).toHaveLength(1)
-    expect(document.querySelector('tbody tr[data-key="c"]')?.nextSibling).toBe(
-      document.querySelector(".otari-detail-row"),
-    )
+    // One panel, moved rather than copied: it sits under the row it belongs to
+    // and Bravo's is gone rather than left behind.
+    expect(
+      screen.getByRole("row", { name: /Charlie/ }).nextElementSibling,
+    ).toHaveTextContent("detail for Charlie")
+    expect(screen.queryByText(/detail for Bravo/)).not.toBeInTheDocument()
   })
 
   it("still fires onRowAction on a row click while a selection is active", async () => {

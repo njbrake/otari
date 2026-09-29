@@ -1,46 +1,18 @@
 """A workspace's policy over the deployment-wide code-execution sandbox.
 
-The sandbox is an operator concern and stays one: its URL and any credential
-live in the deployment's tool settings, and nothing here can point a workspace
-at a different backend. What a policy row decides is *who on this deployment
-may ask for code execution, and within which limits*.
-
-Composition follows the rule in ``src/gateway/AGENTS.md`` (#655, settled in
-#678): a workspace row may veto and may refine, never grant. So
-
-* ``enabled=False`` refuses ``otari_code_execution`` for the workspace;
-* ``max_iterations`` and ``exec_timeout_s`` are floored against what the
-  request would otherwise get, so a value above the deployment's own ceiling
-  narrows nothing rather than raising it;
-* ``default_purpose_hint`` fills in only when the request named none, the same
-  precedence the hybrid path applies to the policy it resolves from otari.ai;
-* ``tools`` intersects the tool kinds the deployment's sandbox backend already
-  serves, so it can only take one away, and a list that leaves nothing runnable
-  refuses the request rather than serving an empty tool set;
-* ``image`` names the sandbox image the workspace's code runs in, and may only
-  name one the operator has already curated into ``sandbox_allowed_session_images``
-  (plus the deployment's own ``sandbox_session_image``). A workspace-settable image is a
-  supply-chain surface rather than a string, so the allow-list is the whole
-  point of the column: without one, a workspace pins nothing;
-* and **no row means no narrowing**, which is what makes a deployment that
-  configures nothing behave exactly as it did.
-
-The CRUD half is master-key routed (``routes/workspace_code_execution_policy.py``)
-and role-gated per workspace: an organization owner/admin, or an owner/admin of
-the workspace itself, may read *and* write it. Reads are gated too, which is a
-departure from ``workspace_budget_default_service`` next door and a port of the
-hosted service's own rule: code execution is a security and billing posture for
-the whole workspace, not a per-member allowance. It is looser than the hosted
-version in one way, admitting a workspace owner/admin and not only an
-organization one, because that is the management gate every other
-per-workspace surface in this repository uses
-(``authorization.require_workspace_management_access``).
-
-The request-path half is :func:`resolve_workspace_code_execution_policy`, a
-plain read with no identity: the caller has already authenticated, and the
-workspace comes off the key, never off a header (``services/workspace_scope``).
-It is called from ``prepare_gateway_tools`` at admission, where the request's
-session is live, and its values land on ``ToolContext``.
+The sandbox stays an operator concern, and a policy decides who may ask for code execution and within which limits.
+A workspace row may veto and may refine, and it never grants.
+``enabled=False`` refuses ``otari_code_execution`` for the workspace.
+``max_iterations`` and ``exec_timeout_s`` can only lower what the request would otherwise get.
+``default_purpose_hint`` applies only when the request names none.
+``tools`` intersects the tool kinds the sandbox backend serves, and an empty result refuses the request.
+``image`` may name only an image on the operator's allow-list, because a settable image is a supply-chain surface.
+``executor`` pins who runs a provider-named code-execution declaration (``auto``, ``otari`` or ``provider``)
+over the deployment default and the request's header. It is a choice rather than a narrowing, and it grants
+no sandbox the deployment has not configured.
+No row means no narrowing.
+Reads and writes both require an owner or admin of the organization or of the workspace.
+:func:`resolve_workspace_code_execution_policy` is a plain read with no identity, and the workspace comes from the key.
 """
 
 from __future__ import annotations
@@ -52,8 +24,9 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.models.entities import WorkspaceCodeExecutionPolicy
+from gateway.exceptions.tools_exceptions import SandboxImageNotAllowedError, SandboxToolsUnrunnableError
 from gateway.models.tenancy import User, Workspace
+from gateway.models.tools import CodeExecutor, WorkspaceCodeExecutionPolicy
 from gateway.services.mcp_loop import MAX_TOOL_ITERATIONS_CAP
 from gateway.services.sandbox_backend import (
     CODE_EXECUTION_TOOL_NAME,
@@ -61,16 +34,11 @@ from gateway.services.sandbox_backend import (
     DEFAULT_EXEC_TIMEOUT_S,
 )
 from gateway.services.tenancy import authorization
-from gateway.services.tenancy.errors import SandboxImageNotAllowedError, SandboxToolsUnrunnableError
 from gateway.services.tenancy.organization_service import OrganizationService
 
-# The two ceilings a workspace value is floored against, which are also the
-# largest values worth storing: a policy may only narrow, so a number above the
-# deployment's own ceiling would read as a configured limit and do nothing. The
-# hosted service instead accepts any positive value and clamps it at resolve
-# time; refusing it at the write is the better answer for a deployment whose
-# operator is the same person, because a 422 says the invariant out loud where a
-# silent clamp leaves a stored value nobody's request will ever see.
+# A policy may only narrow, so a value above either ceiling would read as a
+# configured limit and change nothing. The write refuses it rather than clamping
+# it, so every stored limit is one a request can actually reach.
 _MAX_ITERATIONS = MAX_TOOL_ITERATIONS_CAP
 _MAX_EXEC_TIMEOUT_S = int(DEFAULT_EXEC_TIMEOUT_S)
 # Matches the hosted column's own bound. An image reference longer than this is
@@ -136,6 +104,15 @@ class WorkspaceCodeExecutionPolicyUpdate(BaseModel):
             "null exposes whatever it serves"
         ),
     )
+    executor: CodeExecutor | None = Field(
+        default=None,
+        description=(
+            "Who runs a provider-native code-execution declaration for this workspace: 'auto' (the "
+            "provider when it runs the tool natively for the model, else this gateway's sandbox), "
+            "'otari' or 'provider'. Pins over the deployment default and over the request's "
+            "Otari-Code-Execution header; null leaves both in charge"
+        ),
+    )
 
     @field_validator("tools")
     @classmethod
@@ -161,6 +138,18 @@ class WorkspaceCodeExecutionPolicyUpdate(BaseModel):
             msg = "tools must name at least one tool; use null to narrow nothing, or enabled=false to refuse"
             raise ValueError(msg)
         return deduped
+
+    @field_validator("executor", mode="before")
+    @classmethod
+    def _parse_executor(cls, value: object) -> object:
+        """Accept the vocabulary in any case, and a blank string as no pin.
+
+        An unparseable value passes through for the enum to refuse, because ``None`` would store no pin at all.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        parsed = CodeExecutor.parse(value)
+        return value if parsed is None else parsed
 
 
 class WorkspaceCodeExecutionPolicyPublic(BaseModel):
@@ -199,6 +188,7 @@ class WorkspaceCodeExecutionPolicyPublic(BaseModel):
     exec_timeout_s: int | None
     image: str | None
     tools: list[str] | None
+    executor: CodeExecutor | None
     created_at: str | None
     updated_at: str | None
 
@@ -222,6 +212,7 @@ class WorkspaceCodeExecutionPolicyPublic(BaseModel):
             exec_timeout_s=None,
             image=None,
             tools=None,
+            executor=None,
             created_at=None,
             updated_at=None,
         )
@@ -246,6 +237,7 @@ class WorkspaceCodeExecutionPolicyPublic(BaseModel):
             exec_timeout_s=policy.exec_timeout_s,
             image=policy.image,
             tools=list(policy.tools) if policy.tools is not None else None,
+            executor=CodeExecutor.parse(policy.executor),
             created_at=policy.created_at.isoformat(),
             updated_at=policy.updated_at.isoformat(),
         )
@@ -269,6 +261,11 @@ class ResolvedCodeExecutionPolicy:
     # ever asks whether a tool kind is in it, and an immutable one cannot be
     # edited by a backend it is handed to.
     tools: frozenset[str] | None
+    # The workspace's pin on who runs code, or ``None`` for "the deployment and
+    # the request decide". Parsed on the way out, so a stored value outside the
+    # vocabulary (which the write refuses) reads as no pin rather than failing
+    # every request.
+    executor: CodeExecutor | None = None
 
 
 async def resolve_workspace_code_execution_policy(
@@ -291,6 +288,7 @@ async def resolve_workspace_code_execution_policy(
         exec_timeout_s=policy.exec_timeout_s,
         image=policy.image,
         tools=frozenset(policy.tools) if policy.tools is not None else None,
+        executor=CodeExecutor.parse(policy.executor),
     )
 
 
@@ -299,7 +297,7 @@ class WorkspaceCodeExecutionPolicyService:
 
     def __init__(self, db: AsyncSession, *, sandbox_configured: bool, allowed_images: tuple[str, ...] = ()):
         self.db = db
-        self.organizations = OrganizationService(db)
+        self.organizations = OrganizationService(db, membership_listener=None)
         # Passed in rather than read here: whether a sandbox is configured, and
         # which images an operator curated, are questions about the running
         # deployment's config, which the route layer already holds and a service
@@ -391,8 +389,7 @@ class WorkspaceCodeExecutionPolicyService:
                 "Set sandbox_allowed_session_images (or sandbox_session_image) on the gateway first."
             )
         raise SandboxImageNotAllowedError(
-            f"Sandbox image {candidate!r} is not one this deployment allows. "
-            f"Allowed: {', '.join(self.allowed_images)}."
+            f"Sandbox image {candidate!r} is not one this deployment allows. Allowed: {', '.join(self.allowed_images)}."
         )
 
     async def _commit(self) -> None:
@@ -422,6 +419,7 @@ class WorkspaceCodeExecutionPolicyService:
         policy.exec_timeout_s = request.exec_timeout_s
         policy.image = _blank_to_none(request.image)
         policy.tools = request.tools
+        policy.executor = request.executor.value if request.executor is not None else None
 
     async def clear_policy(self, *, user: User, workspace_id: uuid.UUID) -> WorkspaceCodeExecutionPolicyPublic:
         """Drop the workspace's policy, returning it to the deployment's behavior.

@@ -21,9 +21,13 @@ from sqlalchemy.orm import Session
 from sqlmodel import col
 
 from gateway.core.config import API_ROOT
-from gateway.models.entities import APIKey, BudgetReservation, ModelAlias, UsageLog, User
+from gateway.models.api_keys import APIKey
+from gateway.models.budgets import BudgetReservation
+from gateway.models.providers import ModelAlias
 from gateway.models.tenancy import OrganizationMember, Workspace
 from gateway.models.tenancy import User as Identity
+from gateway.models.usage import UsageLog
+from gateway.models.users import User
 from gateway.services.tenancy.provisioning_service import DEFAULT_WORKSPACE_NAME
 
 LEGACY = "klubrake"

@@ -24,22 +24,31 @@ import importlib
 import inspect
 from collections.abc import Callable, ItemsView
 from dataclasses import dataclass
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar, cast, get_protocol_members
 
 from fastapi import APIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.adapters.api_key_format_adapter import DefaultApiKeyFormatAdapter
 from gateway.adapters.billing_adapter import NullBillingAdapter
+from gateway.adapters.code_execution_adapter import build_code_execution_port, verify_code_execution_ready
 from gateway.adapters.entitlement_adapter import BaseEntitlementAdapter
+from gateway.adapters.file_storage_adapter import build_file_storage_port
 from gateway.adapters.growth_signal_adapter import NullGrowthSignalAdapter
 from gateway.adapters.identity_provider_adapter import RosterIdentityProviderAdapter
+from gateway.adapters.mcp_server_adapter import build_mcp_server_port
 from gateway.adapters.model_provider_adapter import SelfHostedModelProviderAdapter
 from gateway.adapters.telemetry_storage_adapter import DatabaseTelemetryStorageAdapter
+from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
+from gateway.ports.api_key_format_port import ApiKeyFormatPort
 from gateway.ports.billing_port import BillingPort
+from gateway.ports.code_execution_port import CodeExecutionPort
 from gateway.ports.entitlement_port import EntitlementPort
+from gateway.ports.file_storage_port import FileStoragePort
 from gateway.ports.growth_signal_port import GrowthSignalPort
 from gateway.ports.identity_provider_port import IdentityProviderPort
+from gateway.ports.mcp_server_port import McpServerPort
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.ports.telemetry_storage_port import TelemetryStoragePort
 
@@ -107,6 +116,10 @@ class BootstrapError(ContainerError):
     """Raised when the bootstrap module ``OTARI_BOOTSTRAP`` names cannot be loaded."""
 
 
+class PortShapeError(ContainerError):
+    """Raised when a bootstrap binds an adapter that lacks a method its port declares."""
+
+
 class Container:
     """A registry mapping each port to the adapter that satisfies it.
 
@@ -159,6 +172,31 @@ class Container:
     def router_contributions(self) -> tuple[RouterContribution, ...]:
         """Return the recorded router contributions, in contribution order."""
         return tuple(self._router_contributions)
+
+
+def _verify_port_shape(container: Container, port: type[Any]) -> None:
+    """Refuse to boot on an adapter that lacks a method ``port`` declares.
+
+    A port is a plain ``Protocol`` and a bind checks nothing, so an overlay
+    written against an older shape of the port binds cleanly and fails on the
+    first request that reaches the missing method, as a 500 with no startup
+    signal. Checked for the ports whose adapters build with no session, which
+    the hybrid data plane already requires of ``ModelProviderPort``.
+
+    Raises:
+        PortShapeError: the bound adapter lacks one of the port's methods.
+
+    """
+    adapter = container.resolve(port, None)
+    missing = sorted(name for name in get_protocol_members(port) if not hasattr(adapter, name))
+    if missing:
+        msg = f"{type(adapter).__name__}, bound to {_port_name(port)}, lacks {', '.join(missing)}"
+        raise PortShapeError(msg)
+
+
+def _api_key_format_adapter(session: AsyncSession | None) -> ApiKeyFormatPort:
+    """Build the core ``ApiKeyFormatPort`` adapter for one request."""
+    return DefaultApiKeyFormatAdapter(session)
 
 
 def _billing_adapter(session: AsyncSession | None) -> BillingPort:
@@ -245,7 +283,68 @@ def _load_register(selector: str) -> Register:
     return cast(Register, register)
 
 
-def build_container(bootstrap_selector: str | None = None) -> Container:
+def _code_execution_adapter_factory(config: GatewayConfig | None) -> PortFactory[CodeExecutionPort]:
+    """The core ``CodeExecutionPort`` factory, closed over this app's config.
+
+    Config rather than a session, because which adapter runs the code is a
+    deployment setting (``sandbox_provider``) and not a per-request fact. A
+    container built without config (the test helper's default) resolves this
+    port only to raise, which is louder than quietly picking a backend.
+    """
+
+    def factory(session: AsyncSession | None) -> CodeExecutionPort:
+        del session
+        if config is None:
+            msg = "CodeExecutionPort needs the deployment config; build the container with it"
+            raise ContainerError(msg)
+        return build_code_execution_port(config)
+
+    return factory
+
+
+def _file_storage_port_factory(config: GatewayConfig | None) -> PortFactory[FileStoragePort]:
+    """The core ``FileStoragePort`` factory, closed over this app's config.
+
+    Config rather than a session, because which store holds the bytes is a
+    deployment setting (``files_backend``) and not a per-request fact.
+    The store is built on first resolve and reused, so the retention sweep
+    reclaims bytes through the same store the request path wrote them with, and
+    a process that never resolves this port opens no client at all.
+    A container built without config resolves this port only to raise, which is
+    louder than quietly writing to a directory nobody chose.
+    """
+    store: FileStoragePort | None = None
+
+    def factory(session: AsyncSession | None) -> FileStoragePort:
+        del session
+        nonlocal store
+        if config is None:
+            msg = "FileStoragePort needs the deployment config; build the container with it"
+            raise ContainerError(msg)
+        if store is None:
+            store = build_file_storage_port(config)
+        return store
+
+    return factory
+
+
+def _mcp_server_port_factory(config: GatewayConfig | None) -> PortFactory[McpServerPort]:
+    """The core ``McpServerPort`` factory, closed over this app's config.
+
+    Built per resolve rather than once, because the implementation that reads
+    rows needs the request's own session.
+    """
+
+    def factory(session: AsyncSession | None) -> McpServerPort:
+        if config is None:
+            msg = "McpServerPort needs the deployment config; build the container with it"
+            raise ContainerError(msg)
+        return build_mcp_server_port(config, session)
+
+    return factory
+
+
+def build_container(bootstrap_selector: str | None = None, config: GatewayConfig | None = None) -> Container:
     """Build the composition-root container for this deployment.
 
     Binds the core adapters, then, if a selector is given, lets the bootstrap it
@@ -283,6 +382,31 @@ def build_container(bootstrap_selector: str | None = None) -> Container:
     # This one is a real implementation rather than a Null Object, because
     # refusing an unknown identity is itself the base's answer.
     container.bind(IdentityProviderPort, _identity_provider_adapter)
+    # API key format: the base mints the open-source shape and checks every
+    # presented key against its own rows. A hosted overlay binds a format that
+    # carries a region and a checksum, and routes a key minted elsewhere away.
+    container.bind(ApiKeyFormatPort, _api_key_format_adapter)
+    # Code execution: the base speaks the published protocol to the backend at
+    # ``sandbox_url``, and runs E2B's hosted sandboxes in this process when the
+    # deployment asks for them instead. An overlay with its own platform binds
+    # a third adapter here and changes nothing above the port.
+    container.bind(CodeExecutionPort, _code_execution_adapter_factory(config))
+    # Uploaded file bytes: the base writes them to a local directory, an S3
+    # bucket or any fsspec filesystem, whichever ``files_backend`` names. An
+    # overlay binds a store of its own and changes nothing above the port.
+    container.bind(FileStoragePort, _file_storage_port_factory(config))
+    # A workspace's MCP servers: the base reads this deployment's own rows
+    # where it holds them, and asks its peer where it does not. An overlay
+    # binds a source of its own and changes nothing above the port.
+    container.bind(McpServerPort, _mcp_server_port_factory(config))
+    if config is not None:
+        # Asked once, at build, rather than per request: selecting a hosted
+        # provider is itself what publishes code execution on ``/v1/tools``, in
+        # the playground menu and to the pricing warning, so a missing extra or
+        # credential would otherwise be found by a caller, as a 502 on work it
+        # was told would run. A deployment that named a sandbox it cannot lease
+        # fails to start, the way one that named a bootstrap it cannot load does.
+        verify_code_execution_ready(config)
 
     if bootstrap_selector is None:
         # No selector is a legitimate deployment (the plain open-source one), so
@@ -316,6 +440,7 @@ def build_container(bootstrap_selector: str | None = None) -> Container:
         )
         raise BootstrapError(msg)
     rebound = sorted(_port_name(port) for port, factory in container.bindings() if defaults.get(port) is not factory)
+    _verify_port_shape(container, ModelProviderPort)
     container.summary = f"{bootstrap_selector} rebound {', '.join(rebound) or 'no ports'}"
     contributed = ", ".join(contribution.capability for contribution in container.router_contributions())
     if contributed:

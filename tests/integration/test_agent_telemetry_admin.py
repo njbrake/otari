@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from conftest import seed_workspace_id
 from gateway.core.config import API_ROOT
-from gateway.models.entities import AgentTelemetry, APIKey, User
+from gateway.models.api_keys import APIKey
+from gateway.models.usage import AgentTelemetry
+from gateway.models.users import User
 
 DELETE_PATH = f"{API_ROOT}/agent-telemetry"
 
@@ -136,9 +138,7 @@ def test_purge_by_filter_user_id_name_and_date_range(
     assert _get(db_session, "bob-1") is not None
 
 
-def test_purge_by_filter_api_key_id(
-    client: TestClient, master_key_header: dict[str, str], db_session: Session
-) -> None:
+def test_purge_by_filter_api_key_id(client: TestClient, master_key_header: dict[str, str], db_session: Session) -> None:
     _make_row(db_session, row_id="key-a-row", user_id="alice", api_key_id="key-a")
     _make_row(db_session, row_id="key-b-row", user_id="alice", api_key_id="key-b")
     db_session.commit()
@@ -162,15 +162,11 @@ def test_purge_matching_zero_rows_is_not_an_error(client: TestClient, master_key
     assert resp.json() == {"deleted": 0}
 
 
-def test_purge_requires_exactly_one_of_ids_or_by_filter(
-    client: TestClient, master_key_header: dict[str, str]
-) -> None:
+def test_purge_requires_exactly_one_of_ids_or_by_filter(client: TestClient, master_key_header: dict[str, str]) -> None:
     neither = client.request("DELETE", DELETE_PATH, json={}, headers=master_key_header)
     assert neither.status_code == 422
 
-    both = client.request(
-        "DELETE", DELETE_PATH, json={"ids": ["x"], "by_filter": True}, headers=master_key_header
-    )
+    both = client.request("DELETE", DELETE_PATH, json={"ids": ["x"], "by_filter": True}, headers=master_key_header)
     assert both.status_code == 422
 
 

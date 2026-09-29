@@ -1,18 +1,7 @@
-"""Every service module imports on its own, in a fresh interpreter.
+"""Every listed service module imports first in a fresh interpreter.
 
-Import cycles between services are invisible in normal use, because the app
-imports its packages in an order that happens to resolve them: `api/main.py`
-pulls in `services.tenancy` before anything reaches `services.workspace_scope`,
-so the half-initialized module is already complete by the time it is read. The
-first thing to import one of them *first* is what breaks, and that is usually a
-new script, a migration helper, or a test, which is a poor place to discover it.
-
-Each module is therefore imported as the very first thing a subprocess does,
-which is the only way to see the cycle. `workspace_scope` and
-`scoped_budget_service` are here because both did fail this way:
-`workspace_scope` imports `tenancy.provisioning_service`, which runs
-`tenancy/__init__`, which imports `workspace_service`, which imported back into
-`workspace_scope` at module scope.
+The app imports its packages in an order that hides an import cycle between services.
+A subprocess that imports one module first is the only way to see the cycle.
 """
 
 import subprocess
@@ -25,31 +14,18 @@ import pytest
 # for a specific shape, not an inventory to keep in step with the directory.
 _MODULES = [
     "gateway.services.workspace_scope",
-    "gateway.services.scoped_budget_service",
-    "gateway.services.budget_service",
+    "gateway.services.budgets",
+    "gateway.services.budgets._scoped_enforcement",
+    "gateway.services.budgets._reservations",
     "gateway.services.tenancy",
     "gateway.services.tenancy.workspace_service",
     "gateway.services.tenancy.organization_service",
     "gateway.services.tenancy.provisioning_service",
-    # workspace_budget_default_service sits between workspace_service and
-    # organization_service (both reach it, it reaches organization_service and
-    # authorization but never workspace_service), and authorization sits
-    # between workspace_service and organization_service the same way. Pinned
-    # here for the same reason as the two above them.
-    "gateway.services.tenancy.workspace_budget_default_service",
+    # _member_policies reaches organization_service and authorization, and no organizations module reaches it.
+    "gateway.services.budgets._member_policies",
     "gateway.services.tenancy.authorization",
-    # organization_budget_service reaches organization_service and the entity
-    # models but deliberately not `scoped_budget_service`, which would close the
-    # cycle described in its own module docstring: that module reaches
-    # `workspace_scope` -> `tenancy.provisioning_service` -> `tenancy/__init__`.
-    # It spells the five scope names out instead, and
-    # `test_organization_budget_scopes.py` pins those against `ScopeType`.
-    "gateway.services.tenancy.organization_budget_service",
-    # budget_retiming is the leaf both budget surfaces share. It must stay
-    # importable on its own: the tenant-scoped service cannot reach
-    # `scoped_budget_service`, so if this module ever grew an import back into
-    # the tenancy package the shared rule would have to be duplicated again.
-    "gateway.services.budget_retiming",
+    "gateway.services.budgets._organization_surface",
+    "gateway.services.budgets._retiming",
     # workspace_mcp_server_service reaches authorization and organization_service
     # the same way, and is additionally imported from the request pipeline, which
     # is a second entry point into the graph.
@@ -72,3 +48,29 @@ def test_module_imports_first(module: str) -> None:
     )
 
     assert result.returncode == 0, f"{module} cannot be imported first:\n{result.stderr}"
+
+
+# Budgets depends on organizations, never the reverse, so an organizations
+# module must not load a budget module.
+_BUDGETS_PACKAGE = "gateway.services.budgets"
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "gateway.services.tenancy.workspace_service",
+        "gateway.services.tenancy.organization_service",
+        "gateway.services.tenancy.provisioning_service",
+    ],
+)
+def test_organizations_modules_load_no_budget_module(module: str) -> None:
+    code = (
+        "import sys, importlib\n"
+        f"importlib.import_module({module!r})\n"
+        f"loaded = sorted(m for m in sys.modules if m.startswith({_BUDGETS_PACKAGE!r}))\n"
+        "print(','.join(loaded))\n"
+    )
+
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+
+    assert result.stdout.strip() == "", f"{module} loaded budget modules: {result.stdout.strip()}"

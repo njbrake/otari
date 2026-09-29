@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
+    ModelProviderPortDep,
     get_config,
     get_db,
     get_session_identity,
@@ -15,7 +16,9 @@ from gateway.api.deps import (
     verify_catalog_reader,
 )
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import APIKey, ModelPricing
+from gateway.core.surface import Surface
+from gateway.models.api_keys import APIKey
+from gateway.models.pricing import ModelPricing
 from gateway.models.tenancy import User as TenancyUser
 from gateway.services.merged_catalog_service import (
     ModelObject,
@@ -33,6 +36,7 @@ from gateway.services.merged_catalog_service import (
     owner_from_key,
     pricing_info,
     pricing_key_candidates,
+    withheld_as_unadvertised,
 )
 from gateway.services.model_access import is_model_allowed
 from gateway.services.model_catalog_service import (
@@ -65,6 +69,8 @@ catalog_router = APIRouter(
     tags=["models"],
     dependencies=[Depends(verify_catalog_reader)],
 )
+
+SURFACE = Surface("models")
 
 
 class ModelListResponse(BaseModel):
@@ -177,6 +183,7 @@ async def list_models(
     config: Annotated[GatewayConfig, Depends(get_config)],
     auth: Annotated[tuple[APIKey | None, bool], Depends(verify_catalog_reader)],
     session_identity: Annotated[TenancyUser | None, Depends(get_session_identity)],
+    model_provider: ModelProviderPortDep,
     provider: Annotated[str | None, Query(description="Filter models by provider name")] = None,
 ) -> ModelListResponse:
     """List all available models.
@@ -185,7 +192,9 @@ async def list_models(
     pricing data from the model_pricing table when available. Models that only
     exist in the pricing table are also included for backward compatibility.
     """
-    catalog = await build_merged_catalog(db, config, auth=auth, session_identity=session_identity, provider=provider)
+    catalog = await build_merged_catalog(
+        db, config, auth=auth, session_identity=session_identity, provider=provider, model_provider=model_provider
+    )
     return ModelListResponse(data=sorted(catalog.models.values(), key=lambda m: m.id))
 
 
@@ -227,10 +236,7 @@ async def list_discoverable_models(
             discovery_unsupported=discovery.discovery_unsupported,
             checked_at=checked.isoformat() if (checked := cache.checked_at(discovery.provider)) else None,
             models=sorted(
-                (
-                    DiscoverableModel(id=model.id, key=f"{discovery.provider}:{model.id}")
-                    for model in discovery.models
-                ),
+                (DiscoverableModel(id=model.id, key=f"{discovery.provider}:{model.id}") for model in discovery.models),
                 key=lambda m: m.id,
             ),
         )
@@ -270,13 +276,14 @@ async def get_model(
     config: Annotated[GatewayConfig, Depends(get_config)],
     auth: Annotated[tuple[APIKey | None, bool], Depends(verify_catalog_reader)],
     session_identity: Annotated[TenancyUser | None, Depends(get_session_identity)],
+    model_provider: ModelProviderPortDep,
 ) -> ModelObject:
     """Get details for a specific model."""
     api_key, _is_master_key = auth
     # Same scoping as the listing, the workspace layer included: the caller's own
     # aliases, plus their workspace's and the configured ones. A master-key caller
     # has neither, so it reads the configured layer and the default workspace's.
-    scope = await catalog_scope(db, config, auth=auth, session_identity=session_identity)
+    scope = await catalog_scope(db, config, auth=auth, session_identity=session_identity, model_provider=model_provider)
     aliases = catalog_aliases(
         config,
         caller_user_id=api_key.user_id if api_key is not None else None,
@@ -293,6 +300,10 @@ async def get_model(
         target = aliases.get(model_id, model_id)
         if not is_model_allowed(key_allowlist, normalize_pricing_key(config, target)):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Model '{model_id}' not found")
+    # A hosted model the deployment no longer advertises is withheld as the
+    # listing withholds it; an alias is a display name, not a hosted model.
+    if model_id not in aliases and withheld_as_unadvertised(config, scope, normalize_pricing_key(config, model_id)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Model '{model_id}' not found")
 
     # An alias resolves to its own entry, with pricing read from the resolved
     # target so the underlying provider/model stays hidden. Only the target's own
@@ -354,7 +365,9 @@ async def get_model(
         )
         apply_default_pricing(fallback)
         if fallback.pricing is not None:
-            return mark_deployment_managed(config, fallback)
+            return mark_deployment_managed(
+                config, fallback, deployment_supplied_providers=scope.deployment_supplied_providers
+            )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Model '{model_id}' not found",
@@ -368,15 +381,15 @@ async def get_model(
             id=model_key,
             created=created_timestamp(discovered_model),
             owned_by=discovered_provider,
-            pricing=pricing_info(pricing)
-            if pricing
-            else None,
+            pricing=pricing_info(pricing) if pricing else None,
             pricing_source="configured" if pricing else "none",
             context_window=context_window_for_key(model_key),
         )
         apply_default_pricing(obj)
-        return mark_deployment_managed(config, obj)
+        return mark_deployment_managed(config, obj, deployment_supplied_providers=scope.deployment_supplied_providers)
 
     # Pricing-only model (no discovery data).
     assert pricing is not None
-    return mark_deployment_managed(config, model_from_pricing(pricing))
+    return mark_deployment_managed(
+        config, model_from_pricing(pricing), deployment_supplied_providers=scope.deployment_supplied_providers
+    )

@@ -46,18 +46,20 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.auth.models import generate_api_key, hash_key, key_prefix, key_suffix
+from gateway.auth.models import hash_key, key_suffix
 from gateway.core.config import GatewayConfig
 from gateway.core.usage_source import integration_traffic, served_here
-from gateway.models.entities import APIKey, UsageLog, WorkspaceActivationState
-from gateway.models.money import as_float
-from gateway.models.tenancy import User, Workspace
-from gateway.repositories.users_repository import get_or_create_attribution_user
-from gateway.services.tenancy import authorization
-from gateway.services.tenancy.errors import (
+from gateway.exceptions.organizations_exceptions import (
     WorkspaceActivationUnavailableError,
     WorkspaceAlreadyActivatedError,
 )
+from gateway.models.api_keys import APIKey
+from gateway.models.money import as_float
+from gateway.models.tenancy import User, Workspace, WorkspaceActivationState
+from gateway.models.usage import UsageLog
+from gateway.ports.api_key_format_port import ApiKeyFormatPort
+from gateway.repositories.users_repository import get_or_create_attribution_user
+from gateway.services.tenancy import authorization
 from gateway.services.tenancy.organization_service import OrganizationService
 
 # What the guide calls the key it mints, as the Keys page shows it. One name for
@@ -206,10 +208,11 @@ class ActivationApiKeyPublic(BaseModel):
 class WorkspaceActivationService:
     """State and key issuance for the first-request setup guide."""
 
-    def __init__(self, db: AsyncSession, config: GatewayConfig):
+    def __init__(self, db: AsyncSession, config: GatewayConfig, key_format: ApiKeyFormatPort):
         self.db = db
         self.config = config
-        self.organizations = OrganizationService(db)
+        self.key_format = key_format
+        self.organizations = OrganizationService(db, membership_listener=None)
 
     # ------------------------------------------------------------------
     # Reads
@@ -285,16 +288,9 @@ class WorkspaceActivationService:
             # The row it adopted may have been dismissed by whoever created it.
             self._require_offerable(workspace=workspace, state=state)
 
-        plaintext = generate_api_key()
-        # Owned by the caller's own request-plane row, not the shared ``default``
-        # user that ``POST /v1/keys`` falls back to. Two reasons: the dashboard's
-        # own key form requires an owner, so a key minted from a dashboard flow
-        # should have a real one; and a key owned by an identity's attribution row
-        # is what makes the request bill through that member's scoped ceilings
-        # (`services/scoped_budget_service.py` resolves the identity back out of
-        # ``users.user_id``), where one owned by ``default`` would sit outside
-        # every per-member budget. The row normally exists already: first-boot
-        # provisioning mints the operator's, and adding a member mints theirs.
+        plaintext = self.key_format.mint()
+        # The key is owned by the caller's attribution row and not the shared ``default`` user,
+        # so its requests bill through that member's scoped ceilings.
         owner = await get_or_create_attribution_user(
             self.db,
             user_id=str(user.id),
@@ -306,7 +302,7 @@ class WorkspaceActivationService:
                 id=str(uuid.uuid4()),
                 workspace_id=workspace.id,
                 key_hash=hash_key(plaintext),
-                key_prefix=key_prefix(plaintext),
+                key_prefix=self.key_format.fingerprint(plaintext),
                 key_suffix=key_suffix(plaintext),
                 key_name=ACTIVATION_KEY_NAME,
                 user_id=owner.user_id,
@@ -314,7 +310,7 @@ class WorkspaceActivationService:
             self.db.add(record)
         else:
             record.key_hash = hash_key(plaintext)
-            record.key_prefix = key_prefix(plaintext)
+            record.key_prefix = self.key_format.fingerprint(plaintext)
             record.key_suffix = key_suffix(plaintext)
             # The owner moves with the rotation. Whoever asked last is the only
             # person holding a plaintext that still authenticates, so leaving the
@@ -482,7 +478,7 @@ class WorkspaceActivationService:
             .where(
                 UsageLog.workspace_id == workspace_id,
                 served_here(UsageLog.source),
-                integration_traffic(UsageLog.endpoint),
+                integration_traffic(UsageLog.endpoint, UsageLog.api_key_id),
                 UsageLog.status == "success",
             )
             # Tie-broken on the id so two rows sharing a timestamp still name one
@@ -506,7 +502,7 @@ class WorkspaceActivationService:
             .where(
                 UsageLog.workspace_id == workspace_id,
                 served_here(UsageLog.source),
-                integration_traffic(UsageLog.endpoint),
+                integration_traffic(UsageLog.endpoint, UsageLog.api_key_id),
                 UsageLog.status.in_(_ATTEMPT_STATUSES),
             )
             .order_by(UsageLog.timestamp.desc(), UsageLog.id.desc())

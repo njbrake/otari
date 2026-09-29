@@ -99,4 +99,15 @@ describe("copyToClipboard", () => {
   it("does not report success where no clipboard mechanism exists at all", async () => {
     expect(await copyToClipboard("openai:gpt-4o", undefined)).toBe(false)
   })
+
+  it("removes the scratch textarea even when select() throws (#1149)", async () => {
+    // The textarea holds the plaintext, often a one-time API key, so a throw
+    // between the append and the removal leaves a credential in the DOM.
+    vi.spyOn(HTMLTextAreaElement.prototype, "select").mockImplementation(() => {
+      throw new Error("detached document")
+    })
+
+    expect(await copyToClipboard("provider secret", undefined)).toBe(false)
+    expect(document.querySelectorAll("textarea")).toHaveLength(0)
+  })
 })

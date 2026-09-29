@@ -8,7 +8,7 @@ import pytest
 
 from gateway.api.routes._helpers import apply_input_guardrails
 from gateway.api.routes._tools import (
-    _build_web_search_backend,
+    _build_web_retrieval_backend,
     _resolve_sandbox_purpose_hint,
     _resolve_web_search_purpose_hint,
 )
@@ -16,33 +16,56 @@ from gateway.core.config import GatewayConfig
 from gateway.models.guardrails import GuardrailConfig
 
 
-def test_build_web_search_backend_reads_config_knobs() -> None:
+def test_build_web_retrieval_backend_reads_config_knobs() -> None:
     config = GatewayConfig(
         web_search_engines="google,bing",
         web_search_max_results=3,
         web_search_extract=False,
     )
-    backend = _build_web_search_backend(base_url="http://searxng:8080", tool_entry={}, config=config)
+    backend = _build_web_retrieval_backend(base_url="http://searxng:8080", search_tool_entry={}, config=config)
     assert backend._engines == ("google", "bing")
     assert backend._max_results == 3
     assert backend._extract_content is False
 
 
-def test_build_web_search_backend_config_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_web_retrieval_backend_config_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # A config value (a dashboard override applied to config) wins over the env var.
     monkeypatch.setenv("OTARI_WEB_SEARCH_MAX_RESULTS", "9")
     config = GatewayConfig(web_search_max_results=2)
-    backend = _build_web_search_backend(base_url="http://x:8080", tool_entry={}, config=config)
+    backend = _build_web_retrieval_backend(base_url="http://x:8080", search_tool_entry={}, config=config)
     assert backend._max_results == 2
 
 
-def test_build_web_search_backend_env_fallback_when_config_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Pure-env deployment: no config value, env still honored (byte-for-byte prior behavior).
+def test_build_web_retrieval_backend_env_fallback_when_config_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Pure-env deployment: no config value, env still honored.
     monkeypatch.setenv("OTARI_WEB_SEARCH_MAX_RESULTS", "4")
     config = GatewayConfig()
     config.web_search_max_results = None
-    backend = _build_web_search_backend(base_url="http://x:8080", tool_entry={}, config=config)
+    backend = _build_web_retrieval_backend(base_url="http://x:8080", search_tool_entry={}, config=config)
     assert backend._max_results == 4
+
+
+@pytest.mark.parametrize("trusted", [False, True])
+def test_retrieval_proxy_trust_comes_only_from_deployment_config(
+    monkeypatch: pytest.MonkeyPatch, trusted: bool
+) -> None:
+    monkeypatch.setenv("OTARI_WEB_RETRIEVAL_TRUST_ENV_PROXY", str(not trusted).lower())
+    config = GatewayConfig(web_retrieval_trust_env_proxy=trusted)
+    backend = _build_web_retrieval_backend(
+        base_url="http://searxng:8080",
+        search_tool_entry={"trust_env_proxy": not trusted, "web_retrieval_trust_env_proxy": not trusted},
+        config=config,
+    )
+    assert backend._trust_env_proxy is trusted
+
+
+def test_retrieval_proxy_trust_env_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OTARI_WEB_RETRIEVAL_TRUST_ENV_PROXY", "true")
+    backend = _build_web_retrieval_backend(base_url="http://searxng:8080", search_tool_entry={})
+    assert backend._trust_env_proxy is True
+    monkeypatch.setenv("OTARI_WEB_RETRIEVAL_TRUST_ENV_PROXY", "invalid")
+    with pytest.raises(ValueError, match="Invalid boolean"):
+        _build_web_retrieval_backend(base_url="http://searxng:8080", search_tool_entry={})
 
 
 def test_resolve_purpose_hints_from_config() -> None:
@@ -79,6 +102,7 @@ async def test_apply_input_guardrails_uses_config_url(monkeypatch: pytest.Monkey
         default_url: str | None,
         credentials: Any = None,
         mandated: Any = None,
+        in_process: Any = None,
     ) -> Any:
         seen["default_url"] = default_url
 

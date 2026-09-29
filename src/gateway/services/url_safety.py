@@ -1,12 +1,18 @@
 """URL safety checks for outbound HTTP fetches the gateway makes on behalf of a request.
 
-Three call sites with overlapping but not identical threat models:
+Four call sites with overlapping but not identical threat models:
 
 * **MCP server endpoints** (:func:`validate_mcp_url`) — URL comes from the
   request body. We block private/link-local/reserved IPs to prevent SSRF.
   Loopback is allowed by default (useful for same-host sidecar deployments)
   and gated by ``OTARI_MCP_ALLOW_LOOPBACK``. Also enforces TLS when a
   bearer token is supplied.
+
+* **Guardrail definition endpoints** (:func:`validate_mcp_url` again, with a
+  label of its own) — an organization admin writes them into a stored
+  definition and a later step builds a vendor client from them, so the same
+  private/link-local block applies. TLS is enforced unconditionally there,
+  a definition holding a vendor credential beside its endpoint.
 
 * **Web-search result URLs** (:func:`validate_outbound_fetch_url`) — URL
   comes from a third-party search engine via the configured search backend.
@@ -98,7 +104,7 @@ def _allow_private_hosts() -> bool:
     return otari_env("MCP_ALLOW_PRIVATE_HOSTS", "false").lower() in {"1", "true", "yes"}
 
 
-async def validate_mcp_url(url: str, *, has_authorization_token: bool) -> None:
+async def validate_mcp_url(url: str, *, has_authorization_token: bool, label: str = "MCP server") -> None:
     """Reject URLs that are unsafe for the gateway to fetch.
 
     Async because DNS resolution (:func:`_resolve_all_async`) must not block
@@ -106,18 +112,25 @@ async def validate_mcp_url(url: str, *, has_authorization_token: bool) -> None:
     request-body parsing, so other concurrent requests keep making progress
     while a slow/unresolvable hostname is looked up.
 
+    ``label`` names the surface the URL was written for, so a caller that is
+    not an MCP server does not tell its own admin about one: the organization
+    guardrail definition store passes ``guardrail endpoint``. Only the wording
+    moves. Every caller is governed by the one
+    ``OTARI_MCP_ALLOW_PRIVATE_HOSTS`` flag the messages quote, whatever the
+    label says, which is why the hint is not parameterized too.
+
     Raises :class:`UnsafeURLError` on rejection. Returns ``None`` on accept.
     """
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
     if scheme not in {"http", "https"}:
-        raise UnsafeURLError(f"MCP server URL must use http or https, got {scheme!r}")
+        raise UnsafeURLError(f"{label} URL must use http or https, got {scheme!r}")
     if scheme == "http" and has_authorization_token:
-        raise UnsafeURLError("MCP server URL must use https when an authorization_token is set")
+        raise UnsafeURLError(f"{label} URL must use https when a credential travels with it")
 
     host = parsed.hostname
     if not host:
-        raise UnsafeURLError("MCP server URL must include a hostname")
+        raise UnsafeURLError(f"{label} URL must include a hostname")
 
     if _allow_private_hosts():
         return
@@ -137,7 +150,7 @@ async def validate_mcp_url(url: str, *, has_authorization_token: bool) -> None:
             # OTARI_MCP_ALLOW_PRIVATE_HOSTS, which short-circuits this
             # whole function above.
             raise UnsafeURLError(
-                f"MCP server host {host!r} could not be resolved at validation time; "
+                f"{label} host {host!r} could not be resolved at validation time; "
                 "rejecting to avoid DNS-rebinding (a later lookup could resolve to a "
                 "private address). Set OTARI_MCP_ALLOW_PRIVATE_HOSTS=true to override."
             )
@@ -148,7 +161,7 @@ async def validate_mcp_url(url: str, *, has_authorization_token: bool) -> None:
         reason = _blocked_reason(addr)
         if reason is not None:
             raise UnsafeURLError(
-                f"MCP server host {host!r} resolves to {addr} which is {reason}; "
+                f"{label} host {host!r} resolves to {addr} which is {reason}; "
                 "rejecting to prevent SSRF. Set OTARI_MCP_ALLOW_PRIVATE_HOSTS=true to override."
             )
 

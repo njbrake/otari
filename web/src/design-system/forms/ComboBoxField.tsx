@@ -85,7 +85,7 @@ export function ComboBoxField({
   isDisabled,
   isInvalid,
   errorMessage,
-  reserveMessage,
+  shouldReserveMessage,
   className = "",
   allowsCustomValue,
   autoFocus,
@@ -117,7 +117,7 @@ export function ComboBoxField({
   isInvalid?: boolean
   /** Shown under the field and announced with it. Needs `isInvalid` to appear. */
   errorMessage?: string
-  reserveMessage?: boolean
+  shouldReserveMessage?: boolean
   /**
    * The id of text elsewhere on the page that describes this field.
    *
@@ -171,9 +171,9 @@ export function ComboBoxField({
   // moved from one this field reported. The first kind leaves whatever is in the
   // box stale: a list of these fields that drops a row moves a value under a
   // field that is still mounted.
-  const [seen, setSeen] = useState(value)
-  if (value !== seen) {
-    setSeen(value)
+  const [lastSeenValue, setLastSeenValue] = useState(value)
+  if (value !== lastSeenValue) {
+    setLastSeenValue(value)
     if (value !== typed) setTyped(undefined)
   }
 
@@ -284,7 +284,7 @@ export function ComboBoxField({
           beside it in a row. The description goes through HeroUI's own slot,
           which is what wires it to the input via aria-describedby; a bare node
           there leaves the combo box reporting no description at all. */}
-      <FieldMessages reserve={reserveMessage}>
+      <FieldMessages shouldReserve={shouldReserveMessage}>
         {description ? (
           <Description className="text-muted">{description}</Description>
         ) : null}

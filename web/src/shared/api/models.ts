@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
+import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import type {
   CatalogModelDetail,
   CatalogResponse,
@@ -15,6 +15,20 @@ import {
   NO_RETRY,
 } from "@/shared/api/queryKeys"
 
+/**
+ * The window `useCatalog` asks for: the endpoint's maximum, not its default 100.
+ *
+ * The catalog list filters, sorts, counts providers and builds its filter rail
+ * from what one request returns, so a window makes every one of those describe
+ * the window rather than the catalog. One BYO provider key can offer over a
+ * hundred models by itself, which is what put real deployments past the default.
+ *
+ * Still a window. `count` is the number of matches before it, and the page says
+ * so when the two differ. otari#1465 tracks moving the filtering to the server,
+ * which is the answer a bigger number is not.
+ */
+export const CATALOG_LIST_LIMIT = 1000
+
 // The catalog folded by model, priced for the caller. Any session may read it,
 // like `/v1/models`; the detail is keyed under the list so a pricing write that
 // invalidates CATALOG takes every open detail with it.
@@ -25,8 +39,39 @@ export function useCatalog() {
   return useQuery({
     ...NO_RETRY,
     queryKey: [CATALOG, "list"],
-    queryFn: () => apiFetch<CatalogResponse>("/catalog/models"),
+    queryFn: () =>
+      apiFetch<CatalogResponse>(`/catalog/models?limit=${CATALOG_LIST_LIMIT}`),
     staleTime: 60_000,
+  })
+}
+
+/**
+ * The catalog narrowed to a search term, for a picker.
+ *
+ * The term goes to the server, so what comes back is the matches out of the
+ * whole catalog rather than the matches out of whatever page was fetched
+ * (otari#1380). Bounded because a picker shows a handful of rows: the popover
+ * cannot render a thousand, and `count` is what tells the reader how many more
+ * there are.
+ *
+ * Debounce the term before it gets here (`useDebounced`), or every keystroke is
+ * a request and the answers race.
+ */
+export function useCatalogSearch(
+  search: string,
+  limit: number,
+  enabled = true,
+) {
+  return useQuery({
+    ...NO_RETRY,
+    queryKey: [CATALOG, "search", search, limit],
+    queryFn: () =>
+      apiFetch<CatalogResponse>(
+        `/catalog/models?limit=${limit}${search ? `&search=${encodeURIComponent(search)}` : ""}`,
+      ),
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
+    enabled,
   })
 }
 

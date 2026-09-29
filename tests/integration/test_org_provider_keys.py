@@ -18,33 +18,36 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import GatewayConfig
-from gateway.models.provider_keys import (
-    OrgProviderKey,
-    OrgProviderKeyCreateRequest,
-    OrgProviderKeyUpdateRequest,
-    WorkspaceProviderKeyOverrideRequest,
-)
-from gateway.models.tenancy import Organization, User, Workspace
-from gateway.repositories.tenancy import (
-    OrganizationMemberRepository,
-    OrganizationRepository,
-    UserRepository,
-    WorkspaceMemberRepository,
-    WorkspaceRepository,
-)
-from gateway.services.provider_kwargs import resolve_provider_selector
-from gateway.services.secret_box import generate_secret_key
-from gateway.services.tenancy import OrgProviderKeyService
-from gateway.services.tenancy.errors import (
-    NotAuthorizedError,
+from gateway.exceptions.organizations_exceptions import NotAuthorizedError, WorkspaceNotFoundError
+from gateway.exceptions.providers_exceptions import (
     OrgProviderKeyAlreadyExistsError,
     OrgProviderKeyArchivedError,
     OrgProviderKeyDisabledForWorkspaceError,
     OrgProviderKeyNotArchivedError,
     OrgProviderKeyNotFoundError,
-    WorkspaceNotFoundError,
     WorkspaceProviderKeyOverrideConflictError,
 )
+from gateway.models.provider_keys import (
+    OrgProviderKey,
+)
+from gateway.models.tenancy import Organization, User, Workspace
+from gateway.repositories.tenancy import (
+    OrganizationMemberRepository,
+    OrganizationRepository,
+    OrgProviderKeyRepository,
+    UserRepository,
+    WorkspaceMemberRepository,
+    WorkspaceProviderKeyOverrideRepository,
+    WorkspaceRepository,
+)
+from gateway.schemas.providers import (
+    OrgProviderKeyCreateRequest,
+    OrgProviderKeyUpdateRequest,
+    WorkspaceProviderKeyOverrideRequest,
+)
+from gateway.services.provider_kwargs import resolve_provider_selector
+from gateway.services.secret_box import encrypt_secret, generate_secret_key
+from gateway.services.tenancy import OrgProviderKeyService
 from gateway.services.tenancy.org_provider_key_service import (
     cached_org_model_restriction,
     refresh_org_provider_cache,
@@ -203,10 +206,10 @@ async def test_plain_member_cannot_list_keys(async_db: AsyncSession) -> None:
         await service.list_keys_for_user(user=member)
 
 
-async def test_superuser_member_may_still_list_keys(async_db: AsyncSession) -> None:
-    """The gate is `require_active_organization_management_access`, which admits
-    a superuser whatever their role, so the operator identity that reads this
-    surface on a standalone deployment is not locked out by the narrowing above."""
+async def test_a_superuser_with_only_a_member_role_cannot_list_keys(async_db: AsyncSession) -> None:
+    """The gate is `require_active_organization_management_access`, which no longer
+    admits a superuser whatever their role: deployment-operator status is not an
+    organization role, and does not stand in for one here. mozilla-ai/otari#1011."""
     organization = await _organization(async_db)
     owner = await _member(async_db, organization, role="owner", full_name="Owner")
     operator = await _member(async_db, organization, role="member", full_name="Operator")
@@ -216,7 +219,8 @@ async def test_superuser_member_may_still_list_keys(async_db: AsyncSession) -> N
     service = OrgProviderKeyService(async_db)
     await service.create_key_for_user(user=owner, request=_create_request())
 
-    assert len((await service.list_keys_for_user(user=operator)).data) == 1
+    with pytest.raises(NotAuthorizedError):
+        await service.list_keys_for_user(user=operator)
 
 
 async def test_credential_shaped_client_args_are_redacted_even_for_the_admin_who_set_them(
@@ -329,6 +333,41 @@ async def test_workspace_with_no_override_inherits_org_default(async_db: AsyncSe
     assert view.is_effective_default is True
     assert view.is_effective_enabled is True
     assert view.is_default is False, "no override row exists; the effective flag comes from the org default"
+
+
+async def test_a_key_that_will_not_decrypt_says_so_on_both_surfaces(
+    async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A credential this deployment cannot read is listed, and reports that it cannot serve.
+
+    The override flags answer what the workspace chose and stay true, because
+    the workspace chose nothing: the credential is what broke. So the row is
+    otherwise identical to a working key while the catalog withholds its
+    provider, and the two surfaces disagree with nothing on this one to explain
+    it. That is the state a migration run under a different ``OTARI_SECRET_KEY``
+    leaves behind.
+    """
+    organization = await _organization(async_db)
+    owner = await _member(async_db, organization, role="owner", full_name="Owner")
+    workspace = await _workspace(async_db, organization, owner=owner)
+    service = OrgProviderKeyService(async_db)
+
+    key = await service.create_key_for_user(user=owner, request=_create_request())
+    assert key.usable is True
+
+    monkeypatch.setenv("OTARI_SECRET_KEY", generate_secret_key())
+    reset_org_provider_cache()
+
+    (listed,) = (await service.list_keys_for_user(user=owner)).data
+    assert listed.usable is False
+    # Still listed, and still carrying its tail: replacing it is the fix, so a
+    # row the deployment cannot read must not vanish from the page that edits it.
+    assert listed.last4 == "1234"
+
+    (view,) = (await service.list_effective_keys_for_workspace(user=owner, workspace_id=workspace.id)).data
+    assert view.usable is False
+    assert view.is_effective_enabled is True
+    assert view.is_effective_default is True
 
 
 async def test_sibling_workspace_can_pin_a_different_key(async_db: AsyncSession) -> None:
@@ -738,3 +777,53 @@ async def test_dispatch_without_workspace_id_ignores_organization_scoped_keys(as
     config = GatewayConfig(providers={})
     resolved = resolve_provider_selector(config, "openai:gpt-4o")
     assert resolved.kwargs == {}
+
+
+def _stored_api_key(key_state: str) -> str | None:
+    if key_state == "decrypts":
+        return encrypt_secret("sk-live-1234")
+    if key_state == "does_not_decrypt":
+        return "not-a-fernet-token"
+    return None
+
+
+@pytest.mark.parametrize(
+    ("key_state", "workspace_count", "disabled_in_last_workspace", "expected"),
+    [
+        pytest.param(None, 1, False, frozenset(), id="no-key"),
+        pytest.param("decrypts", 0, False, frozenset({"openai"}), id="no-workspaces"),
+        pytest.param("decrypts", 2, False, frozenset({"openai"}), id="every-workspace-uses-the-key"),
+        pytest.param("decrypts", 2, True, frozenset(), id="one-workspace-disables-the-key"),
+        pytest.param("no_api_key_or_base_url", 1, False, frozenset(), id="key-without-a-credential"),
+        pytest.param("does_not_decrypt", 1, False, frozenset(), id="key-that-does-not-decrypt"),
+    ],
+)
+async def test_get_byo_providers(
+    async_db: AsyncSession,
+    key_state: str | None,
+    workspace_count: int,
+    disabled_in_last_workspace: bool,
+    expected: frozenset[str],
+) -> None:
+    organization = await _organization(async_db)
+    workspaces = [await _workspace(async_db, organization, name=f"W{index}") for index in range(workspace_count)]
+    if key_state is not None:
+        key = await OrgProviderKeyRepository(async_db).create_key(
+            organization_id=organization.id,
+            provider="openai",
+            name="primary",
+            encrypted_api_key=_stored_api_key(key_state),
+            last4=None,
+            api_base=None,
+            client_args=None,
+        )
+        if disabled_in_last_workspace:
+            await WorkspaceProviderKeyOverrideRepository(async_db).create(
+                workspace_id=workspaces[-1].id,
+                organization_id=organization.id,
+                org_provider_key_id=key.id,
+                is_default=False,
+                disabled=True,
+            )
+
+    assert await OrgProviderKeyService(async_db).get_byo_providers(organization_id=organization.id) == expected

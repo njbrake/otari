@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.sql import bucket_expr, canonical_bucket, dialect_name, match_any, utc_bound
 from gateway.log_config import logger
-from gateway.models.entities import AgentTelemetry
+from gateway.models.usage import AgentTelemetry
 from gateway.ports.telemetry_storage_port import (
     BehaviorCounts,
     BehaviorGroup,
@@ -73,13 +73,17 @@ def _build_row(api_key_id: str, user_id: str, record: TelemetryRecord) -> AgentT
 
 async def _existing_dedup_keys(db: AsyncSession, source: str, dedup_keys: list[str]) -> set[str]:
     rows = (
-        await db.execute(
-            select(AgentTelemetry.dedup_key).where(
-                AgentTelemetry.source == source,
-                AgentTelemetry.dedup_key.in_(dedup_keys),
+        (
+            await db.execute(
+                select(AgentTelemetry.dedup_key).where(
+                    AgentTelemetry.source == source,
+                    AgentTelemetry.dedup_key.in_(dedup_keys),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return set(rows)
 
 

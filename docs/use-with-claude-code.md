@@ -39,7 +39,7 @@ Then point Claude Code at the standalone gateway:
 
 ```bash
 export ANTHROPIC_BASE_URL="http://localhost:8000/api"
-export ANTHROPIC_AUTH_TOKEN="gw-your-otari-key"
+export ANTHROPIC_AUTH_TOKEN="tk-your-otari-key"
 export ANTHROPIC_MODEL="anthropic:claude-sonnet-4-6"
 claude
 ```
@@ -63,8 +63,9 @@ one a default.
 ## Import Claude Code usage without routing
 
 Claude Code can send subscription usage to Otari over OpenTelemetry. This is for
-sessions that do not already route through Otari. Send it to a standalone or
-hosted gateway; hybrid gateways do not serve the OTLP endpoints.
+sessions that do not already route through Otari. Send it to a standalone
+deployment or a hosted control plane; hybrid gateways do not serve the OTLP
+endpoints.
 
 Create a dedicated API key with `exclude_from_budget: true`, then configure the
 logs exporter. The optional metrics exporter adds content-free outcome counters.
@@ -75,7 +76,7 @@ export OTEL_LOGS_EXPORTER=otlp
 export OTEL_METRICS_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://otari.example.com/otlp"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer gw-your-import-key"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer tk-your-import-key"
 claude
 ```
 
@@ -93,7 +94,8 @@ idempotency, and pricing behavior.
 The exporter above carries sessions that run after it is configured. Everything
 Claude Code did before that is already on disk, one JSONL transcript per session
 under `~/.claude/projects`. `otari import claude-code` reads those transcripts and
-posts them to the same import endpoint:
+posts them to the same import endpoint. The command installs on its own, without
+the server: `brew install mozilla-ai/tap/otari`.
 
 ```bash
 export OTARI_URL="https://otari.example.com"
@@ -103,7 +105,7 @@ otari import claude-code --dry-run
 
 # Then import it, with a budget-exempt API key. Usage binds to that key's own
 # user, so do not pass --user-id here.
-export OTARI_API_KEY="gw-your-import-key"
+export OTARI_API_KEY="tk-your-import-key"
 otari import claude-code
 ```
 

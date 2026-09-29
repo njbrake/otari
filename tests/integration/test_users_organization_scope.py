@@ -31,9 +31,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_ROOT
-from gateway.models.entities import APIKey, DashboardSession, UsageLog, User
-from gateway.models.tenancy import Organization, OrganizationMember, Workspace
+from gateway.models.api_keys import APIKey
+from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, Workspace
 from gateway.models.tenancy import User as TenancyUser
+from gateway.models.usage import UsageLog
+from gateway.models.users import User
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
 # The request-plane ids this suite reasons about. Each names the join that puts
@@ -299,12 +301,8 @@ def test_every_by_id_route_refuses_another_organizations_user(
 
 def test_the_same_routes_still_serve_the_callers_own_user(client: TestClient, world: _World) -> None:
     """The control: 404 has to mean out of scope, not broken."""
-    assert (
-        _request(client, world, "alpha_operator", "GET", f"{API_ROOT}/users/{ALPHA_KEYED}") == status.HTTP_200_OK
-    )
-    assert (
-        _request(client, world, "beta_operator", "GET", f"{API_ROOT}/users/{BETA_KEYED}") == status.HTTP_200_OK
-    )
+    assert _request(client, world, "alpha_operator", "GET", f"{API_ROOT}/users/{ALPHA_KEYED}") == status.HTTP_200_OK
+    assert _request(client, world, "beta_operator", "GET", f"{API_ROOT}/users/{BETA_KEYED}") == status.HTTP_200_OK
 
 
 # =============================================================================

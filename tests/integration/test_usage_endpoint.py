@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 
 from conftest import seed_workspace_id
 from gateway.core.config import API_ROOT
-from gateway.models.entities import APIKey, UsageLog, User
+from gateway.models.api_keys import APIKey
+from gateway.models.usage import UsageLog
+from gateway.models.users import User
 
 USAGE_PATH = f"{API_ROOT}/usage"
 
@@ -124,9 +126,7 @@ def test_list_usage_filters_by_several_request_groups(
     assert sorted(row["id"] for row in listed.json()) == ["row-grp-1", "row-grp-3"]
 
 
-def test_list_usage_request_group_batch_is_capped(
-    client: TestClient, master_key_header: dict[str, str]
-) -> None:
+def test_list_usage_request_group_batch_is_capped(client: TestClient, master_key_header: dict[str, str]) -> None:
     """An unbounded IN list is rejected rather than executed."""
     response = client.get(
         USAGE_PATH,

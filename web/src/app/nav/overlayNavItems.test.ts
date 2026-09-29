@@ -55,13 +55,15 @@ describe("a build that replaces the nav-item module", () => {
   it("appends a contributed row after the organization section's own", () => {
     expect(
       section(ORG_NAV_SECTIONS, "org-money")?.items.map((item) => item.label),
-    ).toEqual(["Spend & budgets", "Model pricing", "Billing"])
+    ).toEqual(["Spend & budgets", "Billing"])
   })
 
   it("appends into a second organization section from the same list", () => {
+    // A section the base leaves empty still takes a row, which is why Gateway
+    // stays declared with nothing in it.
     expect(
       section(ORG_NAV_SECTIONS, "org-gateway")?.items.map((item) => item.label),
-    ).toEqual(["Guardrails", "Gateways"])
+    ).toEqual(["Gateways"])
   })
 
   it("appends into the workspace rail from that same list", () => {
@@ -81,10 +83,10 @@ describe("a build that replaces the nav-item module", () => {
   it("leaves every section no contribution names alone", () => {
     expect(
       section(ORG_NAV_SECTIONS, "org-people")?.items.map((item) => item.label),
-    ).toEqual(["Workspaces", "Members & roles", "Email domains", "Providers"])
+    ).toEqual(["Workspaces", "Members & roles", "Email domains"])
     expect(
       section(NAV_SECTIONS, "gateway")?.items.map((item) => item.label),
-    ).toEqual(["Playground", "Models", "Routing", "Tools"])
+    ).toEqual(["Models", "Routing", "Tools"])
   })
 
   it("leaves a contributed row ungated unless it says otherwise", () => {

@@ -9,18 +9,17 @@ import { useProviders } from "@/shared/api/providers"
 import { useAliases } from "@/shared/api/routing"
 
 // The per-key model access-list is a tri-state:
-//   null  -> "any"   (unrestricted, the default)
-//   []    -> "block" (deny all)
-//   list  -> "only"  (restrict to these entries)
+//   undefined -> "any"   (unrestricted, the default; `null` on the wire)
+//   []        -> "block" (deny all)
+//   list      -> "only"  (restrict to these entries)
 // A bare multi-select cannot tell "any" from "block" (both look empty), so the
 // mode is an explicit 3-way choice. "Only selected" with no entries is an
 // INCOMPLETE form (Save disabled), never a silent deny-all.
 type Mode = "any" | "only" | "block"
 
-function modeOf(value: string[] | null): Mode {
-  if (value === null) return "any"
-  if (value.length === 0) return "block"
-  return "only"
+function modeOf(allowedModels: string[] | undefined): Mode {
+  if (!allowedModels) return "any"
+  return allowedModels.length === 0 ? "block" : "only"
 }
 
 interface CatalogOption {
@@ -35,8 +34,9 @@ const MAX_VISIBLE = 50
 // The control is reused for two layers of the same allow-list grammar: a user's
 // default and a key's (narrower) override. The wording differs between them, so
 // the heading, help text, and the "any" mode label are parameterized. "any" means
-// null on the wire: unrestricted for a user, but "inherit the owner's default" for
-// a key (a key with no list of its own falls back to its user).
+// `null` on the wire, converted where it arrives: unrestricted for a user, but
+// "inherit the owner's default" for a key (a key with no list of its own falls
+// back to its user).
 export function ModelScopeControl({
   initial,
   onChange,
@@ -44,8 +44,8 @@ export function ModelScopeControl({
   description,
   anyLabel = "Any model",
 }: {
-  initial: string[] | null
-  onChange: (value: string[] | null, valid: boolean) => void
+  initial: string[] | undefined
+  onChange: (value: string[] | undefined, valid: boolean) => void
   title?: ReactNode
   description?: ReactNode
   anyLabel?: string
@@ -63,39 +63,44 @@ export function ModelScopeControl({
   // does not appear twice. This is a pick-from-list control, not free text: every
   // stored entry is a real, canonical selector the backend will accept.
   const catalog = useMemo<CatalogOption[]>(() => {
+    const candidates: CatalogOption[] = [
+      ...(providers.data?.providers ?? []).map((provider) => ({
+        id: `${provider.instance}:*`,
+        label: `${provider.instance}:*  ·  all ${provider.instance} models`,
+      })),
+      ...(discoverable.data?.providers ?? []).flatMap((prov) =>
+        prov.models.map((model) => ({ id: model.key, label: model.key })),
+      ),
+      ...(aliases.data ?? []).map((alias) => ({
+        id: alias.target,
+        label: `${alias.name}  ·  alias`,
+      })),
+    ]
+    // First label wins, so a discoverable model keeps its own name over the
+    // alias that resolves to it.
     const seen = new Set<string>()
-    const options: CatalogOption[] = []
-    const add = (id: string, label: string) => {
-      if (id && !seen.has(id)) {
-        seen.add(id)
-        options.push({ id, label })
-      }
-    }
-    for (const p of providers.data?.providers ?? []) {
-      add(`${p.instance}:*`, `${p.instance}:*  ·  all ${p.instance} models`)
-    }
-    for (const prov of discoverable.data?.providers ?? []) {
-      for (const m of prov.models) add(m.key, m.key)
-    }
-    for (const a of aliases.data ?? []) add(a.target, `${a.name}  ·  alias`)
-    return options
+    return candidates.filter((option) => {
+      if (!option.id || seen.has(option.id)) return false
+      seen.add(option.id)
+      return true
+    })
   }, [providers.data, discoverable.data, aliases.data])
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
     return catalog
-      .filter((o) => !entries.includes(o.id))
+      .filter((option) => !entries.includes(option.id))
       .filter(
-        (o) =>
+        (option) =>
           !q ||
-          o.id.toLowerCase().includes(q) ||
-          o.label.toLowerCase().includes(q),
+          option.id.toLowerCase().includes(q) ||
+          option.label.toLowerCase().includes(q),
       )
       .slice(0, MAX_VISIBLE)
   }, [catalog, entries, query])
 
   const emit = (nextMode: Mode, nextEntries: string[]) => {
-    if (nextMode === "any") onChange(null, true)
+    if (nextMode === "any") onChange(undefined, true)
     else if (nextMode === "block") onChange([], true)
     else onChange(nextEntries, nextEntries.length > 0)
   }
@@ -113,7 +118,7 @@ export function ModelScopeControl({
   }
 
   const removeEntry = (id: string) => {
-    const next = entries.filter((e) => e !== id)
+    const next = entries.filter((entry) => entry !== id)
     setEntries(next)
     emit("only", next)
   }
@@ -209,8 +214,8 @@ export function ModelScopeControl({
                   className="max-h-72 overflow-auto"
                   renderEmptyState={() => (
                     <ComboBoxEmpty
-                      isSourceEmpty={catalog.every((o) =>
-                        entries.includes(o.id),
+                      isSourceEmpty={catalog.every((option) =>
+                        entries.includes(option.id),
                       )}
                       emptyMessage={
                         catalog.length === 0
@@ -239,11 +244,14 @@ export function ModelScopeControl({
 // A compact label describing a key's access, for the table row. Deliberately not
 // a count: an entry like `openai:*` is one entry but many models, so a number
 // would mislead. The exact entries are surfaced on hover / in the edit form.
-export function accessLabel(allowed: string[] | null): {
+export function accessLabel(allowedModels: string[] | undefined): {
   text: string
   tone: "muted" | "normal" | "danger"
 } {
-  if (allowed === null) return { text: "All models", tone: "muted" }
-  if (allowed.length === 0) return { text: "No models", tone: "danger" }
+  // Absent is "not restricted", which an empty list cannot say: `[]` is a real
+  // answer meaning no model at all. The wire spells absent `null`, so callers
+  // convert it where it arrives.
+  if (!allowedModels) return { text: "All models", tone: "muted" }
+  if (allowedModels.length === 0) return { text: "No models", tone: "danger" }
   return { text: "Selected models", tone: "normal" }
 }

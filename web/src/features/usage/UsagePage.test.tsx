@@ -513,7 +513,9 @@ describe("UsagePage", () => {
     await user.click(
       screen.getByRole("button", { name: "Share usage as an image" }),
     )
-    await screen.findByText("Share this view as an image")
+    // By role: a `Dialog` fills HeroUI's trigger slot with its own title and
+    // hides it, so the string is in the document twice.
+    await screen.findByRole("dialog", { name: "Share this view as an image" })
 
     // The panel reads the page's own summary. If it ever grows a query of its
     // own, opening it would add a /v1/usage/summary call with a different
@@ -1353,6 +1355,13 @@ describe("UsagePage gateway-run tools", () => {
             cost: 2.49,
           },
           {
+            tool: "web_fetch",
+            calls: 86,
+            errors: 7,
+            requests: 42,
+            cost: 0.43,
+          },
+          {
             tool: "code_execution",
             calls: 65,
             errors: 6,
@@ -1371,6 +1380,12 @@ describe("UsagePage gateway-run tools", () => {
     expect(within(row).getByText("13")).toBeInTheDocument()
     expect(within(row).getByText("105")).toBeInTheDocument()
     expect(within(row).getByText("$2.49")).toBeInTheDocument()
+
+    const fetchRow = screen.getByText("web fetch").closest("tr")!
+    expect(within(fetchRow).getByText("86")).toBeInTheDocument()
+    expect(within(fetchRow).getByText("7")).toBeInTheDocument()
+    expect(within(fetchRow).getByText("42")).toBeInTheDocument()
+    expect(within(fetchRow).getByText("$0.43")).toBeInTheDocument()
   })
 
   it("drills into the Activity log filtered on the clicked tool", async () => {

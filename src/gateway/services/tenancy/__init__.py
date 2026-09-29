@@ -3,6 +3,12 @@
 A feature module: organizations, workspaces, memberships, and the first-boot
 provisioning that gives a standalone deployment an identity to act as. The route
 files under `gateway.api.routes` stay thin composition over these services.
+
+Nothing here may reach model discovery. `workspace_scope` imports this package
+through `provisioning_service`, and discovery dials back through
+`provider_kwargs` and `alias_service` to `workspace_scope`, so a name in that
+ring listed here makes every module in it unimportable. The offered-models
+service is in `services/providers/` for that reason among others.
 """
 
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService

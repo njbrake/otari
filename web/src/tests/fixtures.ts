@@ -11,15 +11,20 @@ import type {
   ApiKey,
   Budget,
   CallerOrganizationMembership,
+  CatalogModelSummary,
+  CatalogResponse,
   DeploymentBootstrap,
   DeploymentUser,
   Organization,
   OrganizationContext,
   OrganizationDomain,
   OrganizationGuardrail,
+  OrganizationGuardrailDefinition,
   OrganizationMember,
+  OrganizationPricingOverride,
   OrganizationSpendCeiling,
   OrgProviderKey,
+  OrgProviderModel,
   PendingOrganizationInvitation,
   PricingResponse,
   ScopedBudget,
@@ -35,6 +40,53 @@ import type {
   WorkspaceProviderKeyOverride,
   WorkspaceWebSearchConfig,
 } from "@/client"
+
+export function catalogModelSummary(
+  overrides: Partial<CatalogModelSummary> &
+    Pick<CatalogModelSummary, "id" | "selectors">,
+): CatalogModelSummary {
+  return {
+    name: overrides.id,
+    // The indexed catalog is the ordinary state, so it is the default; a test
+    // opts into the unindexed one by passing `selector: null` explicitly.
+    selector: overrides.id,
+    vendor: null,
+    capabilities: {
+      reasoning: false,
+      tool_call: false,
+      structured_output: false,
+      attachment: false,
+      temperature: false,
+    },
+    input_modalities: [],
+    output_modalities: [],
+    deprecated: false,
+    open_weights: false,
+    offering_count: overrides.selectors.length,
+    provider_count: overrides.selectors.length,
+    providers: [],
+    price_sources: [],
+    unpriced_count: overrides.selectors.length,
+    discovered: true,
+    ...overrides,
+  }
+}
+
+export function catalogResponse(
+  models: CatalogModelSummary[],
+  overrides: Partial<Omit<CatalogResponse, "models">> = {},
+): CatalogResponse {
+  return {
+    default_pricing: false,
+    defaults_as_of: null,
+    metadata_available: false,
+    // The route's own answer: the matches before the window, which with no
+    // window is however many the fixture carries.
+    count: models.length,
+    models,
+    ...overrides,
+  }
+}
 
 export function usageTotals(overrides: Partial<UsageTotals> = {}): UsageTotals {
   return {
@@ -98,6 +150,8 @@ const STANDALONE_SURFACES = [
   "budgets",
   "keys",
   "models",
+  "organization_guardrails",
+  "organization_providers",
   "organizations",
   "playground",
   "pricing",
@@ -111,16 +165,20 @@ const STANDALONE_SURFACES = [
 ]
 
 // The same list for a hosted (multi-tenant) deployment, kept in step with
-// HOSTED_SURFACES beside it: the process-global provider page drops, the
-// organization-scoped one takes its place, the Playground drops because a
-// control plane serves no inference (otari#822), and the organization-wide
-// Usage page appears, being a destination only where "my organization" is
-// narrower than "everything" (otari-ai#1963).
+// HOSTED_SURFACES beside it: the process-global provider page drops, because a
+// credential keyed on an instance name alone is served to every tenant; the
+// Playground drops because a control plane serves no inference (otari#822); and
+// the organization-wide Usage page appears, being a destination only where "my
+// organization" is narrower than "everything" (otari-ai#1963).
+//
+// `organization_providers` is not part of that difference: it is on the
+// standalone list above too, because the page behind it is where an
+// organization's models are offered, priced and switched, which is a tenant's
+// question whether or not the deployment has more than one tenant.
 const HOSTED_DROPS = new Set(["providers", "playground"])
 
 export const HOSTED_SURFACES = [
   ...STANDALONE_SURFACES.filter((surface) => !HOSTED_DROPS.has(surface)),
-  "organization_providers",
   "organization_usage",
 ]
 
@@ -147,6 +205,8 @@ export function bootstrap(
     // account-menu tests set them.
     terms_url: null,
     privacy_url: null,
+    // No public website: the public catalog's logo links to the catalog.
+    site_url: null,
     // Not frozen, because a fixture describes a deployment somebody can sign
     // in to; the maintenance-mode tests override it.
     maintenance_mode: false,
@@ -158,6 +218,7 @@ export function bootstrap(
     // clearing a list it does not care about.
     oauth_providers: [],
     mail_ready: false,
+    feedback_enabled: true,
     // Off by default, matching the config default; the public-catalog tests
     // turn it on.
     public_catalog: false,
@@ -199,6 +260,8 @@ export function organizationContext(
       user_id: "33333333-3333-3333-3333-333333333333",
       email: null,
       full_name: "Operator",
+      has_password: false,
+      claims_deployment: true,
     },
     role: "owner",
     status: "active",
@@ -574,9 +637,11 @@ export function organizationGuardrail(
     organization_id: "11111111-1111-1111-1111-111111111111",
     profile: "prompt-injection",
     // The ordinary entry: no endpoint of its own, so it is sent to the
-    // deployment's guardrails URL, and no credential to authenticate with.
+    // deployment's guardrails URL, no credential to authenticate with, and no
+    // definition of the organization's own for Otari to build and run.
     url: null,
     has_credential: false,
+    definition_id: null,
     mode: "monitor",
     on_unavailable: "block",
     validate_kwargs: null,
@@ -585,6 +650,26 @@ export function organizationGuardrail(
     workspace_ids: [],
     created_at: "2026-08-24T00:00:00+00:00",
     updated_at: "2026-08-24T00:00:00+00:00",
+    ...overrides,
+  }
+}
+
+export function organizationGuardrailDefinition(
+  overrides: Partial<OrganizationGuardrailDefinition> = {},
+): OrganizationGuardrailDefinition {
+  return {
+    id: "66666666-6666-6666-6666-666666666666",
+    organization_id: "11111111-1111-1111-1111-111111111111",
+    name: "prod-lakera",
+    guardrail_name: "lakera_guard",
+    enabled: true,
+    // Built and running, with its one secret held and readable.
+    build_state: "built",
+    create_kwargs: { endpoint: "https://api.lakera.ai" },
+    create_secrets: { api_key: "***" },
+    secrets_decryptable: true,
+    created_at: "2026-09-22T00:00:00+00:00",
+    updated_at: "2026-09-22T00:00:00+00:00",
     ...overrides,
   }
 }
@@ -609,6 +694,63 @@ export function organizationDomain(
   }
 }
 
+/**
+ * One rate an organization has stored for a model.
+ *
+ * Open ended and in force, which is the period the rate editor opens on. A test
+ * about a retired or future rate sets `effective_to` or `effective_from`.
+ */
+export function organizationPricingOverride(
+  overrides: Partial<OrganizationPricingOverride> = {},
+): OrganizationPricingOverride {
+  return {
+    id: "99999999-9999-9999-9999-999999999999",
+    organization_id: "11111111-1111-1111-1111-111111111111",
+    model_key: "openai:gpt-4o",
+    input_price_per_million: 2.5,
+    output_price_per_million: 10,
+    cache_read_price_per_million: null,
+    cache_write_price_per_million: null,
+    cache_write_1h_price_per_million: null,
+    pricing_tiers: [],
+    unit: "tokens",
+    effective_from: "2026-01-01T00:00:00Z",
+    effective_to: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  }
+}
+
+/**
+ * One model an organization offers on a provider key.
+ *
+ * Priced from the community defaults and served, which is what the offer rule
+ * produces for a model the pricing data knows: a test about an unpriced or
+ * withheld model says so, because those are the states the panel has to show
+ * differently.
+ */
+export function orgProviderModel(
+  overrides: Partial<OrgProviderModel> = {},
+): OrgProviderModel {
+  return {
+    id: "77777777-7777-7777-7777-777777777777",
+    org_provider_key_id: "66666666-6666-6666-6666-666666666666",
+    model: "gpt-4o",
+    input_price_per_million: 2.5,
+    output_price_per_million: 10,
+    cache_read_price_per_million: null,
+    cache_write_price_per_million: null,
+    cache_write_1h_price_per_million: null,
+    price_source: "defaults",
+    pricing_id: null,
+    enabled: true,
+    created_at: "2026-08-24T00:00:00+00:00",
+    updated_at: null,
+    ...overrides,
+  }
+}
+
 export function orgProviderKey(
   overrides: Partial<OrgProviderKey> = {},
 ): OrgProviderKey {
@@ -623,6 +765,9 @@ export function orgProviderKey(
     // the server and only the tail of the key is ever published.
     last4: "abcd",
     is_org_default: false,
+    // The default is a key this deployment can actually read. A test wanting the
+    // other case says so, because that is the state the dashboard has to show.
+    usable: true,
     archived_at: null,
     created_at: "2026-08-24T00:00:00+00:00",
     updated_at: null,
@@ -643,6 +788,7 @@ export function workspaceProviderKeyOverride(
     disabled: false,
     is_effective_default: true,
     is_effective_enabled: true,
+    usable: true,
     // Empty is the answer "every model this key serves", never "no model".
     allowed_models: [],
     ...overrides,
@@ -669,6 +815,7 @@ export function workspaceCodeExecutionPolicy(
     exec_timeout_s: null,
     image: null,
     tools: null,
+    executor: null,
     created_at: null,
     updated_at: null,
     ...overrides,

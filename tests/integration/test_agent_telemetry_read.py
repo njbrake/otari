@@ -18,7 +18,9 @@ from gateway.api.deps import reset_config
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.database import reset_db
 from gateway.main import create_app
-from gateway.models.entities import AgentTelemetry, APIKey, UsageLog, User
+from gateway.models.api_keys import APIKey
+from gateway.models.usage import AgentTelemetry, UsageLog
+from gateway.models.users import User
 
 SUMMARY_PATH = f"{API_ROOT}/agent-telemetry/summary"
 COUNT_PATH = f"{API_ROOT}/agent-telemetry/count"
@@ -171,9 +173,7 @@ def _seed(db: Session) -> None:
         temporality="delta",
         series_key="series-lines-removed",
     )
-    _metric_row(
-        db, row_id="m-active", name="claude_code.active_time.total", value=7200.0, temporality="delta"
-    )
+    _metric_row(db, row_id="m-active", name="claude_code.active_time.total", value=7200.0, temporality="delta")
     # Behavioral events (already stored since PR #548), read here for the first time.
     _behavioral_row(db, row_id="b-tool-1", name="tool_result", tool_name="Bash")
     _behavioral_row(db, row_id="b-tool-2", name="tool_result", tool_name="Bash")
@@ -419,9 +419,7 @@ def test_series_returns_one_series_per_group(
     assert sum(point["rows"] for point in body["points"] if point["key"] == "alice") == 16
 
 
-def test_series_rejects_a_window_with_too_many_buckets(
-    client: TestClient, master_key_header: dict[str, str]
-) -> None:
+def test_series_rejects_a_window_with_too_many_buckets(client: TestClient, master_key_header: dict[str, str]) -> None:
     response = client.get(
         SERIES_PATH,
         params={

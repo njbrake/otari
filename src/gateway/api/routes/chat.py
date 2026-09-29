@@ -14,9 +14,20 @@ from fastapi.responses import StreamingResponse
 from pydantic import Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import ModelProviderPortDep, get_config, get_db_if_needed, get_log_writer
+from gateway.api.deps import (
+    CodeExecutionPortDep,
+    McpServerPortDep,
+    ModelProviderPortDep,
+    OptionalFileServiceDep,
+    build_sandbox_container_registry,
+    build_sandbox_file_bridge,
+    get_config,
+    get_db_if_needed,
+    get_log_writer,
+    get_unit_of_work_if_needed,
+)
 from gateway.api.routes._helpers import latest_user_text, routing_signal_from_messages
-from gateway.api.routes._normalize import normalize_request_messages
+from gateway.api.routes._normalize import normalize_request_messages, sandbox_requested
 from gateway.api.routes._pipeline import (
     NO_RESOLVABLE_PROVIDER_DETAIL,
     PROVIDER_ERROR_DETAIL,
@@ -38,14 +49,19 @@ from gateway.api.routes._pipeline import (
 )
 from gateway.api.routes._platform import ResolvedAttempt, SettledCost
 from gateway.api.routes._schema_derive import SESSION_LABEL_DESC, SESSION_LABEL_MAX_LENGTH, derive_request_base
-from gateway.api.routes._tools import _strip_gateway_fields
+from gateway.api.routes._tools import CODE_EXECUTION_HEADER, WEB_SEARCH_HEADER, _strip_gateway_fields
 from gateway.core.config import GatewayConfig
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage import GatewayUsage
 from gateway.core.usage_source import PLAYGROUND_USAGE_ENDPOINT
 from gateway.log_config import logger
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
+from gateway.models.tools import CodeExecutor
+from gateway.ports.code_execution_port import CodeExecutionPort
+from gateway.ports.mcp_server_port import McpServerPort
 from gateway.ports.model_provider_port import ModelProviderPort
+from gateway.services.files import FileService, StagedFile
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import (
     MAX_TOOL_ITERATIONS_CAP,
@@ -54,7 +70,7 @@ from gateway.services.mcp_loop import (
     mcp_tool_loop,
     mcp_tool_loop_stream,
 )
-from gateway.services.web_search_budget import WebSearchBudget
+from gateway.services.tools import Dialect, ToolUseBudget
 from gateway.streaming import OPENAI_STREAM_FORMAT, StreamFormat
 from gateway.types.attempt import Attempt
 from gateway.types.session_principal import SessionPrincipal
@@ -163,7 +179,7 @@ class _ChatAdapter:
     and friends.
     """
 
-    name = "chat"
+    name = Dialect.CHAT
     stream_format: StreamFormat = OPENAI_STREAM_FORMAT
     log_success_without_usage = True
 
@@ -262,21 +278,22 @@ class _ChatAdapter:
         max_iterations: int,
         on_first_response: Callable[[], None] | None = None,
         *,
-        emit_native_web_search: bool = False,
-        web_search_budget: WebSearchBudget | None = None,
+        native_tools: frozenset[str] = frozenset(),
+        use_budget: ToolUseBudget | None = None,
     ) -> ChatCompletion:
-        # ``emit_native_web_search`` is accepted for interface parity and ignored:
-        # this format has no native vocabulary for a server-side tool call, so a
-        # gateway-run search stays invisible on the wire (see docs/tools.md).
-        # ``web_search_budget`` is not: the cap bounds what the caller is billed
+        # ``native_tools`` is accepted for interface parity and always empty: this
+        # format has no native vocabulary for a server-side tool call, so a
+        # gateway-run search or execution stays invisible on the wire (see
+        # docs/tools.md).
+        # ``use_budget`` is not: the cap bounds what the caller is billed
         # for, which every format owes whether or not it can describe the search.
         # Standalone dispatch has no lock-in callback; only pass the kwarg on
         # the platform-attempt path so test fakes can mirror each call shape.
         extra: dict[str, Any] = {}
         if on_first_response is not None:
             extra["on_first_response"] = on_first_response
-        if web_search_budget is not None:
-            extra["web_search_budget"] = web_search_budget
+        if use_budget is not None:
+            extra["use_budget"] = use_budget
         return await mcp_tool_loop(
             completion_kwargs=kwargs,
             pool=pool,
@@ -290,12 +307,12 @@ class _ChatAdapter:
         pool: ToolBackend,
         max_iterations: int,
         *,
-        emit_native_web_search: bool = False,
-        web_search_budget: WebSearchBudget | None = None,
+        native_tools: frozenset[str] = frozenset(),
+        use_budget: ToolUseBudget | None = None,
     ) -> AsyncIterator[ChatCompletionChunk]:
         extra: dict[str, Any] = {}
-        if web_search_budget is not None:
-            extra["web_search_budget"] = web_search_budget
+        if use_budget is not None:
+            extra["use_budget"] = use_budget
         return mcp_tool_loop_stream(
             completion_kwargs=kwargs,
             pool=pool,
@@ -379,9 +396,13 @@ async def chat_completions(
     background_tasks: BackgroundTasks,
     request: ChatCompletionRequest,
     db: Annotated[AsyncSession | None, Depends(get_db_if_needed)],
+    uow: Annotated[UnitOfWork | None, Depends(get_unit_of_work_if_needed)],
+    files: OptionalFileServiceDep,
     config: Annotated[GatewayConfig, Depends(get_config)],
     log_writer: Annotated[LogWriter, Depends(get_log_writer)],
     model_provider: ModelProviderPortDep,
+    code_execution_port: CodeExecutionPortDep,
+    mcp_server_port: McpServerPortDep,
 ) -> ChatCompletion | StreamingResponse:
     """OpenAI-compatible chat completions endpoint.
 
@@ -399,9 +420,13 @@ async def chat_completions(
         background_tasks=background_tasks,
         request=request,
         db=db,
+        uow=uow,
+        files=files,
         config=config,
         log_writer=log_writer,
         model_provider=model_provider,
+        code_execution_port=code_execution_port,
+        mcp_server_port=mcp_server_port,
     )
 
 
@@ -412,9 +437,13 @@ async def run_chat_completion(
     background_tasks: BackgroundTasks,
     request: ChatCompletionRequest,
     db: AsyncSession | None,
+    uow: UnitOfWork | None,
+    files: FileService | None,
     config: GatewayConfig,
     log_writer: LogWriter,
     model_provider: ModelProviderPort,
+    code_execution_port: CodeExecutionPort | None,
+    mcp_server_port: McpServerPort,
     session_principal: SessionPrincipal | None = None,
 ) -> ChatCompletion | StreamingResponse:
     """Serve one chat completion, from the resolved preamble to the response.
@@ -441,12 +470,17 @@ async def run_chat_completion(
             detail="Invalid request: model is required",
         )
 
+    # Uploads the normalizer found for the code-execution sandbox, handed to the
+    # sandbox session once the billed user and workspace are resolved.
+    sandbox_inputs: list[StagedFile] = []
+
     async def _normalize(
         user_id: str,
         provider: LLMProvider | None,
         model: str,
         instance: str | None,
         workspace_id: uuid.UUID | None,
+        workspace_executor: CodeExecutor | None,
     ) -> tuple[int, CompletionUsage | None]:
         # Resolve uploaded file/image blocks into the wire payload (extract to
         # text for text-only models, inline for natively-capable ones) before
@@ -458,12 +492,20 @@ async def run_chat_completion(
             config=config,
             provider=provider,
             model=model,
-            db=db,
-            raw_request=raw_request,
+            files=files,
             user_id=user_id,
             instance=instance,
             workspace_id=workspace_id,
+            sandbox_requested=sandbox_requested(
+                request.tools,
+                config=config,
+                provider=provider,
+                dialect=adapter.name,
+                code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
+                workspace_executor=workspace_executor,
+            ),
         )
+        sandbox_inputs.extend(stats.sandbox_inputs)
         return len(str(request.messages)), stats.vision_usage()
 
     output_cap = _effective_output_cap(request.max_tokens, request.max_completion_tokens)
@@ -473,6 +515,7 @@ async def run_chat_completion(
         raw_request=raw_request,
         response=response,
         db=db,
+        uow=uow,
         config=config,
         log_writer=log_writer,
         model=request.model,
@@ -486,6 +529,7 @@ async def run_chat_completion(
             request.messages, raw_request, has_tools=bool(request.tools)
         ),
         normalize_messages=_normalize,
+        tools=request.tools,
     )
 
     tool_ctx = await prepare_gateway_tools(
@@ -499,6 +543,25 @@ async def run_chat_completion(
         mcp_server_ids=request.mcp_server_ids,
         max_tool_iterations=request.max_tool_iterations,
         tools_header=request.tools_header,
+        code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
+        web_search_header=raw_request.headers.get(WEB_SEARCH_HEADER),
+        code_execution_port=code_execution_port,
+        mcp_server_port=mcp_server_port,
+        sandbox_containers=build_sandbox_container_registry(
+            config=config,
+            uow=ctx.uow,
+            user_id=ctx.user_id,
+            workspace_id=ctx.workspace_id,
+            port=code_execution_port,
+        ),
+        sandbox_files=build_sandbox_file_bridge(
+            raw_request=raw_request,
+            config=config,
+            uow=ctx.uow,
+            user_id=ctx.user_id,
+            workspace_id=ctx.workspace_id,
+            inputs=sandbox_inputs,
+        ),
     )
 
     request_fields = _strip_gateway_fields(
@@ -546,6 +609,7 @@ async def run_chat_completion(
                     rate_limit_info=ctx.rate_limit_info,
                     tool_ctx=tool_ctx,
                     session_label=request.session_label,
+                    started_at=ctx.started_at,
                 )
             except HTTPException:
                 raise

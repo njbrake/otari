@@ -14,9 +14,20 @@ from openresponses_types.types import Usage as OpenResponsesUsage
 from pydantic import ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import ModelProviderPortDep, get_config, get_db_if_needed, get_log_writer
+from gateway.api.deps import (
+    CodeExecutionPortDep,
+    McpServerPortDep,
+    ModelProviderPortDep,
+    OptionalFileServiceDep,
+    build_sandbox_container_registry,
+    build_sandbox_file_bridge,
+    get_config,
+    get_db_if_needed,
+    get_log_writer,
+    get_unit_of_work_if_needed,
+)
 from gateway.api.routes._helpers import latest_user_text, routing_signal_from_text, text_from_content
-from gateway.api.routes._normalize import normalize_request_messages
+from gateway.api.routes._normalize import normalize_request_messages, sandbox_requested
 from gateway.api.routes._pipeline import (
     NO_RESOLVABLE_PROVIDER_DETAIL,
     PROVIDER_ERROR_DETAIL,
@@ -38,21 +49,25 @@ from gateway.api.routes._pipeline import (
 )
 from gateway.api.routes._platform import ResolvedAttempt, SettledCost, build_attempt_client_args
 from gateway.api.routes._schema_derive import SESSION_LABEL_DESC, SESSION_LABEL_MAX_LENGTH, derive_request_base
-from gateway.api.routes._tools import _strip_gateway_fields
+from gateway.api.routes._tools import CODE_EXECUTION_HEADER, WEB_SEARCH_HEADER, _strip_gateway_fields
 from gateway.core.config import GatewayConfig
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage import GatewayUsage
 from gateway.log_config import logger
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
+from gateway.models.tools import CodeExecutor
+from gateway.services.files import StagedFile
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import ToolBackend
 from gateway.services.mcp_loop_responses import (
+    CODE_INTERPRETER_CALL_ID_PREFIX,
     MAX_TOOL_ITERATIONS_CAP,
     responses_tool_loop,
     responses_tool_loop_stream,
 )
 from gateway.services.tool_format import inject_purpose_hints_responses, openai_to_responses_tools
-from gateway.services.web_search_budget import WebSearchBudget
+from gateway.services.tools import Dialect, ToolUseBudget
 from gateway.streaming import RESPONSES_STREAM_FORMAT, StreamFormat
 from gateway.types.attempt import Attempt
 
@@ -176,31 +191,70 @@ def _split_codex_input_metadata(value: Any) -> tuple[Any, bool]:
 # ``response.output`` to the next ``input``, and the gateway has no
 # ``previous_response_id`` support to do that server-side, so an echoed turn would
 # otherwise ship a ``web_search_call`` to a provider that never declared a
-# web-search tool. Anthropic's equivalent hazard (an ``encrypted_content`` blob the
-# gateway cannot sign) is why Messages emits no native server-tool blocks at all.
+# web-search tool. A ``code_interpreter_call`` is recognized only when its id
+# carries the gateway's own prefix, because OpenAI's own items are legitimately
+# echoed to OpenAI and must survive.
 _GATEWAY_MINTED_ITEM_TYPES = frozenset({"web_search_call"})
 
 
-def _strip_gateway_minted_items(input_data: Any) -> Any:
-    """Drop gateway-minted server-tool items from an inbound ``input``.
+def _is_gateway_minted_item(item: Any) -> bool:
+    return isinstance(item, dict) and item.get("type") in _GATEWAY_MINTED_ITEM_TYPES
 
-    Only touches a list input, and only removes the item types the gateway itself
-    emits. A caller who genuinely used a provider-native web search still had that
-    run upstream, so its items arrive on a response the gateway passed through
-    untouched; those are indistinguishable here and are dropped too. That is the
-    conservative direction: dropping a descriptive item loses nothing the model
-    needs (the search results themselves are in the transcript), while forwarding
-    one risks a 400 from the provider.
+
+def _is_gateway_minted_code_interpreter_call(item: Any) -> bool:
+    if not isinstance(item, dict) or item.get("type") != "code_interpreter_call":
+        return False
+    return str(item.get("id") or "").startswith(CODE_INTERPRETER_CALL_ID_PREFIX)
+
+
+def _code_interpreter_call_as_message(item: dict[str, Any]) -> dict[str, Any]:
+    """Fold a gateway-minted ``code_interpreter_call`` into an assistant message item.
+
+    Unlike a search, whose results are already in the transcript, an execution's
+    logs exist nowhere else, so dropping the item would make the model forget
+    what its code printed on the previous turn. The Messages route folds its pair
+    the same way (``messages._code_execution_pair_as_text``).
+    """
+    code = str(item.get("code") or "")
+    parts = [f"[code executed]\n```\n{code}\n```"] if code else ["[code executed]"]
+    parts.extend(
+        f"logs:\n{output['logs']}"
+        for output in item.get("outputs") or []
+        if isinstance(output, dict) and output.get("type") == "logs" and output.get("logs")
+    )
+    if item.get("status") == "failed":
+        parts.append("status: failed")
+    return {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "\n".join(parts)}]}
+
+
+def _strip_gateway_minted_items(input_data: Any) -> Any:
+    """Take gateway-minted server-tool items back off an inbound ``input``.
+
+    Only touches a list input, and only the items the gateway itself emits. A
+    ``web_search_call`` is dropped: a caller who genuinely used a provider-native
+    web search still had that run upstream, so its items arrive on a response the
+    gateway passed through untouched; those are indistinguishable here and are
+    dropped too. That is the conservative direction: dropping a descriptive item
+    loses nothing the model needs (the search results themselves are in the
+    transcript), while forwarding one risks a 400 from the provider. A gateway-run
+    interpreter call is told apart by its id prefix, so a provider's own survives,
+    and is folded into a message rather than dropped
+    (:func:`_code_interpreter_call_as_message`).
     """
     if not isinstance(input_data, list):
         return input_data
-    kept = [
-        item
-        for item in input_data
-        if not (isinstance(item, dict) and item.get("type") in _GATEWAY_MINTED_ITEM_TYPES)
-    ]
-    if len(kept) != len(input_data):
-        logger.debug("Stripped %d gateway-minted output item(s) from the inbound input", len(input_data) - len(kept))
+    kept: list[Any] = []
+    touched = 0
+    for item in input_data:
+        if _is_gateway_minted_code_interpreter_call(item):
+            kept.append(_code_interpreter_call_as_message(item))
+            touched += 1
+        elif _is_gateway_minted_item(item):
+            touched += 1
+        else:
+            kept.append(item)
+    if touched:
+        logger.debug("Rewrote %d gateway-minted output item(s) on the inbound input", touched)
     return kept
 
 
@@ -257,7 +311,7 @@ class _ResponsesAdapter:
     and friends.
     """
 
-    name = "responses"
+    name = Dialect.RESPONSES
     endpoint = USAGE_ENDPOINT
     stream_format: StreamFormat = RESPONSES_STREAM_FORMAT
     log_success_without_usage = True
@@ -345,21 +399,18 @@ class _ResponsesAdapter:
         max_iterations: int,
         on_first_response: Callable[[], None] | None = None,
         *,
-        emit_native_web_search: bool = False,
-        web_search_budget: WebSearchBudget | None = None,
+        native_tools: frozenset[str] = frozenset(),
+        use_budget: ToolUseBudget | None = None,
     ) -> ResponsesResponse:
-        # ``emit_native_web_search`` is accepted for interface parity and ignored:
-        # this format has no native vocabulary for a server-side tool call, so a
-        # gateway-run search stays invisible on the wire (see docs/tools.md).
-        # ``web_search_budget`` is not: the cap bounds what the caller is billed
-        # for, which every format owes whether or not it can describe the search.
         # Standalone dispatch has no lock-in callback; only pass the kwarg on
         # the platform-attempt path so test fakes can mirror each call shape.
         extra: dict[str, Any] = {}
         if on_first_response is not None:
             extra["on_first_response"] = on_first_response
-        if web_search_budget is not None:
-            extra["web_search_budget"] = web_search_budget
+        if use_budget is not None:
+            extra["use_budget"] = use_budget
+        if native_tools:
+            extra["native_tools"] = native_tools
         return await responses_tool_loop(
             completion_kwargs=kwargs,
             pool=pool,
@@ -373,12 +424,14 @@ class _ResponsesAdapter:
         pool: ToolBackend,
         max_iterations: int,
         *,
-        emit_native_web_search: bool = False,
-        web_search_budget: WebSearchBudget | None = None,
+        native_tools: frozenset[str] = frozenset(),
+        use_budget: ToolUseBudget | None = None,
     ) -> AsyncIterator[ResponseStreamEvent]:
         extra: dict[str, Any] = {}
-        if web_search_budget is not None:
-            extra["web_search_budget"] = web_search_budget
+        if use_budget is not None:
+            extra["use_budget"] = use_budget
+        if native_tools:
+            extra["native_tools"] = native_tools
         return responses_tool_loop_stream(
             completion_kwargs=kwargs,
             pool=pool,
@@ -461,9 +514,13 @@ async def create_response(
     background_tasks: BackgroundTasks,
     request_body: ResponsesRequest,
     db: Annotated[AsyncSession | None, Depends(get_db_if_needed)],
+    uow: Annotated[UnitOfWork | None, Depends(get_unit_of_work_if_needed)],
+    files: OptionalFileServiceDep,
     config: Annotated[GatewayConfig, Depends(get_config)],
     log_writer: Annotated[LogWriter, Depends(get_log_writer)],
     model_provider: ModelProviderPortDep,
+    code_execution_port: CodeExecutionPortDep,
+    mcp_server_port: McpServerPortDep,
 ) -> dict[str, Any] | StreamingResponse:
     """OpenAI-compatible Responses endpoint.
 
@@ -478,12 +535,17 @@ async def create_response(
     raw_max_output = getattr(request_body, "max_output_tokens", None)
     max_output_tokens = raw_max_output if isinstance(raw_max_output, int) and raw_max_output >= 0 else None
 
+    # Uploads the normalizer found for the code-execution sandbox, handed to the
+    # sandbox session once the billed user and workspace are resolved.
+    sandbox_inputs: list[StagedFile] = []
+
     async def _normalize(
         user_id: str,
         provider: LLMProvider | None,
         model: str,
         instance: str | None,
         workspace_id: uuid.UUID | None,
+        workspace_executor: CodeExecutor | None,
     ) -> tuple[int, CompletionUsage | None]:
         # Resolve uploaded file/image blocks into the Responses input payload
         # before the cost estimate. Standalone only; no-op when the files
@@ -494,12 +556,20 @@ async def create_response(
             config=config,
             provider=provider,
             model=model,
-            db=db,
-            raw_request=raw_request,
+            files=files,
             user_id=user_id,
             instance=instance,
             workspace_id=workspace_id,
+            sandbox_requested=sandbox_requested(
+                request_body.tools,
+                config=config,
+                provider=provider,
+                dialect=_ADAPTER.name,
+                code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
+                workspace_executor=workspace_executor,
+            ),
         )
+        sandbox_inputs.extend(stats.sandbox_inputs)
         chars = len(str(request_body.input)) + len(str(getattr(request_body, "instructions", "") or ""))
         return chars, stats.vision_usage()
 
@@ -508,6 +578,7 @@ async def create_response(
         raw_request=raw_request,
         response=response,
         db=db,
+        uow=uow,
         config=config,
         log_writer=log_writer,
         model=request_body.model,
@@ -520,6 +591,7 @@ async def create_response(
             _routing_text(request_body), raw_request, has_tools=bool(request_body.tools)
         ),
         normalize_messages=_normalize,
+        tools=request_body.tools,
     )
 
     # Provider-support guard: an unsupported provider would just fail
@@ -582,6 +654,25 @@ async def create_response(
         mcp_server_ids=request_body.mcp_server_ids,
         max_tool_iterations=request_body.max_tool_iterations,
         tools_header=request_body.tools_header,
+        code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
+        web_search_header=raw_request.headers.get(WEB_SEARCH_HEADER),
+        code_execution_port=code_execution_port,
+        mcp_server_port=mcp_server_port,
+        sandbox_containers=build_sandbox_container_registry(
+            config=config,
+            uow=ctx.uow,
+            user_id=ctx.user_id,
+            workspace_id=ctx.workspace_id,
+            port=code_execution_port,
+        ),
+        sandbox_files=build_sandbox_file_bridge(
+            raw_request=raw_request,
+            config=config,
+            uow=ctx.uow,
+            user_id=ctx.user_id,
+            workspace_id=ctx.workspace_id,
+            inputs=sandbox_inputs,
+        ),
     )
 
     # Strip gateway-internal fields, flatten any caller-supplied function tools
@@ -643,6 +734,7 @@ async def create_response(
                     rate_limit_info=ctx.rate_limit_info,
                     tool_ctx=tool_ctx,
                     session_label=request_body.session_label,
+                    started_at=ctx.started_at,
                 )
             except HTTPException:
                 raise

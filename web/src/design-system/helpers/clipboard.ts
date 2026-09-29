@@ -42,20 +42,24 @@ function legacyCopy(text: string): boolean {
     document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null
-  source.select()
 
-  let copied = false
+  let isCopied = false
   try {
-    copied = document.execCommand("copy")
+    source.select()
+    isCopied = document.execCommand("copy")
   } catch {
-    copied = false
+    // Covers select() too, not just execCommand: a throw there is still a copy
+    // that did not happen, and the caller reads the return value to say so.
+    isCopied = false
+  } finally {
+    // In a finally: the textarea holds the plaintext, so it must not outlive a
+    // throw above it (#1149).
+    source.remove()
+    if (selection && previous) {
+      selection.removeAllRanges()
+      selection.addRange(previous)
+    }
+    previousFocus?.focus()
   }
-
-  source.remove()
-  if (selection && previous) {
-    selection.removeAllRanges()
-    selection.addRange(previous)
-  }
-  previousFocus?.focus()
-  return copied
+  return isCopied
 }

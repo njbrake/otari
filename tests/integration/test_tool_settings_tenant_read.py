@@ -24,8 +24,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_ROOT
-from gateway.models.entities import DashboardSession
-from gateway.models.tenancy import Organization, OrganizationMember, User
+from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
 _PATH = f"{API_ROOT}/tool-settings"
@@ -69,9 +68,7 @@ def sessions(
         session.refresh(organization)
         return {
             "member": _identity(session, email="member@alpha.test", organization_id=organization.id),
-            "operator": _identity(
-                session, email="root@alpha.test", organization_id=organization.id, is_superuser=True
-            ),
+            "operator": _identity(session, email="root@alpha.test", organization_id=organization.id, is_superuser=True),
         }
     finally:
         session.close()

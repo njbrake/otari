@@ -10,6 +10,7 @@ import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { TablePagination } from "@/design-system/data/TablePagination"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
+import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { Checkbox } from "@/design-system/forms/Checkbox"
 import { INPUT_CLASS } from "@/design-system/forms/inputClass"
@@ -29,6 +30,7 @@ import {
   filterModels,
   MODALITIES,
   MODALITY_LABELS,
+  makerKeyOf,
   PRICE_OPTIONS,
   PRICING_OPTIONS,
   providerOptions,
@@ -39,6 +41,12 @@ import {
 } from "@/features/models/catalog"
 import { publicCatalogHref } from "@/features/models/publicCatalog"
 import { useCatalog } from "@/shared/api/models"
+import {
+  anyMakerMark,
+  anyProviderMark,
+  MakerMark,
+  ProviderMark,
+} from "@/shared/components/marks/BrandMark"
 import {
   formatContext,
   formatRate,
@@ -52,7 +60,7 @@ import { useUrlValue } from "@/shared/helpers/urlState"
 // where its offerings are compared. Below `lg` the rail folds behind a
 // "Filters" button.
 //
-// Read-only for every caller. A price is set on Model pricing, which the model
+// Read-only for every caller. A price is set on Providers, which the model
 // page's links reach with the selector in hand, so the catalog cannot be used
 // to reprice anything by accident (otari-ai#2095, #2096).
 //
@@ -131,8 +139,8 @@ function FilterGroup({
   )
 }
 
-function toggle(list: string[], value: string, on: boolean): string[] {
-  return on
+function toggle(list: string[], value: string, isOn: boolean): string[] {
+  return isOn
     ? [...new Set([...list, value])]
     : list.filter((entry) => entry !== value)
 }
@@ -173,6 +181,16 @@ function FilterRail({
     key: K,
     value: CatalogFilters[K],
   ) => onChange({ ...filters, [key]: value })
+  const providers = providerOptions(models)
+  // Decided per list rather than per row: a rail where nothing resolves would
+  // be a column of identical tiles, which says nothing and indents every label.
+  const providersMarked = anyProviderMark(
+    providers.map((option) => option.value),
+  )
+  const vendors = vendorOptions(models)
+  const vendorsMarked = anyMakerMark(
+    vendors.flatMap((option) => (option.markKey ? [option.markKey] : [])),
+  )
   return (
     <div className="flex flex-col">
       <FilterGroup
@@ -184,10 +202,10 @@ function FilterRail({
           <Checkbox
             key={modality}
             isSelected={filters.inputModalities.includes(modality)}
-            onChange={(on) =>
+            onChange={(isOn) =>
               set(
                 "inputModalities",
-                toggle(filters.inputModalities, modality, on),
+                toggle(filters.inputModalities, modality, isOn),
               )
             }
           >
@@ -203,10 +221,10 @@ function FilterRail({
           <Checkbox
             key={modality}
             isSelected={filters.outputModalities.includes(modality)}
-            onChange={(on) =>
+            onChange={(isOn) =>
               set(
                 "outputModalities",
-                toggle(filters.outputModalities, modality, on),
+                toggle(filters.outputModalities, modality, isOn),
               )
             }
           >
@@ -234,28 +252,53 @@ function FilterRail({
         />
       </FilterGroup>
       <FilterGroup label="Providers" count={filters.providers.length}>
-        {providerOptions(models).map((option) => (
+        {providers.map((option) => (
           <Checkbox
             key={option.value}
             isSelected={filters.providers.includes(option.value)}
-            onChange={(on) =>
-              set("providers", toggle(filters.providers, option.value, on))
+            onChange={(isOn) =>
+              set("providers", toggle(filters.providers, option.value, isOn))
             }
           >
-            {option.label}
+            {providersMarked ? (
+              <span className="flex items-center gap-2">
+                <ProviderMark providerId={option.value} label={option.label} />
+                {option.label}
+              </span>
+            ) : (
+              option.label
+            )}
           </Checkbox>
         ))}
       </FilterGroup>
       <FilterGroup label="Vendors" count={filters.vendors.length}>
-        {vendorOptions(models).map((option) => (
+        {vendors.map((option) => (
           <Checkbox
             key={option.value || "unknown"}
             isSelected={filters.vendors.includes(option.value)}
-            onChange={(on) =>
-              set("vendors", toggle(filters.vendors, option.value, on))
+            onChange={(isOn) =>
+              set("vendors", toggle(filters.vendors, option.value, isOn))
             }
           >
-            {option.label}
+            {vendorsMarked ? (
+              <span className="flex items-center gap-2">
+                {/* The unknown bucket is not a company, so it takes no mark and
+                    no tile: an initial for "Unknown vendor" would name a vendor
+                    called U. It keeps the slot, which is what holds the column. */}
+                {option.markKey ? (
+                  <MakerMark
+                    vendorSlug={option.markKey}
+                    label={option.label}
+                    step={16}
+                  />
+                ) : (
+                  <span aria-hidden="true" className="size-4 shrink-0" />
+                )}
+                {option.label}
+              </span>
+            ) : (
+              option.label
+            )}
           </Checkbox>
         ))}
       </FilterGroup>
@@ -264,8 +307,11 @@ function FilterRail({
           <Checkbox
             key={entry.value}
             isSelected={filters.capabilities.includes(entry.value)}
-            onChange={(on) =>
-              set("capabilities", toggle(filters.capabilities, entry.value, on))
+            onChange={(isOn) =>
+              set(
+                "capabilities",
+                toggle(filters.capabilities, entry.value, isOn),
+              )
             }
           >
             {entry.label}
@@ -320,31 +366,18 @@ function ModelCard({
   publicView: boolean
 }) {
   const title = model.vendor ? `${model.vendor}: ${model.name}` : model.name
-  const titleClass = "text-heading text-link hover:text-link-hover break-words"
+  const makerKey = makerKeyOf(model)
+  const titleClass =
+    "text-heading text-link group-hover:text-link-hover break-words"
   const providers =
     model.provider_count === 1
       ? "1 provider"
       : `${model.provider_count} providers`
-  return (
-    <article className="flex flex-col gap-2 border border-border bg-surface p-4">
+  const content = (
+    <>
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-          {publicView ? (
-            <a href={publicCatalogHref(model.id)} className={titleClass}>
-              {title}
-            </a>
-          ) : (
-            // No onClick: the link navigates on a plain click by itself, and
-            // intercepting one would take Cmd/Ctrl-click and middle-click
-            // (which opens a new tab) with it. `onOpen` is the table row's.
-            <Link
-              to="/models/$"
-              params={{ _splat: model.id }}
-              className={titleClass}
-            >
-              {title}
-            </Link>
-          )}
+          <span className={titleClass}>{title}</span>
           {model.open_weights ? <Badge tone="muted">Open weights</Badge> : null}
           {model.deprecated ? <Badge tone="warn">Deprecated</Badge> : null}
         </div>
@@ -354,7 +387,12 @@ function ModelCard({
         <p className="line-clamp-2 text-sm text-muted">{model.description}</p>
       ) : null}
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-caption">
-        <span>by {model.vendor ?? "unknown vendor"}</span>
+        <span className="flex items-center gap-1.5">
+          {makerKey ? (
+            <MakerMark vendorSlug={makerKey} label={model.vendor ?? ""} />
+          ) : null}
+          by {model.vendor ?? "unknown vendor"}
+        </span>
         {model.release_date ? (
           <>
             <Sep />
@@ -382,80 +420,138 @@ function ModelCard({
           </>
         ) : null}
       </p>
+    </>
+  )
+  const cardClass =
+    "group flex flex-col gap-2 border border-border bg-surface p-4 transition-colors duration-150 ease-out hover:bg-surface-alt motion-reduce:transition-none"
+  return (
+    <article>
+      {publicView ? (
+        <a
+          href={publicCatalogHref(model.id)}
+          aria-label={title}
+          className={cardClass}
+        >
+          {content}
+        </a>
+      ) : (
+        <Link
+          to="/models/$"
+          params={{ _splat: model.id }}
+          aria-label={title}
+          className={cardClass}
+        >
+          {content}
+        </Link>
+      )}
     </article>
   )
 }
 
-function tableColumns(): DataTableColumn<CatalogModelSummary>[] {
-  return [
-    {
-      id: "name",
-      header: "Model",
-      isRowHeader: true,
-      allowsSorting: true,
-      cell: (row) => (
+const TABLE_COLUMNS: DataTableColumn<CatalogModelSummary>[] = [
+  {
+    id: "name",
+    header: "Model",
+    isRowHeader: true,
+    allowsSorting: true,
+    cell: (row) => {
+      const makerKey = makerKeyOf(row)
+      return (
         <div className="flex min-w-0 flex-col">
           <span className="text-body break-words">{row.name}</span>
-          <span className="text-caption">
-            {row.vendor ?? "Unknown vendor"} ·{" "}
-            {row.provider_count === 1
-              ? "1 provider"
-              : `${row.provider_count} providers`}
+          <span className="flex items-center gap-1.5 text-caption">
+            {/* No slot held when the maker is unknown: the sub-line is prose on
+              one row of a table whose other rows carry a mark, and an empty box
+              in front of "Unknown vendor" reads as a mark that failed to load. */}
+            {makerKey === undefined ? null : (
+              <MakerMark vendorSlug={makerKey} label={row.vendor ?? ""} />
+            )}
+            <span>
+              {row.vendor ?? "Unknown vendor"} ·{" "}
+              {row.provider_count === 1
+                ? "1 provider"
+                : `${row.provider_count} providers`}
+            </span>
           </span>
         </div>
-      ),
+      )
     },
-    {
-      id: "context",
-      header: "Context",
-      align: "end",
-      allowsSorting: true,
-      cell: (row) => (
-        <span className="text-mono-caption">
-          {formatContext(row.context_window)}
-        </span>
-      ),
-    },
-    {
-      id: "released",
-      header: "Released",
-      align: "end",
-      allowsSorting: true,
-      cell: (row) => (
-        <span className="text-mono-caption">
-          {formatReleaseDate(row.release_date)}
-        </span>
-      ),
-    },
-    {
-      id: "input",
-      header: "Input / 1M",
-      align: "end",
-      allowsSorting: true,
-      cell: (row) => (
-        <span className="text-mono-caption">
-          {fromRate(row.min_input_price_per_million)}
-        </span>
-      ),
-    },
-    {
-      id: "output",
-      header: "Output / 1M",
-      align: "end",
-      allowsSorting: true,
-      cell: (row) => (
-        <span className="text-mono-caption">
-          {fromRate(row.min_output_price_per_million)}
-        </span>
-      ),
-    },
-  ]
-}
+  },
+  {
+    id: "context",
+    header: "Context",
+    align: "end",
+    allowsSorting: true,
+    cell: (row) => (
+      <span className="text-mono-caption">
+        {formatContext(row.context_window)}
+      </span>
+    ),
+  },
+  {
+    id: "released",
+    header: "Released",
+    align: "end",
+    allowsSorting: true,
+    cell: (row) => (
+      <span className="text-mono-caption">
+        {formatReleaseDate(row.release_date)}
+      </span>
+    ),
+  },
+  {
+    id: "input",
+    header: "Input / 1M",
+    align: "end",
+    allowsSorting: true,
+    cell: (row) => (
+      <span className="text-mono-caption">
+        {fromRate(row.min_input_price_per_million)}
+      </span>
+    ),
+  },
+  {
+    id: "output",
+    header: "Output / 1M",
+    align: "end",
+    allowsSorting: true,
+    cell: (row) => (
+      <span className="text-mono-caption">
+        {fromRate(row.min_output_price_per_million)}
+      </span>
+    ),
+  },
+]
+
+const CATALOG_VIEWS = ["list", "table"] as const
+type CatalogView = (typeof CATALOG_VIEWS)[number]
 
 const VIEW_OPTIONS = [
   { value: "list", label: "List" },
   { value: "table", label: "Table" },
-]
+] as const satisfies { value: CatalogView; label: string }[]
+
+function isCatalogView(value: string | null): value is CatalogView {
+  return (CATALOG_VIEWS as readonly string[]).includes(value ?? "")
+}
+
+// Hoisted beside the columns: DataTable caches its rendered rows on these two,
+// and an inline arrow would rebuild every row on each render.
+const rowKey = (row: CatalogModelSummary) => row.id
+
+const VIEW_STORAGE_KEY = "otari.dashboard.modelsView"
+
+function readStoredView(): CatalogView {
+  if (typeof window === "undefined") return "list"
+  try {
+    const stored = window.localStorage.getItem(VIEW_STORAGE_KEY)
+    return isCatalogView(stored) ? stored : "list"
+  } catch {
+    // Private-mode Safari and a disabled-storage policy both throw. The list is
+    // the view a first visit gets, so it is what a blocked read falls back to.
+    return "list"
+  }
+}
 
 export function ModelCatalogView({
   onOpen,
@@ -479,7 +575,18 @@ export function ModelCatalogView({
     providers: initialProvider ? [initialProvider] : [],
   })
   const [sort, setSort] = useState("newest")
-  const [view, setView] = useState("list")
+  const [view, setView] = useState<CatalogView>(readStoredView)
+  // `Segmented` hands back a plain string, so the union is re-established here,
+  // on the same default a stored value nobody recognizes falls to.
+  const changeView = (next: string) => {
+    const chosen = isCatalogView(next) ? next : "list"
+    setView(chosen)
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, chosen)
+    } catch {
+      // Keep the control usable when browser storage is unavailable.
+    }
+  }
   const [railOpen, setRailOpen] = useState(false)
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
@@ -523,6 +630,10 @@ export function ModelCatalogView({
   }
 
   const defaultsAsOf = catalog.data?.defaults_as_of
+  // The filters, the sort, the provider count and the filter rail are all built
+  // from `models`, so a catalog larger than one request can carry makes every
+  // one of them describe a prefix. Say so rather than let them read as totals.
+  const withheld = Math.max(0, (catalog.data?.count ?? 0) - models.length)
 
   return (
     <div className="flex flex-col gap-5">
@@ -549,6 +660,15 @@ export function ModelCatalogView({
       </header>
 
       <ErrorBanner error={catalog.error} />
+
+      {withheld > 0 ? (
+        <InfoBanner tone="warning">
+          This deployment serves {catalog.data?.count} models, and this page
+          holds the first {models.length}. The filters, the sort and the
+          provider counts describe those {models.length}; the remaining{" "}
+          {withheld} are reachable by name from a model's own page.
+        </InfoBanner>
+      ) : null}
 
       <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-8">
         <aside
@@ -600,7 +720,7 @@ export function ModelCatalogView({
               label="View"
               options={VIEW_OPTIONS}
               value={view}
-              onChange={setView}
+              onChange={changeView}
             />
             <Button
               size="sm"
@@ -630,16 +750,16 @@ export function ModelCatalogView({
             <TableScrollFrame className="otari-models-table">
               <DataTable
                 ariaLabel="Models"
-                columns={tableColumns()}
+                columns={TABLE_COLUMNS}
                 rows={pageRows}
-                getRowKey={(row) => row.id}
+                getRowKey={rowKey}
                 sortDescriptor={sortDescriptor}
                 onSortChange={onSortChange}
                 onRowAction={onOpen}
                 emptyContent={
                   <EmptyMessage>
                     {models.length === 0
-                      ? "No models yet. Configure a provider, or price a model on Model pricing."
+                      ? "No models yet. Configure a provider, or price a model on Providers."
                       : "No models match these filters."}
                   </EmptyMessage>
                 }
@@ -648,7 +768,7 @@ export function ModelCatalogView({
           ) : pageRows.length === 0 ? (
             <EmptyMessage minHeightClass="min-h-[12rem]">
               {models.length === 0
-                ? "No models yet. Configure a provider, or price a model on Model pricing."
+                ? "No models yet. Configure a provider, or price a model on Providers."
                 : "No models match these filters."}
             </EmptyMessage>
           ) : (

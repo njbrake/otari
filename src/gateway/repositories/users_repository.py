@@ -7,8 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
 
-from gateway.models.entities import APIKey, UsageLog, User
+from gateway.models.api_keys import APIKey
 from gateway.models.tenancy import OrganizationMember, Workspace
+from gateway.models.usage import UsageLog
+from gateway.models.users import User
 
 # The owner a key falls back to when it is created without a user_id (the API's
 # convenience path, and the first-run bootstrap key). One shared, visible,
@@ -106,6 +108,22 @@ async def live_attribution_user_ids(db: AsyncSession, user_ids: Sequence[str]) -
         return set()
     rows = await db.execute(select(User.user_id).where(User.user_id.in_(list(user_ids)), User.deleted_at.is_(None)))
     return set(rows.scalars().all())
+
+
+async def attribution_spend(db: AsyncSession, user_ids: Sequence[str]) -> dict[str, User]:
+    """The request-plane rows behind these ids, by id.
+
+    One query for the page rather than the whole ``users`` table: the roster read
+    every identity on the deployment to put a spend figure beside a handful of
+    members (otari#1381). Soft-deleted rows are left out, matching
+    :func:`live_attribution_user_ids`, so a member whose row is gone reports no
+    spend rather than a stale one.
+    """
+
+    if not user_ids:
+        return {}
+    rows = (await db.execute(select(User).where(User.user_id.in_(list(user_ids)), User.deleted_at.is_(None)))).scalars()
+    return {row.user_id: row for row in rows}
 
 
 def _keyed_in(organization_id: uuid.UUID | None) -> ColumnElement[bool]:

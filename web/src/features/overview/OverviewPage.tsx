@@ -20,23 +20,20 @@ import { scopeLabel } from "@/features/budgets/organizationBudget"
 import { SetupGuide } from "@/features/onboarding/SetupGuide"
 import { canManage, isDeploymentOperator } from "@/features/organization/roles"
 import {
-  budgetHealth,
+  allocationStrip,
+  type BudgetHealth,
   errorRateHealth,
   providerHealthStatus,
-  spendCeilingHealth,
 } from "@/features/overview/overview"
-import { useKeys } from "@/shared/api/apiKeys"
-import { useBudgets, useOrganizationSpendCeilings } from "@/shared/api/budgets"
 import { useModels } from "@/shared/api/models"
 import { useOrganizationContext } from "@/shared/api/organizations"
+import { useOverviewSummary } from "@/shared/api/overview"
 import { useProviderHealth, useProviders } from "@/shared/api/providers"
 import {
   NO_BREAKDOWNS,
   useUsageLogs,
   useUsageSummary,
 } from "@/shared/api/usage"
-import { useUsers } from "@/shared/api/users"
-import { useWorkspaceMembers } from "@/shared/api/workspaces"
 import {
   deltaFraction,
   formatNumber,
@@ -162,12 +159,12 @@ function UsageKpiCells({
   today,
   period,
   previous,
-  empty,
+  isEmpty,
 }: {
   today: ReturnType<typeof useUsageSummary>
   period: ReturnType<typeof useUsageSummary>
   previous: ReturnType<typeof useUsageSummary>
-  empty: boolean
+  isEmpty: boolean
 }) {
   const todayTotals = today.data?.totals
   const periodTotals = period.data?.totals
@@ -209,12 +206,16 @@ function UsageKpiCells({
         // the caller's *local* midnight, deliberately and with a comment saying
         // so, so a UTC string would be false for everyone not on it.
         subline={
-          empty ? "no prior spend" : todayTotals ? "since midnight" : "no data"
+          isEmpty
+            ? "no prior spend"
+            : todayTotals
+              ? "since midnight"
+              : "no data"
         }
         graphic={
-          !empty && hasHourlyTrend ? (
+          !isEmpty && hasHourlyTrend ? (
             <Sparkline
-              values={todaySeries.map((p) => p.cost)}
+              values={todaySeries.map((point) => point.cost)}
               ariaLabel="Spend by hour today"
               height={40}
             />
@@ -225,7 +226,7 @@ function UsageKpiCells({
         label="Spend, last 30 days"
         value={periodTotals ? formatUsd(periodTotals.cost) : "—"}
         subline={
-          empty ? "no prior spend" : periodTotals ? undefined : "no data"
+          isEmpty ? "no prior spend" : periodTotals ? undefined : "no data"
         }
         // Spend falling is the improvement, so a rise paints danger while the
         // arrow keeps telling the truth about which way it went.
@@ -239,9 +240,9 @@ function UsageKpiCells({
           ) : undefined
         }
         graphic={
-          !empty && hasTrend ? (
+          !isEmpty && hasTrend ? (
             <Sparkline
-              values={periodSeries.map((p) => p.cost)}
+              values={periodSeries.map((point) => point.cost)}
               ariaLabel="Spend trend over the last 30 days"
               height={40}
             />
@@ -252,7 +253,7 @@ function UsageKpiCells({
         label="Requests, last 30 days"
         value={periodTotals ? formatNumber(periodTotals.request_count) : "—"}
         subline={
-          empty ? "no prior traffic" : periodTotals ? undefined : "no data"
+          isEmpty ? "no prior traffic" : periodTotals ? undefined : "no data"
         }
         // Volume, so no polarity: more traffic through the gateway is neither
         // a win nor a regression on its own, and the error rate beside it is
@@ -263,9 +264,9 @@ function UsageKpiCells({
           ) : undefined
         }
         graphic={
-          !empty && hasTrend ? (
+          !isEmpty && hasTrend ? (
             <Sparkline
-              values={periodSeries.map((p) => p.requests)}
+              values={periodSeries.map((point) => point.requests)}
               ariaLabel="Request volume trend over the last 30 days"
               height={40}
             />
@@ -285,7 +286,7 @@ function UsageKpiCells({
         }
         subline={
           err.rate === null
-            ? empty
+            ? isEmpty
               ? "NO REQUESTS YET"
               : "no requests in range"
             : undefined
@@ -301,7 +302,7 @@ function UsageKpiCells({
           ) : undefined
         }
         graphic={
-          !empty && periodTotals ? (
+          !isEmpty && periodTotals ? (
             <span className="text-xs text-muted">
               {`${formatNumber(periodTotals.error_count)} of ${formatNumber(periodTotals.request_count)} requests`}
             </span>
@@ -378,10 +379,7 @@ function OrganizationOverview() {
   // route: `require_active_organization_management_access`, the same gate that
   // opens the organization rail in `AppShell`. A member is refused there, so a
   // member is not asked here (the matrix has Spend & budgets Hidden for them).
-  // `canManage` is narrower than the server on one point, a superuser with no
-  // management role, and `roles.ts` says why that is the safe direction.
   const managesSpend = canManage(context.data)
-  const ceilings = useOrganizationSpendCeilings(managesSpend)
   // What this caller could route a request to, which is the setup guide's gate
   // here: `/providers`, the operator page's answer to the same question,
   // refuses this caller. The catalog is not operator-gated and is filtered to
@@ -390,37 +388,41 @@ function OrganizationOverview() {
   // to send a request to yet. Not asked until a workspace is selected, since the
   // guide is about one.
   const models = useModels(scope !== undefined)
-  // The two rail counts, both on surfaces this caller already reads:
-  // `useKeys` picks `/organizations/me/keys` for a non-operator
-  // (otari-ai#1941), and a workspace's roster is readable by any member of it.
-  const keys = useKeys(scope)
-  const members = useWorkspaceMembers(scope ?? null)
+  // The rail counts and the ceiling strip in one read. Each used to be a whole
+  // collection fetched to produce one number (otari#1425); the gateway scopes
+  // and judges them now, and withholds the ceilings a member may not see.
+  const summary = useOverviewSummary(scope)
 
   const periodSeries = period.data?.series ?? []
-  const organizationName =
-    context.data?.organization.name ?? "This organization"
-  const ceilingHealth = spendCeilingHealth(
-    ceilings.data ?? [],
-    (ceiling) =>
-      ceiling.name ??
-      // No workspace roster is loaded here, so a workspace ceiling reads as
-      // "A workspace", which is what the Spend page shows for an id it cannot
-      // resolve either.
-      scopeLabel(ceiling, { organizationName, workspaces: [] }),
-  )
+  const ceilingHealth = allocationStrip(summary.data?.ceilings, {
+    none: "No spend ceilings configured",
+    noneCapped: "No ceiling caps spend",
+    // No workspace roster is loaded here, so a workspace ceiling reads as
+    // "A workspace", which is what the Spend page shows for an id it cannot
+    // resolve either.
+    nameOf: (worst) =>
+      worst.scope_type
+        ? scopeLabel(
+            { scope_type: worst.scope_type, scope_id: worst.scope_id ?? "" },
+            {
+              organizationName:
+                context.data?.organization.name ?? "This organization",
+              workspaces: [],
+            },
+          )
+        : worst.budget_id,
+  })
 
   // Why the cell has no percentage to show, once the read has landed. The two
   // are told apart because they ask for different things: nothing is capped
   // yet, or what is capped is capped on tokens or requests rather than dollars.
   const noCeilingReason =
-    (ceilings.data?.length ?? 0) === 0
+    (summary.data?.ceilings?.total_count ?? 0) === 0
       ? "no spend ceilings set"
       : "no ceiling caps spend"
 
-  const activeKeys = (keys.data ?? []).filter((k) => k.is_active).length
-  const activeMembers = (members.data ?? []).filter(
-    (member) => member.status === "active",
-  ).length
+  const activeKeys = summary.data?.active_keys ?? 0
+  const activeMembers = summary.data?.active_members ?? 0
 
   // Recent activity is excluded for the operator page's reason: it renders its
   // own inline banner, so including it here would double-report. The previous
@@ -428,34 +430,25 @@ function OrganizationOverview() {
   // would otherwise just silently strip them. The catalog is excluded too: it
   // decides whether an optional offer appears, not whether this page is right.
   const loadError =
-    today.error ??
-    period.error ??
-    previous.error ??
-    ceilings.error ??
-    keys.error ??
-    members.error
+    today.error ?? period.error ?? previous.error ?? summary.error
 
   const refresh = () => {
     void today.refetch()
     void period.refetch()
     void previous.refetch()
     void recent.refetch()
-    void keys.refetch()
-    void members.refetch()
+    void summary.refetch()
     // Both guarded because `refetch` runs a disabled query: the catalog would be
     // asked with no workspace to use it, and the ceilings with a role the server
     // refuses.
     if (scope !== undefined) void models.refetch()
-    if (managesSpend) void ceilings.refetch()
   }
   const isRefreshing =
     today.isFetching ||
     period.isFetching ||
     previous.isFetching ||
     recent.isFetching ||
-    keys.isFetching ||
-    members.isFetching ||
-    ceilings.isFetching ||
+    summary.isFetching ||
     models.isFetching
 
   return (
@@ -474,12 +467,12 @@ function OrganizationOverview() {
 
       <ErrorBanner error={loadError} />
 
-      <KpiStrip empty={false} columns={managesSpend ? 5 : 4}>
+      <KpiStrip isEmpty={false} columns={managesSpend ? 5 : 4}>
         <UsageKpiCells
           today={today}
           period={period}
           previous={previous}
-          empty={false}
+          isEmpty={false}
         />
         {managesSpend ? (
           <KpiCell
@@ -489,12 +482,12 @@ function OrganizationOverview() {
             // read that as "loaded, and zero" is the false zero
             // otari-ai#1935 and #1961 were both about.
             value={
-              ceilings.data && ceilingHealth.worst
+              summary.data?.ceilings && ceilingHealth.worst
                 ? formatPct(ceilingHealth.worst.pct)
                 : "—"
             }
             severity={
-              ceilings.data &&
+              summary.data?.ceilings &&
               ceilingHealth.worst &&
               ceilingHealth.status !== "neutral"
                 ? {
@@ -504,9 +497,9 @@ function OrganizationOverview() {
                 : undefined
             }
             subline={
-              ceilings.data && ceilingHealth.worst
+              summary.data?.ceilings && ceilingHealth.worst
                 ? undefined
-                : ceilings.data
+                : summary.data?.ceilings
                   ? noCeilingReason
                   : "no data"
             }
@@ -514,7 +507,7 @@ function OrganizationOverview() {
             // component the Spend page's own rows use, so the two cannot say
             // different things about one ceiling.
             graphic={
-              ceilings.data && ceilingHealth.worst ? (
+              summary.data?.ceilings && ceilingHealth.worst ? (
                 <SpendMeter
                   spent={ceilingHealth.worst.spent}
                   allocated={ceilingHealth.worst.allocated}
@@ -526,12 +519,12 @@ function OrganizationOverview() {
         ) : null}
       </KpiStrip>
 
-      <SpendChart series={periodSeries} ready={period.isSuccess} />
+      <SpendChart series={periodSeries} isReady={period.isSuccess} />
 
       <ActivitySplit
         recent={recent}
-        activeKeys={keys.data ? activeKeys : null}
-        activeMembers={members.data ? activeMembers : null}
+        activeKeys={summary.data ? activeKeys : null}
+        activeMembers={summary.data ? activeMembers : null}
         links={railLinks(managesSpend)}
       />
     </div>
@@ -599,16 +592,11 @@ export function OverviewPage({
   const usage = useUsageOverview()
   const { today, period, previous, recent } = usage
   const health = useProviderHealth()
-  const budgets = useBudgets()
-  // Same scope as the API keys page this tile links to, so the count and the
-  // table behind it cannot disagree.
-  const keys = useKeys(usage.scope)
-  const users = useUsers()
-  // The rail this feeds is headed "This workspace", so it counts the selected
-  // workspace's roster and not the organization's: an organization member need
-  // not be a member of every workspace, so the deployment-wide count would
-  // overcount the rail and stay put when the switcher moves.
-  const members = useWorkspaceMembers(usage.scope ?? null)
+  // The two rail counts and the budget strip in one read (otari#1425). The
+  // counts are scoped the way the pages they link to are scoped, so the tile
+  // and the table behind it cannot disagree: keys by the selected workspace,
+  // members by that workspace's roster rather than the organization's.
+  const summary = useOverviewSummary(usage.scope)
 
   const periodSeries = period.data?.series ?? []
 
@@ -616,13 +604,14 @@ export function OverviewPage({
   // pure, so it is derived here again rather than threaded out of the cells.
   const err = errorRateHealth(period.data?.totals)
 
-  const budget = budgetHealth(budgets.data ?? [])
+  const budget = allocationStrip(summary.data?.budgets, {
+    none: "No budgets configured",
+    noneCapped: "No capped budgets",
+  })
   const providerHealth = providerHealthStatus(health.data)
 
-  const activeKeys = (keys.data ?? []).filter((k) => k.is_active).length
-  const activeMembers = (members.data ?? []).filter(
-    (member) => member.status === "active",
-  ).length
+  const activeKeys = summary.data?.active_keys ?? 0
+  const activeMembers = summary.data?.active_members ?? 0
 
   // The getting-started state is an onboarding empty state: the gateway has no
   // providers AND no recorded usage. Imported OTLP usage lands in the usage
@@ -646,10 +635,7 @@ export function OverviewPage({
     period.error ??
     previous.error ??
     health.error ??
-    budgets.error ??
-    keys.error ??
-    users.error ??
-    members.error
+    summary.error
 
   // Manual refresh for the whole page; the windows already advance across
   // midnight on focus, but the numbers within a day are only as fresh as the
@@ -660,10 +646,7 @@ export function OverviewPage({
     void period.refetch()
     void previous.refetch()
     void health.refetch()
-    void budgets.refetch()
-    void keys.refetch()
-    void users.refetch()
-    void members.refetch()
+    void summary.refetch()
     void recent.refetch()
   }
   const isRefreshing =
@@ -672,10 +655,7 @@ export function OverviewPage({
     period.isFetching ||
     previous.isFetching ||
     health.isFetching ||
-    budgets.isFetching ||
-    keys.isFetching ||
-    users.isFetching ||
-    members.isFetching ||
+    summary.isFetching ||
     recent.isFetching
 
   return (
@@ -706,24 +686,26 @@ export function OverviewPage({
         errRate={err.rate}
         // The strip evaluates health, budgets, and error rate only after all
         // three load successfully, avoiding transient or false alerts.
-        ready={health.isSuccess && budgets.isSuccess && period.isSuccess}
-        failed={health.isError || budgets.isError || period.isError}
+        isReady={health.isSuccess && summary.isSuccess && period.isSuccess}
+        hasFailed={health.isError || summary.isError || period.isError}
       />
 
-      <KpiStrip empty={isEmpty}>
+      <KpiStrip isEmpty={isEmpty}>
         <UsageKpiCells
           today={today}
           period={period}
           previous={previous}
-          empty={isEmpty}
+          isEmpty={isEmpty}
         />
         <KpiCell
           label="Budget health"
           value={
-            budgets.data && budget.worst ? formatPct(budget.worst.pct) : "—"
+            summary.data?.budgets && budget.worst
+              ? formatPct(budget.worst.pct)
+              : "—"
           }
           severity={
-            budgets.data && budget.worst && budget.status !== "neutral"
+            summary.data?.budgets && budget.worst && budget.status !== "neutral"
               ? { status: budget.status, word: BUDGET_WORDS[budget.status] }
               : undefined
           }
@@ -731,11 +713,11 @@ export function OverviewPage({
           // no budgets showed a bare em dash on the populated page and only
           // explained itself in the empty state.
           subline={
-            budgets.data && budget.worst
+            summary.data?.budgets && budget.worst
               ? undefined
               : isEmpty
                 ? "NO BUDGETS SET"
-                : budgets.data
+                : summary.data?.budgets
                   ? "no budgets set"
                   : "no data"
           }
@@ -745,7 +727,7 @@ export function OverviewPage({
           // component as the Budgets table's cell, so the two cannot say
           // different things about the same budget.
           graphic={
-            !isEmpty && budgets.data && budget.worst ? (
+            !isEmpty && summary.data?.budgets && budget.worst ? (
               <SpendMeter
                 spent={budget.worst.spent}
                 allocated={budget.worst.allocated}
@@ -760,13 +742,13 @@ export function OverviewPage({
           the answer and the shape of the month is the context. Absent entirely
           in the empty state, where there is no shape to show. */}
       {isEmpty ? null : (
-        <SpendChart series={periodSeries} ready={period.isSuccess} />
+        <SpendChart series={periodSeries} isReady={period.isSuccess} />
       )}
 
       <ActivitySplit
         recent={recent}
-        activeKeys={keys.data ? activeKeys : null}
-        activeMembers={members.data ? activeMembers : null}
+        activeKeys={summary.data ? activeKeys : null}
+        activeMembers={summary.data ? activeMembers : null}
         // An operator reaches every one of these; the rail on the tenant page
         // drops the two the organization rail withholds from a member.
         links={RAIL_LINKS}
@@ -812,10 +794,16 @@ function OverviewHeader({
   )
 }
 
-// Where "add a provider credential" lives on this deployment. A standalone one
-// serves the process-wide page; a hosted one serves the organization-scoped
-// page in its place and does not report `providers` at all, so naming
-// `/providers` unconditionally would point an operator at the shell's "not
+// Where "add a provider credential" lives on this deployment. Standalone serves
+// both provider pages and this prefers the deployment's own, which is not the
+// obvious answer once there are two. It is the right one because of who reaches
+// this button: `OverviewIndex` hands a caller who does not operate the
+// deployment to `OrganizationOverview`, which draws no getting-started strip, so
+// the only person who can press this is the operator, and `/providers` is where
+// a fresh gateway is set up and carries the first-run panel that continues the
+// flow. Gating on the caller here too would restate a rule already guaranteed
+// one level up. Hosted and a control plane report no `providers` surface, so
+// naming it unconditionally would point an operator at the shell's "not
 // available here" panel.
 //
 // Only correct for *adding* one, which is why provider health does not use it:
@@ -883,18 +871,18 @@ function AttentionStrip({
   budget,
   errStatus,
   errRate,
-  ready,
-  failed,
+  isReady,
+  hasFailed,
 }: {
   providerHealth: "ok" | "warn" | "alert" | "neutral"
   healthy: number
   degraded: number
   total: number
-  budget: ReturnType<typeof budgetHealth>
+  budget: BudgetHealth
   errStatus: "ok" | "warn" | "alert" | "neutral"
   errRate: number | null
-  ready: boolean
-  failed: boolean
+  isReady: boolean
+  hasFailed: boolean
 }) {
   // Provider health is about `config.providers`, which a hosted deployment
   // serves no page for, so those two entries state the problem without offering
@@ -904,10 +892,10 @@ function AttentionStrip({
   const providerProblemsAreReachable = useSurfaces()("providers")
   // A failed source deserves a visible status message; while loading, wait for
   // actionable information instead of reserving space for a transient banner.
-  if (failed) {
+  if (hasFailed) {
     return <NeutralStrip text="Some status data could not be loaded." />
   }
-  if (!ready) {
+  if (!isReady) {
     return null
   }
 
@@ -1015,22 +1003,22 @@ function AttentionStrip({
  */
 function SpendChart({
   series,
-  ready,
+  isReady,
 }: {
   series: { bucket_start: string; cost: number }[]
-  ready: boolean
+  isReady: boolean
 }) {
-  const [hovered, setHovered] = useState<number | null>(null)
-  if (!ready || series.length < 2) {
+  const [hovered, setHovered] = useState<number>()
+  if (!isReady || series.length < 2) {
     return null
   }
-  const peak = Math.max(...series.map((p) => p.cost), 0)
-  const hoveredPoint = hovered === null ? null : (series[hovered] ?? null)
+  const peak = Math.max(...series.map((point) => point.cost), 0)
+  const hoveredPoint = hovered === undefined ? undefined : series[hovered]
   // A rounded ceiling rather than the peak itself, so the top label is a number
   // somebody would say out loud and the steps between are even.
   const top = niceCeiling(peak)
   // Top-down, which is the order they are drawn in.
-  const steps = [1, 0.75, 0.5, 0.25, 0].map((f) => top * f)
+  const steps = [1, 0.75, 0.5, 0.25, 0].map((fraction) => top * fraction)
   return (
     <Section className="border-b border-border py-5" contentClassName="">
       <div className="flex items-baseline justify-between">
@@ -1060,7 +1048,7 @@ function SpendChart({
             role="img"
             aria-label={`Daily spend over the last 30 days, peaking at ${formatUsd(peak)}`}
             className="relative flex h-[180px] items-end gap-[3px] border-b border-border"
-            onPointerLeave={() => setHovered(null)}
+            onPointerLeave={() => setHovered(undefined)}
           >
             {series.map((point, i) => (
               // The hit area is the whole column, not the drawn bar: a day with
@@ -1073,7 +1061,7 @@ function SpendChart({
                 className="group flex min-w-px flex-1 items-end self-stretch"
                 onPointerEnter={() => setHovered(i)}
                 onFocus={() => setHovered(i)}
-                onBlur={() => setHovered(null)}
+                onBlur={() => setHovered(undefined)}
               >
                 <span
                   className="w-full bg-accent group-hover:bg-accent-hover"
@@ -1177,10 +1165,8 @@ function ChartHoverCard({
 function niceCeiling(value: number): number {
   if (!(value > 0)) return 1
   const magnitude = 10 ** Math.floor(Math.log10(value))
-  for (const step of [1, 2, 5, 10]) {
-    if (value <= step * magnitude) return step * magnitude
-  }
-  return 10 * magnitude
+  const step = [1, 2, 5, 10].find((candidate) => value <= candidate * magnitude)
+  return (step ?? 10) * magnitude
 }
 
 /** Axis money: whole dollars once the scale is past them, cents below. */

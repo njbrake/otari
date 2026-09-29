@@ -1,6 +1,7 @@
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Coroutine
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -13,23 +14,31 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from typing_extensions import override
 
-from gateway.api.deps import set_config
+from gateway import features
+from gateway.api.deps import build_file_service, set_config
 from gateway.api.main import register_routers
-from gateway.container import build_container
+from gateway.container import Container, build_container
 from gateway.core.config import API_KEY_HEADER, API_ROOT, GATEWAY_TOKEN_HEADER, X_API_KEY_HEADER, GatewayConfig
 from gateway.core.database import create_session, dispose_db, init_db
+from gateway.core.feature import Worker
 from gateway.dashboard import DASHBOARD_PACKAGE_PATH, get_dashboard_build_id, get_dashboard_dir
+from gateway.exceptions import TenancyError
+from gateway.exceptions.control_plane_exceptions import ControlPlaneError
 from gateway.inflight import InFlightMiddleware, InFlightRegistry
 from gateway.legacy_routes import LegacyRouteMiddleware
 from gateway.log_config import logger
+from gateway.ports.api_key_format_port import ApiKeyFormatPort
+from gateway.ports.file_storage_port import FileStoragePort
+from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.rate_limit import RateLimiter
 from gateway.root_page import FAVICON_SVG, ROOT_TUTORIAL_HTML
 from gateway.services.alias_service import load_aliases_at_startup, reset_alias_cache, run_alias_refresher
 from gateway.services.bootstrap_service import bootstrap_first_api_key
-from gateway.services.budget_reservation_ledger import run_reservation_sweeper
+from gateway.services.budgets import run_reservation_sweeper
 from gateway.services.catalog_selectors import reset_selector_index
+from gateway.services.code_execution.container_sweeper import run_sandbox_container_sweeper
 from gateway.services.dashboard_session_service import revoke_sessions_on_master_key_change
-from gateway.services.file_store import build_file_store
+from gateway.services.files import run_file_sweeper
 from gateway.services.log_writer import LogWriter, NoopLogWriter, create_log_writer
 from gateway.services.master_key_service import ensure_master_key
 from gateway.services.model_catalog_service import (
@@ -73,11 +82,15 @@ from gateway.services.search_tool_store_service import (
 )
 from gateway.services.secret_box import validate_secret_key
 from gateway.services.selector_index_service import run_selector_index_refresher
-from gateway.services.tenancy.errors import TenancyError
 from gateway.services.tenancy.org_provider_key_service import (
     load_org_provider_keys_at_startup,
     reset_org_provider_cache,
     run_org_provider_refresher,
+)
+from gateway.services.tenancy.organization_guardrail_runner import (
+    load_guardrail_runner_at_startup,
+    reset_guardrail_runner,
+    run_guardrail_runner_refresher,
 )
 from gateway.services.tool_settings_service import apply_overrides_from_db as apply_tool_overrides_from_db
 from gateway.version import __version__
@@ -138,6 +151,122 @@ _UNAUTHENTICATED_PATHS = frozenset(
         f"{API_ROOT}/auth/oauth/{{provider}}/callback",
     }
 )
+
+
+@dataclass(frozen=True)
+class _LifespanWorker:
+    """One periodic background task a standalone deployment runs.
+
+    ``start`` returns the task's coroutine, or None for a worker this config does
+    not run. ``reset`` clears the cache the worker keeps warm.
+    """
+
+    name: str
+    start: Callable[[GatewayConfig, Container], Coroutine[Any, Any, None] | None]
+    reset: Callable[[], None] | None = None
+
+
+def _start_reservation_sweeper(config: GatewayConfig, _container: Container) -> Coroutine[Any, Any, None] | None:
+    """Return the budget reservation sweep, or None when the interval disables it."""
+    if config.budget_reservation_sweep_interval_sec <= 0:
+        return None
+    return run_reservation_sweeper(
+        config.budget_reservation_sweep_interval_sec,
+        batch_size=config.budget_reservation_sweep_batch,
+        retention_sec=config.budget_reservation_retention_sec,
+    )
+
+
+def _start_file_sweeper(config: GatewayConfig, container: Container) -> Coroutine[Any, Any, None] | None:
+    """Return the file retention sweep, or None when files or the interval disable it.
+
+    Sweeps through the same store the request path writes to, since the bytes a
+    request wrote are the bytes this reclaims.
+    """
+    if not config.files_enabled or config.files_sweep_interval_sec <= 0:
+        return None
+    file_store = container.resolve(FileStoragePort, None)
+    return run_file_sweeper(config.files_sweep_interval_sec, lambda uow: build_file_service(uow, file_store, config))
+
+
+def _start_container_sweeper(config: GatewayConfig, _container: Container) -> Coroutine[Any, Any, None] | None:
+    """Return the sandbox container sweep, or None when no sandbox is held past its request."""
+    if not config.sandbox_configured() or config.sandbox_container_idle_ttl_sec <= 0:
+        return None
+    return run_sandbox_container_sweeper()
+
+
+# The periodic background workers a standalone deployment runs.
+# A new worker is one entry here.
+#
+# Each ``start`` resolves its refresher by name in this module when the lifespan
+# runs, so a refresher stays substitutable after import. It is handed the
+# container for the one worker that reads a port the way a request would.
+# Each ``reset`` holds the function object and binds at import, so a substitution
+# made after import does not reach it.
+_LIFESPAN_WORKERS: tuple[_LifespanWorker, ...] = (
+    _LifespanWorker("alias", lambda _config, _container: run_alias_refresher(), reset_alias_cache),
+    _LifespanWorker("policy", lambda _config, _container: run_policy_refresher(), reset_policy_cache),
+    _LifespanWorker("provider", lambda config, _container: run_provider_refresher(config), reset_provider_cache),
+    _LifespanWorker(
+        "organization provider key",
+        lambda _config, _container: run_org_provider_refresher(),
+        reset_org_provider_cache,
+    ),
+    # Not a cache of rows like its neighbours: this holds constructed vendor
+    # clients, so its tick rebuilds only what a write moved and its reset gives
+    # the threads back as well as dropping what was built.
+    _LifespanWorker(
+        "organization guardrail",
+        lambda _config, _container: run_guardrail_runner_refresher(),
+        reset_guardrail_runner,
+    ),
+    _LifespanWorker(
+        "search tool", lambda config, _container: run_search_tool_refresher(config), reset_search_tool_cache
+    ),
+    _LifespanWorker("price snapshot", lambda _config, _container: run_price_snapshot_refresher()),
+    # Started whatever ``pricing_refresh`` says, because that policy is
+    # runtime-settable and each tick re-reads it.
+    _LifespanWorker("price update poll", lambda config, _container: run_price_update_poller(config)),
+    # Started whatever ``model_cache_ttl_seconds`` says, for the same reason.
+    # Gating on it would strand the gateway: the TTL is runtime-settable, and
+    # raising it from 0 flips every read onto a cache nothing then fills.
+    _LifespanWorker(
+        "model discovery", lambda config, _container: run_discovery_refresher(config), reset_discovery_cache
+    ),
+    _LifespanWorker(
+        "models.dev catalog", lambda config, _container: run_catalog_refresher(config), clear_catalog_cache
+    ),
+    # The short model spellings, rebuilt from the deployment's catalog view,
+    # with the hosted port resolved per tick as a request would resolve it.
+    _LifespanWorker(
+        "catalog selectors",
+        lambda config, container: run_selector_index_refresher(
+            config, lambda session: container.resolve(ModelProviderPort, session)
+        ),
+        reset_selector_index,
+    ),
+    # Not a cache reload: this returns leaked budget holds. Without it a user
+    # whose single request leaked would hold against their budget forever.
+    _LifespanWorker("budget reservation sweep", _start_reservation_sweeper),
+    # Same posture for uploaded files: expiry hides a file, this gives its
+    # bytes back.
+    _LifespanWorker("file retention sweep", _start_file_sweeper),
+    # The provider reclaims a held sandbox on its own timer; this drops the
+    # rows that named it once nobody can resume them.
+    _LifespanWorker("sandbox container sweep", _start_container_sweeper),
+)
+
+
+def _start_lifespan_workers(
+    config: GatewayConfig, container: Container
+) -> list[tuple[asyncio.Task[None], _LifespanWorker]]:
+    """Start the workers this config runs, each paired with its registry entry."""
+    return [
+        (asyncio.create_task(coroutine), worker)
+        for worker in _LIFESPAN_WORKERS
+        if (coroutine := worker.start(config, container)) is not None
+    ]
 
 
 def _operation_id(route: APIRoute) -> str:
@@ -264,7 +393,7 @@ def _warn_if_hosted_has_no_data_plane(config: GatewayConfig) -> None:
     )
 
 
-# How long shutdown waits for refreshers to acknowledge cancellation.
+# How long shutdown waits for refreshers and feature workers to acknowledge cancellation.
 #
 # Cancelling a task is a request, not a guarantee. The CancelledError is
 # delivered at whatever the task is awaiting, and a nested cancel scope there can
@@ -275,13 +404,14 @@ def _warn_if_hosted_has_no_data_plane(config: GatewayConfig) -> None:
 # unbounded ``await task`` never returns, so the lifespan never finishes and
 # uvicorn's shutdown hangs behind a background refresh. Bounding the wait and
 # moving on is the right trade: the event loop is torn down immediately after,
-# and no refresher owns state that a late tick could corrupt.
+# and no refresher owns state that a late tick could corrupt. A feature worker
+# shares the bound, so ``CoreFeature`` asks the same of it.
 _REFRESHER_STOP_TIMEOUT_SECONDS = 5.0
 
 
 def _log_abandoned_refresher(name: str) -> None:
     logger.warning(
-        "%s refresher did not stop within %.0fs; abandoning it so shutdown can finish",
+        "%s did not stop within %.0fs; abandoning it so shutdown can finish",
         name,
         _REFRESHER_STOP_TIMEOUT_SECONDS,
     )
@@ -289,7 +419,7 @@ def _log_abandoned_refresher(name: str) -> None:
 
 def _log_refresher_stop(task: asyncio.Task[None], name: str) -> None:
     if not task.cancelled() and (error := task.exception()) is not None:
-        logger.warning("%s refresher stopped with an unexpected error", name, exc_info=error)
+        logger.warning("%s stopped with an unexpected error", name, exc_info=error)
 
 
 async def _wait_for_refresher_stop(task: asyncio.Task[None], name: str) -> None:
@@ -330,6 +460,20 @@ async def _stop_refreshers(refreshers: list[tuple[asyncio.Task[None], str]]) -> 
             _log_refresher_stop(task, name)
 
 
+async def _run_feature_worker(name: str, worker: Worker, config: GatewayConfig) -> None:
+    """Run one feature worker, reporting a failure when it happens rather than at shutdown.
+
+    The refreshers above loop and catch their own errors; a feature worker is
+    another feature's code and may not. This is the top of the task, so the
+    error is handled here once: nothing awaits the task before shutdown, and
+    re-raising would only have the supervisor log the same death again then.
+    """
+    try:
+        await worker(config)
+    except Exception:
+        logger.exception("%s worker stopped with an unexpected error and will not run again", name)
+
+
 def _create_lifespan() -> Callable[[FastAPI], Any]:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -344,17 +488,8 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
         # ``openai``, which names a wire protocol rather than a vendor.
         configure_provider_types(config.provider_pricing_implementation)
         log_writer: LogWriter
-        alias_refresher: asyncio.Task[None] | None = None
-        policy_refresher: asyncio.Task[None] | None = None
-        provider_refresher: asyncio.Task[None] | None = None
-        org_provider_refresher: asyncio.Task[None] | None = None
-        search_tool_refresher: asyncio.Task[None] | None = None
-        price_refresher: asyncio.Task[None] | None = None
-        price_poller: asyncio.Task[None] | None = None
-        discovery_refresher: asyncio.Task[None] | None = None
-        catalog_refresher: asyncio.Task[None] | None = None
-        selector_refresher: asyncio.Task[None] | None = None
-        reservation_sweeper: asyncio.Task[None] | None = None
+        workers: list[tuple[asyncio.Task[None], _LifespanWorker]] = []
+        feature_workers: list[tuple[asyncio.Task[None], str]] = []
         if config.is_hybrid_mode:
             log_writer = NoopLogWriter()
         else:
@@ -401,7 +536,7 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
                 # a fresh database (no workspace or key exists yet), the same
                 # posture load_providers_at_startup takes.
                 await load_org_provider_keys_at_startup(session)
-                await bootstrap_first_api_key(config, session)
+                await bootstrap_first_api_key(config, session, app.state.container.resolve(ApiKeyFormatPort, session))
                 await initialize_pricing_from_config(config, session)
                 await warn_if_require_pricing_without_pricing(config, session)
                 await warn_if_search_tools_lack_flat_pricing(config, session)
@@ -409,73 +544,29 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
                 await warn_if_router_candidates_lack_pricing(config, session)
                 await load_aliases_at_startup(session)
                 await load_policies_at_startup(session)
+            # After the session above and not inside it: the runner reads through
+            # a repository, which reaches the database only through a Unit of
+            # Work of its own. It builds each stored definition into a vendor
+            # client here so the first request to need one does not wait for a
+            # vendor handshake.
+            await load_guardrail_runner_at_startup()
             log_writer = create_log_writer(config.log_writer_strategy)
-            app.state.file_store = build_file_store(config)
-            # Alias resolution is synchronous and reads a cache, so something has
-            # to reload it. A write refreshes its own worker; this is what makes
-            # every other worker and replica catch up.
-            alias_refresher = asyncio.create_task(run_alias_refresher())
-            # Routing policies are the same shape as aliases: resolution reads a
-            # process cache synchronously, so it is reloaded on a TTL to converge
-            # sibling workers and replicas after a write.
-            policy_refresher = asyncio.create_task(run_policy_refresher())
-            # Provider credentials are the same shape: resolution reads
-            # config.providers synchronously, so the overlay is reloaded on a TTL
-            # to converge sibling workers and replicas after a dashboard write.
-            provider_refresher = asyncio.create_task(run_provider_refresher(config))
-            # Organization-scoped provider keys are the same shape, keyed by
-            # (workspace_id, provider) instead of instance name; see
-            # `services/tenancy/org_provider_key_service.py`'s module docstring.
-            org_provider_refresher = asyncio.create_task(run_org_provider_refresher())
-            # Search tools are the provider overlay's twin: resolve_search_tool
-            # reads config.search_tools synchronously, so the overlay is reloaded
-            # on a TTL to converge sibling workers and replicas after a write.
-            search_tool_refresher = asyncio.create_task(run_search_tool_refresher(config))
-            # An accepted pricing snapshot is applied in-memory by the worker that
-            # served the confirm; reload it on a TTL so sibling workers and replicas
-            # converge, the same way aliases and provider credentials do.
-            price_refresher = asyncio.create_task(run_price_snapshot_refresher())
-            # The upstream half: checks genai-prices on a schedule and holds or
-            # applies what it finds per ``pricing_refresh``. Started whatever
-            # the policy, since the policy is runtime-settable and each tick
-            # re-reads it.
-            price_poller = asyncio.create_task(run_price_update_poller(config))
-            # Discovery is the one cache that used to be filled on the request
-            # path, which put model_discovery_timeout_seconds (10s per
-            # unreachable provider) on a dashboard page load and held that
-            # request's database session open for the whole dial. The refresher
-            # owns the dialing now and reads answer from the cache. Not awaited:
-            # priming runs on its first tick so a slow provider cannot delay boot.
-            #
-            # Started unconditionally, and each loop re-checks whether caching is
-            # on. Gating task creation on the setting here would strand the
-            # gateway in the one state that combination must never reach:
-            # model_cache_ttl_seconds and models_dev_cache_ttl_seconds are both
-            # runtime-settable from the dashboard's Settings page, and raising
-            # either from 0 flips every read onto the serve-from-cache path
-            # immediately. With no refresher running, that cache is then filled
-            # once per provider and never refreshed again for the life of the
-            # worker, which is the "cache nothing refreshes" mode these knobs
-            # deliberately do not offer.
-            discovery_refresher = asyncio.create_task(run_discovery_refresher(config))
-            # Same shape for the models.dev catalog, whose fetch is bounded at 15s.
-            catalog_refresher = asyncio.create_task(run_catalog_refresher(config))
-            # The short spellings a request may use for a model, rebuilt from the
-            # deployment's catalog view so a caller can send what the catalog shows.
-            selector_refresher = asyncio.create_task(run_selector_index_refresher(config))
-            # Not a cache refresher like the rest: this one returns leaked budget
-            # holds. The per-user reclaim on the reserve path only runs when that
-            # user next reserves, so a user whose single request leaked would hold
-            # against their budget with nothing ever releasing it.
-            # Standalone only, because hybrid mode reserves nothing locally.
-            if config.budget_reservation_sweep_interval_sec > 0:
-                reservation_sweeper = asyncio.create_task(
-                    run_reservation_sweeper(
-                        config.budget_reservation_sweep_interval_sec,
-                        batch_size=config.budget_reservation_sweep_batch,
-                        retention_sec=config.budget_reservation_retention_sec,
-                    )
+            container: Container = app.state.container
+            # The retention sweep below resolves this same port, so both it and
+            # the request path use whatever store this build bound.
+            app.state.file_store = container.resolve(FileStoragePort, None)
+            workers = _start_lifespan_workers(config, container)
+            # Workers of the enabled features. Same supervisor as the registry
+            # above: created here, cancelled together in ``finally`` under one
+            # shared bound.
+            feature_workers = [
+                (
+                    asyncio.create_task(_run_feature_worker(feature.name, feature.worker, config)),
+                    f"{feature.name} worker",
                 )
+                for feature in app.state.enabled_features
+                if feature.worker is not None
+            ]
 
         # Start the writer inside the try so a failure here still runs the cleanup
         # below; the refresher tasks are already created and would otherwise leak.
@@ -486,36 +577,10 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
             app.state.log_writer = log_writer
             yield
         finally:
-            refreshers = [
-                (alias_refresher, "alias"),
-                (policy_refresher, "policy"),
-                (provider_refresher, "provider"),
-                (org_provider_refresher, "organization provider key"),
-                (search_tool_refresher, "search tool"),
-                (price_refresher, "price snapshot"),
-                (price_poller, "price update poll"),
-                (discovery_refresher, "model discovery"),
-                (catalog_refresher, "models.dev catalog"),
-                (selector_refresher, "catalog selectors"),
-                (reservation_sweeper, "budget reservation sweep"),
-            ]
-            await _stop_refreshers([(task, name) for task, name in refreshers if task is not None])
-            if alias_refresher is not None:
-                reset_alias_cache()
-            if policy_refresher is not None:
-                reset_policy_cache()
-            if provider_refresher is not None:
-                reset_provider_cache()
-            if org_provider_refresher is not None:
-                reset_org_provider_cache()
-            if search_tool_refresher is not None:
-                reset_search_tool_cache()
-            if discovery_refresher is not None:
-                reset_discovery_cache()
-            if catalog_refresher is not None:
-                clear_catalog_cache()
-            if selector_refresher is not None:
-                reset_selector_index()
+            await _stop_refreshers([(task, f"{worker.name} refresher") for task, worker in workers] + feature_workers)
+            for _task, worker in workers:
+                if worker.reset is not None:
+                    worker.reset()
             # Only stop a writer that actually started; if start() raised there is
             # nothing to stop, but the refreshers above still needed cancelling.
             if log_writer_started:
@@ -533,10 +598,10 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
 async def _tenancy_error_handler(_: Request, exc: Exception) -> Response:
     """Render a tenancy domain error as the status it carries.
 
-    One handler for the whole family, so a rehomed service keeps raising domain
-    errors and no tenancy route needs a try/except (see
-    `gateway.services.tenancy.errors`). The body matches FastAPI's own
-    ``HTTPException`` shape, so a client cannot tell which layer answered.
+    One handler for the whole family, so a service keeps raising domain errors
+    and no route needs a try/except (see `gateway.exceptions`). The body matches
+    FastAPI's own ``HTTPException`` shape, so a client cannot tell which layer
+    answered.
 
     A 4xx message is written for the caller and is rendered as it is. A 5xx one
     is not: it describes the deployment rather than the request, and
@@ -555,6 +620,23 @@ async def _tenancy_error_handler(_: Request, exc: Exception) -> Response:
             content={"detail": "Internal server error"},
         )
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+
+
+async def _control_plane_error_handler(_: Request, exc: Exception) -> Response:
+    """Render a control plane failure as the answer the caller has always had.
+
+    Registered ahead of the tenancy family it belongs to, which would replace a
+    502 body with the generic internal-error detail and drop a rate limit's
+    ``Retry-After``. Both are part of this deployment's published contract with
+    a caller, so a peer's refusal reaches them whole.
+    """
+    if not isinstance(exc, ControlPlaneError):  # pragma: no cover - registered for ControlPlaneError only
+        raise exc
+    if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+        logger.error("Control plane request failed: %s", exc.message)
+    retry_after = getattr(exc, "retry_after", None)
+    headers = {"Retry-After": retry_after} if retry_after else None
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message}, headers=headers)
 
 
 async def _validation_error_handler(_: Request, exc: Exception) -> Response:
@@ -826,16 +908,20 @@ def create_app(config: GatewayConfig) -> FastAPI:
 
     app.state.config = config
     app.state.gateway_mode = config.effective_mode
+    # Asked once, so the routers, the workers and the published surfaces cannot
+    # disagree when a setting changes after this point.
+    app.state.enabled_features = tuple(feature for feature in features.CORE_FEATURES if feature.enabled(config))
 
     # The composition root, built before the routers because a bootstrap may
     # contribute some of them. Per app rather than module-global, for the same
     # reason config is: two apps in one process must not share one. A bootstrap
     # that cannot be loaded raises here, so a deployment that named one and got
     # it wrong fails to start instead of quietly running the plain build.
-    app.state.container = build_container(config.bootstrap)
+    app.state.container = build_container(config.bootstrap, config=config)
 
     register_routers(app, config)
     app.add_exception_handler(TenancyError, _tenancy_error_handler)
+    app.add_exception_handler(ControlPlaneError, _control_plane_error_handler)
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
 
     if config.enable_metrics:

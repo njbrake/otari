@@ -11,27 +11,26 @@ from __future__ import annotations
 
 import logging
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 
 import httpx
 import pytest
 from any_guardrail.base import GuardrailName
 from any_guardrail.parameters import ParameterType as UpstreamParameterType
+from any_guardrail.registry import GUARDRAIL_METADATA
 from any_guardrail.taxonomy import BackendType, OutputShape
 from any_guardrail.taxonomy import GuardrailCategory as UpstreamCategory
 from any_guardrail.taxonomy import GuardrailStage as UpstreamStage
 
 from gateway.log_config import logger as gateway_logger
 from gateway.services.guardrail_catalog import (
-    _BACKEND_PACKAGES,
     _KNOWN_TYPES,
-    LOCAL_GUARDRAILS_EXTRA,
     BuiltInGuardrailCatalog,
     BuiltInGuardrailSpec,
     GuardrailParameterSpec,
-    _backend_availability,
-    _installed,
     build_builtin_guardrail_catalog,
+    builtin_guardrail_spec,
+    definable_by_an_organization,
     fetch_guardrail_catalog,
 )
 
@@ -275,8 +274,7 @@ async def test_an_unusable_configured_url_is_a_reason_not_a_500(monkeypatch: pyt
 #
 # Reads the installed any-guardrail registry with nothing stubbed, for the reason
 # the tests above leave the parameter half real: a fixture here could agree with a
-# schema nobody ships. Only the backend probe is faked, so an assertion about
-# `runnable` does not depend on which extras this environment happens to hold.
+# schema nobody ships.
 # ---------------------------------------------------------------------------
 
 
@@ -284,23 +282,38 @@ def _spec(catalog: BuiltInGuardrailCatalog, guardrail_name: str) -> BuiltInGuard
     return next(spec for spec in catalog.guardrails if spec.guardrail_name == guardrail_name)
 
 
-def _force_probe(monkeypatch: pytest.MonkeyPatch, *, installed: bool) -> None:
-    """Answer every module probe the same way, whatever this environment installed."""
-    monkeypatch.setattr("gateway.services.guardrail_catalog._installed", lambda _package: installed)
+def test_lists_only_the_guardrails_a_hosted_api_reaches() -> None:
+    """The set is derived from upstream's metadata, so an addition there reaches it."""
+    listed = {spec.guardrail_name for spec in build_builtin_guardrail_catalog().guardrails}
+
+    assert listed == {
+        name.value for name, metadata in GUARDRAIL_METADATA.items() if metadata.backend is BackendType.HOSTED_API
+    }
 
 
-@pytest.fixture(autouse=True)
-def _clear_backend_cache() -> Iterator[None]:
-    """The probe is cached for the process; a test must not inherit another's answer."""
-    _backend_availability.cache_clear()
-    yield
-    _backend_availability.cache_clear()
+def test_omits_a_guardrail_that_would_load_model_weights() -> None:
+    """The whole point. Otari builds none of these, so offering them is offering nothing."""
+    listed = {spec.guardrail_name for spec in build_builtin_guardrail_catalog().guardrails}
+
+    assert not listed & {"llama_guard", "prompt_guard", "injec_guard", "lettuce_detect"}
 
 
-def test_lists_every_guardrail_the_library_ships() -> None:
-    catalog = build_builtin_guardrail_catalog()
+def test_omits_a_local_guardrail_that_also_declares_a_hosted_path() -> None:
+    """SusFactor declares one, and the rule still reads `backend` alone.
 
-    assert {spec.guardrail_name for spec in catalog.guardrails} == {name.value for name in GuardrailName}
+    Upstream's hosted path is selected by `provider=`, an argument of
+    `AnyGuardrail.create` rather than a registered parameter, so a stored row
+    cannot ask for it and would build the local encoder this catalog exists to
+    keep out of the gateway process. Nothing here is a judgment on 0DIN's
+    guardrail itself; #568 is where that lives.
+    """
+    metadata = GUARDRAIL_METADATA[GuardrailName.SUSFACTOR]
+    assert BackendType.HOSTED_API in metadata.alternate_backends
+    assert metadata.backend is not BackendType.HOSTED_API
+
+    listed = {spec.guardrail_name for spec in build_builtin_guardrail_catalog().guardrails}
+
+    assert "susfactor" not in listed
 
 
 def test_orders_the_catalog_for_a_picker() -> None:
@@ -363,6 +376,70 @@ def test_a_plain_secret_stays_storable() -> None:
     assert key.storable
 
 
+# Every non-secret json parameter a listed guardrail declares, classified by hand
+# as configuration somebody types into a form. ``storable`` cannot make this call:
+# it is derived as ``not (secret and json)``, so it catches a live SDK object only
+# where upstream also marked that object secret, and reads "storable" otherwise.
+# The two tests below are what makes the classification a decision rather than an
+# assumption, so a live object upstream adds fails here instead of much later as a
+# TypeError inside a vendor SDK. Both stages, because both maps are stored.
+_CONFIGURATION_JSON_PARAMETERS = frozenset(
+    {
+        ("alinia", "create", "detection_config"),
+        ("alinia", "create", "metadata"),
+        ("alinia", "create", "blocked_response"),
+        ("alinia", "validate", "context_documents"),
+        ("azure_content_safety", "create", "blocklist_names"),
+        ("azure_prompt_shields", "validate", "documents"),
+        ("lakera_guard", "create", "metadata"),
+        ("patronus", "create", "evaluators"),
+        ("patronus", "create", "tags"),
+        ("patronus", "validate", "retrieved_context"),
+        ("watsonx_guardian", "create", "detectors"),
+    }
+)
+
+
+def _declared_json_parameters(catalog: BuiltInGuardrailCatalog) -> set[tuple[str, str, str]]:
+    """Every non-secret json parameter ``catalog`` publishes, as (guardrail, stage, name)."""
+    return {
+        (spec.guardrail_name, stage, parameter.name)
+        for spec in catalog.guardrails
+        for stage, parameters in (("create", spec.create_parameters), ("validate", spec.validate_parameters))
+        for parameter in parameters
+        if parameter.type == "json" and not parameter.secret
+    }
+
+
+def test_classifies_every_json_parameter_a_listed_guardrail_declares() -> None:
+    """A json parameter is either configuration or a live object, and only a person can say which."""
+    declared = _declared_json_parameters(build_builtin_guardrail_catalog())
+
+    assert declared - _CONFIGURATION_JSON_PARAMETERS == set(), "not classified: configuration, or unstorable?"
+    assert _CONFIGURATION_JSON_PARAMETERS - declared == set(), "classified, but no listed guardrail declares it"
+
+
+def test_notices_a_json_parameter_nobody_has_classified() -> None:
+    """The guard above is worth having only if it fails, so here it is failing.
+
+    A plain string field for an ``onnxruntime.InferenceSession`` is the shape of
+    the mistake: nothing upstream publishes marks it as a live object.
+    """
+    spec = _spec(build_builtin_guardrail_catalog(), "lakera_guard")
+    planted = spec.model_copy(
+        update={
+            "create_parameters": [
+                *spec.create_parameters,
+                GuardrailParameterSpec(name="session", type="json", required=False),
+            ]
+        }
+    )
+
+    declared = _declared_json_parameters(BuiltInGuardrailCatalog(guardrails=[planted]))
+
+    assert declared - _CONFIGURATION_JSON_PARAMETERS == {("lakera_guard", "create", "session")}
+
+
 def test_carries_the_metadata_a_picker_groups_by() -> None:
     spec = _spec(build_builtin_guardrail_catalog(), "lakera_guard")
 
@@ -384,6 +461,17 @@ def test_names_the_environment_variable_that_fills_a_parameter() -> None:
 
     assert api_key.env_var == "OPENAI_API_KEY"
     assert api_key.secret
+
+
+def test_does_not_report_whether_a_backend_is_installed() -> None:
+    """Every listed guardrail is an API call, so there is no backend to have installed.
+
+    Stated rather than merely absent: the fields were published once, and a probe
+    over a hand-maintained package table is the thing not to bring back.
+    """
+    published = set(BuiltInGuardrailSpec.model_fields)
+
+    assert not published & {"runnable", "missing_extra"}
 
 
 def test_does_not_say_whether_that_environment_variable_is_set() -> None:
@@ -413,60 +501,62 @@ def test_leaves_requirement_groups_empty_for_a_guardrail_without_one() -> None:
     assert _spec(build_builtin_guardrail_catalog(), "lakera_guard").requirement_groups == []
 
 
-def test_reports_a_second_way_to_run_the_same_guardrail() -> None:
-    """Susfactor also has a hosted path, which one runnable flag cannot express."""
-    spec = _spec(build_builtin_guardrail_catalog(), "susfactor")
+def test_looks_up_exactly_what_the_catalog_lists() -> None:
+    """One derivation, read by the form through the catalog and by a write path through this.
 
-    assert spec.model_dump(mode="json")["alternate_backends"] == ["hosted_api"]
+    Two of them could disagree about which guardrails exist, and the disagreement
+    would surface as a saved row nothing can build.
+    """
+    catalog = build_builtin_guardrail_catalog()
 
+    for spec in catalog.guardrails:
+        assert builtin_guardrail_spec(spec.guardrail_name) == spec
 
-def test_a_guardrail_whose_backend_is_installed_is_runnable(monkeypatch: pytest.MonkeyPatch) -> None:
-    _force_probe(monkeypatch, installed=True)
-
-    spec = _spec(build_builtin_guardrail_catalog(), "llama_guard")
-
-    assert spec.runnable
-    assert spec.missing_extra is None
-
-
-def test_a_guardrail_whose_backend_is_absent_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
-    _force_probe(monkeypatch, installed=False)
-
-    spec = _spec(build_builtin_guardrail_catalog(), "llama_guard")
-
-    assert not spec.runnable
-    assert spec.missing_extra == LOCAL_GUARDRAILS_EXTRA
+    unlisted = {name.value for name in GuardrailName} - {spec.guardrail_name for spec in catalog.guardrails}
+    assert unlisted
+    for name in unlisted:
+        assert builtin_guardrail_spec(name) is None
 
 
-def test_a_hosted_guardrail_needs_no_extra_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The base install reaches Lakera over `requests`, so nothing is probed."""
-    _force_probe(monkeypatch, installed=False)
-
-    spec = _spec(build_builtin_guardrail_catalog(), "lakera_guard")
-
-    assert spec.runnable
-    assert spec.missing_extra is None
+def test_does_not_look_up_a_name_the_registry_has_never_heard_of() -> None:
+    """A write path reads the name out of a request, so an unknown one is an answer, not a traceback."""
+    assert builtin_guardrail_spec("not_a_guardrail") is None
+    assert builtin_guardrail_spec("") is None
 
 
-def test_a_guardrail_with_no_backend_information_is_a_gap_not_a_guess(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A newer any-guardrail could ship one; reporting it runnable would be a lie."""
-    monkeypatch.delitem(_BACKEND_PACKAGES, GuardrailName.LAKERA_GUARD)
+def test_lists_any_llm_and_still_denies_it_to_an_organizations_own_store() -> None:
+    """The catalog and the organization store disagree about `any_llm`, on purpose.
 
-    spec = _spec(build_builtin_guardrail_catalog(), "lakera_guard")
+    It is a real hosted-API guardrail, so the catalog is right to list it, and it
+    takes no constructor arguments, so it judges text on whatever LLM key the
+    *process* holds. An organization storing one would spend the operator's key
+    with nothing metering it. A deployment-wide store may allow exactly that,
+    which is why the catalog keeps listing it and the payer decides.
+    """
+    listed = {spec.guardrail_name for spec in build_builtin_guardrail_catalog().guardrails}
 
-    assert not spec.runnable
-    assert spec.missing_extra is None
+    assert "any_llm" in listed
+    assert builtin_guardrail_spec("any_llm") is not None
+    assert not definable_by_an_organization("any_llm")
 
 
-def test_every_guardrail_has_backend_information() -> None:
-    """A guardrail upstream adds must be given a probe, not left to the gap above."""
-    assert set(_BACKEND_PACKAGES) == set(GuardrailName)
+def test_offers_an_organization_every_other_guardrail_the_catalog_lists() -> None:
+    """One denial and no more, so the rule cannot quietly grow into a second filter."""
+    listed = {spec.guardrail_name for spec in build_builtin_guardrail_catalog().guardrails}
+
+    refused = {name for name in listed if not definable_by_an_organization(name)}
+    assert refused == {"any_llm"}
 
 
-def test_a_missing_module_is_not_installed() -> None:
-    assert not _installed("a_module_no_one_ships")
-    # A dotted probe whose parent is absent raises rather than answering None.
-    assert not _installed("a_module_no_one_ships.deeper")
+def test_answers_about_a_guardrail_the_catalog_does_not_list() -> None:
+    """A name only, so the two checks compose rather than one standing in for the other.
+
+    A store asks this *after* the spec lookup, and something unbuildable is that
+    lookup's refusal to give. Answering true here would be the wrong answer to
+    the wrong question.
+    """
+    assert definable_by_an_organization("susfactor")
+    assert definable_by_an_organization("not_a_guardrail")
 
 
 def test_listing_the_catalog_never_loads_a_model_backend() -> None:

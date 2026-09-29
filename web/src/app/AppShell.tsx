@@ -53,6 +53,7 @@ import { TelemetryIdentity } from "@/app/TelemetryIdentity"
 import { UpdatePrompt } from "@/app/UpdatePrompt"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { PricingWarning } from "@/features/models/PricingWarning"
+import { UnpricedUsageWarning } from "@/features/models/UnpricedUsageWarning"
 import { canManage } from "@/features/organization/roles"
 import { useOrganizationContext } from "@/shared/api/organizations"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
@@ -213,16 +214,16 @@ function NavRowLink({
   label,
   icon: Icon,
   isActive,
-  collapsed,
-  nested,
+  isCollapsed,
+  isNested,
   onNavigate,
 }: {
   to: NavPath
   label: string
   icon?: IconType
   isActive: boolean
-  collapsed?: boolean
-  nested?: boolean
+  isCollapsed?: boolean
+  isNested?: boolean
   onNavigate: () => void
 }) {
   const recordNavigation = useRecordNavigation()
@@ -237,18 +238,18 @@ function NavRowLink({
         recordNavigation(to, isActive)
         onNavigate()
       }}
-      className={navRowClass({ isActive, collapsed, nested })}
-      aria-label={collapsed ? label : undefined}
-      title={collapsed ? label : undefined}
+      className={navRowClass({ isActive, isCollapsed, isNested })}
+      aria-label={isCollapsed ? label : undefined}
+      title={isCollapsed ? label : undefined}
     >
       {/* A nested row draws no glyph: the indent is what marks it as one, and
           repeating the parent's lane would undo that. The flyout a collapsed
           group opens is the exception, and it is not nested: those rows hang in
           a menu with no indent to read. */}
-      {Icon && !nested ? (
+      {Icon && !isNested ? (
         <Icon className={NAV_ICON_CLASS} aria-hidden="true" />
       ) : null}
-      {collapsed ? null : (
+      {isCollapsed ? null : (
         <span className="min-w-0 flex-1 truncate">{label}</span>
       )}
     </Link>
@@ -282,13 +283,13 @@ function NavGroup({
   currentPath,
   onNavigate,
   isVisible,
-  collapsed,
+  isCollapsed,
 }: {
   item: NavItem
   currentPath: string
   onNavigate: () => void
   isVisible: (item: NavItem) => boolean
-  collapsed: boolean
+  isCollapsed: boolean
 }) {
   // A child declaring its own surface is gated on it. Without this the field
   // was decoration: Guardrails is grouped under Routing but served by the tools
@@ -316,13 +317,13 @@ function NavGroup({
         label={item.label}
         icon={item.icon}
         isActive={currentPath === only.to}
-        collapsed={collapsed}
+        isCollapsed={isCollapsed}
         onNavigate={onNavigate}
       />
     )
   }
 
-  if (collapsed) {
+  if (isCollapsed) {
     return (
       <Popover isOpen={flyoutOpen} onOpenChange={setFlyoutOpen}>
         {/* HeroUI's Button, not a plain one: the popover wires its trigger
@@ -330,7 +331,7 @@ function NavGroup({
         <Button
           variant="ghost"
           aria-label={item.label}
-          className={`${navRowClass({ isActive: holdsCurrent, collapsed: true })} w-auto!`}
+          className={`${navRowClass({ isActive: holdsCurrent, isCollapsed: true })} w-auto!`}
         >
           <item.icon className={NAV_ICON_CLASS} aria-hidden="true" />
         </Button>
@@ -391,7 +392,9 @@ function NavGroup({
               which is visible whenever this trigger is expanded. The collapsed
               rail's trigger a few lines up keeps the full selected marker,
               because there no child is on screen to carry it. */}
-        <Disclosure.Trigger className={navRowClass({ ancestor: holdsCurrent })}>
+        <Disclosure.Trigger
+          className={navRowClass({ isAncestor: holdsCurrent })}
+        >
           <item.icon className={NAV_ICON_CLASS} aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate text-left">
             {item.label}
@@ -427,7 +430,7 @@ function NavGroup({
             label={child.label}
             icon={child.icon}
             isActive={currentPath === child.to}
-            nested
+            isNested
             onNavigate={onNavigate}
           />
         ))}
@@ -593,9 +596,7 @@ function AppShellChrome() {
   // navigated and the drawer closed over the result, so the rail it opened was
   // never a thing you got to read. Here the row opens that rail in place, and
   // choosing a destination in it is what dismisses the drawer.
-  const [mobileRailLevel, setMobileRailLevel] = useState<MobileLevel | null>(
-    null,
-  )
+  const [mobileRailLevel, setMobileRailLevel] = useState<MobileLevel>()
   // Set alongside the state rather than derived from it: the effect that
   // restores focus runs after the level has already been cleared, so the state
   // can no longer say which level it was.
@@ -610,7 +611,7 @@ function AppShellChrome() {
   // back on the organization rows the last tap left showing.
   const closeMobileNav = useCallback(() => {
     setMobileNavOpen(false)
-    setMobileRailLevel(null)
+    setMobileRailLevel(undefined)
   }, [])
 
   // Which of the two rails is drawn. The route decides it, except on mobile,
@@ -623,7 +624,7 @@ function AppShellChrome() {
   // that can silently stay two-way, which is how a rail ends up rendering for a
   // page it does not own.
   const railContext: NavContext =
-    (isMobile ? mobileRailLevel : null) ?? navContext
+    (isMobile ? mobileRailLevel : undefined) ?? navContext
   const showOrganizationRail = railContext === "organization"
   const showDeploymentRail = railContext === "deployment"
   // Whether the footer holds a row above its closing band. The organization row
@@ -681,7 +682,7 @@ function AppShellChrome() {
     if (!mobileNavOpen) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
-      if (mobileRailLevel) setMobileRailLevel(null)
+      if (mobileRailLevel) setMobileRailLevel(undefined)
       else setMobileNavOpen(false)
     }
     window.addEventListener("keydown", onKeyDown)
@@ -796,6 +797,7 @@ function AppShellChrome() {
       <UpdatePrompt />
       <ConnectionStatus />
       <PricingWarning />
+      <UnpricedUsageWarning />
       {/* `relative` so the mobile drawer can be offset from *this row* rather
           than from the viewport. The row's top edge is the header's top edge,
           and the pricing alarm above it is a band in flow, so a
@@ -892,8 +894,8 @@ function AppShellChrome() {
                       closeMobileNav()
                     }}
                     className={navRowClass({
-                      collapsed: effectiveCollapsed,
-                      band: true,
+                      isCollapsed: effectiveCollapsed,
+                      isBand: true,
                     })}
                     aria-label={effectiveCollapsed ? backLabel : undefined}
                     title={effectiveCollapsed ? backLabel : undefined}
@@ -920,8 +922,8 @@ function AppShellChrome() {
                   <button
                     type="button"
                     ref={railBackRef}
-                    onClick={() => setMobileRailLevel(null)}
-                    className={`${navRowClass({ band: true })} cursor-pointer`}
+                    onClick={() => setMobileRailLevel(undefined)}
+                    className={`${navRowClass({ isBand: true })} cursor-pointer`}
                   >
                     <FiArrowLeft
                       aria-hidden="true"
@@ -934,10 +936,12 @@ function AppShellChrome() {
                 )}
               </div>
             ) : (
-              <WorkspaceSwitcher collapsed={effectiveCollapsed} />
+              <WorkspaceSwitcher isCollapsed={effectiveCollapsed} />
             )}
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-4 p-3">
+          {/* No bottom padding: the account band closes the rail, so it sits on
+              the viewport's edge the way the scope band sits on the top. */}
+          <div className="flex min-h-0 flex-1 flex-col gap-4 px-3 pt-3">
             <nav
               // Named because the header's breadcrumb is a navigation landmark
               // too, and two unnamed ones give a screen-reader user no way to tell
@@ -977,7 +981,7 @@ function AppShellChrome() {
                             currentPath={pathname}
                             onNavigate={closeMobileNav}
                             isVisible={isVisible}
-                            collapsed={effectiveCollapsed}
+                            isCollapsed={effectiveCollapsed}
                           />
                         ) : (
                           // Highlighted from the registry's own answer rather than
@@ -993,7 +997,7 @@ function AppShellChrome() {
                             label={item.label}
                             icon={item.icon}
                             isActive={currentItem?.to === item.to}
-                            collapsed={effectiveCollapsed}
+                            isCollapsed={effectiveCollapsed}
                             // Tapping a destination dismisses the mobile drawer so
                             // the page it landed on is visible, not behind it.
                             onNavigate={closeMobileNav}
@@ -1069,7 +1073,7 @@ function AppShellChrome() {
                         organizationLanding?.to ?? "/organization/members"
                       recordNavigation(to, pathname === to)
                     }}
-                    className={navRowClass({ collapsed: effectiveCollapsed })}
+                    className={navRowClass({ isCollapsed: effectiveCollapsed })}
                     aria-label={effectiveCollapsed ? "Organization" : undefined}
                     title={
                       effectiveCollapsed
@@ -1103,7 +1107,7 @@ function AppShellChrome() {
                 so the rail ended differently depending on who was looking. */}
               <div className="-mx-3 flex h-14 shrink-0 items-center border-t border-border">
                 <AccountMenu
-                  collapsed={effectiveCollapsed}
+                  isCollapsed={effectiveCollapsed}
                   triggerRef={accountTriggerRef}
                   // Below `md` the Deployment row opens a level inside the
                   // drawer instead of navigating: the popover it lives in is

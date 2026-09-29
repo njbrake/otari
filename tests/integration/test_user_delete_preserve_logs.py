@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 
 from gateway.adapters.telemetry_storage_adapter import DatabaseTelemetryStorageAdapter
 from gateway.core.config import API_KEY_HEADER, API_ROOT
-from gateway.models.entities import APIKey, BudgetResetLog, UsageLog, User
+from gateway.models.api_keys import APIKey
+from gateway.models.budgets import BudgetResetLog
+from gateway.models.usage import UsageLog
+from gateway.models.users import User
 
 from .conftest import MODEL_NAME
 
@@ -84,7 +87,7 @@ def test_delete_user_preserves_budget_reset_logs(
 
     time_after_reset = initial_time + timedelta(seconds=61)
     with (
-        patch("gateway.services.budget_service.datetime") as mock_dt_budget,
+        patch("gateway.services.budgets._reservations.datetime") as mock_dt_budget,
         patch("gateway.api.routes._pipeline.datetime") as mock_dt_chat,
         patch("gateway.api.routes.chat.acompletion") as mock_acompletion,
     ):

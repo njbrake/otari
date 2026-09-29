@@ -54,9 +54,26 @@ export function fieldMatches(field: ConfigField, query: string): boolean {
     .every((term) => haystack.includes(term) || isSubsequence(term, key))
 }
 
+// The text a control shows over a committed server value.
+//
+// A committed value that moves replaces the draft, so a field nobody is editing
+// follows the server. An unsaved edit stands, so another operator's change (any
+// save on this page writes the whole settings payload back) does not take a
+// half-typed value out from under the cursor. Adjusting state during render is
+// React's answer for a reset conditioned on a value, and the shape
+// `design-system/forms/ComboBoxField.tsx` uses.
+function useDraft(committed: string) {
+  const [draft, setDraft] = useState(committed)
+  const [lastSeenValue, setLastSeenValue] = useState(committed)
+  if (committed !== lastSeenValue) {
+    setLastSeenValue(committed)
+    if (draft === lastSeenValue) setDraft(committed)
+  }
+  return [draft, setDraft] as const
+}
+
 // A numeric setting (int or float) with an explicit Save, so a mistyped value is
-// not applied on every keystroke. The draft resyncs whenever the committed value
-// changes (after a save round-trip).
+// not applied on every keystroke.
 function NumberSetting({
   field,
   onSave,
@@ -67,12 +84,8 @@ function NumberSetting({
   disabled?: boolean
 }) {
   const committed = typeof field.value === "number" ? field.value : 0
-  const [draft, setDraft] = useState(String(committed))
+  const [draft, setDraft] = useDraft(String(committed))
   const isFloat = field.type === "float"
-
-  useEffect(() => {
-    setDraft(String(committed))
-  }, [committed])
 
   const parsed = Number(draft)
   const wellFormed =
@@ -90,8 +103,8 @@ function NumberSetting({
       : ge !== undefined
         ? parsed >= ge
         : parsed >= 0
-  const valid = wellFormed && withinBounds
-  const changed = valid && parsed !== committed
+  const isValid = wellFormed && withinBounds
+  const hasChanged = isValid && parsed !== committed
 
   return (
     <div className="flex items-center gap-2">
@@ -110,7 +123,7 @@ function NumberSetting({
         size="sm"
         variant="primary"
         aria-label={`Save ${field.key}`}
-        isDisabled={disabled || !changed}
+        isDisabled={disabled || !hasChanged}
         onPress={() => onSave(parsed)}
       >
         Save
@@ -131,13 +144,14 @@ function TextSetting({
   disabled?: boolean
 }) {
   const committed = typeof field.value === "string" ? field.value : ""
-  const [draft, setDraft] = useState(committed)
+  const [draft, setDraft] = useDraft(committed)
 
-  useEffect(() => {
-    setDraft(committed)
-  }, [committed])
-
-  const changed = draft !== committed
+  // What a save would store, as text: a box holding only whitespace clears the
+  // value. Comparing and showing this rather than the raw text is what keeps
+  // Save armed for a real change only, and what leaves the box reading the
+  // value it just sent.
+  const saved = draft.trim() === "" ? "" : draft
+  const hasChanged = saved !== committed
 
   return (
     <div className="flex items-center gap-2">
@@ -154,8 +168,11 @@ function TextSetting({
         size="sm"
         variant="primary"
         aria-label={`Save ${field.key}`}
-        isDisabled={disabled || !changed}
-        onPress={() => onSave(draft.trim() === "" ? null : draft)}
+        isDisabled={disabled || !hasChanged}
+        onPress={() => {
+          setDraft(saved)
+          onSave(saved === "" ? null : saved)
+        }}
       >
         Save
       </Button>
@@ -542,18 +559,13 @@ function SecurityKeysSection({
 function groupFields(
   fields: ConfigField[],
 ): { name: string; fields: ConfigField[] }[] {
-  const order: { name: string; fields: ConfigField[] }[] = []
-  const byName = new Map<string, { name: string; fields: ConfigField[] }>()
-  for (const field of fields) {
-    let group = byName.get(field.group)
-    if (!group) {
-      group = { name: field.group, fields: [] }
-      byName.set(field.group, group)
-      order.push(group)
-    }
-    group.fields.push(field)
-  }
-  return order
+  const byName = fields.reduce((groups, field) => {
+    const group = groups.get(field.group)
+    if (group) group.fields.push(field)
+    else groups.set(field.group, { name: field.group, fields: [field] })
+    return groups
+  }, new Map<string, { name: string; fields: ConfigField[] }>())
+  return [...byName.values()]
 }
 
 export function SettingsPage() {
@@ -561,7 +573,7 @@ export function SettingsPage() {
   const updateSettings = useUpdateSettings()
 
   const data = settings.data
-  const pending = updateSettings.isPending
+  const isPending = updateSettings.isPending
 
   const [search, setSearch] = useState("")
   const [settableOnly, setSettableOnly] = useState(false)
@@ -646,7 +658,7 @@ export function SettingsPage() {
               key={field.key}
               field={field}
               patch={patch}
-              disabled={!data || pending}
+              disabled={!data || isPending}
             />
           ))}
         </SettingsGroup>

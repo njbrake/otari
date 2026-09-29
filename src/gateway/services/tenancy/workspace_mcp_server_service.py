@@ -7,10 +7,8 @@ module is the same thing against the local database, for a standalone
 deployment that has no platform to ask.
 
 **Where it plugs in.** A request names stored servers with `mcp_server_ids`.
-Hybrid mode resolves those through the platform
-(`api/routes/_platform._resolve_platform_mcp_servers`); standalone mode
-resolves them here, through :func:`resolve_workspace_mcp_servers`, called at
-admission in `prepare_gateway_tools` where the request's session is live and
+A deployment that holds the rows resolves them here, through
+:func:`resolve_workspace_mcp_servers`, called at admission where the request's session is live and
 `RequestContext.workspace_id` already names the workspace its key belongs to.
 That is the seam otari#655 settled and otari#678 wrote down; MCP is the
 exception that decision names, because there is no deployment-wide server list
@@ -49,9 +47,16 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.models.entities import WorkspaceMcpServer
+from gateway.exceptions.shared_exceptions import SecretBoxUnavailableTenancyError
+from gateway.exceptions.tools_exceptions import (
+    WorkspaceMcpServerAlreadyExistsError,
+    WorkspaceMcpServerLimitReachedError,
+    WorkspaceMcpServerNotFoundError,
+    WorkspaceMcpServerUnsafeUrlError,
+)
 from gateway.models.mcp import McpServerConfig, ResolvedMcpServer
 from gateway.models.tenancy import User
+from gateway.models.tools import WorkspaceMcpServer
 from gateway.repositories.tenancy import WorkspaceRepository
 from gateway.services.secret_box import (
     SecretBoxUnavailableError,
@@ -59,13 +64,6 @@ from gateway.services.secret_box import (
     encrypt_secret,
 )
 from gateway.services.tenancy import authorization
-from gateway.services.tenancy.errors import (
-    SecretBoxUnavailableTenancyError,
-    WorkspaceMcpServerAlreadyExistsError,
-    WorkspaceMcpServerLimitReachedError,
-    WorkspaceMcpServerNotFoundError,
-    WorkspaceMcpServerUnsafeUrlError,
-)
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.url_safety import UnsafeURLError, redact_url_secrets, validate_mcp_url
 
@@ -93,7 +91,7 @@ class WorkspaceMcpServerCreate(BaseModel):
 
     ``authorization_token`` is never stored as sent: it is encrypted with
     ``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention
-    `entities.ProviderCredential` and `OrgProviderKey` already use.
+    `providers.ProviderCredential` and `OrgProviderKey` already use.
     """
 
     name: str = Field(min_length=1, max_length=128, description="Label for the server, unique within the workspace")
@@ -241,13 +239,9 @@ async def resolve_workspace_mcp_servers(
 ) -> list[McpServerConfig]:
     """Swap a request's ``mcp_server_ids`` for the workspace's stored configs.
 
-    The standalone counterpart of `_platform._resolve_platform_mcp_servers`,
-    and deliberately the same contract: ids are de-duplicated with their order
-    preserved, an id naming no server *in this workspace* raises
-    :class:`WorkspaceMcpServerNotFoundError` (the platform answers 404 for the
-    same case, so the two modes refuse identically), and a disabled server is
-    skipped rather than refused, so one decommissioned server does not break a
-    caller whose stored id list still names it.
+    IDs are de-duplicated with their order preserved.
+    An ID naming no server *in this workspace* raises :class:`WorkspaceMcpServerNotFoundError`.
+    A disabled server is skipped rather than refused.
 
     No authorization check, and none is missing: ``workspace_id`` comes off the
     key that authenticated the request (`services/workspace_scope.py`), never
@@ -307,8 +301,7 @@ async def resolve_workspace_mcp_server(
 ) -> ResolvedMcpServer | None:
     """Resolve one stored server for the caller-orchestrated MCP endpoints.
 
-    The standalone counterpart of `_platform._resolve_platform_mcp_server`, and
-    the singular sibling of :func:`resolve_workspace_mcp_servers`. It differs
+    The singular sibling of :func:`resolve_workspace_mcp_servers`. It differs
     from that one in the two ways the stored-server endpoints need. It reports a
     disabled server instead of skipping it, because a disabled server is a
     named 404 here rather than one entry quietly missing from a list; and it
@@ -350,7 +343,7 @@ class WorkspaceMcpServerService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.organizations = OrganizationService(db)
+        self.organizations = OrganizationService(db, membership_listener=None)
 
     async def _require_management(self, user: User, workspace_id: uuid.UUID) -> uuid.UUID:
         """Resolve the workspace and confirm the caller may manage it.
@@ -387,12 +380,8 @@ class WorkspaceMcpServerService:
     ) -> WorkspaceMcpServersPublic:
         """List a page of the workspace's servers, plus the total.
 
-        Reachable by any member who can see the workspace, like the workspace
-        surfaces beside it (`workspace_budget_default_service` is the pattern);
-        see `_require_management` for why the gate here is visibility alone.
-        The rows never carry a token either way, and a caller who may read the
-        workspace without managing it also gets any credential embedded in the
-        URL itself masked (see `WorkspaceMcpServerPublic.from_model`).
+        Any member who can see the workspace may call this.
+        A caller who cannot manage the workspace gets any credential in a server URL masked.
         """
         workspace = await authorization.resolve_visible_workspace(
             self.db, user=user, workspace_id=workspace_id, organizations=self.organizations
@@ -439,11 +428,7 @@ class WorkspaceMcpServerService:
         resolved_workspace_id = await self._require_management(user, workspace_id)
         await _validate_url(request.url, has_token=bool(request.authorization_token))
 
-        # "At most N rows for this workspace" spans a variable set of rows, so no
-        # single unique index can hold it and the count below would otherwise be
-        # a read that a concurrent create invalidates before this one inserts.
-        # Same lock, for the same read-decide-write reason, that
-        # `workspace_budget_default_service` and `org_provider_key_service` take.
+        # The workspace lock stops a concurrent create from invalidating the count below before this insert.
         await WorkspaceRepository(self.db).lock(resolved_workspace_id)
 
         count = (

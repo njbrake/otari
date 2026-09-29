@@ -120,7 +120,7 @@ function ModelAllowList({
   const add = useAddWorkspaceProviderKeyModel()
   const remove = useRemoveWorkspaceProviderKeyModel()
   const [draft, setDraft] = useState("")
-  const pending = add.isPending || remove.isPending
+  const isPending = add.isPending || remove.isPending
   const trimmed = draft.trim()
 
   // The catalog spells a model `provider:model` and the allow-list stores the
@@ -218,7 +218,7 @@ function ModelAllowList({
           placeholder={suggestions[0] ?? "model name"}
           isInvalid={invalidReason !== undefined}
           errorMessage={invalidReason}
-          reserveMessage={false}
+          shouldReserveMessage={false}
           isSourceEmpty={available.length === 0}
           emptyMessage={emptyMessage}
           noMatchesMessage="No catalog entry matches. Type the model id to allow it anyway."
@@ -229,7 +229,9 @@ function ModelAllowList({
           // Named per key, as the picker above it is: the form holds one of
           // these per key, and "Allow" alone names all of them the same.
           aria-label={`Allow a model on ${keyName}`}
-          isDisabled={pending || trimmed === "" || invalidReason !== undefined}
+          isDisabled={
+            isPending || trimmed === "" || invalidReason !== undefined
+          }
           onPress={() =>
             add.mutate(
               { workspaceId, keyId, model: trimmed },
@@ -263,20 +265,24 @@ export function WorkspaceProviderKeys({
       : "ready"
 
   const byId = new Map((orgKeys.data ?? []).map((key) => [key.id, key]))
-  const pending = setOverride.isPending || resetOverride.isPending
+  const isPending = setOverride.isPending || resetOverride.isPending
 
   // `provider:model`, which is how the catalog names an entry and how a model
   // restriction does not. Grouped once rather than per key, since an
   // organization's keys share few providers.
-  const catalogByProvider = new Map<string, string[]>()
-  for (const model of catalog.data?.data ?? []) {
-    const separator = model.id.indexOf(":")
-    if (separator === -1) continue
-    const provider = model.id.slice(0, separator)
-    const entries = catalogByProvider.get(provider)
-    if (entries) entries.push(model.id.slice(separator + 1))
-    else catalogByProvider.set(provider, [model.id.slice(separator + 1)])
-  }
+  const catalogByProvider = (catalog.data?.data ?? []).reduce(
+    (groups, model) => {
+      const separator = model.id.indexOf(":")
+      if (separator === -1) return groups
+      const provider = model.id.slice(0, separator)
+      const name = model.id.slice(separator + 1)
+      const entries = groups.get(provider)
+      if (entries) entries.push(name)
+      else groups.set(provider, [name])
+      return groups
+    },
+    new Map<string, string[]>(),
+  )
 
   // Every provider this deployment names, from the catalog and from the
   // organization's own keys, which is what tells a pasted `openai:` prefix from
@@ -366,6 +372,15 @@ export function WorkspaceProviderKeys({
                   {row.is_effective_default ? (
                     <span className="text-caption">In use</span>
                   ) : null}
+                  {/* "In use" is about resolution and says nothing about whether
+                      the credential can be read. An unreadable key still
+                      resolves, so without this the row reads as the one serving
+                      the workspace while every request through it fails. */}
+                  {row.usable ? null : (
+                    <span className="text-caption text-danger">
+                      Unreadable credential
+                    </span>
+                  )}
                 </div>
                 <FilterSelect
                   ariaLabel={`This workspace's use of ${name}`}
@@ -375,7 +390,7 @@ export function WorkspaceProviderKeys({
                     if (chosen) choose(keyId, chosen)
                   }}
                   options={DEPARTURE_OPTIONS}
-                  disabled={pending}
+                  disabled={isPending}
                 />
                 {departure === "disabled" ? (
                   // Not a control: the gateway refuses an allow-list write on a

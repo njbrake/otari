@@ -1,7 +1,6 @@
-import { Button } from "@heroui/react"
+import { Spinner } from "@heroui/react"
 import { Link } from "@tanstack/react-router"
 import {
-  type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
@@ -9,7 +8,6 @@ import {
   useRef,
   useState,
 } from "react"
-import { FiEdit2, FiPause, FiPlay, FiRefreshCw, FiTrash2 } from "react-icons/fi"
 import type {
   ApiKey,
   CreateKeyRequest,
@@ -19,14 +17,15 @@ import type {
   UpdateOwnKeyRequest,
   User,
 } from "@/client"
+import { Button } from "@/design-system/actions/Button"
 import {
   CopyField,
   concealedFingerprint,
 } from "@/design-system/actions/CopyField"
-import { RowAction, RowActionRow } from "@/design-system/actions/RowAction"
 import { BulkActionBar } from "@/design-system/data/BulkActionBar"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
+import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { FormDialog } from "@/design-system/feedback/FormDialog"
@@ -68,9 +67,17 @@ import {
 } from "@/shared/helpers/tableSelection"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useDeployment } from "@/shared/hooks/useDeployment"
-import { isVirtualUser, secretCaption } from "./secretCaption"
+import { KeyActionsMenu } from "./KeyActionsMenu"
+import { isVirtualUser, keyFingerprint, secretCaption } from "./secretCaption"
 
 // ---------- helpers ----------
+
+// Once per module rather than once per row, and pinned like every other
+// formatter here: an expiry reading "in 2 Tagen" beside an English column
+// heading is the mixed page formatting-and-i18n.md exists to prevent. This one
+// is not `formatRelative`, which is past-only by design; an expiry is the one
+// place the dashboard speaks about the future.
+const expiryRelative = new Intl.RelativeTimeFormat("en-US", { numeric: "auto" })
 
 function relative(iso: string | null): string | null {
   if (!iso) return null
@@ -83,11 +90,20 @@ function relative(iso: string | null): string | null {
     ["hour", 3_600],
     ["minute", 60],
   ]
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" })
-  for (const [unit, sec] of units) {
-    if (abs >= sec) return rtf.format(Math.round(diffSec / sec), unit)
-  }
-  return rtf.format(diffSec, "second")
+  const coarsest = units.find(([, sec]) => abs >= sec)
+  if (!coarsest) return expiryRelative.format(diffSec, "second")
+  const [unit, sec] = coarsest
+  return expiryRelative.format(Math.round(diffSec / sec), unit)
+}
+
+type Layout = "wide" | "compact" | "mobile"
+
+// `md` and below is the list; between that and 1100 the lowest-priority lanes
+// fold into the row. The region's own width decides, except that a viewport
+// under `md` is the list whatever the region measures.
+function layoutFor(viewport: number, region = viewport): Layout {
+  if (viewport < 768 || region < 600) return "mobile"
+  return region < 1100 ? "compact" : "wide"
 }
 
 function isExpired(key: ApiKey): boolean {
@@ -101,14 +117,22 @@ function toDatetimeLocal(iso: string | null): string {
   if (!iso) return ""
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ""
-  const pad = (n: number) => String(n).padStart(2, "0")
+  const pad = (value: number) => String(value).padStart(2, "0")
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-const label = (k: ApiKey): string => k.key_name ?? k.id
+const label = (apiKey: ApiKey): string => apiKey.key_name ?? apiKey.id
 
 // Stable row-key getter so DataTable's per-row cache holds across re-renders.
-const getKeyRowKey = (k: ApiKey): string => k.id
+const getKeyRowKey = (apiKey: ApiKey): string => apiKey.id
+
+function renderFingerprint(apiKey: ApiKey) {
+  return (
+    <code className="whitespace-nowrap text-mono-caption text-muted">
+      {keyFingerprint(apiKey) ?? "—"}
+    </code>
+  )
+}
 
 // ---------- the one-time secret ----------
 
@@ -132,7 +156,10 @@ function KeySecretStep({
   const secret = result.key
   // The key and both snippets show one stand-in, so the credential on this
   // screen reads as one thing rather than three.
-  const concealedSecret = concealedFingerprint(secret)
+  const concealedSecret = concealedFingerprint(
+    result.key_prefix ?? undefined,
+    result.key_suffix ?? undefined,
+  )
   // The snippets carry the same credential, so all three fields share visibility.
   const [isSecretRevealed, setIsSecretRevealed] = useState(false)
 
@@ -200,78 +227,18 @@ function KeySecretStep({
               concealed={snippets.concealedCurl}
               isRevealed={isSecretRevealed}
               onRevealChange={setIsSecretRevealed}
-              multiline
+              isMultiline
             />
             <CopyField
-              label="Python (OpenAI SDK)"
+              label="Python (Otari SDK)"
               value={snippets.python}
               concealed={snippets.concealedPython}
               isRevealed={isSecretRevealed}
               onRevealChange={setIsSecretRevealed}
-              multiline
+              isMultiline
             />
           </>
         ) : null}
-      </div>
-    </div>
-  )
-}
-
-// ---------- row actions and the armed strip ----------
-
-/**
- * The confirmation, as a strip spanning the whole table directly under the row
- * it is about, rather than as a panel inside one cell.
- *
- * It reads as part of that row: the row's own bottom rule is suppressed in CSS
- * so the two are one unit, and the strip carries its own rules top and bottom.
- * The message keeps its `<strong>` on the key's name, which is the one thing
- * that must not be misread when the next click is irreversible.
- */
-function ArmedStrip({
-  message,
-  confirmLabel,
-  isPending,
-  onConfirm,
-  onCancel,
-  confirmRef,
-}: {
-  message: ReactNode
-  confirmLabel: string
-  isPending?: boolean
-  onConfirm: () => void
-  onCancel: () => void
-  /**
-   * The page's `useConfirmationFocus` Confirm ref. Handed down rather than held
-   * here, because the page owns the armed state and the same hook has to see
-   * both ends of the swap.
-   *
-   * Focus does not actually land here on arm, and that is measured rather than
-   * assumed: arming unmounts nothing, so
-   * the row's trigger stays mounted and keeps the caret, and there is no moment
-   * where it falls to the body on the way in. What the hook does earn is the way
-   * back out, since cancelling unmounts this strip from under the focused
-   * Confirm.
-   */
-  confirmRef?: RefObject<HTMLButtonElement | null>
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-4 bg-background px-8 py-3.5">
-      <Dot className="bg-danger" />
-      <span className="min-w-0 flex-1 text-sm text-foreground">{message}</span>
-      <div className="flex shrink-0 items-center gap-4">
-        <RowAction onPress={onCancel} isDisabled={isPending}>
-          Cancel
-        </RowAction>
-        <Button
-          ref={confirmRef}
-          size="sm"
-          variant="danger"
-          isDisabled={isPending}
-          onPress={onConfirm}
-        >
-          {confirmLabel}
-        </Button>
       </div>
     </div>
   )
@@ -290,7 +257,7 @@ function OwnerAccessNote({ userId, users }: { userId: string; users: User[] }) {
       </p>
     )
   }
-  const owner = users.find((u) => u.user_id === id)
+  const owner = users.find((user) => user.user_id === id)
   if (!owner) {
     return (
       <p className="text-caption">
@@ -299,7 +266,7 @@ function OwnerAccessNote({ userId, users }: { userId: string; users: User[] }) {
       </p>
     )
   }
-  const { text } = accessLabel(owner.allowed_models)
+  const { text } = accessLabel(owner.allowed_models ?? undefined)
   const entries =
     owner.allowed_models && owner.allowed_models.length > 0
       ? owner.allowed_models.join(", ")
@@ -349,12 +316,34 @@ function BudgetExemptToggle({
 // Access-control adjacent: a three-way override of the deployment-wide
 // reject_user_mismatch, so it is a picker rather than a checkbox. Same shape as
 // the budget picker on the budgets page.
+/**
+ * Which of the three the key does about a mismatched `user` field.
+ *
+ * A named union rather than `boolean | null`: this is three answers, and a
+ * boolean holds two, so the third had to be smuggled in as an absent value that
+ * every reader then had to know meant "inherit". The wire still spells it
+ * `true`, `false` and `null`, converted at the two edges below.
+ */
+type UserMismatchChoice = "inherit" | "reject" | "accept"
+
+const userMismatchChoice = (
+  stored: boolean | null | undefined,
+): UserMismatchChoice =>
+  stored === null || stored === undefined
+    ? "inherit"
+    : stored
+      ? "reject"
+      : "accept"
+
+const storedUserMismatch = (choice: UserMismatchChoice): boolean | null =>
+  choice === "inherit" ? null : choice === "reject"
+
 function UserMismatchPicker({
   value,
   onChange,
 }: {
-  value: boolean | null
-  onChange: (value: boolean | null) => void
+  value: UserMismatchChoice
+  onChange: (value: UserMismatchChoice) => void
 }) {
   const selectId = "key-reject-user-mismatch"
   return (
@@ -368,10 +357,8 @@ function UserMismatchPicker({
       <FilterSelect
         id={selectId}
         ariaLabel="Mismatched user field"
-        value={value === null ? "inherit" : value ? "reject" : "accept"}
-        onChange={(next) =>
-          onChange(next === "inherit" ? null : next === "reject")
-        }
+        value={value}
+        onChange={(next) => onChange(next as UserMismatchChoice)}
         options={[
           { value: "inherit", label: "Use the deployment setting (default)" },
           { value: "reject", label: "Always reject (403)" },
@@ -446,14 +433,15 @@ function CreateKeyDialog({
   const [expiresAt, setExpiresAt] = useState("")
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [userId, setUserId] = useState("")
-  const [allowedModels, setAllowedModels] = useState<string[] | null>(null)
-  const [excludeFromBudget, setExcludeFromBudget] = useState(false)
-  const [rejectUserMismatch, setRejectUserMismatch] = useState<boolean | null>(
-    null,
+  const [allowedModels, setAllowedModels] = useState<string[] | undefined>(
+    undefined,
   )
+  const [excludeFromBudget, setExcludeFromBudget] = useState(false)
+  const [rejectUserMismatch, setRejectUserMismatch] =
+    useState<UserMismatchChoice>("inherit")
   const [scopeValid, setScopeValid] = useState(true)
-  // The secret, once there is one. Its presence is the step: null is the form.
-  const [created, setCreated] = useState<CreateKeyResponse | null>(null)
+  // The secret, once there is one. Its presence is the step: unset is the form.
+  const [created, setCreated] = useState<CreateKeyResponse>()
   const secretRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
@@ -480,7 +468,7 @@ function CreateKeyDialog({
   // caller belongs to that default, which is the answer this form surfaces
   // rather than pre-empting.
   const workspaceUnresolved = workspaceLoading
-  const blocked = !scopeValid || ownerMissing || workspaceUnresolved
+  const isBlocked = !scopeValid || ownerMissing || workspaceUnresolved
 
   // What the form owns, handed to the guard whole rather than compared field by
   // field: the two drifted apart once already, with the guard armed for three
@@ -507,9 +495,9 @@ function CreateKeyDialog({
     setExpiresAt("")
     setShowAdvanced(false)
     setUserId("")
-    setAllowedModels(null)
+    setAllowedModels(undefined)
     setExcludeFromBudget(false)
-    setRejectUserMismatch(null)
+    setRejectUserMismatch("inherit")
     setScopeValid(true)
     create.reset()
   }
@@ -529,7 +517,7 @@ function CreateKeyDialog({
   }
 
   const submit = () => {
-    if (create.isPending || blocked) return
+    if (create.isPending || isBlocked) return
     const shared = {
       key_name: keyName.trim() || null,
       // The workspace the shell is on. A key belongs to exactly one, and it is
@@ -537,8 +525,8 @@ function CreateKeyDialog({
       // rather than left to the server's default.
       workspace_id: workspace?.workspace_id,
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
-      allowed_models: allowedModels,
-      reject_user_mismatch: rejectUserMismatch,
+      allowed_models: allowedModels ?? null,
+      reject_user_mismatch: storedUserMismatch(rejectUserMismatch),
     }
     // The member surface derives the owner and refuses a budget exemption, so
     // its body carries neither field rather than sending values it would ignore.
@@ -582,7 +570,7 @@ function CreateKeyDialog({
           <Button
             variant="ghost"
             onPress={() => {
-              setCreated(null)
+              setCreated(undefined)
               resetForm()
             }}
           >
@@ -610,7 +598,7 @@ function CreateKeyDialog({
       submitLabel="Create key"
       onSubmit={submit}
       isPending={create.isPending}
-      isSubmitDisabled={blocked}
+      isSubmitDisabled={isBlocked}
       error={create.error}
       isDirty={isDirty}
     >
@@ -621,7 +609,7 @@ function CreateKeyDialog({
         placeholder="ci-bot"
         autoFocus
         description="A label to recognize this key later."
-        reserveMessage
+        shouldReserveMessage
       />
       <Field
         label="Expires (optional)"
@@ -637,7 +625,7 @@ function CreateKeyDialog({
             "Leave blank for a key that never expires."
           )
         }
-        reserveMessage
+        shouldReserveMessage
       />
       {isDeploymentWide ? (
         <UserComboBox
@@ -673,10 +661,10 @@ function CreateKeyDialog({
             anyLabel={
               isDeploymentWide ? "Inherit owner access" : "Inherit your access"
             }
-            initial={null}
-            onChange={(value, valid) => {
+            initial={undefined}
+            onChange={(value, isValid) => {
               setAllowedModels(value)
-              setScopeValid(valid)
+              setScopeValid(isValid)
             }}
           />
           {/* Exempting a key from a budget is the deployment operator's call,
@@ -757,15 +745,16 @@ function EditKeyForm({
   const users = useUsers(isDeploymentWide)
   const [keyName, setKeyName] = useState(apiKey.key_name ?? "")
   const [expiresAt, setExpiresAt] = useState(toDatetimeLocal(apiKey.expires_at))
-  const [allowedModels, setAllowedModels] = useState<string[] | null>(
-    apiKey.allowed_models,
+  const [allowedModels, setAllowedModels] = useState<string[] | undefined>(
+    apiKey.allowed_models ?? undefined,
   )
   const [excludeFromBudget, setExcludeFromBudget] = useState(
     apiKey.exclude_from_budget,
   )
-  const [rejectUserMismatch, setRejectUserMismatch] = useState<boolean | null>(
-    apiKey.reject_user_mismatch,
-  )
+  const [rejectUserMismatch, setRejectUserMismatch] =
+    useState<UserMismatchChoice>(
+      userMismatchChoice(apiKey.reject_user_mismatch),
+    )
   const [scopeValid, setScopeValid] = useState(true)
   const { isDirty } = useDirtySnapshot({
     keyName,
@@ -781,8 +770,8 @@ function EditKeyForm({
     const shared = {
       key_name: keyName.trim() || null,
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
-      allowed_models: allowedModels,
-      reject_user_mismatch: rejectUserMismatch,
+      allowed_models: allowedModels ?? null,
+      reject_user_mismatch: storedUserMismatch(rejectUserMismatch),
     }
     // The member surface has no budget exemption to send (see CreateKeyDialog).
     const body: UpdateKeyRequest | UpdateOwnKeyRequest = isDeploymentWide
@@ -814,7 +803,7 @@ function EditKeyForm({
         onChange={setKeyName}
         placeholder="ci-bot"
         autoFocus
-        reserveMessage={false}
+        shouldReserveMessage={false}
       />
       <Field
         label="Expires"
@@ -822,7 +811,7 @@ function EditKeyForm({
         onChange={setExpiresAt}
         type="datetime-local"
         description="Blank clears the expiry."
-        reserveMessage
+        shouldReserveMessage
       />
       {isDeploymentWide && apiKey.user_id ? (
         <OwnerAccessNote userId={apiKey.user_id} users={users.data ?? []} />
@@ -837,10 +826,10 @@ function EditKeyForm({
         anyLabel={
           isDeploymentWide ? "Inherit owner access" : "Inherit your access"
         }
-        initial={apiKey.allowed_models}
-        onChange={(value, valid) => {
+        initial={apiKey.allowed_models ?? undefined}
+        onChange={(value, isValid) => {
           setAllowedModels(value)
-          setScopeValid(valid)
+          setScopeValid(isValid)
         }}
       />
       {/* Operator-only, as on the create form: a member editing their own key
@@ -896,8 +885,19 @@ function StatusMark({ apiKey }: { apiKey: ApiKey }) {
  * rather than merely narrow. `Selected models` is muted like its siblings and
  * deliberately not link ink: it is a label, and nothing here is clickable.
  */
-function KeyMetaLine({ apiKey }: { apiKey: ApiKey }) {
-  const { text, tone } = accessLabel(apiKey.allowed_models)
+function KeyMetaLine({
+  apiKey,
+  face = "text-mono-overline",
+}: {
+  apiKey: ApiKey
+  /**
+   * The overline's uppercase mono is right beside a 16px name and wrong inside
+   * the folded caption line, where it would sit between two runs of sentence-case
+   * body text.
+   */
+  face?: string
+}) {
+  const { text, tone } = accessLabel(apiKey.allowed_models ?? undefined)
   // Surface the exact entries on hover; the count would mislead (a wildcard is many).
   const title =
     apiKey.allowed_models && apiKey.allowed_models.length > 0
@@ -931,9 +931,15 @@ function KeyMetaLine({ apiKey }: { apiKey: ApiKey }) {
     })
   }
   return (
-    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-mono-overline">
+    <span
+      className={`inline-flex max-w-full gap-3 overflow-hidden whitespace-nowrap align-bottom ${face}`}
+    >
       {facts.map((fact) => (
-        <span key={fact.key} className={fact.ink} title={fact.title}>
+        <span
+          key={fact.key}
+          className={`truncate ${fact.ink}`}
+          title={fact.title}
+        >
           {fact.text}
         </span>
       ))}
@@ -969,15 +975,15 @@ export function KeysPage() {
   // exactly one control named "Create key" and it is the dialog's own submit.
   const [openCount, setOpenCount] = useState(0)
   const openCreate = () => {
-    setEditing(null)
+    setEditing(undefined)
     setOpenCount((n) => n + 1)
     setAddOpen(true)
   }
-  const [editing, setEditing] = useState<string | null>(null)
+  const [editing, setEditing] = useState<string>()
   const [regenerated, setRegenerated] = useState<{
     title: string
     result: CreateKeyResponse
-  } | null>(null)
+  }>()
   // Where focus lands when a dialog opened from a consumed confirm closes.
   // `FormDialog` returns focus to whatever had it, and a regenerate's trigger is
   // a row action that has already disarmed itself, so the page's own primary
@@ -989,16 +995,16 @@ export function KeysPage() {
   // which affordances it draws, are both undecided until the organization
   // context answers, and a disabled query reports `isLoading` false.
   const loading = !scope.isReady || keys.isLoading
-  const editingKey = rows.find((k) => k.id === editing) ?? null
+  const editingKey = rows.find((apiKey) => apiKey.id === editing)
   const showOnboarding = !loading && rows.length === 0
   const selection = useTableSelection()
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [bulkError, setBulkError] = useState<unknown>(undefined)
   const [bulkPending, setBulkPending] = useState(false)
 
-  const selectableKeys = rows.map((k) => k.id)
+  const selectableKeys = rows.map((apiKey) => apiKey.id)
   const selectedIds = resolveSelectedIds(selection.selectedKeys, selectableKeys)
-  const selectedKeys = rows.filter((k) => selectedIds.includes(k.id))
+  const selectedKeys = rows.filter((apiKey) => selectedIds.includes(apiKey.id))
 
   // Stable handlers (mutate fns are referentially stable in TanStack Query) so
   // the memoized columns below survive unrelated re-renders.
@@ -1009,10 +1015,12 @@ export function KeysPage() {
   )
 
   const regenerate = useCallback(
-    (k: ApiKey) =>
-      rotateKey.mutate(k.id, {
-        onSuccess: (result) =>
-          setRegenerated({ title: `New secret for ${label(k)}`, result }),
+    (apiKey: ApiKey) =>
+      rotateKey.mutate(apiKey.id, {
+        onSuccess: (result) => {
+          setPendingRegenerate(undefined)
+          setRegenerated({ title: `New secret for ${label(apiKey)}`, result })
+        },
       }),
     [rotateKey.mutate],
   )
@@ -1037,47 +1045,126 @@ export function KeysPage() {
     }
   }
 
-  // Which row is armed to regenerate. Page state rather than per-button state,
-  // because the confirmation is a strip under the row and only one may be open
-  // at a time.
-  const [armed, setArmed] = useState<string | null>(null)
-  // Which row was armed last, kept after `armed` clears. Cancelling unmounts the
-  // strip that had focus, so the caret has to go back to the action that armed
-  // it, and `useConfirmationFocus` reads its `triggerRef` in an effect that runs
-  // *after* the commit that cleared `armed`. A ref attached on `armed === k.id`
-  // would already have been detached by then and the restore would find null, so
-  // the trigger is identified by a value that outlives the transition.
-  const [lastArmed, setLastArmed] = useState<string | null>(null)
-  const arm = useCallback((id: string) => {
-    setLastArmed(id)
-    setArmed(id)
-  }, [])
-  const { triggerRef, confirmRef } = useConfirmationFocus(armed !== null)
+  const [pendingRegenerate, setPendingRegenerate] = useState<ApiKey>()
   const [pendingDelete, setPendingDelete] = useState<ApiKey>()
+  const [lastAction, setLastAction] = useState<string>()
+  // Still load-bearing, though `confirmRef` goes unused: a menu closes on choice,
+  // so the item that was focused is unmounted before the dialog opens and
+  // react-aria's own restore has no target left. Measured, not assumed: dropping
+  // this strands focus in both the regenerate-cancel and edit-close tests.
+  const { triggerRef: actionTriggerRef } = useConfirmationFocus(
+    !!(pendingRegenerate || pendingDelete || editing || regenerated),
+  )
+  const tableRegion = useRef<HTMLDivElement>(null)
+  // Seeded from the viewport rather than defaulting to "wide": the observer only
+  // reports after the first layout, so a phone would paint the desktop table for
+  // a frame and then swap to the list.
+  const [layout, setLayout] = useState<Layout>(() =>
+    typeof window === "undefined" ? "wide" : layoutFor(window.innerWidth),
+  )
+  useEffect(() => {
+    const region = tableRegion.current
+    if (!region) return
+    const measure = (width: number) => {
+      if (width > 0) setLayout(layoutFor(window.innerWidth, width))
+    }
+    // The observer hands back the region's width without forcing layout, so
+    // remembering it is what lets the viewport listener below re-decide without
+    // measuring. One read here at setup, none per event.
+    let regionWidth = region.getBoundingClientRect().width
+    const observer = new ResizeObserver(([entry]) => {
+      regionWidth = entry.contentRect.width
+      measure(regionWidth)
+    })
+    observer.observe(region)
+    // The region can keep its width while the viewport crosses `md`, which the
+    // observer alone never reports. `window.innerWidth` is not a layout read.
+    const onResize = () => measure(regionWidth)
+    window.addEventListener("resize", onResize)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener("resize", onResize)
+    }
+  }, [])
 
-  // Memoized on the values the cells actually read (mutation pending flags and
-  // the stable handlers) so DataTable's per-row cache holds across selection
-  // clicks; see the DataTable docstring.
+  const ownerLabel = useCallback(
+    (apiKey: ApiKey) =>
+      isVirtualUser(apiKey.user_id)
+        ? "virtual"
+        : apiKey.user_id
+          ? (memberLabels.get(apiKey.user_id) ?? apiKey.user_id)
+          : "—",
+    [memberLabels],
+  )
+  const renderActions = useCallback(
+    (apiKey: ApiKey) => (
+      <KeyActionsMenu
+        apiKey={apiKey}
+        triggerRef={lastAction === apiKey.id ? actionTriggerRef : undefined}
+        onAction={() => setLastAction(apiKey.id)}
+        owner={isDeploymentWide ? ownerLabel(apiKey) : undefined}
+        // Those lanes are off the row below `wide`, so the menu is the only
+        // place left that can show them whole.
+        hasDetails={layout !== "wide"}
+        isPending={updateKey.isPending || rotateKey.isPending}
+        onToggle={() => setActive(apiKey, !apiKey.is_active)}
+        onEdit={() => {
+          setAddOpen(false)
+          setEditing(apiKey.id)
+        }}
+        onRegenerate={() => setPendingRegenerate(apiKey)}
+        onDelete={() => setPendingDelete(apiKey)}
+      />
+    ),
+    [
+      lastAction,
+      actionTriggerRef,
+      isDeploymentWide,
+      ownerLabel,
+      layout,
+      updateKey.isPending,
+      rotateKey.isPending,
+      setActive,
+    ],
+  )
+  // Memoized on what the cells read, so DataTable's per-row cache holds across
+  // selection clicks; see its docstring.
   const columns = useMemo<DataTableColumn<ApiKey>[]>(
     () => [
       {
         id: "name",
         header: "Name",
         isRowHeader: true,
-        // Two lines: the name at 16px, then the metadata line 5px under it.
-        cell: (k) => (
-          <div className="flex flex-col gap-[5px]">
-            <span className="text-base text-foreground">
-              {k.key_name ?? <span className="text-muted">(unnamed)</span>}
+        cell: (apiKey) => (
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="truncate text-base text-foreground">
+              {apiKey.key_name ?? <span className="text-muted">(unnamed)</span>}
             </span>
-            <KeyMetaLine apiKey={k} />
+            {/* Folded, the line joins the owner and the last use to the meta
+              facts, so it takes one face throughout rather than setting an
+              uppercase mono run between two runs of body text. */}
+            <div className="truncate text-caption">
+              {layout === "compact" && isDeploymentWide ? (
+                <>
+                  <span>{ownerLabel(apiKey)}</span>
+                  {" · "}
+                </>
+              ) : null}
+              <KeyMetaLine
+                apiKey={apiKey}
+                face={layout === "compact" ? "text-caption" : undefined}
+              />
+              {layout === "compact"
+                ? ` · used ${relative(apiKey.last_used_at) ?? "never"}`
+                : null}
+            </div>
           </div>
         ),
       },
       {
         id: "status",
         header: "Status",
-        cell: (k) => <StatusMark apiKey={k} />,
+        cell: (apiKey) => <StatusMark apiKey={apiKey} />,
       },
       // Every key on a member's page is their own, so an Owner column there
       // would repeat one name down the table.
@@ -1086,38 +1173,37 @@ export function KeysPage() {
             {
               id: "owner",
               header: "Owner",
-              // A member is named; anything else keeps the raw id, which for a
-              // hand-made owner like `ci-bot` is already the readable form. The
-              // id stays in the title so the value actually sent on a request is
-              // still recoverable from this column.
-              cell: (k: ApiKey) => {
-                // One column, two faces, deliberately: a member is a person and
-                // takes the body face, while a raw id like `ci-bot` is an
-                // identifier and takes the mono one. The face is what tells the
-                // two apart, so neither needs a chip to say which it is.
-                if (isVirtualUser(k.user_id)) {
-                  return (
-                    <span className="text-mono-caption text-subtle">
-                      virtual
-                    </span>
-                  )
-                }
-                const member = k.user_id
-                  ? memberLabels.get(k.user_id)
-                  : undefined
+              // One column, two faces, deliberately: a member is a person and
+              // takes the body face, while a raw id like `ci-bot` is an
+              // identifier and takes the mono one. The face is what tells the two
+              // apart, so neither needs a chip to say which it is. The id stays
+              // in the title, so the value actually sent on a request is
+              // recoverable from a truncated cell.
+              cell: (apiKey: ApiKey) => {
+                const member =
+                  !isVirtualUser(apiKey.user_id) && apiKey.user_id
+                    ? memberLabels.get(apiKey.user_id)
+                    : undefined
                 if (member) {
                   return (
                     <span
-                      className="text-sm text-foreground"
-                      title={k.user_id ?? ""}
+                      className="block truncate text-sm text-foreground"
+                      title={apiKey.user_id ?? ""}
                     >
                       {member}
                     </span>
                   )
                 }
                 return (
-                  <span className="text-mono-caption text-muted">
-                    {k.user_id ?? "—"}
+                  <span
+                    className={`block truncate text-mono-caption ${
+                      isVirtualUser(apiKey.user_id)
+                        ? "text-subtle"
+                        : "text-muted"
+                    }`}
+                    title={apiKey.user_id ?? ""}
+                  >
+                    {ownerLabel(apiKey)}
                   </span>
                 )
               },
@@ -1127,41 +1213,39 @@ export function KeysPage() {
       {
         id: "key",
         header: "Key",
-        cell: (k) => (
-          <code className="text-mono-caption text-muted">
-            {k.key_prefix ? `${k.key_prefix}…${k.key_suffix ?? ""}` : "—"}
-          </code>
-        ),
+        cell: renderFingerprint,
       },
       {
         id: "created",
         header: "Created",
-        cell: (k) => (
+        cell: (apiKey) => (
           <span className="text-mono-caption text-muted">
-            {formatDate(k.created_at)}
+            {formatDate(apiKey.created_at)}
           </span>
         ),
       },
       {
         id: "last_used",
         header: "Last used",
-        cell: (k) => (
+        cell: (apiKey) => (
           <span className="text-mono-caption text-muted">
-            {relative(k.last_used_at) ?? "never"}
+            {relative(apiKey.last_used_at) ?? "never"}
           </span>
         ),
       },
       {
         id: "expires",
         header: "Expires",
-        cell: (k) => (
+        cell: (apiKey) => (
           <span
             className="text-muted"
             title={
-              k.expires_at ? new Date(k.expires_at).toLocaleString() : undefined
+              apiKey.expires_at
+                ? new Date(apiKey.expires_at).toLocaleString()
+                : undefined
             }
           >
-            {k.expires_at ? formatDate(k.expires_at) : "never"}
+            {apiKey.expires_at ? formatDate(apiKey.expires_at) : "never"}
           </span>
         ),
       },
@@ -1169,102 +1253,28 @@ export function KeysPage() {
         id: "actions",
         header: "Actions",
         align: "end",
-        cell: (k) => (
-          <RowActionRow>
-            <RowAction
-              icon={k.is_active ? FiPause : FiPlay}
-              label={k.is_active ? "Disable" : "Enable"}
-              isDisabled={updateKey.isPending}
-              onPress={() => setActive(k, !k.is_active)}
-            />
-            <RowAction
-              icon={FiEdit2}
-              label="Edit"
-              onPress={() => {
-                setAddOpen(false)
-                setEditing(k.id)
-              }}
-            />
-            <RowAction
-              ref={lastArmed === k.id ? triggerRef : undefined}
-              icon={FiRefreshCw}
-              label="Regenerate"
-              isDanger={armed === k.id}
-              onPress={() => arm(k.id)}
-            />
-            {/* Permanent delete is only offered once a key is disabled, so a live
-              caller can't be broken (and its audit trail erased) in one click.
-              The slot is held open when it is not offered: the lane is
-              right-aligned, so a missing action slid every glyph beside it 48px
-              along and Edit sat in a different column on a live row than on a
-              disabled one. An empty span rather than a disabled control, because
-              there is nothing here to refuse. */}
-            {k.is_active ? (
-              <span aria-hidden="true" className="size-8 shrink-0" />
-            ) : (
-              <RowAction
-                icon={FiTrash2}
-                label="Delete"
-                onPress={() => setPendingDelete(k)}
-              />
-            )}
-          </RowActionRow>
-        ),
+        cell: renderActions,
       },
     ],
-    // `arm`, `triggerRef` and `lastArmed` are listed for correctness, not because
-    // they invalidate: the first two are stable for the component's life, and
-    // `setLastArmed` has a single call site, immediately beside the matching
-    // `setArmed`, so `lastArmed` cannot change on a render where `armed` did not. Naming them
-    // anyway means the cache no longer depends on that invariant holding, which is
-    // the kind of coupling that survives until someone sets one without the other.
-    [
-      updateKey.isPending,
-      setActive,
-      memberLabels,
-      armed,
-      isDeploymentWide,
-      arm,
-      triggerRef,
-      lastArmed,
-    ],
+    [layout, isDeploymentWide, memberLabels, ownerLabel, renderActions],
   )
-
-  // The armed confirmation, rendered as a strip under its own row rather than
-  // inside the actions cell. Referentially stable per the DataTable docstring.
-  const renderArmed = useCallback(
-    (k: ApiKey) => {
-      if (armed !== k.id) return null
-      return (
-        <ArmedStrip
-          confirmRef={confirmRef}
-          confirmLabel="Regenerate"
-          isPending={rotateKey.isPending}
-          message={
-            <>
-              Regenerate the secret for <strong>{label(k)}</strong>? The current
-              secret stops working immediately, with no grace period.
-            </>
-          }
-          onConfirm={() => {
-            setArmed(null)
-            regenerate(k)
-          }}
-          onCancel={() => setArmed(null)}
-        />
-      )
-    },
-    // Neither memberLabels nor isDeploymentWide is read here any more: the
-    // strip's copy names the key, not its owner.
-    [armed, rotateKey.isPending, regenerate, confirmRef],
+  const visibleColumns = useMemo(
+    () =>
+      layout === "compact"
+        ? columns.filter(
+            (column) =>
+              !["owner", "created", "last_used", "expires"].includes(column.id),
+          )
+        : columns,
+    [columns, layout],
   )
 
   // Bulk delete targets only already-disabled keys, mirroring the per-row rule
   // that a live key must be disabled before it can be permanently deleted.
-  const deletableSelected = selectedKeys.filter((k) => !k.is_active)
+  const deletableSelected = selectedKeys.filter((apiKey) => !apiKey.is_active)
 
   return (
-    <div className="flex flex-col">
+    <div ref={tableRegion} className="flex min-w-0 flex-col">
       <PageIntro
         title="API keys"
         action={
@@ -1288,7 +1298,7 @@ export function KeysPage() {
       </PageIntro>
 
       {/* Not the deletes: each reports inside its own confirm dialog. */}
-      <ErrorBanner error={keys.error ?? updateKey.error ?? rotateKey.error} />
+      <ErrorBanner error={keys.error ?? updateKey.error} />
 
       {/* A key's owner and its spending limit are both set elsewhere now, on the
           organization rail. This page is where an operator arrives looking for
@@ -1328,7 +1338,7 @@ export function KeysPage() {
           result={regenerated.result}
           memberLabels={memberLabels}
           onClose={() => {
-            setRegenerated(null)
+            setRegenerated(undefined)
             // Drop the one-time secret from mutation state so a later
             // regenerate never flashes the previous key.
             rotateKey.reset()
@@ -1362,7 +1372,7 @@ export function KeysPage() {
           key={editingKey.id}
           isDeploymentWide={isDeploymentWide}
           apiKey={editingKey}
-          onClose={() => setEditing(null)}
+          onClose={() => setEditing(undefined)}
         />
       ) : null}
 
@@ -1380,8 +1390,11 @@ export function KeysPage() {
             variant="ghost"
             isDisabled={bulkPending}
             onPress={() =>
-              void runBulk(selectedKeys, (k) =>
-                updateKey.mutateAsync({ id: k.id, body: { is_active: false } }),
+              void runBulk(selectedKeys, (apiKey) =>
+                updateKey.mutateAsync({
+                  id: apiKey.id,
+                  body: { is_active: false },
+                }),
               )
             }
           >
@@ -1395,9 +1408,9 @@ export function KeysPage() {
               variant="ghost"
               isDisabled={bulkPending}
               onPress={() =>
-                void runBulk(selectedKeys, (k) =>
+                void runBulk(selectedKeys, (apiKey) =>
                   updateKey.mutateAsync({
-                    id: k.id,
+                    id: apiKey.id,
                     body: { exclude_from_budget: true },
                   }),
                 )
@@ -1420,11 +1433,89 @@ export function KeysPage() {
       {/* Suppress the table (and its own empty message) while the onboarding
           panel owns the empty state, so a fresh gateway shows one call to action,
           not a panel stacked over a redundant "no rows" table. */}
-      {showOnboarding ? null : (
+      {showOnboarding ? null : layout === "mobile" ? (
+        <section
+          aria-label="API keys"
+          className="otari-keys-list flex flex-col"
+        >
+          <div className="flex min-h-11 items-center gap-2 border-b border-border-subtle">
+            <Checkbox
+              hasTouchTarget
+              ariaLabel="Select all keys"
+              isSelected={rows.length > 0 && selectedIds.length === rows.length}
+              onChange={(checked) =>
+                selection.onSelectionChange(
+                  checked ? new Set(selectableKeys) : new Set(),
+                )
+              }
+            >
+              <span className="sr-only">Select all keys</span>
+            </Checkbox>
+            <span className="flex-1 text-caption">
+              {rows.length} {rows.length === 1 ? "key" : "keys"}
+            </span>
+            <span className="text-overline">Actions</span>
+          </div>
+          {/* The list owns loading too: falling through to the table here painted
+              a seven-column skeleton on a phone and then swapped it for this. */}
+          {loading ? (
+            <EmptyMessage>
+              <span className="inline-flex items-center gap-2">
+                <Spinner size="sm" aria-hidden="true" /> Loading…
+              </span>
+            </EmptyMessage>
+          ) : null}
+          <ul className="flex flex-col">
+            {rows.map((apiKey) => (
+              <li
+                key={apiKey.id}
+                className={`flex items-start gap-2 border-b border-border-subtle py-3 ${selectedIds.includes(apiKey.id) ? "bg-primary-subtle" : ""}`}
+              >
+                <div className="flex min-h-11 shrink-0 items-center">
+                  <Checkbox
+                    hasTouchTarget
+                    ariaLabel={`Select ${label(apiKey)}`}
+                    isSelected={selectedIds.includes(apiKey.id)}
+                    onChange={(checked) => {
+                      const next = new Set(selectedIds)
+                      if (checked) next.add(apiKey.id)
+                      else next.delete(apiKey.id)
+                      selection.onSelectionChange(next)
+                    }}
+                  >
+                    <span className="sr-only">Select {label(apiKey)}</span>
+                  </Checkbox>
+                </div>
+                <div className="flex min-w-0 flex-1 flex-col gap-1 pt-2">
+                  <span className="truncate text-base text-foreground">
+                    {apiKey.key_name ?? "(unnamed)"}
+                  </span>
+                  {renderFingerprint(apiKey)}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="shrink-0">
+                      <StatusMark apiKey={apiKey} />
+                    </span>
+                    {isDeploymentWide ? (
+                      <span className="truncate text-caption">
+                        {ownerLabel(apiKey)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="truncate text-caption">
+                    <KeyMetaLine apiKey={apiKey} face="text-caption" /> · used{" "}
+                    {relative(apiKey.last_used_at) ?? "never"}
+                  </div>
+                </div>
+                {renderActions(apiKey)}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : (
         <TableScrollFrame className="otari-keys-table">
           <DataTable
             ariaLabel="API keys"
-            columns={columns}
+            columns={visibleColumns}
             rows={rows}
             getRowKey={getKeyRowKey}
             isLoading={loading}
@@ -1432,11 +1523,35 @@ export function KeysPage() {
             selectionMode="multiple"
             selectedKeys={selection.selectedKeys}
             onSelectionChange={selection.onSelectionChange}
-            detailKey={armed}
-            renderDetail={renderArmed}
           />
         </TableScrollFrame>
       )}
+
+      <ConfirmDialog
+        isOpen={pendingRegenerate !== undefined}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingRegenerate(undefined)
+            rotateKey.reset()
+          }
+        }}
+        heading="Regenerate API key"
+        body={
+          pendingRegenerate ? (
+            <>
+              Regenerate the secret for{" "}
+              <strong>{label(pendingRegenerate)}</strong>? The current secret
+              stops working immediately, with no grace period.
+            </>
+          ) : null
+        }
+        confirmLabel="Regenerate"
+        isPending={rotateKey.isPending}
+        error={rotateKey.error}
+        onConfirm={() => {
+          if (pendingRegenerate) regenerate(pendingRegenerate)
+        }}
+      />
 
       <ConfirmDialog
         isOpen={pendingDelete !== undefined}
@@ -1480,7 +1595,7 @@ export function KeysPage() {
         onConfirm={() =>
           void runBulk(
             deletableSelected,
-            (k) => deleteKey.mutateAsync(k.id),
+            (apiKey) => deleteKey.mutateAsync(apiKey.id),
             () => setBulkDeleteOpen(false),
           )
         }

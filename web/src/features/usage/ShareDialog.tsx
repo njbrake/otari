@@ -1,6 +1,7 @@
-import { AlertDialog, Button } from "@heroui/react"
+import { Button } from "@heroui/react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { UsageGroupRow, UsageSeriesPoint, UsageTotals } from "@/client"
+import { Dialog, DialogSection } from "@/design-system/feedback/Dialog"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import {
@@ -172,7 +173,7 @@ export function ShareDialog(props: ShareDialogProps) {
   // would leave the PNG showing the previous card.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the dependency is the rendered card, which the rule cannot see
   useEffect(() => {
-    let cancelled = false
+    let isCancelled = false
     let url: string | undefined
     const timer = setTimeout(() => {
       const node = cardRef.current
@@ -182,7 +183,7 @@ export function ShareDialog(props: ShareDialogProps) {
       const { width, height } = CARD_SIZES[presentation.ratio]
       rasterize(node, { width, height })
         .then((blob) => {
-          if (cancelled) {
+          if (isCancelled) {
             return
           }
           url = URL.createObjectURL(blob)
@@ -195,7 +196,7 @@ export function ShareDialog(props: ShareDialogProps) {
           setError(undefined)
         })
         .catch((cause: unknown) => {
-          if (!cancelled) {
+          if (!isCancelled) {
             setError(
               cause instanceof Error
                 ? cause
@@ -205,7 +206,7 @@ export function ShareDialog(props: ShareDialogProps) {
         })
     }, 300)
     return () => {
-      cancelled = true
+      isCancelled = true
       clearTimeout(timer)
     }
   }, [presentation, hero, secondary, shown, scope])
@@ -223,8 +224,8 @@ export function ShareDialog(props: ShareDialogProps) {
     [],
   )
 
-  const copyable = canCopyImages()
-  const blocked = isStale || hero === null
+  const isCopyable = canCopyImages()
+  const isBlocked = isStale || hero === null
 
   async function withBlob(
     action: (blob: Blob) => Promise<void> | void,
@@ -251,192 +252,178 @@ export function ShareDialog(props: ShareDialogProps) {
   }
 
   return (
-    <AlertDialog isOpen onOpenChange={(open) => (open ? undefined : onClose())}>
-      <AlertDialog.Backdrop>
-        <AlertDialog.Container placement="center" size="lg">
-          <AlertDialog.Dialog className="w-[92vw] max-w-[940px]">
-            <AlertDialog.Header>
-              <AlertDialog.Heading>
-                Share this view as an image
-              </AlertDialog.Heading>
-            </AlertDialog.Header>
-            <AlertDialog.Body className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto">
-              <p className="text-caption">
-                The card shows the window and filters currently applied above.
-                Change them on the page to change what it says.
-              </p>
-
-              <ErrorBanner error={error} />
-
-              {isStale ? (
-                <InfoBanner tone="warning">
-                  Waiting for the current numbers before this can be shared.
-                </InfoBanner>
-              ) : null}
-
-              <div className="flex flex-col gap-4 sm:flex-row">
-                {/* The preview is the PNG itself at feed width, not a styled DOM stand-in:
-            what is approved here is byte-for-byte what gets posted. */}
-                <div className="w-full sm:w-[340px] sm:shrink-0">
-                  {preview !== undefined ? (
-                    <img
-                      src={preview}
-                      alt="Preview of the usage card that will be shared"
-                      className="h-auto w-full rounded-md border border-border"
-                    />
-                  ) : (
-                    <div className="flex aspect-square w-full items-center justify-center rounded-md border border-dashed border-border text-caption">
-                      Rendering preview…
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex min-w-0 flex-1 flex-col gap-4">
-                  <Field label="Lead with">
-                    <div className="inline-flex flex-wrap gap-1.5">
-                      {heroCandidates(stats).map((stat) => (
-                        <Button
-                          key={stat.id}
-                          size="sm"
-                          variant={hero?.id === stat.id ? "primary" : "ghost"}
-                          aria-pressed={hero?.id === stat.id}
-                          onPress={() => set("hero", stat.id)}
-                        >
-                          {stat.label}
-                        </Button>
-                      ))}
-                    </div>
-                  </Field>
-
-                  <Field
-                    label={`Title (${presentation.title.length}/${TITLE_MAX})`}
-                  >
-                    <input
-                      value={presentation.title}
-                      maxLength={TITLE_MAX}
-                      onChange={(event) => set("title", event.target.value)}
-                      className="w-full rounded-md border border-border px-2 py-1 text-sm"
-                      aria-label="Card title"
-                    />
-                  </Field>
-
-                  <div className="flex flex-wrap gap-4">
-                    <Field label="Shape">
-                      <div className="inline-flex gap-1.5">
-                        {(["square", "landscape"] as CardRatio[]).map(
-                          (ratio) => (
-                            <Button
-                              key={ratio}
-                              size="sm"
-                              variant={
-                                presentation.ratio === ratio
-                                  ? "primary"
-                                  : "ghost"
-                              }
-                              aria-pressed={presentation.ratio === ratio}
-                              onPress={() => set("ratio", ratio)}
-                            >
-                              {ratio === "square" ? "Square" : "Wide"}
-                            </Button>
-                          ),
-                        )}
-                      </div>
-                    </Field>
-                    <Field label="Theme">
-                      <div className="inline-flex gap-1.5">
-                        {(["dark", "light"] as const).map((theme) => (
-                          <Button
-                            key={theme}
-                            size="sm"
-                            variant={
-                              presentation.theme === theme ? "primary" : "ghost"
-                            }
-                            aria-pressed={presentation.theme === theme}
-                            onPress={() => set("theme", theme)}
-                          >
-                            {theme === "dark" ? "Dark" : "Light"}
-                          </Button>
-                        ))}
-                      </div>
-                    </Field>
-                    <Field label="Model rows">
-                      <div className="inline-flex gap-1.5">
-                        {ROW_CHOICES.map((rows) => (
-                          <Button
-                            key={rows}
-                            size="sm"
-                            variant={
-                              presentation.rows === rows ? "primary" : "ghost"
-                            }
-                            aria-pressed={presentation.rows === rows}
-                            onPress={() => set("rows", rows)}
-                          >
-                            {rows}
-                          </Button>
-                        ))}
-                      </div>
-                    </Field>
-                  </div>
-
-                  <div className="flex flex-wrap gap-1.5">
-                    <Button
-                      size="sm"
-                      variant={presentation.hideDollars ? "primary" : "ghost"}
-                      aria-pressed={presentation.hideDollars}
-                      onPress={() =>
-                        set("hideDollars", !presentation.hideDollars)
-                      }
-                    >
-                      Hide dollar amounts
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </AlertDialog.Body>
-            <AlertDialog.Footer className="flex flex-wrap items-center gap-2">
-              {notice !== undefined ? (
-                // Muted, not link ink: a notice is a result, not a destination, and
-                // link ink on something unclickable promises an interaction
-                // that is not there.
-                <span className="mr-auto text-xs text-muted">{notice}</span>
-              ) : null}
-              <Button variant="ghost" onPress={onClose}>
-                Close
-              </Button>
+    <>
+      <Dialog
+        isOpen
+        onOpenChange={(open) => (open ? undefined : onClose())}
+        title="Share this view as an image"
+        description="The card shows the window and filters currently applied above. Change them on the page to change what it says."
+        size="xl"
+        footerStart={
+          // Muted, not link ink: a notice is a result, not a destination, and
+          // link ink on something unclickable promises an interaction that is
+          // not there.
+          notice !== undefined ? (
+            <span className="text-caption">{notice}</span>
+          ) : undefined
+        }
+        actions={
+          <>
+            <Button
+              variant={isCopyable ? "ghost" : "primary"}
+              isDisabled={busy || isBlocked}
+              onPress={() =>
+                withBlob(
+                  (blob) => downloadBlob(blob, shareFilename(startIso, endIso)),
+                  "Image saved",
+                )
+              }
+            >
+              Download PNG
+            </Button>
+            {isCopyable ? (
               <Button
-                variant={copyable ? "ghost" : "primary"}
-                isDisabled={busy || blocked}
+                variant="primary"
+                isDisabled={busy || isBlocked}
                 onPress={() =>
-                  withBlob(
-                    (blob) =>
-                      downloadBlob(blob, shareFilename(startIso, endIso)),
-                    "Image saved",
-                  )
+                  withBlob(async (blob) => {
+                    if (!(await copyBlobAsImage(blob))) {
+                      throw new Error(
+                        "The image could not be copied to the clipboard.",
+                      )
+                    }
+                  }, "Image copied")
                 }
               >
-                Download PNG
+                Copy image
               </Button>
-              {copyable ? (
+            ) : null}
+          </>
+        }
+      >
+        <DialogSection className="gap-4">
+          <ErrorBanner error={error} />
+
+          {isStale ? (
+            <InfoBanner tone="warning">
+              Waiting for the current numbers before this can be shared.
+            </InfoBanner>
+          ) : null}
+
+          <div className="flex flex-col gap-4 sm:flex-row">
+            {/* The preview is the PNG itself at feed width, not a styled DOM stand-in:
+          what is approved here is byte-for-byte what gets posted. */}
+            <div className="w-full sm:w-[340px] sm:shrink-0">
+              {preview !== undefined ? (
+                <img
+                  src={preview}
+                  alt="Preview of the usage card that will be shared"
+                  className="h-auto w-full rounded-md border border-border"
+                />
+              ) : (
+                <div className="flex aspect-square w-full items-center justify-center rounded-md border border-dashed border-border text-caption">
+                  Rendering preview…
+                </div>
+              )}
+            </div>
+
+            <div className="flex min-w-0 flex-1 flex-col gap-4">
+              <Field label="Lead with">
+                <div className="inline-flex flex-wrap gap-1.5">
+                  {heroCandidates(stats).map((stat) => (
+                    <Button
+                      key={stat.id}
+                      size="sm"
+                      variant={hero?.id === stat.id ? "primary" : "ghost"}
+                      aria-pressed={hero?.id === stat.id}
+                      onPress={() => set("hero", stat.id)}
+                    >
+                      {stat.label}
+                    </Button>
+                  ))}
+                </div>
+              </Field>
+
+              <Field
+                label={`Title (${presentation.title.length}/${TITLE_MAX})`}
+              >
+                <input
+                  value={presentation.title}
+                  maxLength={TITLE_MAX}
+                  onChange={(event) => set("title", event.target.value)}
+                  className="w-full rounded-md border border-border px-2 py-1 text-sm"
+                  aria-label="Card title"
+                />
+              </Field>
+
+              <div className="flex flex-wrap gap-4">
+                <Field label="Shape">
+                  <div className="inline-flex gap-1.5">
+                    {(["square", "landscape"] as CardRatio[]).map((ratio) => (
+                      <Button
+                        key={ratio}
+                        size="sm"
+                        variant={
+                          presentation.ratio === ratio ? "primary" : "ghost"
+                        }
+                        aria-pressed={presentation.ratio === ratio}
+                        onPress={() => set("ratio", ratio)}
+                      >
+                        {ratio === "square" ? "Square" : "Wide"}
+                      </Button>
+                    ))}
+                  </div>
+                </Field>
+                <Field label="Theme">
+                  <div className="inline-flex gap-1.5">
+                    {(["dark", "light"] as const).map((theme) => (
+                      <Button
+                        key={theme}
+                        size="sm"
+                        variant={
+                          presentation.theme === theme ? "primary" : "ghost"
+                        }
+                        aria-pressed={presentation.theme === theme}
+                        onPress={() => set("theme", theme)}
+                      >
+                        {theme === "dark" ? "Dark" : "Light"}
+                      </Button>
+                    ))}
+                  </div>
+                </Field>
+                <Field label="Model rows">
+                  <div className="inline-flex gap-1.5">
+                    {ROW_CHOICES.map((rows) => (
+                      <Button
+                        key={rows}
+                        size="sm"
+                        variant={
+                          presentation.rows === rows ? "primary" : "ghost"
+                        }
+                        aria-pressed={presentation.rows === rows}
+                        onPress={() => set("rows", rows)}
+                      >
+                        {rows}
+                      </Button>
+                    ))}
+                  </div>
+                </Field>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
                 <Button
-                  variant="primary"
-                  isDisabled={busy || blocked}
-                  onPress={() =>
-                    withBlob(async (blob) => {
-                      if (!(await copyBlobAsImage(blob))) {
-                        throw new Error(
-                          "The image could not be copied to the clipboard.",
-                        )
-                      }
-                    }, "Image copied")
-                  }
+                  size="sm"
+                  variant={presentation.hideDollars ? "primary" : "ghost"}
+                  aria-pressed={presentation.hideDollars}
+                  onPress={() => set("hideDollars", !presentation.hideDollars)}
                 >
-                  Copy image
+                  Hide dollar amounts
                 </Button>
-              ) : null}
-            </AlertDialog.Footer>
-          </AlertDialog.Dialog>
-        </AlertDialog.Container>
-      </AlertDialog.Backdrop>
+              </div>
+            </div>
+          </div>
+        </DialogSection>
+      </Dialog>
 
       {/* Rendered at full size off-screen: html cannot be rasterized from a
           display:none subtree (it has no layout), and the preview above must not
@@ -458,7 +445,7 @@ export function ShareDialog(props: ShareDialogProps) {
           />
         </div>
       </div>
-    </AlertDialog>
+    </>
   )
 }
 

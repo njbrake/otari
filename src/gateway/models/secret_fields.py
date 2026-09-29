@@ -64,6 +64,4 @@ def restore_redacted_values(
         return None
     if not stored:
         return dict(incoming)
-    return {
-        key: stored[key] if value == REDACTED_VALUE and key in stored else value for key, value in incoming.items()
-    }
+    return {key: stored[key] if value == REDACTED_VALUE and key in stored else value for key, value in incoming.items()}

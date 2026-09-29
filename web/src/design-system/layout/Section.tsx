@@ -5,7 +5,7 @@ import type { HTMLAttributes, ReactNode } from "react"
  * the content inside them still in the centered column.
  *
  * It takes two elements, because one element cannot be both full-width and
- * centered. `.otari-bleed` escapes `<main>` (see globals.css for why it is
+ * centered. `.otari-bleed` escapes `<main>` (see design-system.css for why it is
  * container units and not `100vw`); the inner element restores the column.
  *
  * `className` styles the band: its rules, its vertical padding, its own layout
@@ -19,23 +19,23 @@ import type { HTMLAttributes, ReactNode } from "react"
 export function Section({
   className = "",
   contentClassName = "",
-  bleed = true,
+  shouldBleed = true,
   children,
   ...rest
 }: {
   className?: string
   contentClassName?: string
-  bleed?: boolean
+  shouldBleed?: boolean
   children: ReactNode
 } & Omit<HTMLAttributes<HTMLElement>, "className" | "children">) {
   return (
     <section
-      className={bleed ? `otari-bleed ${className}` : className}
+      className={shouldBleed ? `otari-bleed ${className}` : className}
       {...rest}
     >
       <div
         className={
-          bleed
+          shouldBleed
             ? `mx-auto w-full max-w-[112.5rem] px-4 md:px-6 ${contentClassName}`
             : `w-full ${contentClassName}`
         }

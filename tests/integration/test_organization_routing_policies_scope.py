@@ -25,8 +25,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_ROOT
-from gateway.models.entities import DashboardSession, RoutingPolicy
-from gateway.models.tenancy import Organization, OrganizationMember, User, Workspace, WorkspaceMember
+from gateway.models.routing import RoutingPolicy
+from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
 _SCOPED_PATH = f"{API_ROOT}/organizations/me/routing-policies"
@@ -220,9 +220,7 @@ def test_a_member_reads_only_the_workspaces_they_belong_to(client: TestClient, w
     assert listed.isdisjoint(_BETA_POLICIES)
 
 
-def test_a_member_of_no_workspace_reads_no_stored_rows_rather_than_a_refusal(
-    client: TestClient, world: _World
-) -> None:
+def test_a_member_of_no_workspace_reads_no_stored_rows_rather_than_a_refusal(client: TestClient, world: _World) -> None:
     """Nothing was refused; no stored policy is theirs to see yet."""
     code, body = _as(client, world, "alpha_newcomer")
     assert code == status.HTTP_200_OK, body

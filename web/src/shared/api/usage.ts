@@ -39,9 +39,12 @@ function usageParams(filters: UsageFilters): URLSearchParams {
   // endpoints match any of them); an empty array is no filter at all, not a
   // filter matching nothing.
   const appendAll = (key: string, value: string | string[] | undefined) => {
-    for (const one of typeof value === "string" ? [value] : (value ?? [])) {
-      if (one) params.append(key, one)
-    }
+    const values = typeof value === "string" ? [value] : (value ?? [])
+    values
+      .filter((one) => one !== "")
+      .forEach((one) => {
+        params.append(key, one)
+      })
   }
   if (filters.workspace_id) params.set("workspace_id", filters.workspace_id)
   if (filters.start_date) params.set("start_date", filters.start_date)
@@ -268,6 +271,52 @@ export function useFailureCount(windowSeconds: number, enabled = true) {
   })
 }
 
+// Unpriced usage moves at the pace of traffic to a model nobody priced, so a slow
+// poll is enough for a banner that reports it.
+const UNPRICED_USAGE_POLL_MS = 5 * 60_000
+
+// Successful gateway requests within the last `windowSeconds` whose model usage
+// had no price (the Activity page's "Unpriced" filter), with the models that
+// served them. One bounded summary read: the totals, and the `model` breakdown
+// only. `workspaceId` narrows it the way Activity narrows to the shell's
+// selected workspace, so a count and the Activity rows it links to agree; ""
+// is no workspace, which Activity reads as deployment-wide too. The window is
+// resolved in the query function for the reasons `useFailureCount` gives.
+export function useUnpricedUsage(
+  windowSeconds: number,
+  workspaceId: string,
+  enabled = true,
+) {
+  const scope = useUsageScope()
+  return useQuery({
+    queryKey: [
+      USAGE,
+      "summary",
+      "unpriced",
+      scope.base,
+      workspaceId,
+      windowSeconds,
+    ],
+    queryFn: () => {
+      const params = usageParams({
+        workspace_id: workspaceId || undefined,
+        status: "success",
+        source: "gateway",
+        priced: false,
+        start_date: isoAgo(windowSeconds),
+      })
+      params.set("bucket", "hour")
+      params.append("dimensions", "model")
+      return apiFetch<UsageSummary>(
+        `${scope.base}/summary?${params.toString()}`,
+      )
+    },
+    enabled: enabled && scope.isReady,
+    refetchInterval: UNPRICED_USAGE_POLL_MS,
+    retry: false,
+  })
+}
+
 // The rows of one or more request groups: every attempt a routed request made,
 // which is what turns "attempt 1 of 2, failed" into "and here is what served it".
 // A plan is capped at a handful of candidates and the activity table pages at a
@@ -286,7 +335,9 @@ export function useRequestGroups(groupIds: readonly string[]) {
     queryKey: [USAGE, "groups", scope.base, ids],
     queryFn: () => {
       const params = new URLSearchParams()
-      for (const id of ids) params.append("request_group_id", id)
+      ids.forEach((id) => {
+        params.append("request_group_id", id)
+      })
       params.set("limit", String(REQUEST_GROUP_PAGE_LIMIT))
       return apiFetch<UsageEntry[]>(`${scope.base}?${params.toString()}`)
     },
@@ -379,9 +430,10 @@ export function useUsageSummary(
       // A repeated query param has no empty-list form, so an empty selection goes
       // on the wire as the server's `none` sentinel.
       if (dimensions) {
-        for (const dimension of dimensions.length > 0 ? dimensions : ["none"]) {
+        const requested = dimensions.length > 0 ? dimensions : ["none"]
+        requested.forEach((dimension) => {
           params.append("dimensions", dimension)
-        }
+        })
       }
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,

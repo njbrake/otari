@@ -82,7 +82,10 @@ const CONTEXTS: { place: string; keys: string[] }[] = [
       "status",
     ],
   },
-  { place: "otari-mcp-table", keys: ["actions", "enabled", "token"] },
+  {
+    place: "otari-mcp-table",
+    keys: ["actions", "enabled", "server_id", "token"],
+  },
   {
     place: "otari-members-table",
     keys: ["actions", "member", "role", "spend", "status", "workspaces"],
@@ -96,36 +99,21 @@ const CONTEXTS: { place: string; keys: string[] }[] = [
     keys: ["cost", "key", "model", "status", "time", "tokens"],
   },
   {
-    place: "otari-pricing-table",
+    place: "otari-offered-models-table",
     keys: [
-      "cacheRead",
+      "actions",
       "cache_read",
       "cache_write",
+      "enabled",
       "input",
-      "modelKey",
-      "model_key",
+      "model",
       "output",
-      "spacer",
-      "tiers",
-      "updatedAt",
+      "source",
     ],
   },
   {
     place: "otari-provider-keys-table",
     keys: ["actions", "api_base", "api_key", "created", "name", "provider"],
-  },
-  {
-    place: "otari-rate-overrides-table",
-    keys: [
-      "actions",
-      "cacheRead",
-      "cache_read",
-      "cache_write",
-      "input",
-      "output",
-      "period",
-      "status",
-    ],
   },
   {
     place: "otari-workspaces-table",

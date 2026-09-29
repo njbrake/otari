@@ -3,12 +3,17 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { OrganizationBudget, OrganizationSpendCeiling } from "@/client"
+import type {
+  OrganizationBudget,
+  OrganizationContext,
+  OrganizationSpendCeiling,
+} from "@/client"
 import { OrganizationBudgetsPage } from "@/features/budgets/OrganizationBudgetsPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
   bootstrap,
+  organization,
   organizationContext,
   organizationSpendCeiling as spendCeiling,
   workspace,
@@ -85,7 +90,15 @@ function mockApi({
     })
     if (url.includes(`${API_ROOT}/organizations/me/spend-ceilings`)) {
       if (method === "GET") {
-        return jsonResponse({ data: ceilings, count: ceilings.length })
+        // Honors the window, like the endpoint: a test that ignored it could
+        // not tell a paged read from a read of everything.
+        const params = new URL(url, "http://localhost").searchParams
+        const skip = Number(params.get("skip") ?? 0)
+        const limit = Number(params.get("limit") ?? 100)
+        return jsonResponse({
+          data: ceilings.slice(skip, skip + limit),
+          count: ceilings.length,
+        })
       }
       if (method === "DELETE") return jsonResponse({ message: "deleted" })
       return jsonResponse(spendCeiling(), writeStatus)
@@ -112,25 +125,35 @@ function mockApi({
   return requests
 }
 
+// The caller this page exists for: an admin who does not operate the
+// deployment. The fixture defaults to an owner who does, which is the one
+// caller that would reach the other page instead.
+const admin = (overrides: Partial<OrganizationContext> = {}) =>
+  organizationContext({
+    role: "admin",
+    deployment_operator: false,
+    ...overrides,
+  })
+
 function renderPage() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return render(
+  const tree = (context: OrganizationContext) => (
     <DeploymentProvider value={bootstrap()}>
       <QueryClientProvider client={client}>
-        <OrganizationBudgetsPage
-          // The caller this page exists for: an admin who does not operate the
-          // deployment. The fixture defaults to an owner who does, which is the
-          // one caller that would reach the other page instead.
-          organization={organizationContext({
-            role: "admin",
-            deployment_operator: false,
-          })}
-        />
+        <OrganizationBudgetsPage organization={context} />
       </QueryClientProvider>
-    </DeploymentProvider>,
+    </DeploymentProvider>
   )
+  const result = render(tree(admin()))
+  // Switching organization invalidates every query rather than remounting this
+  // page, so the page seeing a new context in place is what a switch looks like
+  // from here.
+  return {
+    ...result,
+    switchTo: (context: OrganizationContext) => result.rerender(tree(context)),
+  }
 }
 
 afterEach(() => {
@@ -400,6 +423,113 @@ describe("OrganizationBudgetsPage", () => {
     expect(within(table).getByText(/held/)).toBeInTheDocument()
   })
 
+  it("asks for a page of ceilings rather than walking them", async () => {
+    // otari#1420. The Overview used to read this collection too, for a
+    // worst-case aggregate, and a second reader wanting every row is what kept
+    // it a walk; that reader moved to the summary endpoint in otari#1425.
+    const requests = mockApi({
+      ceilings: Array.from({ length: 30 }, (_, index) =>
+        spendCeiling({
+          id: `cccccccc-1111-2222-3333-${String(index).padStart(12, "0")}`,
+        }),
+      ),
+    })
+    renderPage()
+
+    const table = await screen.findByRole("grid", {
+      name: "Organization spend ceilings",
+    })
+    // A header row and a page of 25, not all 30.
+    await waitFor(() => {
+      expect(within(table).getAllByRole("row")).toHaveLength(26)
+    })
+    expect(
+      requests.some((request) =>
+        request.url.includes("/spend-ceilings?skip=0&limit=25"),
+      ),
+    ).toBe(true)
+  })
+
+  it("pages the ceilings without reading the rest", async () => {
+    const user = userEvent.setup()
+    const requests = mockApi({
+      ceilings: Array.from({ length: 30 }, (_, index) =>
+        spendCeiling({
+          id: `cccccccc-1111-2222-3333-${String(index).padStart(12, "0")}`,
+        }),
+      ),
+    })
+    renderPage()
+
+    await screen.findByRole("grid", { name: "Organization spend ceilings" })
+    await user.click(
+      screen.getByRole("button", { name: "Next page, spend ceilings" }),
+    )
+
+    await waitFor(() => {
+      expect(
+        requests.some((request) =>
+          request.url.includes("/spend-ceilings?skip=25&limit=25"),
+        ),
+      ).toBe(true)
+    })
+    const table = await screen.findByRole("grid", {
+      name: "Organization spend ceilings",
+    })
+    // The tail: five rows and the header.
+    await waitFor(() => {
+      expect(within(table).getAllByRole("row")).toHaveLength(6)
+    })
+  })
+
+  it("goes back to the first page when the organization changes", async () => {
+    // Switching invalidates every query rather than remounting the page, so the
+    // window survives the switch. Left alone, the new organization is asked for
+    // a page its shorter list does not reach, that answers empty, the card steps
+    // back, and the two walk down a page per request until they meet zero.
+    const user = userEvent.setup()
+    const requests = mockApi({
+      ceilings: Array.from({ length: 30 }, (_, index) =>
+        spendCeiling({
+          id: `cccccccc-1111-2222-3333-${String(index).padStart(12, "0")}`,
+        }),
+      ),
+    })
+    const { switchTo } = renderPage()
+
+    await screen.findByRole("grid", { name: "Organization spend ceilings" })
+    await user.click(
+      screen.getByRole("button", { name: "Next page, spend ceilings" }),
+    )
+    await waitFor(() => {
+      expect(
+        requests.some((request) => request.url.includes("skip=25&limit=25")),
+      ).toBe(true)
+    })
+
+    const box = screen.getByRole("textbox", {
+      name: "Page number, spend ceilings",
+    })
+    expect(box).toHaveValue("2")
+
+    switchTo(
+      admin({
+        organization: {
+          ...admin().organization,
+          id: "99999999-1111-2222-3333-444444444444",
+        },
+      }),
+    )
+
+    // Back to the first window, so the new organization is never asked for a
+    // page its list may not reach.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: "Page number, spend ceilings" }),
+      ).toHaveValue("1")
+    })
+  })
+
   it("marks a ceiling whose budget is set outside the organization", async () => {
     // What the otari-ai cutover writes. Listed rather than hidden, because it is
     // enforcing today and omitting it would let the page read as uncapped.
@@ -452,11 +582,123 @@ describe("OrganizationBudgetsPage", () => {
         request.url.includes(`${API_ROOT}/organizations/me/spend-ceilings`),
     )
     // The scope an admin reaches this page to set, held to the organization's
-    // own first budget.
+    // own first budget. `scope_id` is asserted because the endpoint resolves it
+    // as a uuid: a word standing in for "the organization" is refused, and the
+    // scope type alone cannot tell the two apart (otari-ai#2147).
     expect(posted?.body).toMatchObject({
       scope_type: "organization",
+      scope_id: organization().id,
       budget_id: organizationBudget().budget_id,
     })
+  })
+
+  it("creates a ceiling against the workspace that was picked", async () => {
+    // The other half of the target control. Both options carry a real id, so
+    // the one guard against them being swapped is that each posts its own.
+    const requests = mockApi()
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole("grid", { name: "Organization spend ceilings" })
+
+    await user.click(screen.getByRole("button", { name: "Add ceiling" }))
+    await user.click(screen.getByRole("button", { name: /Capping/ }))
+    await user.click(
+      await screen.findByRole("option", { name: "Engineering (workspace)" }),
+    )
+    await user.click(
+      screen
+        .getAllByRole("button", { name: "Add ceiling" })
+        .at(-1) as HTMLElement,
+    )
+
+    await waitFor(() => {
+      const posted = requests.find(
+        (request) =>
+          request.method === "POST" &&
+          request.url.includes(`${API_ROOT}/organizations/me/spend-ceilings`),
+      )
+      expect(posted?.body).toMatchObject({
+        scope_type: "workspace",
+        scope_id: workspace().id,
+      })
+    })
+  })
+
+  it("seeds the new organization after a switch, not the one it opened on", async () => {
+    // The dialog seeds its target on mount and this page is not remounted by a
+    // switch, so without the organization in its key the next open would post
+    // the previous organization's id, which is not among the options it offers
+    // and submits as a workspace.
+    const requests = mockApi()
+    const user = userEvent.setup()
+    const { switchTo } = renderPage()
+    await screen.findByRole("grid", { name: "Organization spend ceilings" })
+    await user.click(screen.getByRole("button", { name: "Add ceiling" }))
+    await screen.findByRole("dialog", { name: "New spend ceiling" })
+
+    const moved = organization({
+      id: "77777777-7777-7777-7777-777777777777",
+      name: "Second Organization",
+    })
+    switchTo(admin({ organization: moved }))
+
+    // The frame opened on the previous organization is gone, so this is a fresh
+    // open against the new one.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "New spend ceiling" }),
+      ).toBeNull(),
+    )
+    await user.click(screen.getByRole("button", { name: "Add ceiling" }))
+    await screen.findByRole("dialog", { name: "New spend ceiling" })
+    await user.click(
+      screen
+        .getAllByRole("button", { name: "Add ceiling" })
+        .at(-1) as HTMLElement,
+    )
+
+    await waitFor(() => {
+      const posted = requests.find(
+        (request) =>
+          request.method === "POST" &&
+          request.url.includes(`${API_ROOT}/organizations/me/spend-ceilings`),
+      )
+      expect(posted?.body).toMatchObject({
+        scope_type: "organization",
+        scope_id: moved.id,
+      })
+    })
+  })
+
+  it("drops an open edit when the organization changes under it", async () => {
+    // `editing` and `pendingDelete` hold rows, not ids, and a switch leaves this
+    // page mounted. Without the reset the frame stays open naming a ceiling from
+    // the organization the reader has just left, and saving PATCHes an id the
+    // new organization does not own.
+    const requests = mockApi({ ceilings: [spendCeiling()] })
+    const user = userEvent.setup()
+    const { switchTo } = renderPage()
+    const table = await screen.findByRole("grid", {
+      name: "Organization spend ceilings",
+    })
+    await user.click(await within(table).findByRole("button", { name: "Edit" }))
+    await screen.findByRole("dialog", { name: "Edit spend ceiling" })
+
+    switchTo(
+      admin({
+        organization: organization({
+          id: "77777777-7777-7777-7777-777777777777",
+          name: "Second Organization",
+        }),
+      }),
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Edit spend ceiling" }),
+      ).toBeNull(),
+    )
+    expect(requests.some((request) => request.method === "PATCH")).toBe(false)
   })
 
   it("offers an unnamed budget by what it caps, without saying the figure twice", async () => {

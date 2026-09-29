@@ -19,13 +19,24 @@ land and is not reproducible on demand.
 """
 
 import asyncio
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
 
+from gateway import main as gateway_main
+from gateway.container import build_container
 from gateway.core.config import GatewayConfig
-from gateway.main import _REFRESHER_STOP_TIMEOUT_SECONDS, _create_lifespan, _stop_refresher, _stop_refreshers
+from gateway.main import (
+    _LIFESPAN_WORKERS,
+    _REFRESHER_STOP_TIMEOUT_SECONDS,
+    _create_lifespan,
+    _start_lifespan_workers,
+    _stop_refresher,
+    _stop_refreshers,
+)
 
 
 async def _absorbs_cancellation() -> None:
@@ -149,9 +160,122 @@ async def test_lifespan_shutdown_completes_despite_a_stuck_refresher(
     lifespan = _create_lifespan()
     app = FastAPI()
     app.state.config = config
+    app.state.enabled_features = ()
+    # create_app would have put the container here. It is built with the config
+    # because the file store binding reads it, and the first-run key is minted
+    # through its bound key format.
+    app.state.container = build_container(config=config)
 
     # No asyncio.timeout wrapper: if shutdown regresses this hangs, and the
     # suite-wide pytest timeout reports it. A short bound here would be
     # indistinguishable from the fix under test.
     async with lifespan(app):
         pass
+
+
+def _recording_refresher(name: str, started: list[str]) -> Callable[..., Coroutine[Any, Any, None]]:
+    """A stand-in refresher that records when it is called, not when it is awaited.
+
+    Recording at call time lets a caller cancel the task before the loop runs it,
+    so a real refresher that slipped through fails an assertion rather than
+    hanging on its own sleep.
+    """
+
+    async def _noop() -> None:
+        return None
+
+    def _start(*_args: Any, **_kwargs: Any) -> Coroutine[Any, Any, None]:
+        started.append(name)
+        return _noop()
+
+    return _start
+
+
+async def _started_worker_names(config: GatewayConfig, monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[str]]:
+    """Start the registry against stand-in refreshers, then stop it.
+
+    Returns the worker names that started, and the refreshers they called.
+    """
+    called: list[str] = []
+    for attribute in dir(gateway_main):
+        if attribute.startswith("run_"):
+            monkeypatch.setattr(gateway_main, attribute, _recording_refresher(attribute, called))
+
+    workers = _start_lifespan_workers(config, build_container(config=config))
+    for task, _worker in workers:
+        task.cancel()
+    await asyncio.gather(*(task for task, _worker in workers), return_exceptions=True)
+    return [worker.name for _task, worker in workers], called
+
+
+def _full_config(**overrides: Any) -> GatewayConfig:
+    """A config every conditional worker starts under, so one that does not is the finding.
+
+    Each ``and no other`` assertion below compares against the whole registry,
+    which only means anything from a baseline that turns nothing off: a worker
+    gated on a setting this config leaves unset would look like a worker the
+    change under test dropped.
+    """
+    return GatewayConfig(master_key="sk-test-master", sandbox_url="http://sandbox:8080", **overrides)
+
+
+@pytest.mark.asyncio
+async def test_every_worker_looks_its_refresher_up_when_it_starts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A registry entry must resolve its refresher in ``gateway.main``, not hold it.
+
+    The root conftest substitutes refreshers by that name to keep the unit suite
+    off the network. An entry holding the function object would keep calling the
+    original, and the substitution would silently do nothing.
+    """
+    names, called = await _started_worker_names(_full_config(), monkeypatch)
+
+    assert names == [worker.name for worker in _LIFESPAN_WORKERS]
+    assert len(called) == len(_LIFESPAN_WORKERS)
+
+
+@pytest.mark.asyncio
+async def test_the_reservation_sweeper_is_the_one_worker_a_setting_turns_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sweeping is opt-out, and opting out must not drop any other worker."""
+    config = _full_config(budget_reservation_sweep_interval_sec=0)
+    names, _called = await _started_worker_names(config, monkeypatch)
+
+    assert "budget reservation sweep" not in names
+    assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "budget reservation sweep"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config",
+    [
+        _full_config(files_sweep_interval_sec=0),
+        _full_config(files_enabled=False),
+    ],
+)
+async def test_the_file_sweeper_stops_with_files_or_its_interval(
+    monkeypatch: pytest.MonkeyPatch, config: GatewayConfig
+) -> None:
+    """Disabling files, or the sweep alone, drops that one worker and no other."""
+    names, _called = await _started_worker_names(config, monkeypatch)
+
+    assert "file retention sweep" not in names
+    assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "file retention sweep"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config",
+    [
+        GatewayConfig(master_key="sk-test-master"),
+        _full_config(sandbox_container_idle_ttl_sec=0),
+    ],
+)
+async def test_the_container_sweeper_stops_without_a_sandbox_or_without_reuse(
+    monkeypatch: pytest.MonkeyPatch, config: GatewayConfig
+) -> None:
+    """Nothing holds a sandbox past its request, so there are no rows to sweep."""
+    names, _called = await _started_worker_names(config, monkeypatch)
+
+    assert "sandbox container sweep" not in names
+    assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "sandbox container sweep"]

@@ -138,10 +138,13 @@ export function ChartLegend({ series }: { series: SeriesDef[] }) {
   if (series.length < 2) return null
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-      {series.map((s) => (
-        <span key={s.key} className="flex items-center gap-1.5 text-caption">
-          <SeriesMarker color={s.color} />
-          {s.label}
+      {series.map((seriesDef) => (
+        <span
+          key={seriesDef.key}
+          className="flex items-center gap-1.5 text-caption"
+        >
+          <SeriesMarker color={seriesDef.color} />
+          {seriesDef.label}
         </span>
       ))}
     </div>
@@ -202,14 +205,14 @@ export function TrendChart({
   xTickInterval?: number
   yTickCount?: number
   onSelectRange?: (startIndex: number, endIndex: number) => void
-  window?: { startIndex: number; endIndex: number } | null
+  window?: { startIndex: number; endIndex: number }
 }) {
-  const [drag, setDrag] = useState<{ start: number; end: number } | null>(null)
+  const [drag, setDrag] = useState<{ start: number; end: number }>()
   // Mirror for the commit handlers: mouseup can fire before the last
   // mousemove's setState has re-rendered, and committing from the stale closure
   // would snap to the previous bucket.
   const dragRef = useRef(drag)
-  const setDragBoth = (next: { start: number; end: number } | null) => {
+  const setDragBoth = (next?: { start: number; end: number }) => {
     dragRef.current = next
     setDrag(next)
   }
@@ -223,7 +226,7 @@ export function TrendChart({
 
   const commit = () => {
     const range = dragRef.current
-    setDragBoth(null)
+    setDragBoth(undefined)
     if (!range || !onSelectRange || range.start === range.end) return
     // Clamp like the window prop below: the indices were captured from a
     // previous render's tooltip state, and a background refetch landing
@@ -234,7 +237,7 @@ export function TrendChart({
     onSelectRange(lo, hi)
   }
 
-  const selectable = Boolean(onSelectRange) && data.length > 1
+  const isSelectable = Boolean(onSelectRange) && data.length > 1
   const dimmed =
     windowRange && data.length > 0
       ? {
@@ -252,16 +255,16 @@ export function TrendChart({
     // (presets, zoom buttons, the Activity pan rail).
     // biome-ignore lint/a11y/useAriaPropsSupportedByRole: both roles this switches between support aria-label; the rule cannot evaluate the condition
     <div
-      role={selectable ? "group" : "img"}
+      role={isSelectable ? "group" : "img"}
       aria-label={ariaLabel}
-      className={`w-full touch-pan-y select-none ${selectable ? "cursor-crosshair" : ""}`}
+      className={`w-full touch-pan-y select-none ${isSelectable ? "cursor-crosshair" : ""}`}
     >
       <ResponsiveContainer width="100%" height={height}>
         <BarChart
           data={data}
           margin={{ top: 4, right: 0, left: 0, bottom: 0 }}
           onMouseDown={(state) => {
-            if (!selectable) return
+            if (!isSelectable) return
             const index = toIndex(state)
             if (index !== null) setDragBoth({ start: index, end: index })
           }}
@@ -273,7 +276,7 @@ export function TrendChart({
           onMouseUp={commit}
           onMouseLeave={commit}
           onTouchStart={(state) => {
-            if (!selectable) return
+            if (!isSelectable) return
             const index = toIndex(state)
             if (index !== null) setDragBoth({ start: index, end: index })
           }}
@@ -314,13 +317,13 @@ export function TrendChart({
               />
             }
           />
-          {series.map((s) => (
+          {series.map((seriesDef) => (
             <Bar
-              key={s.key}
-              dataKey={s.key}
-              name={s.label}
+              key={seriesDef.key}
+              dataKey={seriesDef.key}
+              name={seriesDef.label}
               stackId="stack"
-              fill={s.color}
+              fill={seriesDef.color}
               stroke="var(--color-surface)"
               strokeWidth={series.length > 1 ? 1 : 0}
               // Square, always. Rounding the data end of a single-series bar

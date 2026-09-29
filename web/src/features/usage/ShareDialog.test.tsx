@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { UsageGroupRow, UsageTotals } from "@/client"
 import { usageTotals } from "@/tests/fixtures"
+import { getModalBackdrop } from "@/tests/modal"
 import { ShareDialog } from "./ShareDialog"
 
 // jsdom has no canvas, so the rasterizer cannot run for real here; mocked so the
@@ -54,7 +55,7 @@ const rows: UsageGroupRow[] = [
   },
 ]
 
-function renderDialog() {
+function renderDialog(onClose: () => void = () => undefined) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -69,7 +70,7 @@ function renderDialog() {
         startIso="2026-07-29T00:00:00Z"
         endIso="2026-08-11T00:00:00Z"
         isStale={false}
-        onClose={() => undefined}
+        onClose={onClose}
       />
     </QueryClientProvider>,
   )
@@ -130,17 +131,55 @@ describe("ShareDialog", () => {
     renderDialog()
     // An earlier draft had both a preset row and a "lead with" row, which produced
     // two different buttons named "Spend".
-    const names = screen.getAllByRole("button").map((b) => b.textContent)
+    // The label, not the text: the frame's own close control and react-aria's
+    // injected dismiss are both icon-only, so textContent is empty for both and
+    // says they collide when their names do not.
+    const names = screen
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent)
     expect(new Set(names).size).toBe(names.length)
   })
 
   it("presents as a modal dialog overlay, not an inline card", () => {
     renderDialog()
-    const dialog = screen.getByRole("alertdialog")
+    const dialog = screen.getByRole("dialog", {
+      name: "Share this view as an image",
+    })
     expect(dialog).toBeInTheDocument()
+    // The preview and its controls sit side by side, which is what the widest
+    // of the shared dialog sizes exists for.
+    expect(dialog).toHaveClass("otari-dialog--xl")
     expect(
       within(dialog).getByRole("button", { name: "Download PNG" }),
     ).toBeInTheDocument()
+  })
+
+  // Nothing here is lost by closing: the card is regenerated from the page's
+  // own filters next time, so the frame keeps the dismissals every dialog has.
+  it.each([
+    [
+      "Escape",
+      async (user: ReturnType<typeof userEvent.setup>) =>
+        user.keyboard("{Escape}"),
+    ],
+    [
+      "a backdrop click",
+      async (user: ReturnType<typeof userEvent.setup>) =>
+        user.click(getModalBackdrop()),
+    ],
+    [
+      "the frame's own close control",
+      async (user: ReturnType<typeof userEvent.setup>) =>
+        user.click(screen.getByRole("button", { name: "Close" })),
+    ],
+  ])("dismisses on %s", async (_name, dismiss) => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    renderDialog(onClose)
+
+    await dismiss(user)
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 
   it("carries no window or filter control: data scope comes from the page", () => {

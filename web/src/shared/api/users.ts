@@ -7,24 +7,10 @@ import type {
   User,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
+import { fetchAllRows } from "@/shared/api/paging"
 import { BUDGETS, KEYS, USAGE, USERS } from "@/shared/api/queryKeys"
 
-const USERS_PAGE_SIZE = 1000
-const USERS_MAX_PAGES = 100
-
-async function fetchAllUsers(): Promise<User[]> {
-  const all: User[] = []
-  for (let page = 0; page < USERS_MAX_PAGES; page += 1) {
-    const rows = await apiFetch<User[]>(
-      `/users?skip=${page * USERS_PAGE_SIZE}&limit=${USERS_PAGE_SIZE}`,
-    )
-    all.push(...rows)
-    if (rows.length < USERS_PAGE_SIZE) {
-      break
-    }
-  }
-  return all
-}
+const fetchAllUsers = () => fetchAllRows<User>("/users")
 
 // Gated for the same reason as `useBudgets` above.
 export function useUsers(enabled = true) {

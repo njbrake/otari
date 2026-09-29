@@ -15,23 +15,32 @@ import pytest
 from fastapi import APIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.adapters.api_key_format_adapter import DefaultApiKeyFormatAdapter
 from gateway.adapters.billing_adapter import NullBillingAdapter
 from gateway.adapters.entitlement_adapter import BaseEntitlementAdapter
+from gateway.adapters.file_storage_adapter import LocalDirFileStore
 from gateway.adapters.growth_signal_adapter import NullGrowthSignalAdapter
 from gateway.adapters.identity_provider_adapter import RosterIdentityProviderAdapter
+from gateway.adapters.mcp_server_adapter import RemoteMcpServers
 from gateway.adapters.model_provider_adapter import SelfHostedModelProviderAdapter
 from gateway.adapters.telemetry_storage_adapter import DatabaseTelemetryStorageAdapter
 from gateway.container import (
     BootstrapError,
     Container,
+    ContainerError,
     PortNotBoundError,
+    PortShapeError,
     RouterContribution,
     build_container,
 )
+from gateway.core.config import GatewayConfig
+from gateway.ports.api_key_format_port import ApiKeyFormatPort
 from gateway.ports.billing_port import BillingPort
 from gateway.ports.entitlement_port import EntitlementPort
+from gateway.ports.file_storage_port import FileStoragePort
 from gateway.ports.growth_signal_port import GrowthSignalPort
 from gateway.ports.identity_provider_port import IdentityProviderPort
+from gateway.ports.mcp_server_port import McpServerPort
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.ports.telemetry_storage_port import TelemetryStoragePort
 
@@ -90,6 +99,7 @@ def test_core_defaults_are_bound_for_every_port() -> None:
     assert isinstance(container.resolve(GrowthSignalPort, NO_SESSION), NullGrowthSignalAdapter)
     assert isinstance(container.resolve(TelemetryStoragePort, NO_SESSION), DatabaseTelemetryStorageAdapter)
     assert isinstance(container.resolve(IdentityProviderPort, NO_SESSION), RosterIdentityProviderAdapter)
+    assert isinstance(container.resolve(ApiKeyFormatPort, NO_SESSION), DefaultApiKeyFormatAdapter)
 
 
 def test_no_selector_contributes_no_routers_and_says_so() -> None:
@@ -106,6 +116,45 @@ def test_no_selector_contributes_no_routers_and_says_so() -> None:
         TelemetryStoragePort,
     ):
         assert port.__name__ in container.summary
+
+
+def test_file_storage_resolves_to_one_store_for_the_whole_container(tmp_path: Path) -> None:
+    """The retention sweep reclaims the bytes the request path wrote, so both get one store."""
+    container = build_container(config=GatewayConfig(files_backend="local", files_local_dir=str(tmp_path)))
+
+    store = container.resolve(FileStoragePort, NO_SESSION)
+
+    assert isinstance(store, LocalDirFileStore)
+    assert container.resolve(FileStoragePort, NO_SESSION) is store
+
+
+def test_file_storage_refuses_a_container_built_without_config() -> None:
+    """With no config there is no ``files_backend`` to honor, so resolving says so."""
+    container = build_container()
+
+    with pytest.raises(ContainerError, match="FileStoragePort"):
+        container.resolve(FileStoragePort, NO_SESSION)
+
+
+def test_mcp_servers_refuse_a_deployment_that_holds_the_rows_and_has_no_session() -> None:
+    """A deployment reading its own rows cannot do so without the request's session.
+
+    The refusal is a wiring fault rather than a failed resolve, so it must not
+    reach a caller as this deployment's MCP resolution error.
+    """
+    container = build_container(config=GatewayConfig())
+
+    with pytest.raises(ValueError, match="a session is required"):
+        container.resolve(McpServerPort, NO_SESSION)
+
+
+def test_mcp_servers_need_no_session_where_a_peer_holds_the_rows() -> None:
+    """A deployment with a peer reads no rows of its own, so it is built without one."""
+    container = build_container(
+        config=GatewayConfig(mode="hybrid", platform={"base_url": "http://platform.test/api/v1"})
+    )
+
+    assert isinstance(container.resolve(McpServerPort, NO_SESSION), RemoteMcpServers)
 
 
 def test_resolve_refuses_a_port_nothing_bound() -> None:
@@ -169,6 +218,38 @@ def register(container: Container) -> None:
     assert not isinstance(entitlements, BaseEntitlementAdapter)
     assert [contribution.capability for contribution in container.router_contributions()] == ["probe"]
     assert container.summary == ("probe_bootstrap:register rebound EntitlementPort, contributed routers for probe")
+
+
+def test_a_bootstrap_binding_an_adapter_of_the_wrong_shape_fails_at_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An adapter written against an older port fails the boot, not the first request that reaches it."""
+    _write_bootstrap(
+        tmp_path,
+        monkeypatch,
+        "stale_bootstrap",
+        """
+from gateway.ports.model_provider_port import ModelProviderPort
+
+
+class StaleModelProvider:
+    def __init__(self, session):
+        self.session = session
+
+    async def resolve_hosted_credential(self, **kwargs):
+        return None
+
+    async def get_hosted_providers(self, **kwargs):
+        return frozenset()
+
+
+def register(container):
+    container.bind(ModelProviderPort, StaleModelProvider)
+""",
+    )
+
+    with pytest.raises(PortShapeError, match="StaleModelProvider, bound to ModelProviderPort, lacks get_hosted_models"):
+        build_container("stale_bootstrap:register")
 
 
 def test_bootstrap_that_rebinds_nothing_leaves_the_core_defaults(

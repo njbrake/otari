@@ -25,7 +25,7 @@ from gateway.api import deps
 from gateway.api.routes import auth_session as auth_session_route
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.main import create_app
-from gateway.models.entities import DashboardSession
+from gateway.models.tenancy import DashboardSession
 from gateway.services import dashboard_session_service, master_key_service
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME
 from gateway.services.tenancy.provisioning_service import BOOTSTRAP_IDENTITY_KEY
@@ -33,11 +33,12 @@ from gateway.services.tenancy.provisioning_service import BOOTSTRAP_IDENTITY_KEY
 MASTER_KEY = "sk-test-master"
 
 
-def _config(tmp_path: Path) -> GatewayConfig:
+def _config(tmp_path: Path, **overrides: object) -> GatewayConfig:
     return GatewayConfig(
         database_url=f"sqlite:///{tmp_path / 'session-test.db'}",
         master_key=MASTER_KEY,
         require_pricing=False,
+        **overrides,  # type: ignore[arg-type]
     )
 
 
@@ -116,6 +117,35 @@ def test_cross_site_requests_cannot_ride_the_cookie(tmp_path: Path) -> None:
         assert client.get(f"{API_ROOT}/settings", headers={"Sec-Fetch-Site": "same-origin"}).status_code == 200
 
 
+def test_a_sibling_host_cannot_ride_the_cookie_unless_it_is_a_listed_origin(tmp_path: Path) -> None:
+    # A dashboard an edge serves from a sibling of this process is same-site
+    # to it, which SameSite=Strict lets through. Only an origin the operator
+    # listed for CORS is admitted; every other sibling stays refused, and so
+    # does a same-site request that names no origin at all.
+    listed = "https://app.example.com"
+    with TestClient(create_app(_config(tmp_path, cors_allow_origins=[listed]))) as client:
+        _sign_in(client)
+        same_site = {"Sec-Fetch-Site": "same-site"}
+        assert client.get(f"{API_ROOT}/settings", headers={**same_site, "Origin": listed}).status_code == 200
+        other = client.get(f"{API_ROOT}/settings", headers={**same_site, "Origin": "https://other.example.com"})
+        assert other.status_code == 401
+        assert client.get(f"{API_ROOT}/settings", headers=same_site).status_code == 401
+
+
+def test_a_wildcard_cors_entry_admits_no_sibling_host(tmp_path: Path) -> None:
+    with TestClient(create_app(_config(tmp_path, cors_allow_origins=["*"]))) as client:
+        _sign_in(client)
+        headers = {"Sec-Fetch-Site": "same-site", "Origin": "https://app.example.com"}
+        assert client.get(f"{API_ROOT}/settings", headers=headers).status_code == 401
+
+
+def test_with_no_listed_origin_a_sibling_host_stays_refused(tmp_path: Path) -> None:
+    with TestClient(create_app(_config(tmp_path))) as client:
+        _sign_in(client)
+        headers = {"Sec-Fetch-Site": "same-site", "Origin": "https://app.example.com"}
+        assert client.get(f"{API_ROOT}/settings", headers=headers).status_code == 401
+
+
 def test_sign_out_revokes_the_session_server_side(tmp_path: Path) -> None:
     with TestClient(create_app(_config(tmp_path))) as client:
         _sign_in(client)
@@ -135,9 +165,7 @@ def test_sign_out_without_a_session_is_a_no_op(tmp_path: Path) -> None:
         assert client.delete(f"{API_ROOT}/auth/session").status_code == 204
 
 
-def test_sign_out_clears_the_cookie_even_when_revocation_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sign_out_clears_the_cookie_even_when_revocation_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A DB failure during revocation must not leave the browser holding a live
     # cookie: sign-out stays best-effort (204 + cookie cleared) and the
     # unrevoked session dies on its TTL.
@@ -151,7 +179,7 @@ def test_sign_out_clears_the_cookie_even_when_revocation_fails(
         assert response.status_code == 204
         set_cookie = response.headers.get("set-cookie", "")
         assert SESSION_COOKIE_NAME in set_cookie
-        assert 'expires=' in set_cookie.lower() or "max-age=0" in set_cookie.lower()
+        assert "expires=" in set_cookie.lower() or "max-age=0" in set_cookie.lower()
 
 
 def test_expired_sessions_stop_authenticating(tmp_path: Path) -> None:
@@ -415,7 +443,9 @@ def test_the_cookie_still_reads_the_catalog(tmp_path: Path) -> None:
     These describe the deployment instead of acting on it: no provider call, no
     write, no billing, so ``verify_catalog_reader`` admits the cookie where the
     plane around it does not. Asserted here beside the refusal above, because the
-    two are one decision and a change to either should have to look at both.
+    two are one decision and a change to either should have to look at both. The
+    built-in guardrail catalog is the one an organization's own form reads rather
+    than a page of the operator's, and it is on this plane for the same reasons.
     """
     with TestClient(create_app(_config(tmp_path))) as client:
         _sign_in(client)
@@ -423,6 +453,7 @@ def test_the_cookie_still_reads_the_catalog(tmp_path: Path) -> None:
         assert client.get(f"{API_ROOT}/models").status_code == 200
         assert client.get(f"{API_ROOT}/pricing").status_code == 200
         assert client.get(f"{API_ROOT}/tools").status_code == 200
+        assert client.get(f"{API_ROOT}/tool-settings/guardrails/catalog").status_code == 200
 
 
 def test_the_request_plane_still_refuses_anonymous_and_cross_site_callers(tmp_path: Path) -> None:
@@ -531,9 +562,7 @@ def test_reactivating_the_identity_does_not_restore_its_old_sessions(tmp_path: P
         assert client.get(f"{API_ROOT}/settings").status_code == 401
 
 
-def test_a_failed_revocation_still_answers_401_rather_than_503(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_failed_revocation_still_answers_401_rather_than_503(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The cleanup is best-effort, and a failed one must not change the answer.
 
     A deactivated identity's sessions are deleted on the read that refuses
@@ -565,9 +594,7 @@ def test_a_failed_revocation_still_answers_401_rather_than_503(
         assert client.get(f"{API_ROOT}/settings").status_code == 401
 
 
-def test_a_failed_revocation_leaves_the_request_session_alone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_failed_revocation_leaves_the_request_session_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The revocation writes on its own session, not the caller's.
 
     ``_bump_last_used_at`` is the precedent: a best-effort write on the auth

@@ -26,9 +26,9 @@ from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from mcp.types import CallToolResult, TextContent
 
+from conftest import InstallControlPlane
 from gateway import log_config
 from gateway.api.deps import reset_config
-from gateway.api.routes import _platform as platform_module
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.database import reset_db
 from gateway.main import create_app
@@ -104,7 +104,7 @@ class _Platform:
 
 
 @pytest.fixture
-def platform(monkeypatch: pytest.MonkeyPatch) -> _Platform:
+def platform(monkeypatch: pytest.MonkeyPatch, control_plane_transport: InstallControlPlane) -> _Platform:
     fake = _Platform()
 
     async def post(*, url: str, headers: dict[str, str], body: dict[str, Any], timeout_seconds: float) -> Any:
@@ -115,7 +115,7 @@ def platform(monkeypatch: pytest.MonkeyPatch) -> _Platform:
             return httpx.Response(fake.status_code, content=b"{")
         return httpx.Response(fake.status_code, json=fake.payload(), headers=response_headers)
 
-    monkeypatch.setattr(platform_module, "_post_platform", post)
+    control_plane_transport(post)
     return fake
 
 
@@ -204,7 +204,7 @@ def test_the_request_id_is_returned_on_success_without_touching_the_result(
     """The successful body stays the native MCP result, so the id rides a header."""
     response = client.post(f"{API_ROOT}/mcp/execute", headers=USER_AUTH, json=_body())
 
-    assert response.headers["X-Otari-Request-ID"]
+    assert response.headers["Otari-Request-ID"]
     assert "request_id" not in response.json()
 
 
@@ -280,6 +280,30 @@ def test_an_unauthenticated_request_reaches_neither_platform_nor_server(
         "execution_state": "not_started",
     }
     assert platform.bodies == []
+    assert session.calls == []
+
+
+def test_a_user_token_for_another_region_is_misdirected_without_the_host(
+    client: TestClient,
+    platform: _Platform,
+    session: _FakeSession,
+) -> None:
+    """The platform's 421 keeps its status and gets this contract's own code.
+
+    The host the platform's detail named is dropped with the detail (R-ERR-1);
+    a caller learns it from any endpoint outside this contract.
+    """
+    platform.status_code = 421
+
+    response = client.post(f"{API_ROOT}/mcp/execute", headers=USER_AUTH, json=_body())
+
+    assert response.status_code == 421, response.text
+    assert _error(response) == {
+        "detail": "This API key belongs to another deployment",
+        "code": "misdirected_request",
+        "execution_state": "not_started",
+    }
+    assert "refused" not in response.text
     assert session.calls == []
 
 
@@ -661,9 +685,7 @@ def test_an_oversized_result_is_an_unknown_outcome(
     platform: _Platform,
     session: _FakeSession,
 ) -> None:
-    session.result = CallToolResult(
-        content=[TextContent(type="text", text="x" * (mcp_stateless.RESULT_MAX_BYTES + 1))]
-    )
+    session.result = CallToolResult(content=[TextContent(type="text", text="x" * (mcp_stateless.RESULT_MAX_BYTES + 1))])
 
     response = client.post(f"{API_ROOT}/mcp/execute", headers=USER_AUTH, json=_body())
 
@@ -708,9 +730,11 @@ def test_a_capacity_refusal_is_the_only_failure_that_invites_a_retry(
     async def hold_the_only_slot() -> Any:
         async with gate.slot():
             return await asyncio.to_thread(
-                lambda: client.post(path, headers=USER_AUTH, json=_body())
-                if path.endswith("execute")
-                else client.get(path, headers=USER_AUTH)
+                lambda: (
+                    client.post(path, headers=USER_AUTH, json=_body())
+                    if path.endswith("execute")
+                    else client.get(path, headers=USER_AUTH)
+                )
             )
 
     response = asyncio.run(hold_the_only_slot())
