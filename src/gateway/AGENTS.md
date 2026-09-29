@@ -277,7 +277,8 @@ where one exists.
 ## Usage filters
 
 Usage list, count, series, and bulk mutation must share filter semantics through
-`core/sql.py` and the usage services. Every visible filter belongs on
+`core/sql.py`, `core/usage_filters.py` (the search and `UsageRefinements`, which
+`UsageSelection` inherits), and the usage services. Every visible filter belongs on
 `UsageSelection` with the same scalar-or-list shape and
 `MAX_FILTER_VALUES` bound.
 
