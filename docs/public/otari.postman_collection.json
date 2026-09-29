@@ -10462,6 +10462,39 @@
     {
       "item": [
         {
+          "name": "Get Workspace Budget",
+          "request": {
+            "description": "Return the workspace's own spend ceiling for the current period, or null when it has none.\n\nAny member of the workspace may read it, as may an organization owner or\nadmin; a workspace the caller cannot see is not found. ``spent`` is settled\nspend plus holds in flight, what the gate enforces against.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                ":workspace_id",
+                "budget"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/budget",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "workspace_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "workspace-budget"
+    },
+    {
+      "item": [
+        {
           "name": "Get Workspace Code Execution Policy",
           "request": {
             "description": "Read a workspace's code-execution policy.\n\nTakes the same role as setting it (an organization owner/admin, or an\nowner/admin of this workspace), because the policy describes the\nworkspace's security and billing posture rather than one member's\nallowance. A workspace with no policy answers with the unconfigured one\n(``configured: false``), which is the deployment's own behavior described\nin the same shape rather than a 404.",
@@ -10903,6 +10936,183 @@
         }
       ],
       "name": "workspace-member-budget-policies"
+    },
+    {
+      "item": [
+        {
+          "name": "List Saved Views",
+          "request": {
+            "description": "List the views the caller may open on a page: their own first, then those shared with the workspace.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                ":workspace_id",
+                "saved-views"
+              ],
+              "query": [
+                {
+                  "description": "The dashboard page the views belong to.",
+                  "disabled": false,
+                  "key": "page",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "skip",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "limit",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/saved-views?page=&skip=&limit=",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "workspace_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Saved View",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"page\": \"string\",\n  \"name\": \"string\",\n  \"query\": \"string\"\n}"
+            },
+            "description": "Save a view. Sharing it with the workspace needs someone who manages the workspace.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                ":workspace_id",
+                "saved-views"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/saved-views",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "workspace_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Saved View",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"name\": \"string\",\n  \"query\": \"string\",\n  \"shared\": false\n}"
+            },
+            "description": "Rename, re-save or re-share one of the caller's own views.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                ":workspace_id",
+                "saved-views",
+                ":view_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/saved-views/:view_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "path parameter",
+                  "key": "view_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Saved View",
+          "request": {
+            "description": "Delete one of the caller's views, or a shared one when they manage the workspace.",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                ":workspace_id",
+                "saved-views",
+                ":view_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/saved-views/:view_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "path parameter",
+                  "key": "view_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "saved-views"
     },
     {
       "item": [

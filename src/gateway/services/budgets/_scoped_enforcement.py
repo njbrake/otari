@@ -32,7 +32,7 @@ from gateway.models.budgets import (
     ScopedBudget,
 )
 from gateway.models.tenancy import OrganizationMember, Workspace, WorkspaceMember
-from gateway.services.budgets._periods import period_window
+from gateway.services.budgets._periods import as_utc, rolled_window
 from gateway.services.workspace_scope import resolve_workspace_id
 
 if TYPE_CHECKING:
@@ -107,17 +107,6 @@ class ApplicableBudget:
     def subject(self) -> str:
         """The scope's name in a refusal message."""
         return _SCOPE_SUBJECT.get(self.scope_type, "Budget")
-
-
-def _as_utc(value: datetime | None) -> datetime | None:
-    """Read a stored timestamp as UTC.
-
-    SQLite hands datetimes back naive, and comparing one to an aware ``now``
-    raises. A stored value is always the UTC it was written as, so say so.
-    """
-    if value is None or value.tzinfo is not None:
-        return value
-    return value.replace(tzinfo=UTC)
 
 
 def _identity_uuid(user_id: str) -> uuid.UUID | None:
@@ -209,7 +198,7 @@ async def _roll_expired_periods(
     """
     for budget_id, duration, alignment in expired:
         try:
-            window = period_window(now, duration=duration, alignment=alignment)
+            period_start, period_end = rolled_window(now, duration=duration, alignment=alignment)
         except ValueError:
             # Only reachable by a write that went around the API, and the safe
             # direction is to leave the exhausted window in place: not resetting
@@ -220,7 +209,6 @@ async def _roll_expired_periods(
                 alignment,
             )
             continue
-        period_start, period_end = window if window is not None else (now, None)
         await db.execute(
             update(ScopedBudget)
             .where(
@@ -293,7 +281,7 @@ async def applicable_budgets(
     expired = [
         (budget_id, duration, alignment)
         for budget_id, _scope_type, _provider, duration, alignment, period_end, _tokens, _requests in rows
-        if (parsed := _as_utc(period_end)) is not None and now >= parsed
+        if (parsed := as_utc(period_end)) is not None and now >= parsed
     ]
     if expired:
         await _roll_expired_periods(db, expired, now)

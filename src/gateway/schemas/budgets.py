@@ -7,6 +7,7 @@ Responses echo the stored string, so a row that holds an unknown value still rea
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
@@ -429,6 +430,44 @@ class OrganizationScopedBudgetsPublic(BaseModel):
     count: int
 
 
+class WorkspaceSpendPublic(BaseModel):
+    """A workspace's own spend ceiling as any member of the workspace may read it.
+
+    Dollars only, and only the workspace-wide ceiling: no member's personal cap and
+    no other workspace's. ``spent`` is what the gate enforces against, settled
+    spend plus holds still in flight. ``max_budget`` is null when the ceiling's
+    budget caps only tokens or requests.
+    """
+
+    workspace_id: uuid.UUID
+    name: str | None
+    max_budget: float | None
+    spent: float
+    period_start: str | None
+    period_end: str | None
+
+    @classmethod
+    def from_ceiling(
+        cls,
+        workspace_id: uuid.UUID,
+        ceiling: ScopedBudget,
+        budget: Budget,
+        *,
+        spent: float,
+        period_start: datetime | None,
+        period_end: datetime | None,
+    ) -> WorkspaceSpendPublic:
+        """Read a workspace ceiling, with the spend and window the caller derived for now."""
+        return cls(
+            workspace_id=workspace_id,
+            name=ceiling.name,
+            max_budget=as_float(budget.max_budget),
+            spent=spent,
+            period_start=period_start.isoformat() if period_start else None,
+            period_end=period_end.isoformat() if period_end else None,
+        )
+
+
 class WorkspaceMemberBudgetPolicyCreate(BaseModel):
     """Request body for creating a default."""
 
@@ -520,4 +559,5 @@ __all__ = [
     "WorkspaceMemberBudgetPolicyCreate",
     "WorkspaceMemberBudgetPolicyPublic",
     "WorkspaceMemberBudgetPolicyUpdate",
+    "WorkspaceSpendPublic",
 ]

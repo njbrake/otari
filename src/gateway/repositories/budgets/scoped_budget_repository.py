@@ -139,6 +139,17 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             .execution_options(synchronize_session=False)
         )
 
+    async def for_scope(
+        self, scope_type: ScopeType, scope_id: str, provider_key_id: str | None
+    ) -> tuple[ScopedBudget, Budget] | None:
+        """Return the ceiling capping this scope for this provider, with the budget it names, or None."""
+        result = await self.db.execute(
+            select(ScopedBudget, Budget)
+            .join(Budget, Budget.budget_id == ScopedBudget.budget_id)
+            .where(_scope_match(scope_type, scope_id, provider_key_id))
+        )
+        return result.tuples().first()
+
     async def has_ceiling(self, scope_type: ScopeType, scope_id: str, provider_key_id: str | None) -> bool:
         """Report whether a ceiling caps this scope for this provider, where None means every provider."""
         return await self._exists(_scope_match(scope_type, scope_id, provider_key_id))

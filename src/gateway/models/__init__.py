@@ -20,6 +20,7 @@ from gateway.models import (  # noqa: F401
     provider_keys,
     providers,
     routing,
+    saved_views,
     tenancy,
     tools,
     usage,

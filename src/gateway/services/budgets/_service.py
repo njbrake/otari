@@ -1,3 +1,6 @@
+import uuid
+from datetime import UTC, datetime
+
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.tenancy import User
 from gateway.repositories.budgets import BudgetRepositories
@@ -10,11 +13,13 @@ from gateway.schemas.budgets import (
     OrganizationScopedBudgetPublic,
     OrganizationScopedBudgetsPublic,
     OrganizationScopedBudgetUpdate,
+    WorkspaceSpendPublic,
 )
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets._organization_surface import _OrganizationSurface
 from gateway.services.budgets._scopes import ScopeOwnership
-from gateway.services.tenancy.organization_service import OrganizationService
+from gateway.services.budgets._workspace_surface import _WorkspaceSurface
+from gateway.services.tenancy import OrganizationService, WorkspaceService
 
 
 class BudgetService:
@@ -29,9 +34,11 @@ class BudgetService:
         repositories: BudgetRepositories,
         organizations: OrganizationService,
         api_keys: ApiKeyService,
+        workspaces: WorkspaceService,
     ) -> None:
         self._uow = uow
         self._organization = _OrganizationSurface(repositories, ScopeOwnership(organizations, api_keys), organizations)
+        self._workspace = _WorkspaceSurface(repositories, workspaces)
 
     async def create_organization_budget(
         self, *, user: User, request: OrganizationBudgetCreate
@@ -87,6 +94,11 @@ class BudgetService:
         """Relabel a ceiling inside the caller's organization, or point it at another budget the organization owns."""
         async with self._uow:
             return await self._organization.update_ceiling(user=user, ceiling_id=ceiling_id, request=request)
+
+    async def workspace_spend(self, *, user: User, workspace_id: uuid.UUID) -> WorkspaceSpendPublic | None:
+        """Return the workspace's own spend ceiling for any member of it, or None when it has none."""
+        async with self._uow:
+            return await self._workspace.spend(user=user, workspace_id=workspace_id, now=datetime.now(UTC))
 
 
 __all__ = ["BudgetService"]
