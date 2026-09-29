@@ -134,6 +134,8 @@ export type UsageSetPriceRequest = Defaulted<
 export type UsageSetPriceResult = Schemas["UsageSetPriceResult"]
 export type InFlightRequest = Schemas["InFlightEntry"]
 export type InFlightResponse = Schemas["InFlightResponse"]
+export type UsageActivityGroup = Schemas["UsageActivityGroup"]
+export type UsageActivityGroups = Schemas["UsageActivityGroups"]
 
 // The charge lines on a row's `pricing_breakdown`, which carry either a
 // per-million or a per-call rate.
@@ -191,6 +193,14 @@ type SeriesQuery = NonNullable<
   operations["usage-usage_series"]["parameters"]["query"]
 >
 export type UsageGroupBy = NonNullable<SeriesQuery["group_by"]>
+type ListQuery = NonNullable<
+  operations["usage-list_usage"]["parameters"]["query"]
+>
+export type UsageSortKey = NonNullable<ListQuery["sort"]>
+type ActivityGroupsQuery = NonNullable<
+  operations["usage-usage_activity_groups"]["parameters"]["query"]
+>
+export type UsageActivityGroupBy = ActivityGroupsQuery["group_by"]
 
 // `UsageFilters` (`./local`) stays hand-written, because it is a filter set the
 // hooks assemble across five usage endpoints and several of its values go on the
@@ -236,6 +246,8 @@ export type BudgetResetLog = Schemas["BudgetResetLogResponse"]
 // `provider_key_id` holds a provider instance name, so a value for it comes
 // from `ProviderInfo["instance"]`.
 export type ScopedBudget = Schemas["ScopedBudgetResponse"]
+// A workspace's own ceiling, as any member of it may read it.
+export type WorkspaceSpend = Schemas["WorkspaceSpendPublic"]
 export type CreateScopedBudgetRequest = Schemas["CreateScopedBudgetRequest"]
 export type UpdateScopedBudgetRequest = Schemas["UpdateScopedBudgetRequest"]
 export type BudgetScopeType = CreateScopedBudgetRequest["scope_type"]
@@ -667,6 +679,19 @@ export type CreateWorkspaceMcpServerRequest =
   Schemas["WorkspaceMcpServerCreate"]
 export type UpdateWorkspaceMcpServerRequest =
   Schemas["WorkspaceMcpServerUpdate"]
+
+// ---------------------------------------------------------------------------
+// Saved views
+//
+// A dashboard page's query string under a name, per person or shared with the
+// workspace; see `src/gateway/api/routes/saved_views.py`.
+// ---------------------------------------------------------------------------
+export type SavedView = Schemas["SavedViewPublic"]
+export type SavedViews = Schemas["SavedViewsPublic"]
+export type CreateSavedViewRequest = Defaulted<
+  Schemas["SavedViewCreate"],
+  "shared"
+>
 
 // ---------------------------------------------------------------------------
 // Playground

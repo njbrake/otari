@@ -48,20 +48,6 @@ const CONTEXTS: { place: string; keys: string[] }[] = [
     ],
   },
   {
-    place: "otari-activity-table",
-    keys: [
-      "api_key",
-      "cost",
-      "latency",
-      "model",
-      "routing",
-      "status",
-      "time",
-      "tokens",
-      "user",
-    ],
-  },
-  {
     place: "otari-breakdown",
     keys: ["calls", "failed", "requests", "spend", "tokens"],
   },

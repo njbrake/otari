@@ -171,11 +171,9 @@ function toIndex(state: ChartMouseState | null | undefined): number | null {
 // clicking never zoom by accident. Releasing outside the plot commits the
 // selection dragged so far.
 //
-// The y-axis is optional (the compact Activity strip omits it; the caller's
-// caption carries the peak); stacked segments get a hairline surface stroke so
-// adjacent fills always show their boundary. `window` dims buckets outside the
-// active sub-window in place, which is how the Activity strip shows a zoomed
-// selection inside its full extent.
+// The y-axis is optional (a compact strip omits it; the caller's caption carries
+// the peak); stacked segments get a hairline surface stroke so adjacent fills
+// always show their boundary.
 export function TrendChart({
   data,
   series,
@@ -192,7 +190,6 @@ export function TrendChart({
   // Recharts' default is 5. A short strip wants fewer.
   yTickCount,
   onSelectRange,
-  window: windowRange,
 }: {
   data: StackedPoint[]
   series: SeriesDef[]
@@ -205,7 +202,6 @@ export function TrendChart({
   xTickInterval?: number
   yTickCount?: number
   onSelectRange?: (startIndex: number, endIndex: number) => void
-  window?: { startIndex: number; endIndex: number }
 }) {
   const [drag, setDrag] = useState<{ start: number; end: number }>()
   // Mirror for the commit handlers: mouseup can fire before the last
@@ -228,9 +224,9 @@ export function TrendChart({
     const range = dragRef.current
     setDragBoth(undefined)
     if (!range || !onSelectRange || range.start === range.end) return
-    // Clamp like the window prop below: the indices were captured from a
-    // previous render's tooltip state, and a background refetch landing
-    // mid-drag can shrink the series under them.
+    // Clamped: the indices were captured from a previous render's tooltip
+    // state, and a background refetch landing mid-drag can shrink the series
+    // under them.
     const lo = clampIndex(Math.min(range.start, range.end))
     const hi = clampIndex(Math.max(range.start, range.end))
     if (lo === hi) return
@@ -238,21 +234,12 @@ export function TrendChart({
   }
 
   const isSelectable = Boolean(onSelectRange) && data.length > 1
-  const dimmed =
-    windowRange && data.length > 0
-      ? {
-          startIndex: clampIndex(windowRange.startIndex),
-          endIndex: clampIndex(windowRange.endIndex),
-        }
-      : null
-  const showDimming =
-    dimmed !== null && (dimmed.startIndex > 0 || dimmed.endIndex < last)
 
   return (
     // A static chart is an image to AT; one that owns drag selection is not
     // (role="img" would hide the interaction entirely), so it presents as a
     // labeled group instead. Keyboard equivalents live with the callers
-    // (presets, zoom buttons, the Activity pan rail).
+    // (presets, zoom buttons).
     // biome-ignore lint/a11y/useAriaPropsSupportedByRole: both roles this switches between support aria-label; the rule cannot evaluate the condition
     <div
       role={isSelectable ? "group" : "img"}
@@ -334,27 +321,6 @@ export function TrendChart({
               isAnimationActive={false}
             />
           ))}
-          {/* Out-of-window dimming (start side, then end side), under the drag
-              highlight. ReferenceArea x-bounds are category values, so the
-              shading stays glued to its buckets across resizes. */}
-          {showDimming && dimmed && dimmed.startIndex > 0 ? (
-            <ReferenceArea
-              x1={data[0].x}
-              x2={data[dimmed.startIndex - 1].x}
-              fill="var(--color-surface-muted)"
-              fillOpacity={0.75}
-              stroke="none"
-            />
-          ) : null}
-          {showDimming && dimmed && dimmed.endIndex < last ? (
-            <ReferenceArea
-              x1={data[dimmed.endIndex + 1].x}
-              x2={data[data.length - 1].x}
-              fill="var(--color-surface-muted)"
-              fillOpacity={0.75}
-              stroke="none"
-            />
-          ) : null}
           {drag && clampIndex(drag.start) !== clampIndex(drag.end) ? (
             <ReferenceArea
               x1={data[clampIndex(Math.min(drag.start, drag.end))].x}

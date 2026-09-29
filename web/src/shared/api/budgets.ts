@@ -15,6 +15,7 @@ import type {
   UpdateOrganizationBudget,
   UpdateOrganizationSpendCeiling,
   UpdateScopedBudgetRequest,
+  WorkspaceSpend,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
 import { useOrganizationContext } from "@/shared/api/organizations"
@@ -248,6 +249,22 @@ export function useOrganizationSpendCeilings(
       enabled &&
       queryClient.getQueryData<OrganizationContext>(ORGANIZATION_CONTEXT) ===
         context,
+  })
+}
+
+// The workspace's own spend ceiling as any member of it reads it, or null when
+// it has none. Under the ceilings' head so every budget or ceiling write here
+// refreshes it too. Spend moves with traffic, so it is also re-read with the
+// page that shows it.
+export function useWorkspaceSpend(workspaceId: string) {
+  return useQuery({
+    queryKey: [ORGANIZATION_SPEND_CEILINGS, "workspace", workspaceId],
+    queryFn: () =>
+      apiFetch<WorkspaceSpend | null>(
+        `/workspaces/${encodeURIComponent(workspaceId)}/budget`,
+      ),
+    enabled: workspaceId !== "",
+    staleTime: 60_000,
   })
 }
 

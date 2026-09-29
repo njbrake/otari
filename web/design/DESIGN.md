@@ -79,7 +79,7 @@ for a component, not for those.
 | `forms/optionKey` | `optionKey`, `optionValue`. Internal to the two selects |
 | `actions/Button` | `Button`, and the `ButtonVariant` / `ButtonSize` / `ButtonProps` types |
 | `actions/IconButton` | `IconButton` |
-| `actions/ConfirmButton` · `/RefreshButton` · `/CopyButton` | one each |
+| `actions/ConfirmButton` · `/RefreshButton` · `/CopyButton` · `/TextButton` | one each |
 | `actions/CopyField` | `CopyField`, `CopyableValue` |
 | `actions/RowAction` | `RowAction`, `RowActionRow` |
 | `actions/ConfirmRowAction` | `ConfirmRowAction` |

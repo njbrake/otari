@@ -6,7 +6,7 @@ is about the shape of the code inside a feature.
 
 ## File size is a design signal
 
-The largest pages here are past two thousand lines (`features/activity/ActivityPage.tsx`),
+The largest pages here run past fifteen hundred lines (`features/usage/UsagePage.tsx`),
 and their tests are larger still. Nothing about the domains
 requires that: it is what happens when every dialog, row renderer, and derived table lives in
 the file that renders the page.

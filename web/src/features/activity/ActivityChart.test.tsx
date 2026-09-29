@@ -1,0 +1,52 @@
+import { fireEvent, render, screen } from "@testing-library/react"
+import { describe, expect, it, vi } from "vitest"
+
+import { ActivityChart } from "./ActivityChart"
+import type { ChartBar } from "./chartBars"
+
+const HOUR = 3_600_000
+const START = Date.parse("2026-01-15T00:00:00Z")
+const BARS: ChartBar[] = Array.from({ length: 4 }, (_, index) => ({
+  start: START + index * HOUR,
+  end: START + (index + 1) * HOUR,
+  ok: index,
+  failed: index === 2 ? 1 : 0,
+}))
+
+function slider() {
+  return screen.getByRole("slider", { name: /Filter by time/ })
+}
+
+describe("ActivityChart", () => {
+  it("scales the axis to the busiest bar", () => {
+    render(<ActivityChart bars={BARS} span={undefined} onSpan={vi.fn()} />)
+    expect(screen.getByText("3")).toBeInTheDocument()
+  })
+
+  it("picks a stretch from the keyboard: arrows move, Shift extends, Enter applies", () => {
+    const onSpan = vi.fn()
+    render(<ActivityChart bars={BARS} span={undefined} onSpan={onSpan} />)
+    fireEvent.keyDown(slider(), { key: "ArrowLeft" })
+    fireEvent.keyDown(slider(), { key: "ArrowLeft", shiftKey: true })
+    expect(slider()).toHaveAttribute("aria-valuetext", "01:00–03:00")
+    fireEvent.keyDown(slider(), { key: "Enter" })
+    expect(onSpan).toHaveBeenCalledWith({
+      from: BARS[1].start,
+      to: BARS[2].end,
+    })
+  })
+
+  it("clears the span on Escape", () => {
+    const onSpan = vi.fn()
+    render(
+      <ActivityChart
+        bars={BARS}
+        span={{ from: BARS[1].start, to: BARS[1].end }}
+        onSpan={onSpan}
+      />,
+    )
+    expect(slider()).toHaveAttribute("aria-valuetext", "01:00–02:00")
+    fireEvent.keyDown(slider(), { key: "Escape" })
+    expect(onSpan).toHaveBeenCalledWith(undefined)
+  })
+})

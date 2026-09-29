@@ -1,12 +1,16 @@
 import {
   keepPreviousData,
+  useInfiniteQuery,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
 import type {
   InFlightResponse,
   SummaryDimension,
+  UsageActivityGroupBy,
+  UsageActivityGroups,
   UsageBucket,
   UsageCount,
   UsageDeleteResult,
@@ -17,6 +21,7 @@ import type {
   UsageMutationSelection,
   UsageSetPriceRequest,
   UsageSetPriceResult,
+  UsageSortKey,
   UsageSummary,
 } from "@/client"
 import { ApiError, apiFetch, longRequestSignal } from "@/shared/api/client"
@@ -61,6 +66,29 @@ function usageParams(filters: UsageFilters): URLSearchParams {
   if (filters.priced !== undefined) params.set("priced", String(filters.priced))
   if (filters.counts_toward_budget !== undefined) {
     params.set("counts_toward_budget", String(filters.counts_toward_budget))
+  }
+  if (filters.include_absorbed !== undefined) {
+    params.set("include_absorbed", String(filters.include_absorbed))
+  }
+  if (filters.q) params.set("q", filters.q)
+  appendAll("requested_model", filters.requested_model)
+  appendAll("exclude_model", filters.exclude_model)
+  appendAll("exclude_user_id", filters.exclude_user_id)
+  appendAll("exclude_api_key_id", filters.exclude_api_key_id)
+  appendAll("exclude_source", filters.exclude_source)
+  appendAll("exclude_status", filters.exclude_status)
+  appendAll("policy_name", filters.policy_name)
+  appendAll("exclude_policy_name", filters.exclude_policy_name)
+  if (filters.routed !== undefined) params.set("routed", String(filters.routed))
+  appendAll("is_null", filters.is_null)
+  if (filters.tokens_gt !== undefined) {
+    params.set("tokens_gt", String(filters.tokens_gt))
+  }
+  if (filters.cost_gt !== undefined) {
+    params.set("cost_gt", String(filters.cost_gt))
+  }
+  if (filters.latency_ms_gt !== undefined) {
+    params.set("latency_ms_gt", String(filters.latency_ms_gt))
   }
   return params
 }
@@ -119,23 +147,39 @@ export function useUsageScope(scope: UsageScope = "caller"): {
   }
 }
 
+export interface UsageSort {
+  key: UsageSortKey
+  order: "asc" | "desc"
+}
+
+/** The server's own order, so a caller that does not sort sends nothing. */
+export const NEWEST_FIRST: UsageSort = { key: "timestamp", order: "desc" }
+
 // `placeholderData: keepPreviousData` keeps the current page on screen while the
 // next loads, so paging does not flash empty.
 export function useUsageLogs(
   filters: UsageFilters,
   page: number,
   pageSize: number,
+  {
+    sort = NEWEST_FIRST,
+    enabled = true,
+  }: { sort?: UsageSort; enabled?: boolean } = {},
 ) {
   const scope = useUsageScope()
   return useQuery({
-    queryKey: [USAGE, "list", scope.base, filters, page, pageSize],
+    queryKey: [USAGE, "list", scope.base, filters, page, pageSize, sort],
     queryFn: () => {
       const params = usageParams(filters)
       params.set("skip", String(page * pageSize))
       params.set("limit", String(pageSize))
+      if (sort.key !== NEWEST_FIRST.key || sort.order !== NEWEST_FIRST.order) {
+        params.set("sort", sort.key)
+        params.set("order", sort.order)
+      }
       return apiFetch<UsageEntry[]>(`${scope.base}?${params.toString()}`)
     },
-    enabled: scope.isReady,
+    enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
     // The log is a snapshot an operator reads, not a feed. On a busy gateway rows
     // arrive faster than anyone can inspect them, so a page that refetched on its
@@ -145,6 +189,61 @@ export function useUsageLogs(
     // provider's refetch-on-focus default, which is already off (`provider.tsx`).
     // `useLiveUsageCount` is how the page still says that newer rows exist.
     staleTime: 10_000,
+  })
+}
+
+// The log read a batch at a time and kept, for a list that grows as it is
+// scrolled rather than paging: each batch asks only for the rows after the last,
+// and the next is offered while a batch came back full and the rows stay under
+// `maxRows`.
+export function useUsageBatches(
+  filters: UsageFilters,
+  batch: number,
+  maxRows: number,
+  {
+    sort = NEWEST_FIRST,
+    enabled = true,
+  }: { sort?: UsageSort; enabled?: boolean } = {},
+) {
+  const scope = useUsageScope()
+  return useInfiniteQuery({
+    queryKey: [USAGE, "batches", scope.base, filters, batch, sort],
+    queryFn: ({ pageParam }) => {
+      const params = usageParams(filters)
+      params.set("skip", String(pageParam))
+      params.set("limit", String(batch))
+      if (sort.key !== NEWEST_FIRST.key || sort.order !== NEWEST_FIRST.order) {
+        params.set("sort", sort.key)
+        params.set("order", sort.order)
+      }
+      return apiFetch<UsageEntry[]>(`${scope.base}?${params.toString()}`)
+    },
+    initialPageParam: 0,
+    getNextPageParam: (last, _pages, skip) =>
+      last.length === batch && skip + batch < maxRows
+        ? skip + batch
+        : undefined,
+    enabled: enabled && scope.isReady,
+    // A snapshot, as the paged log is (see `useUsageLogs`).
+    staleTime: 10_000,
+  })
+}
+
+// One row by its own id, for a link that opens a request: the row it names is
+// usually not on the page the link lands on. Read only while `id` is set.
+export function useUsageRow(id: string | undefined) {
+  const scope = useUsageScope()
+  return useQuery({
+    queryKey: [USAGE, "row", scope.base, id],
+    queryFn: async () => {
+      const params = new URLSearchParams({ id: id as string })
+      const [row] = await apiFetch<UsageEntry[]>(
+        `${scope.base}?${params.toString()}`,
+      )
+      return row ?? null
+    },
+    enabled: id !== undefined && scope.isReady,
+    staleTime: 30_000,
   })
 }
 
@@ -442,6 +541,119 @@ export function useUsageSummary(
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+  })
+}
+
+// The Activity page's totals line and chart: the series and the totals, and
+// no breakdowns. The 95th-percentile latency sorts the window's latencies, so
+// the server computes it only when asked: the totals line asks, the chart does
+// not. `include_absorbed` is the list's and count's alone, so it is not sent:
+// the totals count earlier failed attempts separately either way.
+export function useActivityTotals(
+  filters: UsageFilters,
+  bucket: UsageBucket,
+  {
+    enabled = true,
+    withP95 = false,
+  }: { enabled?: boolean; withP95?: boolean } = {},
+) {
+  const scope = useUsageScope()
+  const { include_absorbed: _listOnly, ...summaryFilters } = filters
+  return useQuery({
+    queryKey: [
+      USAGE,
+      "summary",
+      "activity",
+      scope.base,
+      summaryFilters,
+      bucket,
+      withP95,
+    ],
+    queryFn: () => {
+      const params = usageParams(summaryFilters)
+      params.set("bucket", bucket)
+      params.append("dimensions", "none")
+      if (withP95) params.set("include_p95", "true")
+      return apiFetch<UsageSummary>(
+        `${scope.base}/summary?${params.toString()}`,
+      )
+    },
+    enabled: enabled && scope.isReady,
+    placeholderData: keepPreviousData,
+    staleTime: 10_000,
+  })
+}
+
+// The first rows of each of several filtered sets, for the groups a grouped
+// log has open. Keyed as `useUsageLogs` keys a first page, so a group's rows and
+// the same filter's list share one cache entry.
+export function useUsagePreviews(
+  filterSets: readonly UsageFilters[],
+  limit: number,
+) {
+  const scope = useUsageScope()
+  return useQueries({
+    queries: filterSets.map((filters) => ({
+      queryKey: [USAGE, "list", scope.base, filters, 0, limit, NEWEST_FIRST],
+      queryFn: () => {
+        const params = usageParams(filters)
+        params.set("limit", String(limit))
+        return apiFetch<UsageEntry[]>(`${scope.base}?${params.toString()}`)
+      },
+      enabled: scope.isReady,
+      staleTime: 10_000,
+    })),
+  })
+}
+
+// The endpoint's own ceiling. A grouping past it says how many groups there
+// were, and the page offers to narrow rather than paging groups.
+export const ACTIVITY_GROUP_LIMIT = 200
+
+// How a column menu asks for its values: busiest first, narrowed by what the
+// menu's search box holds. The grouped log leaves both off, most recent first.
+export type GroupsQuery = { search?: string; order?: "recent" | "requests" }
+
+// The log collapsed to one row per key, session, model, member, policy or alias,
+// with each group's totals: the grouped log, and the values a column menu lists.
+// The previous result stands in only for the same grouping, since another
+// grouping's keys would be read as this one's: model names listed as members.
+export function useActivityGroups(
+  filters: UsageFilters,
+  groupBy: UsageActivityGroupBy,
+  {
+    enabled = true,
+    search = "",
+    order = "recent",
+  }: GroupsQuery & { enabled?: boolean } = {},
+) {
+  const scope = useUsageScope()
+  const { include_absorbed: _listOnly, ...groupFilters } = filters
+  return useQuery({
+    // The grouping ends the key, which is what the placeholder below compares.
+    queryKey: [
+      USAGE,
+      "activity-groups",
+      scope.base,
+      groupFilters,
+      search,
+      order,
+      groupBy,
+    ],
+    queryFn: () => {
+      const params = usageParams(groupFilters)
+      params.set("group_by", groupBy)
+      params.set("limit", String(ACTIVITY_GROUP_LIMIT))
+      if (search) params.set("search", search)
+      if (order !== "recent") params.set("order", order)
+      return apiFetch<UsageActivityGroups>(
+        `${scope.base}/groups?${params.toString()}`,
+      )
+    },
+    enabled: enabled && scope.isReady,
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === groupBy ? previous : undefined,
+    staleTime: 10_000,
   })
 }
 
