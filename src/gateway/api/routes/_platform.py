@@ -36,7 +36,6 @@ from gateway.core.usage import (
 from gateway.log_config import logger
 from gateway.metrics import record_abandoned_attempt
 from gateway.models.mcp import McpServerConfig, ResolvedMcpServer
-from gateway.services.bedrock_gateway_auth import build_bedrock_client_args
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
 from gateway.services.mcp_stateless import (
     CODE_RESOLUTION_FAILED,
@@ -122,8 +121,8 @@ class ResolvedAttempt(BaseModel):
     api_key: str
     managed: bool
     extra_params: dict[str, str] | None = None
-    """Provider-specific extra client kwargs beyond api_key/api_base (e.g. AWS
-    Bedrock's ``region_name``/``aws_access_key_id``). Sourced only from the
+    """Provider-specific extra client kwargs beyond api_key/api_base (e.g. a
+    ``region_name``). Sourced only from the
     trusted platform peer, never from the caller's request body. See
     ``default_attempt_kwargs``, which merges these in non-overridably."""
 
@@ -191,22 +190,12 @@ def build_attempt_client_args(attempt: ResolvedAttempt) -> dict[str, Any] | None
     ``client_args`` mapping to the provider's client constructor
     (``AnyLLM.create(provider, api_key=..., api_base=..., **client_args)``);
     every other keyword argument goes to the completion *call* instead. A
-    provider-specific credential field passed flat (e.g. Bedrock's
-    ``region_name``) never reaches ``boto3.client()`` that way and is instead
-    silently forwarded into the raw provider API call, which is how an
-    earlier version of this forwarding path still hit ``NoRegionError``
-    despite carrying the right value.
-
-    Bedrock gets dedicated handling (see :mod:`gateway.services.bedrock_gateway_auth`)
-    because it also needs its secret aliased to a different boto3 kwarg name
-    and, for the bearer-token ("Bedrock API key") credential shape, a custom
-    pre-built client. Every other provider's ``extra_params`` is forwarded
-    as-is.
+    provider-specific client field passed flat (e.g. a ``region_name``) never
+    reaches the client constructor that way and is instead silently forwarded
+    into the raw provider API call.
     """
     if not attempt.extra_params:
         return None
-    if LLMProvider(attempt.provider) == LLMProvider.BEDROCK:
-        return build_bedrock_client_args(attempt.api_key, attempt.extra_params)
     return dict(attempt.extra_params)
 
 
@@ -524,8 +513,8 @@ async def _post_resolve(
     network errors, the platform's server-side failures, and any unexpected
     status collapse to a 502. 400 is included here (unlike 422, which stays
     collapsed) because this backend's own 400s are deliberately hand-written,
-    caller-safe rejections (e.g. a Bedrock BYO key using an auth shape that
-    cannot be forwarded through a gateway), not raw framework validation
+    caller-safe rejections (e.g. a BYO key using an auth shape that cannot be
+    forwarded through a gateway), not raw framework validation
     errors that might otherwise leak internal request-shape detail.
     """
     platform_base_url = config.platform.get("base_url")
@@ -755,7 +744,7 @@ def upstream_exception_shape(exc: BaseException) -> tuple[UpstreamErrorKind | No
        :func:`_error_status_code`).
     4. A conservative duck-typed fallback, by exception class name, for the
        remaining any-llm provider SDKs that don't reuse the OpenAI/Anthropic
-       base classes (e.g. cohere, mistral, groq, bedrock) and whose own
+       base classes (e.g. cohere, mistral, groq) and whose own
        timeout/connection exception types aren't imported here. Mirrors the
        heuristic ``any_llm.utils.exception_handler.convert_exception`` already
        uses internally. Only applies when the exception carries no status code

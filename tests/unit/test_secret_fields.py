@@ -1,10 +1,9 @@
 """Credential-shaped entries in a free-form settings dict never round-trip.
 
 Four tables hold arbitrary operator-supplied JSON, and all four are places a
-real credential legitimately lives. Three of them hand it to a provider SDK:
-standalone Bedrock keeps its ``aws_secret_access_key`` in ``client_args``,
-because any-llm's BedrockProvider never forwards ``api_key`` into the boto3
-client it builds. ``OrgProviderKey`` has masked its own since it shipped;
+real credential legitimately lives. Three of them hand it to a provider SDK,
+which can take a secret such as ``aws_secret_access_key`` as a client
+constructor kwarg. ``OrgProviderKey`` has masked its own since it shipped;
 otari-ai#1880 is the other two, where ``ProviderCredential.client_args``
 returned a live AWS secret to anyone who could reach
 ``GET /api/v1/provider-credentials``. The fourth is

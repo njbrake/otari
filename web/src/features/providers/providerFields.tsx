@@ -11,15 +11,8 @@ import {
 import { type ReactNode, useMemo, useState } from "react"
 import { Checkbox } from "@/design-system/forms/Checkbox"
 import { ComboBoxEmpty } from "@/design-system/forms/ComboBoxEmpty"
-import { Field } from "@/design-system/forms/Field"
 import { FieldMessages } from "@/design-system/forms/FieldMessages"
-import { SecretField } from "@/design-system/forms/SecretField"
 import { useProviderCatalog } from "@/shared/api/providers"
-
-import {
-  type CredentialFieldValues,
-  credentialFieldsFor,
-} from "./providerCredentialFields"
 
 // The form controls a provider credential needs wherever it is edited, and the
 // parsing that goes with them.
@@ -29,7 +22,7 @@ import {
 // `/organization/provider-keys`, where it belongs to the tenant. Both take a
 // provider name any-llm has to recognize and both take `client_args`, so a
 // second copy of any of these controls would be a second place for the JSON
-// guard, the catalog lookup and the per-provider field list to drift.
+// guard or the catalog lookup to drift.
 
 // client_args is whatever the provider's SDK client constructor takes (timeouts,
 // custom headers), so it has no fixed schema and the form edits it as JSON. Blank
@@ -66,73 +59,8 @@ export function formatClientArgs(
     : ""
 }
 
-// The typed fields a provider expects inside `client_args`, from the registry.
-// Renders nothing for the providers that need none, which is nearly all of them.
-export function ProviderCredentialFields({
-  provider,
-  values,
-  onChange,
-  errors,
-  redacted = [],
-}: {
-  provider: string
-  values: CredentialFieldValues
-  onChange: (next: CredentialFieldValues) => void
-  /** Per-field messages from `validateCredentialFields`, keyed by field key. */
-  errors: Record<string, string>
-  /** Fields whose stored value came back masked, so blank means "keep it". */
-  redacted?: readonly string[]
-}) {
-  const fields = credentialFieldsFor(provider)
-  if (fields.length === 0) return null
-
-  return (
-    <>
-      {fields.map((field) => {
-        const value = values[field.key] ?? ""
-        const error = errors[field.key]
-        const set = (next: string) => onChange({ ...values, [field.key]: next })
-        // The gateway masks anything credential-shaped by key name, so a stored
-        // value is often unreadable whether or not the registry calls it a
-        // secret. Say it is set instead of prefilling the mask.
-        const description = redacted.includes(field.key)
-          ? `Set already, and never shown again. Leave blank to keep it. ${field.helpText}`
-          : field.helpText
-        if (field.isSecret) {
-          return (
-            <SecretField
-              key={field.key}
-              label={field.label}
-              value={value}
-              onChange={set}
-              placeholder={field.placeholder ?? "••••••••"}
-              description={description}
-              isInvalid={error !== undefined}
-              errorMessage={error}
-            />
-          )
-        }
-        return (
-          <Field
-            key={field.key}
-            label={field.label}
-            value={value}
-            onChange={set}
-            isRequired={field.isRequired}
-            placeholder={field.placeholder}
-            description={description}
-            isInvalid={error !== undefined}
-            errorMessage={error}
-          />
-        )
-      })}
-    </>
-  )
-}
-
-// The client_args editor: the escape hatch for whatever the typed fields above
-// do not describe. Options are passed straight to the provider client, so a bad
-// value is rejected here rather than sent (issue #517).
+// The client_args editor. Options are passed straight to the provider client,
+// so a bad value is rejected here rather than sent (issue #517).
 export function ClientArgsField({
   value,
   onChange,
@@ -162,8 +90,8 @@ export function ClientArgsField({
         >
           {error ??
             // Both halves of that sentence are load-bearing, and blanket "keep
-            // secrets out" advice would be wrong: Bedrock's classic IAM shape
-            // genuinely needs a secret in here (`gateway/models/provider_keys.py`),
+            // secrets out" advice would be wrong: an SDK can take a secret as a
+            // client kwarg (`gateway/models/provider_keys.py`),
             // `redact_secret_like_values` is why it does not come back, and
             // `encrypted_api_key` is the protection it does not get.
             "Passed to the provider's client, e.g. a request timeout in seconds or custom headers. An option named like a credential is masked when read back, but nothing here is encrypted at rest."}
@@ -172,6 +100,25 @@ export function ClientArgsField({
     </TextField>
   )
 }
+
+/**
+ * Providers a stored credential can never authenticate, so a form that
+ * collects one must not offer them.
+ *
+ * any-llm's SageMaker provider verifies against a bare `boto3.Session()`
+ * before its client is built, so it authenticates from the gateway's own
+ * ambient AWS chain and refuses outright when there is none, whatever was
+ * supplied. otari already treats it that way on the dispatch side
+ * (`_AMBIENT_CREDENTIAL_PROVIDERS` in `services/provider_kwargs.py` lets a
+ * SageMaker selector resolve with nothing configured), and it reports no model
+ * listing, so a connection test cannot tell an operator any of this either.
+ *
+ * Scoped to the call sites that collect a bring-your-own credential rather
+ * than applied to every picker: a deployment operator adding a SageMaker
+ * *instance* on `/providers` to give it an endpoint and a model list, backed
+ * by the host's own credentials, is a configuration that does work.
+ */
+export const BYO_UNSUPPORTED_PROVIDERS: readonly string[] = ["sagemaker"]
 
 // The spellings `session_affinity_supported` in the gateway's core/config.py
 // accepts: the header rides on the SDK client's default headers, which only the

@@ -187,7 +187,7 @@ def test_default_attempt_kwargs_omits_extra_params_when_unset() -> None:
 
 
 def test_default_attempt_kwargs_forwards_extra_params_as_client_args() -> None:
-    """A generic (non-Bedrock) attempt's ``extra_params`` is nested under
+    """An attempt's ``extra_params`` is nested under
     ``client_args``, not merged flat: any-llm's ``acompletion()`` only routes
     a ``client_args`` mapping to the provider's client constructor, so a flat
     top-level key would silently reach the completion call instead."""
@@ -209,11 +209,9 @@ def test_default_attempt_kwargs_forwards_extra_params_as_client_args() -> None:
     assert kwargs["model"] == "openai:gpt-4o-mini"
 
 
-def test_default_attempt_kwargs_forwards_bedrock_extra_params_via_client_args() -> None:
-    """A Bedrock classic-IAM-pair attempt's ``extra_params`` reaches
-    ``client_args`` with the secret aliased to ``aws_secret_access_key``,
-    which any-llm's Bedrock provider actually reads when building its boto3
-    client (unlike a plain ``api_key``)."""
+def test_default_attempt_kwargs_applies_no_provider_specific_client_args() -> None:
+    """A Bedrock attempt's ``extra_params`` are forwarded as they came, like any
+    other provider's: the secret stays in ``api_key`` and nothing is added."""
     attempt = ResolvedAttempt(
         attempt_id="a0",
         position=0,
@@ -229,7 +227,6 @@ def test_default_attempt_kwargs_forwards_bedrock_extra_params_via_client_args() 
     assert kwargs["client_args"] == {
         "region_name": "us-east-1",
         "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
-        "aws_secret_access_key": "secret-access-key",
     }
     assert kwargs["api_key"] == "secret-access-key"
     assert kwargs["model"] == "bedrock:anthropic.claude-3-5-sonnet-20241022-v2:0"

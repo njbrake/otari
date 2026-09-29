@@ -99,14 +99,13 @@ Content-Type: application/json
     {
       "attempt_id": "01HX3...",
       "position": 2,
-      "provider": "bedrock",
-      "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-      "api_key": "wJalrXUtnFEMI...",
-      "api_base": null,
+      "provider": "azureopenai",
+      "model": "gpt-4o-mini",
+      "api_key": "az-...",
+      "api_base": "https://example.openai.azure.com",
       "managed": false,
       "extra_params": {
-        "region_name": "us-east-1",
-        "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE"
+        "api_version": "2024-10-21"
       }
     }
   ]
@@ -119,41 +118,22 @@ the entry that ultimately succeeded (or the last one tried, on total failure) is
 back via `X-Correlation-ID` and reports through `/gateway/usage`.
 
 `extra_params` (optional, omitted for most providers) carries provider-specific
-credential/client fields beyond `api_key`/`api_base`: for example AWS
-Bedrock's mandatory `region_name` and, for the classic IAM-key-pair shape,
-`aws_access_key_id` (the paired secret access key travels in `api_key`, since
-that's the only field the wire contract treats as sensitive). This field is
-sourced only from the trusted platform peer; Otari never accepts it from the
-caller, and it can never be shadowed by a same-named field in the caller's
-own request body: the same non-overridable treatment `api_key` and `model`
-already get.
+client fields beyond `api_key`/`api_base`, such as an API version or a region.
+Secrets travel in `api_key`, since that's the only field the wire contract
+treats as sensitive. This field is sourced only from the trusted platform peer;
+Otari never accepts it from the caller, and it can never be shadowed by a
+same-named field in the caller's own request body: the same non-overridable
+treatment `api_key` and `model` already get.
 
 Otari does not merge `extra_params` into the completion call's kwargs
 directly. any-llm's `acompletion()` only forwards a separate `client_args`
 mapping to the provider's client constructor (everything else in its own
 `**kwargs` goes to the completion call instead), so `extra_params` is nested
-under `client_args` before the call. A flat merge would silently forward
-`region_name` to the completion call rather than boto3's client constructor,
-which is how an earlier version of this forwarding path still hit boto3's
-`NoRegionError` despite carrying the right value end to end.
-
-AWS Bedrock gets additional handling on top of that generic nesting, since
-any-llm's Bedrock provider never reads a plain `api_key` when building its
-boto3 client and AWS has two distinct credential shapes:
-
-- Classic IAM access-key/secret-key pair (`aws_access_key_id` present in
-  `extra_params`): the paired secret (`api_key`) is aliased into
-  `client_args["aws_secret_access_key"]`, boto3's own constructor kwarg for it.
-- Bearer token ("Bedrock API key", no `aws_access_key_id`): Otari builds a
-  boto3 client itself, with signing disabled and the `Authorization: Bearer
-  <token>` header injected via a `before-sign` event hook, and passes it as
-  `client_args["client"]` (an any-llm-sdk `BedrockProvider` constructor
-  parameter it already supports overriding its client with). The pinned
-  boto3 version has no native support for `AWS_BEARER_TOKEN_BEDROCK` or an
-  `aws_bearer_token` constructor kwarg, so this hook-based approach is the
-  only way to authenticate this shape today; it is a per-request, in-process
-  client, safe under concurrent load. See
-  `src/gateway/services/bedrock_gateway_auth.py`.
+under `client_args` before the call. A flat merge would silently forward a
+client field such as `region_name` to the completion call rather than to the
+client constructor. Otari applies no provider-specific handling on top of that
+nesting: a provider whose SDK does not authenticate from `api_key` (AWS
+Bedrock among them) cannot be served through a hybrid gateway.
 
 `request_id` groups every `attempt_id` from the same resolve call so the
 platform can attribute spend, render trace timelines, and emit fallback events.

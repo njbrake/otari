@@ -60,15 +60,11 @@ from sqlmodel import Field, SQLModel
 from gateway.models.secret_fields import redact_secret_like_values
 from gateway.models.tenancy import CreatedAtMixin, PrimaryKeyMixin, UpdatedAtMixin, _timestamp_field
 
-# ``client_args`` is arbitrary JSON, and this gateway's own Bedrock support is
-# the reason a credential-shaped entry in it cannot simply be rejected outright:
-# standalone mode's classic AWS IAM shape genuinely requires
-# ``aws_access_key_id`` and ``aws_secret_access_key`` inside ``client_args``
-# (any-llm-sdk's ``BedrockProvider`` never forwards ``api_key`` into the boto3
-# client it builds; see ``services/bedrock_gateway_auth.py``), so those are real
-# credentials this field is *supposed* to carry, not smuggled duplicates of
-# ``encrypted_api_key``. They still must never round-trip over the API, the same
-# treatment ``encrypted_api_key`` already gets (only ``last4`` comes back);
+# ``client_args`` is arbitrary JSON spread into the provider SDK's client
+# constructor, so a credential-shaped entry in it cannot simply be rejected
+# outright: an SDK that takes a second secret as a constructor kwarg needs it
+# there. It still must never round-trip over the API, the same treatment
+# ``encrypted_api_key`` already gets (only ``last4`` comes back);
 # ``redact_secret_like_values`` is that treatment applied by key name rather
 # than by field.
 
@@ -164,8 +160,8 @@ class OrgProviderKey(SQLModel, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, 
     def to_public(self) -> OrgProviderKeyPublic:
         """Serialize for the API. Never includes the key, only ``last4``.
 
-        ``client_args`` is arbitrary JSON an admin can set (Bedrock's
-        ``region_name``, other client kwargs), and a credential-shaped field
+        ``client_args`` is arbitrary JSON an admin can set (a region, other
+        client kwargs), and a credential-shaped field
         placed there is never echoed back either: ``redact_secret_like_values``
         masks it the same way ``encrypted_api_key`` itself already stays off
         the wire (only ``last4`` comes back). That masking is the whole

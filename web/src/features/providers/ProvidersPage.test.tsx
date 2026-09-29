@@ -408,93 +408,6 @@ describe("ProvidersPage", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("asks a known provider for its own fields and sends them in client_args", async () => {
-    const fetchMock = mockApi({
-      stored: [storedProvider("anthropic", "0000")],
-      catalog: [
-        {
-          id: "bedrock",
-          name: "Bedrock",
-          env_key: "AWS_BEARER_TOKEN_BEDROCK",
-          default_api_base: null,
-          requires_api_key: true,
-          env_key_present: false,
-        },
-      ],
-    })
-    const user = userEvent.setup()
-    renderPage(<ProvidersPage />)
-
-    await screen.findByText("••••0000")
-    await user.click(screen.getByRole("button", { name: "Add provider" }))
-    // Typed rather than clicked: the picker is this dialog's autofocused first
-    // field, so it opens its list on input (`menuTrigger`), and the chevron
-    // beside it is the other way to the full catalog.
-    await user.type(screen.getByPlaceholderText("Search providers…"), "Bed")
-    await user.click(await screen.findByRole("option", { name: "Bedrock" }))
-
-    const add = within(screen.getByRole("dialog")).getByRole("button", {
-      name: "Add provider",
-    })
-    await user.type(screen.getByLabelText(/Bedrock API key/), "bearer-token")
-    // The region is required and outside Advanced, so nothing that blocks the
-    // submit is hidden behind a collapsed section.
-    expect(add).toBeDisabled()
-    await user.type(
-      screen.getByRole("textbox", { name: /AWS region/ }),
-      "eu-central-1",
-    )
-    await waitFor(() => expect(add).toBeEnabled())
-    await user.click(add)
-
-    const post = await waitFor(() => {
-      const call = fetchMock.mock.calls.find(
-        ([u, init]) =>
-          String(u).endsWith(`${API_ROOT}/provider-credentials`) &&
-          (init?.method ?? "") === "POST",
-      )
-      expect(call).toBeDefined()
-      return call!
-    })
-    expect(JSON.parse(String(post[1]?.body))).toMatchObject({
-      instance: "bedrock",
-      api_key: "bearer-token",
-      client_args: { region_name: "eu-central-1" },
-    })
-  })
-
-  it("splits a stored provider's registered options out of the JSON box on edit", async () => {
-    mockApi({
-      stored: [
-        storedProvider("bedrock", "0000", true, {
-          region_name: "us-east-1",
-          timeout: 1800,
-        }),
-      ],
-      catalog: [
-        {
-          id: "bedrock",
-          name: "Bedrock",
-          env_key: "AWS_BEARER_TOKEN_BEDROCK",
-          default_api_base: null,
-          requires_api_key: true,
-          env_key_present: false,
-        },
-      ],
-    })
-    const user = userEvent.setup()
-    renderPage(<ProvidersPage />)
-
-    await user.click(await screen.findByRole("button", { name: "Edit" }))
-
-    expect(
-      await screen.findByRole("textbox", { name: /AWS region/ }),
-    ).toHaveValue("us-east-1")
-    expect(
-      screen.getByRole("textbox", { name: "Client options (JSON)" }),
-    ).toHaveValue('{\n  "timeout": 1800\n}')
-  })
-
   it("sends session affinity when a custom endpoint opts in", async () => {
     const fetchMock = mockApi({ meta: [], stored: [] })
     const user = userEvent.setup()
@@ -644,10 +557,10 @@ describe("ProvidersPage", () => {
     })
   })
 
-  it("keeps a split-out option when the provider type is retyped mid-edit", async () => {
-    // The field list follows the provider type, which is an editable box here,
-    // while the values were split out of client_args at mount. A field that
-    // stops rendering must not take the stored option with it.
+  it("edits a stored provider's whole client_args as JSON and sends it back", async () => {
+    // A row saved by the Bedrock form the dashboard no longer has: its options
+    // are ordinary client_args now, masked entries included, and the gateway
+    // keeps a stored secret wherever the mask comes back.
     const fetchMock = mockApi({
       stored: [
         storedProvider("bedrock", "0000", true, {
@@ -655,29 +568,16 @@ describe("ProvidersPage", () => {
           aws_secret_access_key: "***",
         }),
       ],
-      catalog: [
-        {
-          id: "bedrock",
-          name: "Bedrock",
-          env_key: "AWS_BEARER_TOKEN_BEDROCK",
-          default_api_base: null,
-          requires_api_key: true,
-          env_key_present: false,
-        },
-      ],
     })
     const user = userEvent.setup()
     renderPage(<ProvidersPage />)
 
     await user.click(await screen.findByRole("button", { name: "Edit" }))
-    await screen.findByRole("textbox", { name: /AWS region/ })
-    await user.type(
-      screen.getByRole("textbox", { name: "Provider type" }),
-      "openai",
-    )
     expect(
-      screen.queryByRole("textbox", { name: /AWS region/ }),
-    ).not.toBeInTheDocument()
+      await screen.findByRole("textbox", { name: "Client options (JSON)" }),
+    ).toHaveValue(
+      '{\n  "region_name": "us-east-1",\n  "aws_secret_access_key": "***"\n}',
+    )
 
     await user.click(screen.getByRole("button", { name: "Save" }))
 
@@ -893,8 +793,8 @@ describe("ProvidersPage", () => {
 
   it("guards an Advanced rename on the known tab, with no provider chosen", async () => {
     // The guard reads one snapshot of the whole draft. It used to read the
-    // provider and the key only, so a rename, an API base, a client_args blob
-    // and every typed credential went on Escape with nothing asked.
+    // provider and the key only, so a rename, an API base and a client_args
+    // blob went on Escape with nothing asked.
     mockApi({ meta: [], stored: [] })
     const user = userEvent.setup()
     renderPage(<ProvidersPage />)
