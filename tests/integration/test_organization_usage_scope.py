@@ -727,3 +727,35 @@ def test_earlier_failed_attempts_are_counted_only_inside_the_callers_scope(
     assert code == status.HTTP_200_OK, body
     assert isinstance(body, list)
     assert [(row["id"], row["absorbed_attempts"]) for row in body] == [("served", 1)]
+
+
+def test_a_members_groups_hold_only_their_own_requests(client: TestClient, world: _World) -> None:
+    """Grouping runs inside the scope: by user, a member sees one group, their own."""
+    code, body = _as(client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage/groups?group_by=user")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert [group["key"] for group in body["groups"]] == [str(world.users["alpha_member"])]
+    code, body = _as(client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage/groups?group_by=model")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert {group["key"] for group in body["groups"]} == set(_ALPHA_ONE_MEMBER_MODELS)
+
+
+def test_the_organization_list_sorts_and_refines_inside_the_scope(client: TestClient, world: _World) -> None:
+    code, body = _as(client, world, "alpha_owner", f"{API_ROOT}/organizations/me/usage?sort=model&order=asc")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, list)
+    models = [row["model"] for row in body]
+    assert models == sorted(models)
+    assert set(models) == set(_ALPHA_MODELS)
+    refined = _models_listed(client, world, "alpha_owner", "?exclude_model=alpha-one-a&exclude_model=alpha-two-a")
+    assert refined == set(_ALPHA_MODELS) - {"alpha-one-a", "alpha-two-a"}
+    code, body = _as(
+        client,
+        world,
+        "alpha_owner",
+        f"{API_ROOT}/organizations/me/usage/groups?group_by=model&exclude_model=alpha-one-a",
+    )
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert {group["key"] for group in body["groups"]} == set(_ALPHA_MODELS) - {"alpha-one-a"}

@@ -34,10 +34,10 @@ from gateway.api.routes.usage import (
     Bucket,
     _dense_series,
     _refuse_wide_grid,
-    _request_count_expr,
     _resolve_window,
 )
 from gateway.core.sql import BUCKET_FORMATS, MAX_FILTER_VALUES, bucket_expr, canonical_bucket, dialect_name, match_any
+from gateway.core.usage_filters import request_count
 from gateway.models.usage import UsageLog
 from gateway.ports.telemetry_storage_port import (
     BehaviorCounts,
@@ -417,9 +417,7 @@ async def agent_telemetry_summary(
     # request writes one row per recovered attempt, and counting those would
     # deflate the error rate against a request volume the Usage page never shows.
     usage_row = (
-        await db.execute(
-            select(func.coalesce(func.sum(UsageLog.cost), 0.0), _request_count_expr()).where(*usage_conditions)
-        )
+        await db.execute(select(func.coalesce(func.sum(UsageLog.cost), 0.0), request_count()).where(*usage_conditions))
     ).one()
     usage = AgentTelemetryUsage(cost=float(usage_row[0]), requests=int(usage_row[1]))
 
