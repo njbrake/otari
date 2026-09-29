@@ -19,6 +19,7 @@ from sqlalchemy import (
     text,
     true,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlmodel import SQLModel
 
@@ -785,7 +786,9 @@ class UsageLog(Base):
     # A default would make every historical row claim a convention nothing
     # checked, and mis-price the half that were the other one.
     cache_tokens_in_prompt: Mapped[bool | None] = mapped_column()
-    billing_meters: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # ``jsonb`` on PostgreSQL: the usage analytics extract meters from every row in
+    # a window, and a ``json`` value is re-parsed from text on each extraction.
+    billing_meters: Mapped[dict[str, Any] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
     pricing_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     # The settled amount, and the accounting truth for this row
     # (mozilla-ai/otari-ai#1751). Exact to the micro-dollar; see
