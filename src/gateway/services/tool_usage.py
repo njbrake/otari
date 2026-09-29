@@ -43,7 +43,8 @@ TOOL_METER_NAMESPACE = "tools"
 
 # Bounds on what a caller-influenced name can write into the row. An MCP server
 # can advertise any number of tools with any names; the row is JSON, not a
-# schema, so the caps are enforced here.
+# schema, so the caps are enforced here. NUL is stripped because PostgreSQL's
+# ``jsonb`` rejects ``\u0000``, which would fail the whole usage-row write.
 MAX_TOOL_NAMES = 32
 MAX_TOOL_NAME_CHARS = 64
 # Reserved rather than a plausible tool name: MCP tool names come from a
@@ -85,7 +86,7 @@ class ToolUsageTally:
         entry["errors" if failed else "billed"] += 1
 
     def _key(self, tool: str) -> str:
-        name = (tool or OVERFLOW_TOOL_NAME)[:MAX_TOOL_NAME_CHARS]
+        name = ((tool or "").replace("\x00", "") or OVERFLOW_TOOL_NAME)[:MAX_TOOL_NAME_CHARS]
         if name in self._counts:
             return name
         if len(self._counts) >= MAX_TOOL_NAMES:

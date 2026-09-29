@@ -7,8 +7,9 @@ is stored parsed. Values and their extraction semantics are unchanged.
 
 SQLite has no ``jsonb`` and keeps the column as it is.
 
-The retype rewrites the table under an exclusive lock, so writes to
-``usage_logs`` wait for it (about a second per 150k rows).
+The retype rewrites the table under an ACCESS EXCLUSIVE lock, so reads and
+writes of ``usage_logs`` wait for it (about a second per 150k rows). With
+``auto_migrate`` on, that pause happens at startup.
 
 Revision ID: 9a2bc62cd6ea
 Revises: 13771e40d2f5
