@@ -38,7 +38,7 @@ from any_llm import AnyLLM, LLMProvider
 from any_llm.exceptions import AnyLLMError
 
 from gateway.auth.vertex_auth import setup_vertex_environment
-from gateway.core.config import KEYLESS_SELF_HOSTED_PROVIDERS, GatewayConfig, provider_credential_env_names
+from gateway.core.config import API_ROOT, KEYLESS_SELF_HOSTED_PROVIDERS, GatewayConfig, provider_credential_env_names
 from gateway.log_config import logger
 from gateway.services.alias_service import resolve_effective_alias
 from gateway.services.catalog_selectors import resolve_catalog_selector
@@ -203,6 +203,23 @@ def credential_ladder_exhausted(provider: LLMProvider, kwargs: dict[str, Any]) -
     return not _provider_env_key_present(provider)
 
 
+def otari_gateway_origin(api_base: Any) -> Any:
+    """An ``otari`` instance's ``api_base`` with a trailing API root (or bare ``/v1``) removed.
+
+    Fork-only stopgap. any-llm 1.29 appends the API root to the origin itself and
+    raises on a base that already carries it, which is how an instance configured
+    for any-llm 1.27 (``https://api.otari.ai`` plus the root) is spelled. Stripping
+    the root reaches the URL that spelling reached before.
+    """
+    if not isinstance(api_base, str):
+        return api_base
+    trimmed = api_base.rstrip("/")
+    for suffix in (API_ROOT, "/v1"):
+        if trimmed.endswith(suffix):
+            return trimmed.removesuffix(suffix)
+    return api_base
+
+
 def get_provider_kwargs(
     config: GatewayConfig,
     provider: LLMProvider,
@@ -257,6 +274,9 @@ def get_provider_kwargs(
                 kwargs["client_args"] = provider_config["client_args"]
     else:
         _warn_undeclared_env_provider(config, provider)
+
+    if provider == LLMProvider.OTARI and kwargs.get("api_base"):
+        kwargs["api_base"] = otari_gateway_origin(kwargs["api_base"])
 
     placeholder = keyless_placeholder_api_key(provider, kwargs.get("api_base"), kwargs.get("api_key"))
     if placeholder is not None:
