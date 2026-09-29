@@ -338,6 +338,10 @@ const MODEL_AND_SOURCE_BREAKDOWNS: SummaryDimension[] = ["model", "source"]
 // option costs nothing beyond the breakdown itself. The alternative is paging
 // the whole users and api_keys tables on every visit.
 const ENTITY_BREAKDOWNS: SummaryDimension[] = ["user", "api_key"]
+const SUGGESTION_BREAKDOWNS: SummaryDimension[] = [
+  ...MODEL_AND_SOURCE_BREAKDOWNS,
+  ...ENTITY_BREAKDOWNS,
+]
 const SOURCE_BREAKDOWN: SummaryDimension[] = ["source"]
 
 // All filter + pagination state, with defaults, kept in the URL.
@@ -1384,10 +1388,19 @@ export function ActivityPage() {
   )
   // Two breakdowns are read here (model typeahead, source picker); the rest are
   // not requested.
+  // The two suggestion queries below differ only by the filters each drops, plus
+  // `priced`, which the model one never applies. With none of those set they ask
+  // the same question, so this one carries all four breakdowns and the entity
+  // query is not sent.
+  const sharedSuggestions =
+    modelFilters.length === 0 &&
+    userFilters.length === 0 &&
+    apiKeyFilters.length === 0 &&
+    priced === undefined
   const modelSummary = useUsageSummary(
     modelSuggestFilters,
     "day",
-    MODEL_AND_SOURCE_BREAKDOWNS,
+    sharedSuggestions ? SUGGESTION_BREAKDOWNS : MODEL_AND_SOURCE_BREAKDOWNS,
   )
   const realGroups = (rows: UsageGroupRow[] | undefined) =>
     (rows ?? []).filter((r) => !r.is_other && r.key !== null)
@@ -1408,8 +1421,10 @@ export function ActivityPage() {
     entitySuggestFilters,
     "day",
     ENTITY_BREAKDOWNS,
+    !sharedSuggestions,
   )
-  const keyOptions = realGroups(entitySummary.data?.by_api_key).map((r) => ({
+  const entityData = sharedSuggestions ? modelSummary.data : entitySummary.data
+  const keyOptions = realGroups(entityData?.by_api_key).map((r) => ({
     value: r.key as string,
     label: r.label ?? `${(r.key as string).slice(0, 8)}…`,
   }))
@@ -1634,7 +1649,7 @@ export function ActivityPage() {
   // Name first, id in parentheses: the id is what the filter submits, and two
   // people can share a name. Resolved the way the User column resolves it, so
   // the same person reads the same in the picker, the chip and the row.
-  const userOptionsList = realGroups(entitySummary.data?.by_user).map((r) => {
+  const userOptionsList = realGroups(entityData?.by_user).map((r) => {
     const name = userDisplay(r.key as string, r.label, memberLabels)
     return {
       value: r.key as string,
@@ -1944,7 +1959,9 @@ export function ActivityPage() {
     void inFlight.refetch()
     void contextSummary.refetch()
     void modelSummary.refetch()
-    void entitySummary.refetch()
+    if (!sharedSuggestions) {
+      void entitySummary.refetch()
+    }
     // Guarded because refetch() ignores `enabled`: without a picked source the
     // query is disabled by design and refetching it would fire a pointless
     // extra summary request.

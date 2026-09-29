@@ -2311,6 +2311,33 @@ describe("ActivityPage suggestion scoping", () => {
     expect(entityQuery).not.toContain("user_id=alice")
     expect(entityQuery).toContain("model=gpt-4o")
   })
+
+  it("sends one suggestion summary while no picker filter is set", async () => {
+    // Unfiltered, both pickers ask the same window, so the entity breakdowns ride
+    // the model typeahead's request instead of repeating the whole summary.
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />)
+    await screen.findByText("gpt-4o")
+
+    const suggestions = calls
+      .map((c) => c.url)
+      .filter(
+        (url) =>
+          url.includes(`${API_ROOT}/usage/summary`) &&
+          url.includes("dimensions=model"),
+      )
+    expect(suggestions).toHaveLength(1)
+    expect(suggestions[0]).toContain("dimensions=user")
+    expect(suggestions[0]).toContain("dimensions=api_key")
+    expect(
+      calls.filter(
+        (c) =>
+          c.url.includes(`${API_ROOT}/usage/summary`) &&
+          c.url.includes("dimensions=user") &&
+          !c.url.includes("dimensions=model"),
+      ),
+    ).toHaveLength(0)
+  })
 })
 
 // ---------------------------------------------------------------------------
