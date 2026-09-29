@@ -31,9 +31,18 @@ export function formatNumber(value: number | null | undefined): string {
   return GROUPED.format(value)
 }
 
-/** A fraction as a percentage, to one decimal place. */
-export function formatPct(fraction: number): string {
-  return `${(fraction * 100).toFixed(1)}%`
+const PERCENT = [0, 1].map(
+  (digits) =>
+    new Intl.NumberFormat("en-US", {
+      style: "percent",
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }),
+)
+
+/** A fraction as a percentage, to one decimal place, or to none. */
+export function formatPct(fraction: number, digits: 0 | 1 = 1): string {
+  return PERCENT[digits].format(fraction)
 }
 
 /**

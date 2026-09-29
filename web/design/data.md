@@ -59,6 +59,13 @@ the rows it labels.
 <table className="w-full">…</table>
 ```
 
+One table is the exception, and its own header says why: Activity's log
+(`features/activity/ActivityTable.tsx`) needs group rows spanning several
+columns, attempts nested under the request they belong to, and headers that
+hold a filter menu beside the sort, none of which a react-aria grid expresses.
+It keeps the three row states below by hand. Reaching for it elsewhere needs the
+same kind of reason.
+
 Row states, and the only three:
 
 | State | Ground |
@@ -113,7 +120,7 @@ tracks horizontal scroll so a first column can pin, and the per-page class is wh
 `otari-keys-table`, `otari-models-table`, `otari-providers-table`,
 `otari-routing-table`, `otari-domains-table`, `otari-members-table`,
 `otari-provider-keys-table`, `otari-offered-models-table`,
-`otari-workspaces-table`, `otari-accounts-table`, `otari-activity-table`,
+`otari-workspaces-table`, `otari-accounts-table`,
 `otari-budgets-table`, `otari-mcp-table`, `otari-offerings-table`. Inventing one
 at the call site compiles and styles nothing.
 

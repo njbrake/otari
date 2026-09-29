@@ -57,3 +57,16 @@ export const Overfilled: Story = {
     </div>
   ),
 }
+
+/**
+ * Sized by the row it sits in: narrow beside the figure it measures, or the
+ * lane's whole width on a phone.
+ */
+export const Widths: Story = {
+  render: () => (
+    <div className="flex w-64 flex-col gap-3">
+      <Meter fraction={0.41} ariaLabel="41% used" className="w-16" />
+      <Meter fraction={0.41} ariaLabel="41% used" className="w-full" />
+    </div>
+  ),
+}

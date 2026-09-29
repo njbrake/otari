@@ -125,7 +125,7 @@ can link Vite's esbuild binary at all.
   type and radius come from a token or a utility. **A value computed at runtime that no class
   can express is the exception**: a percentage width, a computed offset, a position that
   follows the data. Tailwind emits only the utilities the source asks for, so `w-[${pct}%]`
-  compiles to nothing and the value has to reach the element as a property. `Meter.tsx:16` and
+  compiles to nothing and the value has to reach the element as a property. `Meter.tsx:22` and
   `SpendMeter.tsx:92` are the reference sites; `ShareCard.tsx` is a documented whole-file
   exception for a different reason (it is rasterized through an `<img>`, where custom
   properties do not resolve). The pre-paint block in `index.html` is the only `<style>` tag,

@@ -95,16 +95,18 @@ describe("UnpricedUsageWarning", () => {
 
     expect(
       await screen.findByText(
-        "19 requests in the last 24 hours had no model price",
+        /^19 requests in the last 24 hours had no model price/,
       ),
     ).toBeInTheDocument()
     // Busiest first, so the model costing the most unbilled traffic leads.
-    const names = screen.getAllByText(/^gemini-/).map((el) => el.textContent)
-    expect(names).toEqual(["gemini-3.7-flash", "gemini-3.8-flash"])
-    // The link lands on the same rows the count is taken from.
     expect(
-      screen.getByRole("link", { name: "View unpriced requests" }),
-    ).toHaveAttribute(
+      screen.getByText("gemini-3.7-flash, gemini-3.8-flash"),
+    ).toBeInTheDocument()
+    // One line, and never a claim that the requests were recorded at $0: their
+    // cost is empty, not zero.
+    expect(screen.queryByText(/\$0/)).not.toBeInTheDocument()
+    // The link lands on the same rows the count is taken from.
+    expect(screen.getByRole("link", { name: "View them" })).toHaveAttribute(
       "href",
       "/activity?status=success&priced=false&range=24h&source=gateway",
     )
@@ -164,7 +166,7 @@ describe("UnpricedUsageWarning", () => {
 
     expect(
       await screen.findByText(
-        "1 request in the last 24 hours had no model price",
+        /^1 request in the last 24 hours had no model price/,
       ),
     ).toBeInTheDocument()
   })
@@ -214,7 +216,7 @@ describe("UnpricedUsageWarning", () => {
 
     expect(
       await screen.findByText(
-        "4 requests in the last 24 hours had no model price",
+        /^4 requests in the last 24 hours had no model price/,
       ),
     ).toBeInTheDocument()
     expect(screen.queryByText("gemini-3.7-flash")).not.toBeInTheDocument()

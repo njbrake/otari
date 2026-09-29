@@ -20,11 +20,17 @@ import { DocsLink } from "../navigation/DocsLink"
  */
 export function PageIntro({
   title,
+  beside,
   action,
   docsHref,
   children,
 }: {
   title: string
+  /**
+   * A control that belongs to the title rather than to the page, set on the
+   * title's line: which saved view of the page is showing, say.
+   */
+  beside?: ReactNode
   action?: ReactNode
   /**
    * Trails the description rather than sitting in `action`: a link to the
@@ -37,7 +43,10 @@ export function PageIntro({
   return (
     <header className="flex flex-col gap-4 pb-5 sm:flex-row sm:items-start sm:justify-between">
       <div className="max-w-[38.75rem]">
-        <h1 className="text-display">{title}</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-display">{title}</h1>
+          {beside}
+        </div>
         {children || docsHref ? (
           <p className="mt-1 text-sm text-muted">
             {children}
