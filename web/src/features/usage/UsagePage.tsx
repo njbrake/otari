@@ -462,13 +462,17 @@ function ToolBreakdownTable({
 
 // ---------- which breakdowns the page asks for ----------
 
-// Every breakdown the page renders, and nothing more (each one is a GROUP BY
-// over the window server-side; tile-only queries pass NO_BREAKDOWNS instead). There is deliberately no API-key spend table:
-// keys identify callers, not workloads, and the User table already answers
-// "who". The chart's group-by can still split by key via /v1/usage/series.
+// Every breakdown the page renders, plus the key picker's options (each one is a
+// GROUP BY over the window server-side; tile-only queries pass NO_BREAKDOWNS
+// instead). There is deliberately no API-key spend table: keys identify callers,
+// not workloads, and the User table already answers "who". `api_key` is here so
+// the pickers can read this summary rather than send one of their own whenever
+// no filter separates the two (see `modelSuggest`). The chart's group-by can
+// still split by key via /v1/usage/series.
 const PAGE_BREAKDOWNS: SummaryDimension[] = [
   "model",
   "user",
+  "api_key",
   "source_label",
   "endpoint",
   "provider",
@@ -655,10 +659,17 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
     () => ({ ...filters, model: undefined }),
     [filters],
   )
+  // Each picker needs a query of its own only while its own filter is set.
+  // Otherwise its filters are the page's, so it asks for the page summary's key
+  // and shares that request. Staying on one observer is what keeps the options
+  // (and the chip labels read from them) in place across the first pick:
+  // `keepPreviousData` carries the page summary, which is the right window for
+  // the new key, until the picker's own summary lands.
+  const ownModelQuery = modelFilters.length > 0
   const modelSuggest = useUsageSummary(
     modelSuggestFilters,
     bucket,
-    MODEL_BREAKDOWN,
+    ownModelQuery ? MODEL_BREAKDOWN : PAGE_BREAKDOWNS,
     true,
     scope,
   )
@@ -672,10 +683,11 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
     () => ({ ...filters, user_id: undefined, api_key_id: undefined }),
     [filters],
   )
+  const ownEntityQuery = userFilters.length > 0 || apiKeyFilters.length > 0
   const entitySuggest = useUsageSummary(
     entitySuggestFilters,
     bucket,
-    ENTITY_BREAKDOWNS,
+    ownEntityQuery ? ENTITY_BREAKDOWNS : PAGE_BREAKDOWNS,
     true,
     scope,
   )
@@ -852,8 +864,12 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
       setStartDate(isoAgo(preset.seconds ?? 0))
     }
     void summary.refetch()
-    void modelSuggest.refetch()
-    void entitySuggest.refetch()
+    if (ownModelQuery) {
+      void modelSuggest.refetch()
+    }
+    if (ownEntityQuery) {
+      void entitySuggest.refetch()
+    }
     if (previousFilters !== null) {
       void previous.refetch()
     }

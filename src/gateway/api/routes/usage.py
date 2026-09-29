@@ -987,13 +987,6 @@ def _billed_expr(meter: str, fallback: Any) -> Any:
     of a missing key and a NULL column both yield NULL, so the fallback chain
     covers both, ending at 0. ``as_integer`` compiles to the dialect's JSON
     number cast on SQLite and PostgreSQL alike.
-
-    Cost note: ``billing_meters`` is a plain ``json`` column, so on PostgreSQL
-    every extraction re-parses the row's text, and the summary runs several
-    aggregate passes per render. If profiling shows this biting on large
-    windows, the escapes are a ``jsonb`` migration or persisting the billed
-    totals as real columns at write time; the fallback semantics here would be
-    unchanged by either.
     """
     return func.coalesce(UsageLog.billing_meters[meter].as_integer(), fallback, 0)
 
@@ -1234,7 +1227,7 @@ async def _tool_breakdown(
 
     One aggregate per known tool rather than a ``GROUP BY`` over the meter map:
     a JSON map's keys cannot be grouped portably across SQLite and PostgreSQL
-    (``json_each`` versus ``jsonb_each``, on a plain ``json`` column), and the set
+    (``json_each`` versus ``jsonb_each``), and the set
     of gateway-run tools is small and fixed. Cost comes from each row's charge
     line rather than the row total, because a row's ``cost`` also carries tokens.
 

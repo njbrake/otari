@@ -101,6 +101,10 @@ const MODEL_AND_SOURCE_BREAKDOWNS: SummaryDimension[] = ["model", "source"]
 // option costs nothing beyond the breakdown itself. The alternative is paging
 // the whole users and api_keys tables on every visit.
 const ENTITY_BREAKDOWNS: SummaryDimension[] = ["user", "api_key"]
+const SUGGESTION_BREAKDOWNS: SummaryDimension[] = [
+  ...MODEL_AND_SOURCE_BREAKDOWNS,
+  ...ENTITY_BREAKDOWNS,
+]
 const SOURCE_BREAKDOWN: SummaryDimension[] = ["source"]
 
 // All filter + pagination state, with defaults, kept in the URL.
@@ -343,10 +347,19 @@ export function ActivityPage() {
   )
   // Two breakdowns are read here (model typeahead, source picker); the rest are
   // not requested.
+  // The two suggestion queries below differ only by the filters each drops, plus
+  // `priced`, which the model one never applies. With none of those set they ask
+  // the same question, so both carry all four breakdowns under one key and share
+  // a request.
+  const sharedSuggestions =
+    modelFilters.length === 0 &&
+    userFilters.length === 0 &&
+    apiKeyFilters.length === 0 &&
+    priced === undefined
   const modelSummary = useUsageSummary(
     modelSuggestFilters,
     "day",
-    MODEL_AND_SOURCE_BREAKDOWNS,
+    sharedSuggestions ? SUGGESTION_BREAKDOWNS : MODEL_AND_SOURCE_BREAKDOWNS,
   )
   const realGroups = (rows: UsageGroupRow[] | undefined) =>
     (rows ?? []).filter((group) => !group.is_other && group.key !== null)
@@ -366,7 +379,10 @@ export function ActivityPage() {
   const entitySummary = useUsageSummary(
     entitySuggestFilters,
     "day",
-    ENTITY_BREAKDOWNS,
+    // Shared through the key rather than by reading `modelSummary`: on the first
+    // pick this observer's own previous data is the right window for its new key,
+    // so the options and chip labels hold until its own summary lands.
+    sharedSuggestions ? SUGGESTION_BREAKDOWNS : ENTITY_BREAKDOWNS,
   )
   const keyOptions = realGroups(entitySummary.data?.by_api_key).map(
     (group) => ({
@@ -913,7 +929,9 @@ export function ActivityPage() {
     void inFlight.refetch()
     void contextSummary.refetch()
     void modelSummary.refetch()
-    void entitySummary.refetch()
+    if (!sharedSuggestions) {
+      void entitySummary.refetch()
+    }
     // Guarded because refetch() ignores `enabled`: without a picked source the
     // query is disabled by design and refetching it would fire a pointless
     // extra summary request.

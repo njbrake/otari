@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useLocation } from "@tanstack/react-router"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -996,9 +996,74 @@ describe("UsagePage", () => {
     expect(main).toBeDefined()
     expect(main).toContain("dimensions=source_label")
     expect(main).toContain("dimensions=provider")
-    // No table on this page breaks spend down by API key.
-    expect(main).not.toContain("dimensions=api_key")
+    // No table breaks spend down by API key; the key picker reads it from here.
+    expect(main).toContain("dimensions=api_key")
     expect(summaryCalls.some((u) => u.includes("dimensions=none"))).toBe(true)
+    // With no filter set the pickers read the page summary, so neither sends one
+    // of its own.
+    expect(summaryCalls).toHaveLength(2)
+  })
+
+  it("gives a picker its own summary only while its own filter is set", async () => {
+    const fetchMock = mockApi(summary())
+    const user = userEvent.setup()
+    renderPage(<UsagePage />)
+    await screen.findByText("gpt-5.6")
+
+    const modelInput = screen.getByRole("combobox", { name: "Model" })
+    await user.click(modelInput)
+    await user.type(modelInput, "claude")
+    await user.click(
+      await screen.findByRole("option", { name: /claude-sonnet-5/ }),
+    )
+
+    await waitFor(() => {
+      const modelOnly = fetchMock.mock.calls
+        .map(([u]) => String(u))
+        .filter((u) => u.includes("/usage/summary"))
+        .filter(
+          (u) =>
+            new URL(u, "http://x").searchParams.getAll("dimensions").join() ===
+            "model",
+        )
+      // The model picker drops its own filter, so it keeps offering the others.
+      expect(modelOnly).toHaveLength(1)
+      expect(modelOnly[0]).not.toContain("model=claude-sonnet-5")
+    })
+  })
+
+  it("keeps the user options and chip label while the picker's own summary loads", async () => {
+    // The first pick moves the entity picker onto a summary of its own. Until that
+    // lands it has to keep showing the page summary it just read from, or the chip
+    // falls back to the raw id and the picker offers nothing.
+    let holdEntity = false
+    const fetchMock = mockApi(summary())
+    const answer = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input)
+      const dims = new URL(url, "http://x").searchParams.getAll("dimensions")
+      if (holdEntity && dims.join() === "user,api_key") {
+        return new Promise<Response>(() => {})
+      }
+      return answer(input, init)
+    })
+    const user = userEvent.setup()
+    renderPage(<UsagePage />)
+    await screen.findByText("gpt-5.6")
+    holdEntity = true
+
+    const userInput = screen.getByRole("combobox", { name: "User" })
+    await user.click(userInput)
+    await user.type(userInput, "alice")
+    await user.click(await screen.findByRole("option", { name: /alice/ }))
+
+    expect(
+      screen.getByLabelText("Remove User filter Alice (alice)"),
+    ).toBeInTheDocument()
+    await user.click(userInput)
+    expect(
+      await screen.findByRole("option", { name: /Bob/ }),
+    ).toBeInTheDocument()
   })
 
   it("switches the secondary breakdown between session, endpoint, provider, and source", async () => {
@@ -1078,10 +1143,13 @@ describe("UsagePage", () => {
       await screen.findByRole("option", { name: /claude-sonnet-5/ }),
     )
 
-    const summaryCalls = fetchMock.mock.calls
+    const pageSummaryCalls = fetchMock.mock.calls
       .map(([u]) => String(u))
-      .filter((u) => u.includes("/usage/summary"))
-    expect(summaryCalls.at(-1)).toContain("model=claude-sonnet-5")
+      .filter(
+        (u) =>
+          u.includes("/usage/summary") && u.includes("dimensions=source_label"),
+      )
+    expect(pageSummaryCalls.at(-1)).toContain("model=claude-sonnet-5")
   })
 
   it("renders the trend with recharts and retires the hand-rolled SVG chart", async () => {
