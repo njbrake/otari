@@ -17,14 +17,8 @@ export const MODELS = "models"
 // own key so the two reads can be cached apart, and every pricing mutation
 // invalidates both: a rate change moves a row in each.
 export const CATALOG = "catalog"
+export const OVERVIEW = "overview"
 export const PRICING = "pricing"
-// The three operator reads beside the price list: an update the scheduled
-// refresh left waiting, the accepted-snapshot history, and each stored rate
-// against today's default. Children of PRICING, so a confirm or a price write
-// refetches them with the list.
-export const PRICING_PENDING = [PRICING, "pending"] as const
-export const PRICING_SNAPSHOTS = [PRICING, "snapshots"] as const
-export const PRICING_DRIFT = [PRICING, "drift"] as const
 export const SETTINGS = "settings"
 export const MAIL_SETTINGS = "mail-settings"
 export const MAINTENANCE_MODE = "maintenance-mode"
@@ -39,6 +33,11 @@ export const SEARCH_PROVIDERS = "search-providers"
 // remote service's answer, so a settings save that changes that URL invalidates
 // it, while every other tool-settings write must not re-dial the sidecar.
 export const GUARDRAIL_PROFILES = "guardrail-profiles"
+// The guardrails this gateway can build itself. Kept apart from
+// GUARDRAIL_PROFILES for the opposite reason: this one is a property of the
+// installed library and moves only on a redeploy, so pointing `guardrails_url`
+// at another service must not invalidate it.
+export const BUILTIN_GUARDRAIL_CATALOG = "builtin-guardrail-catalog"
 // Both carry the surface they were read from and the workspace they were scoped
 // to as trailing key segments, so the deployment-wide list and its tenant-scoped
 // sibling share a head that one invalidation covers. See `useRoutingScope`.
@@ -61,6 +60,12 @@ export const SCOPED_BUDGETS = "scoped-budgets"
 export const USERS = "users"
 export const USAGE = "usage"
 export const ORGANIZATIONS = "organizations"
+// The caller's standing in the organization they are acting in. Composed here
+// rather than spelled at the hook, because two things outside that hook address
+// this one read: switching organization writes the context it was answered with
+// straight into it, and the spend-ceilings read binds its role gate to whatever
+// object is cached under it.
+export const ORGANIZATION_CONTEXT = [ORGANIZATIONS, "context"] as const
 // Deliberately its own key rather than a child of ORGANIZATIONS: switching
 // organizations invalidates both, but a role change invalidates only the roster,
 // and nesting would re-read the context (and every page gated on it) as well.
@@ -77,10 +82,25 @@ export const ORGANIZATION_PRICING = "organization-pricing"
 export const ORGANIZATION_BUDGETS = "organization-budgets"
 export const ORGANIZATION_SPEND_CEILINGS = "organization-spend-ceilings"
 export const ORGANIZATION_GUARDRAILS = "organization-guardrails"
+// What each guardrail is, apart from where it runs. No mandate field changes
+// when a definition does, so a definition write leaves the mandates alone.
+export const ORGANIZATION_GUARDRAIL_DEFINITIONS =
+  "organization-guardrail-definitions"
 // The organization's own upstream provider credentials. Its own key for the
 // reason the two above have one: this is read by one page, and a credential
 // edit has no business refetching the organization context every page reads.
 export const ORGANIZATION_PROVIDER_KEYS = "organization-provider-keys"
+// The models an organization offers on one of its provider keys. Its own root
+// key rather than a child of ORGANIZATION_PROVIDER_KEYS: making a key default or
+// archiving one does not move a model row, and nesting would refetch every open
+// panel on each of those writes. Scoped per key below the root, because a page
+// can have one key's panel open at a time and the others must not refetch.
+export const ORGANIZATION_PROVIDER_MODELS = "organization-provider-models"
+// What a provider says it serves on a stored credential. The DISCOVERABLE rule
+// one scope down: answering dials the upstream, so it must not share a head with
+// anything a price or a toggle invalidates, or every save would re-dial.
+export const ORGANIZATION_PROVIDER_AVAILABLE_MODELS =
+  "organization-provider-available-models"
 // The organization's email-domain claims. Its own key for the same reason:
 // one page reads it, and claiming a domain has no bearing on anything else.
 export const ORGANIZATION_DOMAINS = "organization-domains"

@@ -89,9 +89,9 @@ The workspace view contains day-to-day gateway operations:
   list of cards with a rail of filters beside it, and a page per model where
   every offering of it is compared, one per provider, each with its own limits
   and the price your organization is charged. It is read-only; a rate is set on
-  Model pricing.
+  Providers.
 - Tools
-- API keys, providers, and workspace members
+- API keys and workspace members
 
 The organization view contains tenant-wide administration:
 
@@ -99,8 +99,16 @@ The organization view contains tenant-wide administration:
 - Workspaces and organization members
 - Email domains, for joining colleagues automatically
 - Spend and budgets
-- Organization pricing
-- Organization settings and, in hosted mode, provider keys
+- General: Providers, followed by Deployment providers and Org settings.
+  Providers is the organization's own upstream credentials, the models each one
+  reaches, and what this organization pays for them: adding a key offers every
+  model the provider lists on it, each carrying a switch that decides whether
+  the runtime serves it. Each is priced by the first rung that answers, which is
+  the order a request is metered by: this organization's own rate, then the
+  deployment price list, then the community defaults. A model nothing prices is
+  offered and left unserved. Deployment providers is the process-wide credential
+  list, which a deployment operator manages and which is served to every
+  organization; it appears in standalone mode only.
 
 Settings shows the effective non-secret configuration. Some values can be changed
 at runtime and others require a restart. The server marks that distinction in the
@@ -110,15 +118,17 @@ What a page shows can also depend on who is signed in, not only on the
 deployment. Spend and budgets is the clearest case: an organization owner or
 admin manages their own organization's budgets and the spend ceilings holding
 them, while a deployment operator gets the deployment-wide budgets and the
-gateway users assigned to them. Model pricing splits the same way, with the
-default pricing catalog kept to an operator and the organization's own rate
-overrides open to its admins. An override covers a model the organization
-supplies the provider key for; a model reached through one of the deployment's
-own provider instances is priced by the catalog, because the deployment holds
-that credential and settles its upstream bill. For an operator that section
-also shows the update a scheduled genai-prices check has left for review, when
-the defaults were last accepted and by whom, and how far each stored rate sits
-from today's default.
+gateway users assigned to them.
+
+Providers answers to the organization role rather than to deployment authority.
+Its owners and admins manage the keys, the models each key offers, and the rate
+each model is billed at. An organization may set its own rate for a model it
+supplies the provider key for. A model reached through one of the deployment's
+own provider instances is not one of those: the deployment holds that credential
+and settles its upstream bill, so its rate is the deployment price list's, which
+is `/api/v1/pricing` and has no page of its own. The genai-prices defaults are
+likewise kept current through `/api/v1/pricing/refresh` rather than from the
+dashboard.
 
 Exact page names and availability can change with deployment mode and installed
 extensions. The running dashboard is the source of truth.
@@ -197,11 +207,11 @@ the three credentials they used. It is the only path that grants membership
 without somebody deciding about the person, and it is fenced accordingly: see
 [Email-domain auto-join](access-control.md#email-domain-auto-join).
 
-Mail is optional. Without SMTP, invitation links can still be copied and shared
-manually. See [Configuration](configuration.md#mail). Setting a password is the
-step that needs mail, because it sends a verification link, so on a deployment
-without mail an operator generates one instead: **Accounts**, then **Set
-password**, shows it once to hand over.
+Mail is optional. Inviting a member always gives you an accept link to share,
+and an invitee who has never signed in chooses a password on the page it opens,
+so a deployment without SMTP can still bring people in. See [Configuration](configuration.md#mail).
+For an account that already exists, an operator can generate a password instead:
+**Accounts**, then **Set password**, shows it once to hand over.
 
 ## Bundled guide and custom documentation
 

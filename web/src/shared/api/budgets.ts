@@ -7,7 +7,9 @@ import type {
   CreateOrganizationSpendCeiling,
   CreateScopedBudgetRequest,
   OrganizationBudget,
+  OrganizationContext,
   OrganizationSpendCeiling,
+  OrganizationSpendCeilings,
   ScopedBudget,
   UpdateBudgetRequest,
   UpdateOrganizationBudget,
@@ -15,30 +17,17 @@ import type {
   UpdateScopedBudgetRequest,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
-import { fetchAllPaged } from "@/shared/api/paging"
+import { useOrganizationContext } from "@/shared/api/organizations"
+import { fetchAllPaged, fetchAllRows } from "@/shared/api/paging"
 import {
   BUDGETS,
   ORGANIZATION_BUDGETS,
+  ORGANIZATION_CONTEXT,
   ORGANIZATION_SPEND_CEILINGS,
   SCOPED_BUDGETS,
 } from "@/shared/api/queryKeys"
 
-const BUDGETS_PAGE_SIZE = 1000
-const BUDGETS_MAX_PAGES = 100
-
-async function fetchAllBudgets(): Promise<Budget[]> {
-  const all: Budget[] = []
-  for (let page = 0; page < BUDGETS_MAX_PAGES; page += 1) {
-    const rows = await apiFetch<Budget[]>(
-      `/budgets?skip=${page * BUDGETS_PAGE_SIZE}&limit=${BUDGETS_PAGE_SIZE}`,
-    )
-    all.push(...rows)
-    if (rows.length < BUDGETS_PAGE_SIZE) {
-      break
-    }
-  }
-  return all
-}
+const fetchAllBudgets = () => fetchAllRows<Budget>("/budgets")
 
 // `enabled` is for a page that composes this deployment-wide read into a
 // tenant-scoped one: since #821 it answers 403 to anyone who does not operate
@@ -109,25 +98,8 @@ export function useDeleteBudget() {
 // above rather than a view over them: each row carries its own counters, so one
 // row is a pooled cap over whatever its scope names. See `client/index.ts`.
 //
-// The list route returns a bare array (not the `Paged` envelope the tenancy
-// routes use) and caps `limit` at 1000 server-side, so it pages like budgets and
-// keys do, with the same guard against a backend that ignores `skip`.
-const SCOPED_BUDGETS_PAGE_SIZE = 1000
-const SCOPED_BUDGETS_MAX_PAGES = 100
-
-async function fetchAllScopedBudgets(): Promise<ScopedBudget[]> {
-  const all: ScopedBudget[] = []
-  for (let page = 0; page < SCOPED_BUDGETS_MAX_PAGES; page += 1) {
-    const rows = await apiFetch<ScopedBudget[]>(
-      `/scoped-budgets?skip=${page * SCOPED_BUDGETS_PAGE_SIZE}&limit=${SCOPED_BUDGETS_PAGE_SIZE}`,
-    )
-    all.push(...rows)
-    if (rows.length < SCOPED_BUDGETS_PAGE_SIZE) {
-      break
-    }
-  }
-  return all
-}
+const fetchAllScopedBudgets = () =>
+  fetchAllRows<ScopedBudget>("/scoped-budgets")
 
 // Gated for the same reason as `useBudgets` above.
 export function useScopedBudgets(enabled = true) {
@@ -218,15 +190,64 @@ export function useOrganizationBudgets(enabled = true) {
   })
 }
 
-export function useOrganizationSpendCeilings(enabled = true) {
+/**
+ * One page of the organization's spend ceilings, with the total.
+ *
+ * Read whole until otari#1420: the Overview also read it, for a worst-case
+ * aggregate, and a second reader wanting every row is what kept this a walk.
+ * That reader moved to the summary endpoint in otari#1425, so the table is the
+ * only one left and can ask for the page it shows.
+ */
+export function useOrganizationSpendCeilings(
+  page: number,
+  pageSize: number,
+  enabled = true,
+) {
+  const queryClient = useQueryClient()
+  // The context the caller's `enabled` was read from, whatever it read off it.
+  const context = useOrganizationContext().data
   return useQuery({
-    queryKey: [ORGANIZATION_SPEND_CEILINGS],
+    // The organization is part of the key, not only of the request, which
+    // carries it implicitly: the server scopes this read by the session's
+    // active organization, so a walk still in flight when the caller switches
+    // is answered about the organization just left. Keyed per organization, it
+    // lands under the one it asked about rather than under the one now on
+    // screen. `invalidateOrganizationSpend` matches on the head, so the extra
+    // segment costs it nothing, and a context that names no organization keys
+    // as `null` rather than taking the page down over a cache entry.
+    queryKey: [
+      ORGANIZATION_SPEND_CEILINGS,
+      context?.organization?.id ?? null,
+      page,
+      pageSize,
+    ],
     queryFn: () =>
-      fetchAllPaged<OrganizationSpendCeiling>(
-        "/organizations/me/spend-ceilings",
+      apiFetch<OrganizationSpendCeilings>(
+        `/organizations/me/spend-ceilings?skip=${page * pageSize}&limit=${pageSize}`,
       ),
     staleTime: 60_000,
-    enabled,
+    // Kept across a page change and dropped across an organization change.
+    // `keepPreviousData` alone answers the new organization's key with the old
+    // organization's rows until the fetch lands, which is one tenant's spend on
+    // another tenant's screen, briefly and for no reason.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === (context?.organization?.id ?? null)
+        ? previous
+        : undefined,
+    // A callback, because this is the one read here that a *role* opens, and a
+    // role moves under a mounted query. Switching organization invalidates
+    // everything cached, and React Query resolves a plain `enabled` from the
+    // render before, so an owner or admin here who is a member there refetched
+    // this owners-and-admins-only read under the role just left and the page
+    // reported the refusal (otari#1300). A callback is resolved when the
+    // refetch is decided, by which point the switch has written the new
+    // context, so the read is withheld rather than made and apologized for.
+    // The gate reopens on the caller's next render, which is where `enabled`
+    // is worked out again from the context now in its hands.
+    enabled: () =>
+      enabled &&
+      queryClient.getQueryData<OrganizationContext>(ORGANIZATION_CONTEXT) ===
+        context,
   })
 }
 

@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from typing import Never
 
@@ -6,6 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from gateway.auth.models import API_KEY_PREFIX
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.db import APIKey, User
 from gateway.main import create_app
@@ -33,7 +35,7 @@ def test_create_app_bootstraps_first_api_key(tmp_path: Path) -> None:
     # The bootstrap key is the operator's first and most-used key, so it must carry a
     # fingerprint like any other (regression guard for the third mint path).
     assert keys[0].key_prefix is not None
-    assert keys[0].key_prefix.startswith("gw-")
+    assert keys[0].key_prefix.startswith(API_KEY_PREFIX)
     assert keys[0].key_suffix is not None
     assert len(keys[0].key_suffix) == 4
     assert len(users) == 1
@@ -119,3 +121,53 @@ def test_first_boot_seeds_a_fresh_database_without_sending_mail(
     with Session(engine) as db:
         assert db.query(APIKey).count() == 1
     engine.dispose()
+
+
+PROBE_BOOTSTRAP = """
+from gateway.container import Container
+from gateway.ports.api_key_format_port import ApiKeyFormatPort, Local
+
+
+class ProbeKeyFormat:
+    def __init__(self, session):
+        self.session = session
+
+    def mint(self):
+        return "probe-" + "z" * 60
+
+    def fingerprint(self, api_key):
+        return api_key[:13]
+
+    def route(self, presented):
+        return Local()
+
+
+def register(container: Container) -> None:
+    container.bind(ApiKeyFormatPort, ProbeKeyFormat)
+"""
+
+
+def test_the_bootstrap_key_is_minted_in_the_bound_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first-run key goes through the port too, so an overlay's format reaches it."""
+    module_name = "probe_bootstrap_key_format"
+    (tmp_path / f"{module_name}.py").write_text(PROBE_BOOTSTRAP)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop(module_name, None)
+    try:
+        database_path = tmp_path / "bootstrap-probe.db"
+        config = GatewayConfig(database_url=f"sqlite:///{database_path}", bootstrap=f"{module_name}:register")
+        app = create_app(config)
+
+        with TestClient(app):
+            pass
+
+        engine = create_engine(config.database_url)
+        with Session(engine) as db:
+            keys = db.query(APIKey).all()
+        engine.dispose()
+    finally:
+        sys.modules.pop(module_name, None)
+
+    assert len(keys) == 1
+    assert keys[0].key_prefix == "probe-zzzzzzz"
+    assert keys[0].key_suffix == "zzzz"

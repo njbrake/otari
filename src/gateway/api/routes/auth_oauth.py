@@ -46,7 +46,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import IdentityProviderPortDep, get_config, get_db
+from gateway.api.deps import IdentityProviderPortDep, get_config, get_db, record_auth_failure
 from gateway.api.routes._public_auth import throttle_public_auth
 
 # The same refusal the password and passkey sign-ins carry, imported rather than
@@ -54,8 +54,9 @@ from gateway.api.routes._public_auth import throttle_public_auth
 # wording it differently would tell a person the doors closed for three reasons.
 from gateway.api.routes.auth_session import MAINTENANCE_MODE_REFUSAL
 from gateway.core.config import OAUTH_PROVIDERS, GatewayConfig
+from gateway.exceptions import TenancyError
+from gateway.exceptions.identity_exceptions import OAuthNotConfiguredError
 from gateway.log_config import logger
-from gateway.metrics import record_auth_failure
 from gateway.services.dashboard_session_service import (
     apply_session_cookie,
     create_dashboard_session,
@@ -72,7 +73,6 @@ from gateway.services.oauth_service import (
     provider_label,
     require_configured,
 )
-from gateway.services.tenancy.errors import OAuthNotConfiguredError, TenancyError
 from gateway.services.tenancy.organization_domain_service import OrganizationDomainService
 
 router = APIRouter(prefix=OAUTH_ROUTE_PREFIX, tags=["auth"])

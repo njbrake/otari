@@ -1,46 +1,118 @@
 """OpenAI-compatible file upload/storage endpoints.
 
 Stores uploaded files so they can later be referenced from chat messages by
-``file_id``. The content normalizer (gateway.services.content_normalizer)
-resolves those references and either forwards them to natively-capable
-providers or extracts them to text for text-only local models.
+``file_id``. The content normalizer resolves those references and either
+forwards them to natively-capable providers or extracts them to text for
+text-only local models.
 
 Files carry two scopes. ``user_id`` is the owner, resolved from the authenticated
 principal. ``workspace_id`` is the workspace the upload was made in, taken off the
 API key that authenticated it and never from a header, exactly as every other
-request-plane row does (``services/workspace_scope``). A keyed request is confined
-to its own key's workspace on every verb; a master-key request is the operator
-acting deployment-wide and sees every workspace, narrowable on the listing with
-``workspace_id``, matching ``GET /api/v1/keys``.
+request-plane row does. A keyed request is confined to its own key's workspace on
+every verb; a master-key request is the operator acting deployment-wide and sees
+every workspace, narrowable on the listing with ``workspace_id``, matching
+``GET /api/v1/keys``.
+
+The same five routes serve two SDKs. OpenAI's and Anthropic's Files APIs share
+their paths and verbs and differ only in the JSON they return, so the response
+shape follows the caller: a request carrying Anthropic's ``anthropic-version``
+header (which its SDK sends on every call) gets ``FileMetadata``, everything
+else gets the OpenAI file object.
+The Anthropic flavor is its GA shape only, so a request for the Files API beta is a 400.
 """
 
-import mimetypes
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator
-from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from collections.abc import AsyncIterator
+from typing import Annotated, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
-from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import get_config, get_db, get_file_store, verify_api_key_or_master_key
+from gateway.api.deps import FileServiceDep, get_config, verify_api_key_or_master_key
 from gateway.api.routes._helpers import resolve_user_id
 from gateway.core.config import GatewayConfig
-from gateway.log_config import logger
-from gateway.models.entities import APIKey, FileObject
-from gateway.services.file_service import fetch_file
-from gateway.services.file_store import FileStore
-from gateway.services.workspace_scope import default_workspace_id
+from gateway.exceptions.files_exceptions import FilesDisabledError
+from gateway.models.api_keys import APIKey
+from gateway.schemas.files import (
+    AnthropicFileDeleted,
+    AnthropicFileList,
+    AnthropicFileMetadata,
+    OpenAIFileDeleted,
+    OpenAIFileList,
+    OpenAIFileObject,
+)
+from gateway.services.files import (
+    DEFAULT_LIST_LIMIT,
+    MAX_LIST_LIMIT,
+    FileDialect,
+    FileListing,
+    FileScope,
+    NewFile,
+)
 
-router = APIRouter(tags=["files"])
+_FILES_BETA = "files-api-2025-04-14"
+
+
+async def _refuse_files_beta(raw_request: Request) -> None:
+    """Refuse Anthropic's Files API beta, whose shapes differ from the GA shapes served here."""
+    for header_value in raw_request.headers.getlist("anthropic-beta"):
+        if _FILES_BETA in (beta.strip() for beta in header_value.split(",")):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"The {_FILES_BETA} beta is not supported: send Files API requests without it in anthropic-beta",
+            )
+
+
+async def _require_files_enabled(config: Annotated[GatewayConfig, Depends(get_config)]) -> None:
+    """Refuse every verb when the deployment does not serve files.
+
+    A router dependency, so the refusal comes before the request is parsed and
+    before the caller is authenticated. That is what makes a switched-off
+    feature answer like an unmounted one instead of leaking, through the
+    refusal it picks, that the paths are there at all.
+    """
+    if not config.files_enabled:
+        raise FilesDisabledError
+
+
+router = APIRouter(tags=["files"], dependencies=[Depends(_require_files_enabled), Depends(_refuse_files_beta)])
 
 # OpenAI's documented file purposes plus a generic default. We don't enforce the
 # enum (forward-compat), but normalise the empty case to "user_data".
 _DEFAULT_PURPOSE = "user_data"
+
+# The most files ``ids[]`` may name in one page.
+_MAX_LIST_IDS = 100
+
+_READ_CHUNK_BYTES = 1024 * 1024
+
+
+def _dialect(raw_request: Request) -> FileDialect:
+    """Which SDK's Files API the caller speaks."""
+    if "anthropic-version" in raw_request.headers:
+        return FileDialect.ANTHROPIC
+    return FileDialect.OPENAI
+
+
+def _check_anthropic_list_params(raw_request: Request, page: str | None, ids: list[str] | None) -> None:
+    """Refuse the parameter combinations Anthropic's GA listing refuses, given de-duplicated ``ids``."""
+    params = raw_request.query_params
+    if "after_id" in params or "before_id" in params:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="after_id and before_id are not supported: pass next_page back as page instead",
+        )
+    if ids is None:
+        return
+    if page is not None or "limit" in params:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="ids[] cannot be combined with page or limit"
+        )
+    if len(ids) > _MAX_LIST_IDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"ids[] takes at most {_MAX_LIST_IDS} file IDs"
+        )
 
 
 def _request_workspace_id(auth_result: tuple[APIKey | None, bool]) -> uuid.UUID | None:
@@ -86,59 +158,18 @@ def _resolve_user(
     )
 
 
-_READ_CHUNK_BYTES = 1024 * 1024
+def _scope(auth_result: tuple[APIKey | None, bool], user: str | None, config: GatewayConfig) -> FileScope:
+    """The rows this request may reach: its billed user, and its key's workspace."""
+    return FileScope(
+        user_id=_resolve_user(auth_result, user, config),
+        workspace_id=_request_workspace_id(auth_result),
+    )
 
 
-async def _capped_chunks(file: UploadFile, max_bytes: int) -> AsyncIterator[bytes]:
-    """Yield an upload's bytes in chunks, aborting with 413 past ``max_bytes``.
-
-    This is what keeps the size cap an HTTP concern living in the route: it
-    yields chunks straight through to the storage backend (via
-    ``FileStore.put_stream``) instead of accumulating them, so the cap is
-    enforced as bytes flow rather than after a full buffer is built.
-    """
-    total = 0
+async def _upload_chunks(file: UploadFile) -> AsyncIterator[bytes]:
+    """Read the upload off the request a chunk at a time, so it is never held whole."""
     while chunk := await file.read(_READ_CHUNK_BYTES):
-        total += len(chunk)
-        if total > max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                detail=f"File exceeds maximum upload size of {max_bytes // (1024 * 1024)} MB",
-            )
         yield chunk
-
-
-async def _prime(chunks: AsyncGenerator[bytes, None]) -> AsyncGenerator[bytes, None]:
-    """Eagerly read ``chunks``' first item so a read failure raises here, not later.
-
-    ``StreamingResponse`` only touches its body iterator after the 200 status
-    and headers are already flushed. Without this, a missing or unreadable blob
-    (DB record present, disk blob gone or corrupted) would truncate an
-    already-started 200 response instead of failing with a clean 500. Awaiting
-    the first chunk before constructing the response surfaces that failure as
-    a normal exception in the route.
-    """
-    try:
-        first: bytes | None = await chunks.__anext__()
-    except StopAsyncIteration:
-        first = None
-
-    async def _rest() -> AsyncGenerator[bytes, None]:
-        # StreamingResponse closes this outer generator on early client
-        # disconnect, but that doesn't automatically propagate to closing
-        # `chunks` (no such thing for a bare `async for`) — without this
-        # try/finally, `get_stream`'s file handle stays open until GC
-        # eventually gets to the abandoned generator, which under real
-        # traffic (cancelled downloads, closed tabs) means fds pile up.
-        try:
-            if first is not None:
-                yield first
-                async for chunk in chunks:
-                    yield chunk
-        finally:
-            await chunks.aclose()
-
-    return _rest()
 
 
 def _content_disposition(filename: str) -> str:
@@ -149,144 +180,120 @@ def _content_disposition(filename: str) -> str:
     ``filename`` for legacy clients plus an RFC 5987 percent-encoded
     ``filename*`` for the real (possibly non-ASCII) name.
     """
-    ascii_name = "".join(c for c in filename if c.isprintable() and c not in '"\\').encode(
-        "ascii", "ignore"
-    ).decode("ascii")
+    ascii_name = (
+        "".join(c for c in filename if c.isprintable() and c not in '"\\').encode("ascii", "ignore").decode("ascii")
+    )
     ascii_name = ascii_name.strip() or "download"
     encoded = quote(filename, safe="")
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
 
 
-def _guess_mime(filename: str | None, declared: str | None) -> str:
-    if declared and declared != "application/octet-stream":
-        return declared
-    if filename:
-        guessed, _ = mimetypes.guess_type(filename)
-        if guessed:
-            return guessed
-    return declared or "application/octet-stream"
-
-
 @router.post("/files")
 async def create_file(
+    raw_request: Request,
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
-    file_store: Annotated[FileStore, Depends(get_file_store)],
+    files: FileServiceDep,
     file: UploadFile = File(...),
     purpose: str = Form(_DEFAULT_PURPOSE),
     user: str | None = Form(None),
-) -> dict[str, Any]:
-    """OpenAI-compatible file upload endpoint."""
-    if not config.files_enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File uploads are disabled")
-
-    user_id = _resolve_user(auth_result, user, config)
-    # A master-key upload has no key to read a workspace off, so it lands in the
-    # default workspace: the operator acting deployment-wide, which is the same
-    # answer `resolve_workspace_id` gives every other master-key write.
-    workspace_id = _request_workspace_id(auth_result) or await default_workspace_id(db)
-
-    file_id = f"file-{uuid.uuid4().hex}"
-    storage_ref, size = await file_store.put_stream(file_id, _capped_chunks(file, config.files_max_bytes))
-    if size == 0:
-        # The empty check now happens after the stream drains (we don't know
-        # the size until then), so a zero-byte blob must be cleaned up before
-        # rejecting the upload.
-        await file_store.delete(storage_ref)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
-
-    expires_at: datetime | None = None
-    if config.files_retention_hours is not None:
-        expires_at = datetime.now(UTC) + timedelta(hours=config.files_retention_hours)
-
-    record = FileObject(
-        id=file_id,
-        user_id=user_id,
-        workspace_id=workspace_id,
-        filename=file.filename or file_id,
-        mime_type=_guess_mime(file.filename, file.content_type),
-        bytes=size,
-        purpose=purpose or _DEFAULT_PURPOSE,
-        storage_ref=storage_ref,
-        created_at=datetime.now(UTC),
-        expires_at=expires_at,
+) -> OpenAIFileObject | AnthropicFileMetadata:
+    """Upload a file. Answers in the OpenAI or Anthropic file shape, following the caller's headers."""
+    record = await files.store(
+        NewFile(
+            user_id=_resolve_user(auth_result, user, config),
+            workspace_id=_request_workspace_id(auth_result),
+            filename=file.filename,
+            content_type=file.content_type,
+            purpose=purpose or _DEFAULT_PURPOSE,
+            chunks=_upload_chunks(file),
+        )
     )
-    db.add(record)
-    try:
-        await db.commit()
-    except SQLAlchemyError as exc:
-        await db.rollback()
-        # The bytes were written before the metadata commit; drop them so a
-        # failed insert doesn't leak an unreferenced blob.
-        await file_store.delete(storage_ref)
-        logger.error("Failed to persist file metadata for %s: %s", file_id, exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to store file",
-        ) from exc
-
-    logger.info(
-        "Stored file %s (%d bytes) for user %s in workspace %s", file_id, size, user_id, workspace_id
-    )
-    return record.to_dict()
+    if _dialect(raw_request) is FileDialect.ANTHROPIC:
+        return AnthropicFileMetadata.of(record)
+    return OpenAIFileObject.of(record)
 
 
 @router.get("/files")
 async def list_files(
+    raw_request: Request,
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
+    files: FileServiceDep,
     user: str | None = None,
     purpose: str | None = None,
     workspace_id: uuid.UUID | None = None,
-) -> dict[str, Any]:
+    limit: Annotated[int, Query(ge=1, le=MAX_LIST_LIMIT)] = DEFAULT_LIST_LIMIT,
+    after: str | None = None,
+    order: Literal["asc", "desc"] = "desc",
+    page: str | None = None,
+    ids: Annotated[list[str] | None, Query(alias="ids[]")] = None,
+) -> OpenAIFileList | AnthropicFileList:
     """List the authenticated user's uploaded files in the request's workspace.
 
     ``workspace_id`` narrows a master-key listing to one workspace; a keyed
     request is already confined to its key's own and cannot widen or move it.
-    """
-    if not config.files_enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File uploads are disabled")
 
-    user_id = _resolve_user(auth_result, user, config)
+    Each flavor pages with its own cursor.
+    OpenAI's ``after`` names the last file of the previous page, and ``has_more`` says whether to ask again.
+    Anthropic's ``next_page`` is passed back as ``page``, and ``ids[]`` reads up to 100 named files in one page.
+    A cursor whose file has since been deleted or has expired is still a position.
+    An ``after`` the caller never owned is a 404, and a ``page`` token this gateway did not issue is a 400.
+    """
+    dialect = _dialect(raw_request)
+    if dialect is FileDialect.ANTHROPIC:
+        named_ids = None if ids is None else list(dict.fromkeys(ids))
+        _check_anthropic_list_params(raw_request, page, named_ids)
+        cursor = page
+    else:
+        named_ids, cursor = None, after
     # The key's own workspace wins over anything the caller sent, rather than
     # 400ing on a mismatch: the parameter is a master-key narrowing, and a keyed
     # request is confined either way, so refusing it would only add a way to get
     # an error instead of the same answer.
-    scope = _request_workspace_id(auth_result) or workspace_id
-    stmt = select(FileObject).where(
-        FileObject.user_id == user_id,
-        FileObject.deleted_at.is_(None),
+    scope = FileScope(
+        user_id=_resolve_user(auth_result, user, config),
+        workspace_id=_request_workspace_id(auth_result) or workspace_id,
     )
-    if scope is not None:
-        stmt = stmt.where(FileObject.workspace_id == scope)
-    if purpose is not None:
-        stmt = stmt.where(FileObject.purpose == purpose)
-    stmt = stmt.order_by(FileObject.created_at.desc())
 
-    result = await db.execute(stmt)
-    records = result.scalars().all()
-    return {"object": "list", "data": [r.to_dict() for r in records]}
+    result = await files.page(
+        FileListing(
+            scope=scope,
+            dialect=dialect,
+            limit=limit,
+            ascending=order == "asc",
+            purpose=purpose,
+            file_ids=named_ids,
+            cursor=cursor,
+        )
+    )
+    if dialect is FileDialect.ANTHROPIC:
+        return AnthropicFileList(
+            data=[AnthropicFileMetadata.of(record) for record in result.files],
+            next_page=result.next_cursor,
+        )
+    return OpenAIFileList(
+        data=[OpenAIFileObject.of(record) for record in result.files],
+        has_more=result.next_cursor is not None,
+        first_id=result.files[0].id if result.files else None,
+        last_id=result.files[-1].id if result.files else None,
+    )
 
 
 @router.get("/files/{file_id}")
 async def get_file(
     file_id: str,
+    raw_request: Request,
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
+    files: FileServiceDep,
     user: str | None = None,
-) -> dict[str, Any]:
+) -> OpenAIFileObject | AnthropicFileMetadata:
     """Retrieve metadata for a single file."""
-    if not config.files_enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File uploads are disabled")
-
-    user_id = _resolve_user(auth_result, user, config)
-    record = await fetch_file(db, file_id, user_id, workspace_id=_request_workspace_id(auth_result))
-    if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-    return record.to_dict()
+    record = await files.stored_file(file_id, _scope(auth_result, user, config))
+    if _dialect(raw_request) is FileDialect.ANTHROPIC:
+        return AnthropicFileMetadata.of(record)
+    return OpenAIFileObject.of(record)
 
 
 @router.get(
@@ -313,77 +320,35 @@ async def get_file(
 async def get_file_content(
     file_id: str,
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
-    file_store: Annotated[FileStore, Depends(get_file_store)],
+    files: FileServiceDep,
     user: str | None = None,
 ) -> Response:
     """Download the raw bytes of a file, streamed rather than buffered whole."""
-    if not config.files_enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File uploads are disabled")
-
-    user_id = _resolve_user(auth_result, user, config)
-    record = await fetch_file(db, file_id, user_id, workspace_id=_request_workspace_id(auth_result))
-    if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-
-    # No Content-Length: it would come from record.bytes (DB) while the body
-    # comes from the storage backend (disk). If those ever diverge (partial
-    # write, corruption), a length header derived from the DB value would be
-    # wrong, and clients trust that header over what actually arrives. Chunked
-    # transfer encoding doesn't need to declare a length up front.
-    try:
-        body = await _prime(file_store.get_stream(record.storage_ref))
-    except OSError as exc:
-        logger.error("Failed to read blob for file %s (ref=%s): %s", file_id, record.storage_ref, exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to read file",
-        ) from exc
-
+    content = await files.content(file_id, _scope(auth_result, user, config))
+    # No Content-Length: it would come from the row's byte count while the body
+    # comes from the storage backend. If those ever diverge (partial write,
+    # corruption), a length header derived from the row would be wrong, and
+    # clients trust that header over what actually arrives. Chunked transfer
+    # encoding doesn't need to declare a length up front.
     return StreamingResponse(
-        body,
-        media_type=record.mime_type,
-        headers={"Content-Disposition": _content_disposition(record.filename)},
+        content.chunks,
+        media_type=content.mime_type,
+        headers={"Content-Disposition": _content_disposition(content.filename)},
     )
 
 
 @router.delete("/files/{file_id}")
 async def delete_file(
     file_id: str,
+    raw_request: Request,
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
-    file_store: Annotated[FileStore, Depends(get_file_store)],
+    files: FileServiceDep,
     user: str | None = None,
-) -> dict[str, Any]:
+) -> OpenAIFileDeleted | AnthropicFileDeleted:
     """Soft-delete a file's metadata and remove its bytes from the backend."""
-    if not config.files_enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File uploads are disabled")
-
-    user_id = _resolve_user(auth_result, user, config)
-    record = await fetch_file(db, file_id, user_id, workspace_id=_request_workspace_id(auth_result))
-    if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-
-    storage_ref = record.storage_ref
-    record.deleted_at = datetime.now(UTC)
-    try:
-        await db.commit()
-    except SQLAlchemyError as exc:
-        await db.rollback()
-        logger.error("Failed to delete file %s: %s", file_id, exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete file",
-        ) from exc
-
-    # The soft-delete already committed, so the file is gone from the user's
-    # view. Removing the blob is best-effort cleanup: a backend failure must not
-    # turn a successful delete into a 500 (it would only leave an orphaned blob).
-    try:
-        await file_store.delete(storage_ref)
-    except OSError as exc:
-        logger.warning("Soft-deleted file %s but failed to remove its blob %s: %s", file_id, storage_ref, exc)
-
-    return {"id": file_id, "object": "file", "deleted": True}
+    await files.discard(file_id, _scope(auth_result, user, config))
+    if _dialect(raw_request) is FileDialect.ANTHROPIC:
+        return AnthropicFileDeleted(id=file_id)
+    return OpenAIFileDeleted(id=file_id)

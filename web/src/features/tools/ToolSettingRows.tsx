@@ -54,7 +54,12 @@ export interface FieldCopy {
   /** A representative value, never the word "default": blank already means that. */
   placeholder: string
   /** Mono, for a value a machine reads. Off for a sentence a model reads. */
-  machine?: boolean
+  isMachineReadable?: boolean
+  /**
+   * What each value of a closed-vocabulary field is called, keyed by the value
+   * the backend lists in `options`. A value without an entry shows as itself.
+   */
+  optionLabels?: Record<string, string>
 }
 
 function useDraft(committed: string) {
@@ -126,7 +131,7 @@ function TextRow({
               if (next === committed) return
               void save.run(() => commit(field.key, next === "" ? null : next))
             }}
-            className={`${copy.machine ? MACHINE_INPUT : TEXT_INPUT}`}
+            className={`${copy.isMachineReadable ? MACHINE_INPUT : TEXT_INPUT}`}
           />
           {trailing}
         </div>
@@ -157,8 +162,9 @@ function NumberRow({
   // Digits only. `Number` would read "0x10" as 16 and "1e1" as 10, and the
   // server's floor is 1, so both are refused here rather than sent.
   const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN
-  const valid = trimmed === "" || (Number.isSafeInteger(parsed) && parsed >= 1)
-  const message = save.error || (valid ? "" : "A whole number, 1 or more.")
+  const isValid =
+    trimmed === "" || (Number.isSafeInteger(parsed) && parsed >= 1)
+  const message = save.error || (isValid ? "" : "A whole number, 1 or more.")
 
   return (
     <SettingRow
@@ -183,7 +189,7 @@ function NumberRow({
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={commitOnEnter}
           onBlur={() => {
-            if (!valid || trimmed === committed) return
+            if (!isValid || trimmed === committed) return
             void save.run(() =>
               commit(field.key, trimmed === "" ? null : parsed),
             )
@@ -246,6 +252,63 @@ function BoolRow({
   )
 }
 
+// A `str` field the backend closes to a fixed vocabulary (`options`). A select
+// rather than a text box, because the write refuses anything outside the list
+// and a field that can only fail on save is worse than one that cannot be
+// mistyped. "Default" is a clear, like the tri-state boolean beside it.
+function OptionRow({
+  field,
+  copy,
+  commit,
+  disabled,
+  defaultLabel,
+  note,
+}: {
+  field: ToolSettingField
+  copy: FieldCopy
+  commit: CommitField
+  disabled: boolean
+  defaultLabel: string
+  note?: React.ReactNode
+}) {
+  const save = useAutosave()
+  const errorId = useId()
+  const configKey = keyCaption(copy, field)
+  const current =
+    typeof field.value === "string" && field.value ? field.value : "default"
+
+  return (
+    <SettingRow
+      label={copy.label}
+      configKey={configKey}
+      help={copy.help}
+      note={note}
+      error={save.error}
+      errorId={errorId}
+      control={
+        <FilterSelect
+          fullWidth
+          ariaLabel={configKey ? `${copy.label} ${configKey}` : copy.label}
+          value={current}
+          onChange={(next) =>
+            void save.run(() =>
+              commit(field.key, next === "default" ? null : next),
+            )
+          }
+          options={[
+            { value: "default", label: defaultLabel },
+            ...(field.options ?? []).map((option) => ({
+              value: option,
+              label: copy.optionLabels?.[option] ?? option,
+            })),
+          ]}
+          disabled={disabled || save.isSaving}
+        />
+      }
+    />
+  )
+}
+
 // The URL row carries Test, which probes the *typed* value so an operator can
 // check an endpoint before leaving the field. The result is pinned to the URL
 // it was asked about, so a late answer never lands beside a different one.
@@ -263,7 +326,7 @@ function UrlRow({
   const committed = typeof field.value === "string" ? field.value : ""
   const [typed, setTyped] = useState(committed)
   const [seen, setSeen] = useState(committed)
-  const [testedUrl, setTestedUrl] = useState<string | null>(null)
+  const [testedUrl, setTestedUrl] = useState<string>()
   const test = useTestService()
 
   // A refetch can re-seed the field with no keystroke, which the `onChange`
@@ -277,7 +340,7 @@ function UrlRow({
   const trimmed = typed.trim()
   // A result belongs to the URL it was asked about, so a late answer never
   // lands beside a different one.
-  const settled = testedUrl === trimmed && !test.isPending
+  const isSettled = testedUrl === trimmed && !test.isPending
 
   return (
     <TextRow
@@ -298,7 +361,7 @@ function UrlRow({
           aria-live="polite"
           className={`text-caption ${test.data?.ok ? "text-success" : "text-danger"}`}
         >
-          {settled &&
+          {isSettled &&
             (test.error ? errorMessage(test.error) : test.data?.reason)}
         </p>
       }
@@ -337,12 +400,15 @@ export function ToolSettingRow({
   disabled,
   readOnly,
   defaultLabel = "Default",
+  note,
 }: {
   field: ToolSettingField
   copy: FieldCopy
   commit: CommitField
   disabled: boolean
   readOnly: boolean
+  /** Shown under the control, for a condition the help text cannot know. */
+  note?: React.ReactNode
   /** Names what the backend does when nothing is set ("Default (on)"). */
   defaultLabel?: string
 }) {
@@ -356,7 +422,7 @@ export function ToolSettingRow({
           ? "On"
           : field.value === false
             ? "Off"
-            : String(field.value)
+            : (copy.optionLabels?.[String(field.value)] ?? String(field.value))
     return (
       <SettingRow
         label={copy.label}
@@ -393,6 +459,18 @@ export function ToolSettingRow({
         commit={commit}
         disabled={disabled}
         defaultLabel={defaultLabel}
+      />
+    )
+  }
+  if (field.options && field.options.length > 0) {
+    return (
+      <OptionRow
+        field={field}
+        copy={copy}
+        commit={commit}
+        disabled={disabled}
+        defaultLabel={defaultLabel}
+        note={note}
       />
     )
   }

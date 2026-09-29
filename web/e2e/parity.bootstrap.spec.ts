@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { API_ROOT } from "@/shared/api/client"
+import { API_ROOT, DASHBOARD_BUILD_PATH } from "@/shared/api/client"
 
 // The shell reads /v1/bootstrap before it renders anything, so every other spec
 // here already depends on it answering: a failure paints an error banner in
@@ -22,6 +22,8 @@ test("the deployment bootstrap is served unauthenticated", async ({
       "budgets",
       "keys",
       "models",
+      "organization_guardrails",
+      "organization_providers",
       "organizations",
       "playground",
       "pricing",
@@ -51,6 +53,9 @@ test("the deployment bootstrap is served unauthenticated", async ({
     // No legal pages configured here; see docs/configuration.md#legal-pages.
     terms_url: null,
     privacy_url: null,
+    // No site of its own here, so the public catalog's logo links to the
+    // catalog; see docs/configuration.md#the-public-site.
+    site_url: null,
     // Sign-ins are open, which is the resting state: maintenance mode is a
     // stored row an operator sets to freeze them during a redeploy, and
     // nothing in this environment sets it.
@@ -61,6 +66,9 @@ test("the deployment bootstrap is served unauthenticated", async ({
     // needs a registered passkey; see docs/access-control.md.
     passkeys_ready: false,
     oauth_providers: [],
+    // Always off: this fork removes feedback forwarding. See
+    // docs/configuration.md#product-feedback.
+    feedback_enabled: false,
     // No SMTP configured in this e2e environment, so invitations are
     // creatable but not emailed; see docs/configuration.md#mail.
     mail_ready: false,
@@ -72,4 +80,28 @@ test("the deployment bootstrap is served unauthenticated", async ({
     // send one registers nobody.
     open_signup: false,
   })
+})
+
+// The stale-tab check, asserted against the real gateway because it is the one
+// place the two halves meet: the route is mounted beside the dashboard at the
+// gateway's own root, and the poll reaches it through `siteFetch` rather than
+// `apiFetch` for exactly that reason. Built the same way the client builds it,
+// so a caller moved back under the API root fails here rather than silently
+// polling a 404, which is how this went unnoticed from #1026 until now.
+test("the dashboard build id is served at the gateway's own root", async ({
+  request,
+}) => {
+  const response = await request.get(DASHBOARD_BUILD_PATH)
+
+  expect(response.status()).toBe(200)
+  const body = await response.json()
+  expect(typeof body.build).toBe("string")
+  expect(body.build.length).toBeGreaterThan(0)
+  expect(typeof body.version).toBe("string")
+  expect(body.version.length).toBeGreaterThan(0)
+
+  // And not under the API root, which is where it was being asked for.
+  expect(
+    (await request.get(`${API_ROOT}${DASHBOARD_BUILD_PATH}`)).status(),
+  ).toBe(404)
 })

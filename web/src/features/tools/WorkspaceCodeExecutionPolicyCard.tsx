@@ -43,6 +43,15 @@ type Stance = "default" | "allowed" | "blocked"
 // The sentinel for "no workspace image", which is a real choice and not an
 // absent one: the workspace runs whatever the deployment runs.
 const DEPLOYMENT_IMAGE = ""
+// The sentinel for "no workspace pin" on who runs a provider's code tool: the
+// deployment default, and the request's own header, decide.
+const DEPLOYMENT_EXECUTOR = ""
+const EXECUTOR_OPTIONS = [
+  { value: DEPLOYMENT_EXECUTOR, label: "Deployment default" },
+  { value: "auto", label: "Auto: provider when native, else here" },
+  { value: "otari", label: "Always here, on this sandbox" },
+  { value: "provider", label: "Always the provider" },
+]
 
 // The server's own ceilings (`workspace_code_execution_policy_service`): a value
 // above either could never take effect, so it is refused rather than stored.
@@ -75,6 +84,7 @@ export function WorkspaceCodeExecutionPolicyCard({
   const stanceSave = useAutosave()
   const imageSave = useAutosave()
   const toolsSave = useAutosave()
+  const executorSave = useAutosave()
   // One writer for the group: a PUT replaces the whole policy, so two rows
   // saving at once would each carry the other's pre-save value.
   const write = usePolicyWriter({
@@ -87,6 +97,7 @@ export function WorkspaceCodeExecutionPolicyCard({
       exec_timeout_s: stored.exec_timeout_s,
       image: stored.image,
       tools: stored.tools,
+      executor: stored.executor,
     }),
     put: (body: UpdateWorkspaceCodeExecutionPolicyRequest) =>
       setPolicy.mutateAsync({
@@ -124,8 +135,8 @@ export function WorkspaceCodeExecutionPolicyCard({
   // Disabled until the read has succeeded. Without that the rows sit at
   // "Deployment default" over a workspace that may well have a stored policy,
   // and one change issues the write that drops it.
-  const unreadable = query.isLoading || query.isError || !policy
-  const narrowingDisabled = unreadable || stance === "default"
+  const isUnreadable = query.isLoading || query.isError || !policy
+  const narrowingDisabled = isUnreadable || stance === "default"
 
   const allowedImages = policy?.allowed_images ?? []
   const availableTools = policy?.available_tools ?? []
@@ -183,7 +194,7 @@ export function WorkspaceCodeExecutionPolicyCard({
 
   return (
     <SettingsGroup
-      bounded
+      isBounded
       title="This workspace"
       description={`Narrows what the deployment allows for requests billed to ${selected.name}. Never widens it, and grants no sandbox the deployment has not configured.`}
       docsHref={docsHref}
@@ -226,7 +237,7 @@ export function WorkspaceCodeExecutionPolicyCard({
               { value: "allowed", label: "Allowed" },
               { value: "blocked", label: "Blocked" },
             ]}
-            disabled={unreadable || stanceSave.isSaving}
+            disabled={isUnreadable || stanceSave.isSaving}
           />
         }
       />
@@ -246,7 +257,7 @@ export function WorkspaceCodeExecutionPolicyCard({
         label="Max tool-loop iterations"
         help="Lowers the number of model-to-tool rounds. It never raises one."
         placeholder="10"
-        numeric
+        isNumeric
         committed={
           policy?.max_iterations == null ? "" : String(policy.max_iterations)
         }
@@ -259,13 +270,38 @@ export function WorkspaceCodeExecutionPolicyCard({
         label="Execution timeout"
         help="Lowers how long one execution may run, in seconds. It never raises it."
         placeholder="30"
-        numeric
+        isNumeric
         committed={
           policy?.exec_timeout_s == null ? "" : String(policy.exec_timeout_s)
         }
         parse={ceilingParser(MAX_EXEC_TIMEOUT_S, "seconds")}
         commit={(exec_timeout_s) => commitField({ exec_timeout_s })}
         disabled={narrowingDisabled}
+      />
+
+      <SettingRow
+        label="Who runs provider code tools"
+        help="For requests billed here that declare a provider's own code tool. A pin here overrides the deployment default and refuses a request header that disagrees. It decides nothing until the deployment has a sandbox backend."
+        error={executorSave.error}
+        control={
+          <FilterSelect
+            fullWidth
+            ariaLabel="Who runs provider code tools for this workspace"
+            value={policy?.executor ?? DEPLOYMENT_EXECUTOR}
+            onChange={(next) =>
+              void executorSave.run(() =>
+                commitField({
+                  executor:
+                    next === DEPLOYMENT_EXECUTOR
+                      ? null
+                      : (next as UpdateWorkspaceCodeExecutionPolicyRequest["executor"]),
+                }),
+              )
+            }
+            options={EXECUTOR_OPTIONS}
+            disabled={narrowingDisabled || executorSave.isSaving}
+          />
+        }
       />
 
       <SettingRow

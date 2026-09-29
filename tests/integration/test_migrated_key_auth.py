@@ -1,4 +1,4 @@
-"""Route-level auth for a key that does not have the ``gw-`` shape (issue #646).
+"""Route-level auth for a key that does not have the minted shape (issue #646).
 
 Otari and otari-ai both store an unsalted SHA-256 hex digest of the whole
 presented key, so a migrated ``tk_`` key's hash lands on an ``api_keys`` row
@@ -15,10 +15,10 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_KEY_HEADER, API_ROOT
-from gateway.models.entities import APIKey
+from gateway.models.api_keys import APIKey
 
-# The shape otari-ai mints: it fails both the ``gw-``/``gw_`` prefix check and the
-# ``gw[-_][A-Za-z0-9_-]+`` charset check the old validator applied.
+# The shape otari-ai mints: the dot fails the charset check the old verify-path
+# validator applied, and the prefix failed it outright when the gateway minted ``gw-``.
 MIGRATED_KEY = "tk_live.migrated-platform-key-0123456789abcdefghij"
 
 

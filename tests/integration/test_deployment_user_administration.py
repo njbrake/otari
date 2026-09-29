@@ -22,31 +22,28 @@ from sqlalchemy.orm import Session
 from sqlmodel import col
 
 from gateway.core.config import API_ROOT, GatewayConfig
-from gateway.models.entities import DashboardSession, RuntimeSetting
-from gateway.models.tenancy import (
-    DeploymentUserUpdateRequest,
-    Organization,
-    OrganizationMember,
-    User,
-)
-from gateway.repositories.tenancy import (
-    OrganizationMemberRepository,
-    OrganizationRepository,
-    UserRepository,
-)
-from gateway.services.dashboard_session_service import (
-    SESSION_COOKIE_NAME,
-    create_dashboard_session,
-    hash_session_token,
-)
-from gateway.services.tenancy.deployment_user_service import DeploymentUserService
-from gateway.services.tenancy.errors import (
+from gateway.exceptions.identity_exceptions import (
     BootstrapOperatorProtectedError,
     DeploymentAdministrationUnavailableError,
     DeploymentUserNotFoundError,
     DeploymentUserSelfChangeError,
     EmptyDeploymentUserUpdateError,
 )
+from gateway.models.platform import RuntimeSetting
+from gateway.models.tenancy import (
+    DashboardSession,
+    DeploymentUserUpdateRequest,
+    Organization,
+    OrganizationMember,
+    User,
+)
+from gateway.repositories.tenancy import OrganizationMemberRepository, OrganizationRepository, UserRepository
+from gateway.services.dashboard_session_service import (
+    SESSION_COOKIE_NAME,
+    create_dashboard_session,
+    hash_session_token,
+)
+from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.provisioning_service import BOOTSTRAP_IDENTITY_KEY
 
 
@@ -152,9 +149,7 @@ def test_the_list_carries_every_identity_with_its_organizations(
     # Never signed in, which is null rather than a timestamp: the column exists
     # so this stays distinguishable from "signed in before the sessions expired".
     assert member["last_sign_in_at"] is None
-    assert [organization["organization_id"] for organization in member["organizations"]] == [
-        str(organization_id)
-    ]
+    assert [organization["organization_id"] for organization in member["organizations"]] == [str(organization_id)]
     assert member["organizations"][0]["role"] == "member"
     assert member["organizations"][0]["status"] == "active"
 
@@ -242,9 +237,7 @@ def test_deactivating_an_account_ends_its_dashboard_sessions(
     assert response.json()["is_active"] is False
     session = db_session_factory()
     try:
-        remaining = (
-            session.query(DashboardSession).filter(col(DashboardSession.user_id) == member_id).count()
-        )
+        remaining = session.query(DashboardSession).filter(col(DashboardSession.user_id) == member_id).count()
     finally:
         session.close()
     # Ended now rather than refused the next time the cookie is presented, so

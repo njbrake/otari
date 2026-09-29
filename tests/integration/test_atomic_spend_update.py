@@ -11,8 +11,8 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.models.entities import User
-from gateway.services.budget_service import ReservationHandle, reconcile_reservation
+from gateway.models.users import User
+from gateway.services.budgets import ReservationHandle, reconcile_reservation
 
 
 @pytest.mark.asyncio

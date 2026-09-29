@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import CurrentIdentity, get_config, get_db, verify_master_key
 from gateway.core.config import GatewayConfig
+from gateway.core.surface import Surface
 from gateway.models.tenancy import (
     AcceptInvitationResultPublic,
     ActiveOrganizationMemberCreateRequest,
@@ -42,6 +43,8 @@ from gateway.models.tenancy import (
     ActiveOrganizationMembersPublic,
     ActiveOrganizationMemberUpdateRequest,
     ActiveOrganizationUpdateRequest,
+    BulkInviteOrganizationMembersRequest,
+    BulkInviteOrganizationMembersResultPublic,
     CallerOrganizationMembershipsPublic,
     InviteOrganizationMemberRequest,
     InviteOrganizationMemberResultPublic,
@@ -55,6 +58,7 @@ from gateway.models.tenancy import (
     PendingOrganizationInvitationsPublic,
     SwitchActiveOrganizationRequest,
 )
+from gateway.services.budgets import WorkspaceBudgetDefaultService
 from gateway.services.tenancy import OrganizationDomainService, OrganizationService
 
 # Auth is declared on the router, not left to arrive through `CurrentIdentity`:
@@ -66,6 +70,8 @@ router = APIRouter(
     dependencies=[Depends(verify_master_key)],
 )
 
+SURFACE = Surface("organizations")
+
 
 class Message(BaseModel):
     """A human-readable acknowledgment for an operation with nothing to return."""
@@ -75,7 +81,7 @@ class Message(BaseModel):
 
 def get_organization_service(db: Annotated[AsyncSession, Depends(get_db)]) -> OrganizationService:
     """Build the organization service on the request's session."""
-    return OrganizationService(db)
+    return OrganizationService(db, membership_listener=WorkspaceBudgetDefaultService(db))
 
 
 OrganizationServiceDep = Annotated[OrganizationService, Depends(get_organization_service)]
@@ -179,12 +185,25 @@ async def list_active_organization_members(
     current_identity: CurrentIdentity,
     skip: Annotated[int, Query(ge=0, description="Number of records to skip")] = 0,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum number of records to return")] = 100,
+    search: Annotated[
+        str | None,
+        Query(
+            max_length=200,
+            description="Narrow to members whose name or email contains this text, case-insensitively.",
+        ),
+    ] = None,
 ) -> ActiveOrganizationMembersPublic:
-    """List the members of the caller's active organization."""
+    """List the members of the caller's active organization.
+
+    ``search`` narrows the page and the count together, so a caller offering
+    these members as options can ask for the matches instead of filtering
+    whatever page it happened to fetch.
+    """
     return await service.list_active_organization_members_for_user(
         user=current_identity,
         skip=skip,
         limit=limit,
+        search=search,
     )
 
 
@@ -335,6 +354,29 @@ async def invite_active_organization_member(
     )
 
 
+@router.post("/me/member-invitations/bulk")
+async def bulk_invite_active_organization_members(
+    service: OrganizationServiceDep,
+    current_identity: CurrentIdentity,
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    body: BulkInviteOrganizationMembersRequest,
+) -> BulkInviteOrganizationMembersResultPublic:
+    """Invite several addresses to the caller's active organization at once.
+
+    Organization owners and admins only. Every address gets the same role and
+    workspace assignments. Each one is checked as ``POST /me/member-invitations``
+    would check it, and an address that is refused lands in ``failed`` with the
+    reason rather than failing the request, so the answer is 200 even when some
+    or all were refused. Each invited entry carries its own ``mail_sent`` and
+    accept link.
+    """
+    return await service.invite_active_organization_members_for_user(
+        user=current_identity,
+        request=body,
+        config=config,
+    )
+
+
 @router.delete("/me/member-invitations/{invitation_id}")
 async def revoke_active_organization_member_invitation(
     service: OrganizationServiceDep,
@@ -351,7 +393,6 @@ async def revoke_active_organization_member_invitation(
         invitation_id=invitation_id,
     )
     return Message(message="Invitation revoked")
-
 
 
 # =============================================================================

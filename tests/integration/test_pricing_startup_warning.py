@@ -8,8 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger as gateway_logger
-from gateway.models.entities import ModelPricing
+from gateway.models.pricing import ModelPricing
 from gateway.services.pricing_init_service import (
+    warn_if_gateway_tools_lack_pricing,
     warn_if_require_pricing_without_pricing,
     warn_if_search_tools_lack_flat_pricing,
 )
@@ -28,9 +29,7 @@ def _capture_gateway_logs(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.asyncio
-async def test_soft_note_when_default_pricing_enabled(
-    async_db: AsyncSession, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_soft_note_when_default_pricing_enabled(async_db: AsyncSession, caplog: pytest.LogCaptureFixture) -> None:
     """Default pricing on: no dire warning, but a softer coverage note is logged."""
     _capture_gateway_logs(caplog)
     try:
@@ -86,9 +85,7 @@ async def test_warning_for_a_search_tool_with_no_flat_rate(
 
 
 @pytest.mark.asyncio
-async def test_no_warning_once_a_flat_rate_exists(
-    async_db: AsyncSession, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_no_warning_once_a_flat_rate_exists(async_db: AsyncSession, caplog: pytest.LogCaptureFixture) -> None:
     """An explicit rate silences it, including a deliberate 0 for a free tool."""
     async_db.add(
         ModelPricing(
@@ -102,3 +99,34 @@ async def test_no_warning_once_a_flat_rate_exists(
 
     await _warn_for_search_tools(async_db, caplog)
     assert _SEARCH_WARNING_MARKER not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_gateway_tool_warning_includes_fetch_without_a_search_backend(
+    async_db: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    _capture_gateway_logs(caplog)
+    try:
+        await warn_if_gateway_tools_lack_pricing(
+            GatewayConfig(require_pricing=False, web_fetch_enabled=True),
+            async_db,
+        )
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+
+    assert "web_fetch" in caplog.text
+    assert "otari:web_fetch" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_gateway_tool_warning_omits_disabled_fetch(
+    async_db: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    _capture_gateway_logs(caplog)
+    try:
+        await warn_if_gateway_tools_lack_pricing(GatewayConfig(require_pricing=False), async_db)
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+
+    assert "web_fetch" not in caplog.text
+    assert "otari:web_fetch" not in caplog.text

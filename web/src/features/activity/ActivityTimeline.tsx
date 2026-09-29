@@ -4,6 +4,7 @@ import { useRef, useState } from "react"
 import { FiMinus, FiPlus } from "react-icons/fi"
 
 import type { UsageBucket } from "@/client"
+import { IconButton } from "@/design-system/actions/IconButton"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import {
   ChartLegend,
@@ -12,6 +13,7 @@ import {
   TrendChart,
 } from "@/design-system/metrics/charts"
 import { Tab, TabRow } from "@/design-system/navigation/TabRow"
+import { formatNumber } from "@/shared/helpers/format"
 import {
   bucketDurationMs,
   bucketIndexRange,
@@ -106,21 +108,21 @@ export function ActivityTimeline({
   ariaLabel = "Request volume over the selected window",
   action,
 }: ActivityTimelineProps) {
-  const starts = series.map((p) => p.bucketStart)
+  const starts = series.map((point) => point.bucketStart)
   const n = series.length
   const label = formatWindowLabel(windowStart, windowEnd)
 
   // Errors stack only when the window actually has any, so the everyday strip
   // stays a single calm series and red keeps its "something failed" meaning.
-  const hasErrors = series.some((p) => (p.errors ?? 0) > 0)
+  const hasErrors = series.some((point) => (point.errors ?? 0) > 0)
   const chartSeries = hasErrors
     ? [SUCCESS_SERIES, ERROR_SERIES]
     : [PLAIN_SERIES]
-  const data: StackedPoint[] = series.map((p): StackedPoint => {
-    const errors = Math.min(p.errors ?? 0, p.requests)
+  const data: StackedPoint[] = series.map((point): StackedPoint => {
+    const errors = Math.min(point.errors ?? 0, point.requests)
     return hasErrors
-      ? { x: p.bucketStart, success: p.requests - errors, errors }
-      : { x: p.bucketStart, requests: p.requests }
+      ? { x: point.bucketStart, success: point.requests - errors, errors }
+      : { x: point.bucketStart, requests: point.requests }
   })
 
   // The active window as inclusive bucket indices of the extent series. The pan
@@ -133,19 +135,19 @@ export function ActivityTimeline({
   const [panSel, setPanSel] = useState<{
     startIndex: number
     endIndex: number
-  } | null>(null)
+  }>()
   // Ref mirror for the pointer handlers: pointerup can fire before the last
   // pointermove's setState has re-rendered, and committing from the stale
   // closure would pan to the previous position.
   const panSelRef = useRef(panSel)
-  const setPan = (next: { startIndex: number; endIndex: number } | null) => {
+  const setPan = (next?: { startIndex: number; endIndex: number }) => {
     panSelRef.current = next
     setPanSel(next)
   }
   const sel = panSel ?? windowIdx
   const span = sel.endIndex - sel.startIndex + 1
   const atFullExtent = sel.startIndex === 0 && sel.endIndex >= n - 1
-  const zoomed = n > 0 && !atFullExtent
+  const isZoomed = n > 0 && !atFullExtent
 
   // Commit an inclusive bucket range: the full extent falls back to the rolling
   // preset window; anything narrower resolves to absolute instants.
@@ -166,7 +168,7 @@ export function ActivityTimeline({
   // is always one tap from a wider view. In halves it (min one bucket). When the
   // extent is not one of the presets (a drill-down window from another page),
   // fall back to the smallest preset that broadens it, so zoom-out never dead-ends.
-  const extentIndex = presets.findIndex((p) => p.key === extentKey)
+  const extentIndex = presets.findIndex((preset) => preset.key === extentKey)
   const extentSeconds =
     extentIndex >= 0
       ? presets[extentIndex].seconds
@@ -175,9 +177,9 @@ export function ActivityTimeline({
     extentIndex >= 0
       ? presets[extentIndex + 1]
       : presets.find(
-          (p) =>
-            p.seconds === null ||
-            (extentSeconds !== null && p.seconds > extentSeconds),
+          (preset) =>
+            preset.seconds === null ||
+            (extentSeconds !== null && preset.seconds > extentSeconds),
         )
 
   const applySpan = (newSpan: number) => {
@@ -201,7 +203,16 @@ export function ActivityTimeline({
   // capture and commits on release; arrow keys step one bucket, PageUp/Down a
   // whole window, Home/End to the extent edges.
   const railRef = useRef<HTMLDivElement>(null)
-  const panStart = useRef<{ x: number; startIndex: number } | null>(null)
+  // The rail's width is measured once, where the drag starts, rather than on
+  // every move. `getBoundingClientRect()` flushes pending layout before it can
+  // answer, and the line below it writes state that dirties layout again, so
+  // reading it here made the whole drag a read-write cycle per pointer event.
+  // The rail cannot resize while a pointer is down on it.
+  const panStart = useRef<{
+    x: number
+    startIndex: number
+    railWidth: number
+  } | null>(null)
 
   const panTo = (
     startIndex: number,
@@ -233,11 +244,11 @@ export function ActivityTimeline({
   }
 
   const onPanMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!panStart.current || !railRef.current) return
-    const width = railRef.current.getBoundingClientRect().width
-    if (width <= 0) return
-    const dx = Math.round(((event.clientX - panStart.current.x) / width) * n)
-    setPan(panTo(panStart.current.startIndex + dx))
+    if (!panStart.current) return
+    const { x, startIndex, railWidth } = panStart.current
+    if (railWidth <= 0) return
+    const dx = Math.round(((event.clientX - x) / railWidth) * n)
+    setPan(panTo(startIndex + dx))
   }
 
   const endPan = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -246,7 +257,7 @@ export function ActivityTimeline({
     }
     panStart.current = null
     const committed = panSelRef.current
-    setPan(null)
+    setPan(undefined)
     if (committed && committed.startIndex !== windowIdx.startIndex) {
       commit(committed.startIndex, committed.endIndex)
     }
@@ -289,27 +300,31 @@ export function ActivityTimeline({
             <span className="hidden text-xs text-muted sm:inline">
               Drag to filter a range
             </span>
-            <Button
+            {/* `md:min-h-8 md:min-w-8` on both: 44px where a finger does the
+                zooming, back to the toolbar's own 32px density from `md` up. */}
+            <IconButton
               size="sm"
               variant="ghost"
               isIconOnly
-              aria-label="Zoom in"
+              className="md:min-h-8 md:min-w-8"
+              label="Zoom in"
               isDisabled={n === 0}
               onPress={zoomIn}
             >
               <FiPlus aria-hidden="true" className="h-4 w-4" />
-            </Button>
-            <Button
+            </IconButton>
+            <IconButton
               size="sm"
               variant="ghost"
               isIconOnly
-              aria-label="Zoom out"
+              className="md:min-h-8 md:min-w-8"
+              label="Zoom out"
               isDisabled={n === 0 || (atFullExtent && !largerPreset)}
               onPress={zoomOut}
             >
               <FiMinus aria-hidden="true" className="h-4 w-4" />
-            </Button>
-            {zoomed ? (
+            </IconButton>
+            {isZoomed ? (
               <Button
                 size="sm"
                 variant="ghost"
@@ -336,7 +351,7 @@ export function ActivityTimeline({
             <TrendChart
               data={data}
               series={chartSeries}
-              formatValue={(value) => value.toLocaleString()}
+              formatValue={(value) => formatNumber(value)}
               formatXTick={(iso) => formatTick(iso, bucket)}
               ariaLabel={ariaLabel}
               height={90}
@@ -346,12 +361,12 @@ export function ActivityTimeline({
               showYAxis
               yTickCount={3}
               onSelectRange={commit}
-              window={zoomed || panSel ? sel : null}
+              window={isZoomed || panSel ? sel : undefined}
             />
             {/* Pan rail: a minimap-style scrollbar for the zoomed window. Only
                 rendered while zoomed (at the full extent there is nothing to
                 pan), so it never takes space or a tab stop otherwise. */}
-            {zoomed || panSel ? (
+            {isZoomed || panSel ? (
               // The row is 44px so the handle inside it is a real touch target;
               // the track and the handle keep the 10px they read best at, drawn
               // as children so the grab area is the whole height rather than
@@ -401,6 +416,8 @@ export function ActivityTimeline({
                     panStart.current = {
                       x: event.clientX,
                       startIndex: sel.startIndex,
+                      railWidth:
+                        railRef.current?.getBoundingClientRect().width ?? 0,
                     }
                     setPan({ ...sel })
                     event.currentTarget.setPointerCapture(event.pointerId)

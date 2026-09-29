@@ -44,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.api.deps import (
+    ApiKeyFormatPortDep,
     CurrentIdentity,
     GrowthSignalPortDep,
     get_config,
@@ -52,21 +53,23 @@ from gateway.api.deps import (
 )
 from gateway.api.routes.keys import (
     _KEY_EXCEEDS_USER_DETAIL,
+    NOT_INTERNAL,
     CreateKeyResponse,
     KeyInfo,
     _load_key_in_organization,
 )
-from gateway.auth.models import generate_api_key, hash_key, key_prefix, key_suffix
+from gateway.auth.models import hash_key, key_suffix
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import APIKey, User
+from gateway.exceptions.organizations_exceptions import WorkspaceNotFoundError
+from gateway.models.api_keys import APIKey
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
+from gateway.models.users import User
 from gateway.ports.growth_signal_port import GrowthActivationEvent
 from gateway.repositories.users_repository import get_or_create_attribution_user
 from gateway.services.model_access import is_allowlist_subset, validate_allowed_models
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import resolve_workspace_in_organization
-from gateway.services.tenancy.errors import WorkspaceNotFoundError
 from gateway.services.workspace_scope import organization_default_workspace_id
 
 router = APIRouter(
@@ -147,7 +150,7 @@ async def _caller_context(db: AsyncSession, identity: TenancyUser) -> tuple[uuid
     identity's UUID rendered as a string, the attribution convention
     ``get_or_create_attribution_user`` documents.
     """
-    organization = await OrganizationService(db).get_active_organization_for_user(identity)
+    organization = await OrganizationService(db, membership_listener=None).get_active_organization_for_user(identity)
     return organization.id, str(identity.id)
 
 
@@ -159,15 +162,16 @@ async def create_own_key(
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     growth: GrowthSignalPortDep,
+    key_format: ApiKeyFormatPortDep,
 ) -> CreateKeyResponse:
     """Create an API key owned by the caller, in a workspace they may see.
 
     The member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the
     caller's own attribution user, the key is always budget-enforced, and the
     workspace must be visible to the caller (a member of it, or an organization
-    owner/admin/superuser, who see every workspace). The secret is returned once.
+    owner/admin, who see every workspace). The secret is returned once.
     """
-    organizations = OrganizationService(db)
+    organizations = OrganizationService(db, membership_listener=None)
     organization = await organizations.get_active_organization_for_user(identity)
 
     if request.workspace_id is not None:
@@ -219,9 +223,7 @@ async def create_own_key(
     # then refuses a request whose owner is deleted. Reviving it is therefore
     # restoring spend, which is not a member's to do for themselves, so this
     # refuses where ``POST /api/v1/keys`` refuses the same owner.
-    revoked = (
-        await db.execute(select(User.deleted_at).where(User.user_id == str(identity.id)))
-    ).scalar_one_or_none()
+    revoked = (await db.execute(select(User.deleted_at).where(User.user_id == str(identity.id)))).scalar_one_or_none()
     if revoked is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -246,12 +248,12 @@ async def create_own_key(
         await db.execute(select(APIKey.id).where(APIKey.user_id == owner.user_id).limit(1))
     ).scalar_one_or_none() is None
 
-    api_key = generate_api_key()
+    api_key = key_format.mint()
     db_key = APIKey(
         id=str(uuid.uuid4()),
         workspace_id=workspace_id,
         key_hash=hash_key(api_key),
-        key_prefix=key_prefix(api_key),
+        key_prefix=key_format.fingerprint(api_key),
         key_suffix=key_suffix(api_key),
         key_name=request.key_name,
         user_id=owner.user_id,
@@ -315,6 +317,7 @@ async def list_own_keys(
         .where(
             col(Workspace.organization_id) == organization_id,
             col(APIKey.user_id) == owner_user_id,
+            NOT_INTERNAL,
         )
     )
     if workspace_id is not None:
@@ -387,6 +390,7 @@ async def rotate_own_key(
     key_id: str,
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
+    key_format: ApiKeyFormatPortDep,
 ) -> CreateKeyResponse:
     """Rotate the secret of one of the caller's own API keys, in place.
 
@@ -397,9 +401,9 @@ async def rotate_own_key(
     organization_id, owner_user_id = await _caller_context(db, identity)
     key = await _load_key_in_organization(db, key_id, organization_id, owner_user_id=owner_user_id)
 
-    new_api_key = generate_api_key()
+    new_api_key = key_format.mint()
     key.key_hash = hash_key(new_api_key)
-    key.key_prefix = key_prefix(new_api_key)
+    key.key_prefix = key_format.fingerprint(new_api_key)
     key.key_suffix = key_suffix(new_api_key)
     key.last_used_at = None
 

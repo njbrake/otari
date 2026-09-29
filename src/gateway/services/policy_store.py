@@ -45,8 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.core.config import GatewayConfig
 from gateway.core.database import create_session
 from gateway.log_config import logger
-from gateway.models.entities import RoutingPolicy
-from gateway.models.routing import PolicySpec
+from gateway.models.routing import PolicySpec, RoutingPolicy
 from gateway.services.workspace_scope import lookup_default_workspace_id
 
 __all__ = [
@@ -81,9 +80,7 @@ def _scope(workspace_id: uuid.UUID | None) -> uuid.UUID | None:
     return workspace_id if workspace_id is not None else _default_workspace
 
 
-def cached_policies(
-    user_id: str | None = None, *, workspace_id: uuid.UUID | None = None
-) -> dict[str, PolicySpec]:
+def cached_policies(user_id: str | None = None, *, workspace_id: uuid.UUID | None = None) -> dict[str, PolicySpec]:
     """The stored policies this worker last loaded. Empty before the first load."""
     scope = _scope(workspace_id)
     if scope is None:

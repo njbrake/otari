@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_ROOT
-from gateway.models.entities import User as GatewayUser
+from gateway.models.users import User as GatewayUser
 
 
 def _add_member(client: TestClient, headers: dict[str, str], email: str) -> dict[str, Any]:
@@ -83,8 +83,9 @@ def test_the_roster_carries_the_same_id(
 ) -> None:
     created = _add_member(client, master_key_header, "ada@example.com")
 
-    assert _roster_row(client, master_key_header, "ada@example.com")["attribution_user_id"] == (
-        created["attribution_user_id"]
+    assert (
+        _roster_row(client, master_key_header, "ada@example.com")["attribution_user_id"]
+        == (created["attribution_user_id"])
     )
 
 

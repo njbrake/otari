@@ -14,8 +14,9 @@ selector is resolved against (``alias_service``, ``policy_store``), which
 applies to every selector shape. Separately, it selects **whose
 organization-scoped provider keys** may supply credentials (otari-ai#1748,
 otari#643): a second, disjoint credential source, consulted only for a *bare*
-``provider:model``/``provider/model`` selector, i.e. one with no matching
-``config.providers`` instance. An ``instance:model`` selector always draws its
+``provider:model`` selector, i.e. one with no matching ``config.providers``
+instance, and which organization's own offerings the catalog spellings below
+may resolve to. An ``instance:model`` selector always draws its
 credentials from ``config.providers`` exactly as before and never touches
 organization-scoped keys, by construction: the two addressing schemes occupy
 disjoint selector shapes rather than one layering over the other. See
@@ -37,7 +38,8 @@ from any_llm import AnyLLM, LLMProvider
 from any_llm.exceptions import AnyLLMError
 
 from gateway.auth.vertex_auth import setup_vertex_environment
-from gateway.core.config import GatewayConfig, provider_credential_env_names
+from gateway.core.config import API_ROOT, KEYLESS_SELF_HOSTED_PROVIDERS, GatewayConfig, provider_credential_env_names
+from gateway.log_config import logger
 from gateway.services.alias_service import resolve_effective_alias
 from gateway.services.catalog_selectors import resolve_catalog_selector
 from gateway.services.policy_store import resolve_effective_policy
@@ -62,19 +64,13 @@ SESSION_AFFINITY_HEADER = "x-session-affinity"
 # tolerance (mozilla-ai/any-llm#1198).
 _KEYLESS_PLACEHOLDER_API_KEY = "otari-no-key-required"
 
-# Two sets of providers any-llm calls without an otari-visible credential, even
-# though each *declares* a credential environment variable.
-# ``provider_credential_env_names`` sees only the declaration, so it cannot tell
-# them from a keyed provider the way it can ollama/llamacpp/llamafile (which
+# Providers any-llm calls without an otari-visible credential, even though each
+# *declares* a credential environment variable, so ``provider_credential_env_names``
+# cannot tell them from a keyed provider the way it can ollama/llamafile (which
 # declare the literal ``"None"``) or Vertex AI (which declares an empty name).
-# Both are written out by hand and both are drift-guarded in
-# ``tests/unit/test_provider_instances.py``.
+# The self-hosted ones are ``KEYLESS_SELF_HOSTED_PROVIDERS``; this set is drift-guarded
+# alongside it in ``tests/unit/test_provider_instances.py``.
 #
-# Local and LAN backends that never require a key: each overrides
-# ``_verify_and_set_api_key`` to return without raising and defaults to a
-# localhost or LAN base URL, so a bare ``vllm:my-model`` reaches a self-hosted
-# server today with nothing configured in otari at all.
-_KEYLESS_SELF_HOSTED_PROVIDERS = frozenset({"vllm", "lmstudio", "cascadia", "otari"})
 # Providers authenticating from cloud SDK credentials this gateway cannot see:
 # an EC2 instance profile, an SSO session, or an ambient boto3 chain. They are
 # the same category as Vertex AI's application default credentials, which
@@ -95,6 +91,10 @@ _AMBIENT_CREDENTIAL_PROVIDERS = frozenset({"bedrock", "sagemaker"})
 # that answered. ``api_base`` is deliberately absent: an instance with a base URL
 # and no key takes the keyless placeholder, so it never reaches a caller alone.
 _NON_CREDENTIAL_KWARGS = frozenset({"client_args"})
+
+# Providers already warned about reaching any-llm on their env var alone, so the
+# deprecation is logged once per provider per process rather than per request.
+_undeclared_env_warned: set[str] = set()
 
 
 def _kwargs_carry_a_credential(kwargs: dict[str, Any]) -> bool:
@@ -118,6 +118,34 @@ def _provider_env_key_present(provider: LLMProvider) -> bool:
     the config layer so both agree on which variables carry a credential.
     """
     return any(os.getenv(name) for name in provider_credential_env_names(provider.value) or ())
+
+
+def _warn_undeclared_env_provider(config: GatewayConfig, provider: LLMProvider) -> None:
+    """Log, once per provider, that a standalone call rides the env-var fallback.
+
+    Reached when nothing declares the provider (no ``config.providers`` entry, no
+    organization-scoped key) and any-llm will authenticate from the provider's
+    native variable instead. That fallback is deprecated: such a provider serves
+    requests but is missing from model discovery. Hybrid mode resolves every
+    credential from the platform and hosted mode serves no inference, so neither
+    warns.
+    """
+    if config.is_hybrid_mode or config.is_hosted_mode or provider.value in _undeclared_env_warned:
+        return
+    env_name = next((name for name in provider_credential_env_names(provider.value) or () if os.getenv(name)), None)
+    if env_name is None:
+        return
+    _undeclared_env_warned.add(provider.value)
+    logger.warning(
+        "Provider '%s' is not declared under providers: and is being called with its %s environment variable. "
+        "This fallback is deprecated and will stop working in a future release, and the provider's models are "
+        "not listed meanwhile. Declare it in config.yml (providers: {%s: {api_key: ${%s}}}) or on the "
+        "dashboard's Providers page.",
+        provider.value,
+        env_name,
+        provider.value,
+        env_name,
+    )
 
 
 def keyless_placeholder_api_key(provider: LLMProvider, api_base: Any, api_key: Any) -> str | None:
@@ -157,9 +185,9 @@ def credential_ladder_exhausted(provider: LLMProvider, kwargs: dict[str, Any]) -
     caller that might serve it from somewhere else. A deployment pointing at its
     own backends is served upstream of anything reading this. They come in two
     shapes: those declaring no credential variable at all (the keyless local
-    backends ollama, llamacpp and llamafile, and Vertex AI, which authenticates
+    backends ollama and llamafile, and Vertex AI, which authenticates
     through the cloud SDK), and those declaring one any-llm does not insist on
-    (``_KEYLESS_SELF_HOSTED_PROVIDERS`` and ``_AMBIENT_CREDENTIAL_PROVIDERS``).
+    (``KEYLESS_SELF_HOSTED_PROVIDERS`` and ``_AMBIENT_CREDENTIAL_PROVIDERS``).
 
     ``provider_credential_env_names`` returns ``None`` rather than ``()`` for a
     provider it cannot inspect at all, and that stays exhausted: nothing is known
@@ -168,11 +196,28 @@ def credential_ladder_exhausted(provider: LLMProvider, kwargs: dict[str, Any]) -
     """
     if _kwargs_carry_a_credential(kwargs):
         return False
-    if provider.value in _KEYLESS_SELF_HOSTED_PROVIDERS or provider.value in _AMBIENT_CREDENTIAL_PROVIDERS:
+    if provider.value in KEYLESS_SELF_HOSTED_PROVIDERS or provider.value in _AMBIENT_CREDENTIAL_PROVIDERS:
         return False
     if provider_credential_env_names(provider.value) == ():
         return False
     return not _provider_env_key_present(provider)
+
+
+def otari_gateway_origin(api_base: Any) -> Any:
+    """An ``otari`` instance's ``api_base`` with a trailing API root (or bare ``/v1``) removed.
+
+    Fork-only stopgap. any-llm 1.29 appends the API root to the origin itself and
+    raises on a base that already carries it, which is how an instance configured
+    for any-llm 1.27 (``https://api.otari.ai`` plus the root) is spelled. Stripping
+    the root reaches the URL that spelling reached before.
+    """
+    if not isinstance(api_base, str):
+        return api_base
+    trimmed = api_base.rstrip("/")
+    for suffix in (API_ROOT, "/v1"):
+        if trimmed.endswith(suffix):
+            return trimmed.removesuffix(suffix)
+    return api_base
 
 
 def get_provider_kwargs(
@@ -227,6 +272,11 @@ def get_provider_kwargs(
             kwargs = {k: v for k, v in provider_config.items() if k != "client_args"}
             if "client_args" in provider_config:
                 kwargs["client_args"] = provider_config["client_args"]
+    else:
+        _warn_undeclared_env_provider(config, provider)
+
+    if provider == LLMProvider.OTARI and kwargs.get("api_base"):
+        kwargs["api_base"] = otari_gateway_origin(kwargs["api_base"])
 
     placeholder = keyless_placeholder_api_key(provider, kwargs.get("api_base"), kwargs.get("api_key"))
     if placeholder is not None:
@@ -363,13 +413,13 @@ def resolve_provider_selector(
         # it properly; everywhere else it surfaces as an unknown model.
         alias = resolve_static_policy_target(config, model_selector, user_id, workspace_id=workspace_id)
     if alias is None:
-        # The catalog's own spellings: ``instance:<cleaned id>`` for one
-        # offering, or a bare slug for the model's cheapest. Consulted last and
-        # only for a selector that names no offering already, so nothing a
-        # caller sends verbatim is ever rewritten. Relabeled like an alias:
-        # the caller sees the spelling they sent, and pricing keys on the
-        # target.
-        alias = resolve_catalog_selector(model_selector)
+        # The catalog's own spellings: a catalog id for the model's cheapest
+        # offering, or ``instance:<catalog id>`` to pin the instance. Consulted last and only
+        # for a selector that names no offering already, so nothing a caller
+        # sends verbatim is ever rewritten; the workspace picks which
+        # organization's own offerings may answer. Relabeled like an alias: the
+        # caller sees the spelling they sent, and pricing keys on the target.
+        alias = resolve_catalog_selector(model_selector, workspace_id=workspace_id)
     selector = alias if alias is not None else model_selector
 
     split = split_selector(selector)

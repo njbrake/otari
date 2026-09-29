@@ -88,12 +88,20 @@ These gates combine with AND. Organization and workspace authorization still
 comes from server responses.
 
 The workspace and organization rails have separate registries. A sidebar item
-points to a real page, never a redirect. `/docs` and `/account` are chrome
+points to a real page, never a redirect. `/playground`, `/docs`, and `/account` are chrome
 destinations and do not belong in a rail.
 
 Overlay navigation uses the empty seam modules under `src/app/nav/` for new
 sections, items inserted into base sections, and label overrides. Keep their
 types aligned with otari-ai.
+
+Three more seams let a build whose one dashboard reaches several deployments
+say which: `shared/api/overlayRequestPolicy.ts` (the origin and credential every
+management request uses, settled before the bootstrap is read),
+`features/auth/overlayPublicAuthFields.tsx` (a control above the address on the
+pages that post one), and `app/nav/overlayAccountBadge.tsx` (the mark on the
+account control, the monogram here). Each ships inert; `src/overlaySeams.test.ts`
+lists every seam and checks it is reached by its `@/…` specifier.
 
 ## Icons
 
@@ -306,18 +314,37 @@ sized by its neighbor's wording was never sized. The rule that prevents it is
 `design/layout.md`, "Repeated rows": a trailing action takes `shrink-0` in any
 flex row.
 
-**Every data table here is `table-layout: auto` with 16px cell padding and no
-declared column widths anywhere**, so the browser re-solves every column from its
-content on each render. Any plan of the form "take the width from column X" is
-therefore a guess rather than a specification: the solver decides which column
-pays, and the stylesheet does not say. Measure a column change by injecting the
-new cell into the live table and reading the result back.
+**Read the table's own block in `globals.css` before measuring anything.** Ten of
+the sixteen per-table classes declare widths on some of their columns, keyed on
+`data-key`, and `.otari-keys-table` is `table-layout: fixed` outright
+(`globals.css:2731`, "Key lanes stay fixed while the name absorbs the available
+width"). So a width is often written down rather than solved, and measuring the
+live table to rediscover it is the slower route to a worse answer. Read both
+blocks before changing one: `.otari-breakdown`'s columns are specified in two
+places, as `min-width` at `globals.css:2279` and as `width` at `globals.css:2827`,
+550 lines apart, and neither mentions the other.
+
+What is still true is the part that made the advice worth having. A table is
+`table-layout: auto` unless its block says otherwise, with 16px cell padding, so
+**the columns nothing specifies are re-solved from content on every render** and
+"take the width from column X" is a guess for those. Measure a change to one of
+them by injecting the new cell into the live table and reading the result back.
 
 - Give every part of an injected cell `flex: 0 0 auto`. Without it the parts
   shrink to fit and overflow their own element with no error, leaving column
   widths that look plausible and are not.
 - Overwrite `last_used` with a real timestamp first. Every row in the seed says
   "never", and that one substitution moves a measured overflow from 0 to 23px.
+
+**A dialog's bounding box is a few percent large while it opens.** The overlay
+animates in on a scale transform, so `getBoundingClientRect()` read right after
+the frame becomes visible returns the box mid-animation: a 928px dialog measured
+963, and its container measured 1336 on a 1280 viewport, both the same 1.0438
+factor. It reads as a width rule that lost a cascade fight, which is the thing
+anyone measuring a dialog is usually there to check. `getComputedStyle(el).width`
+is unaffected by the transform and is the number a width assertion wants;
+`e2e/dashboard.spec.ts`'s share frame is the worked example. The background-tab
+entry above is the same instrument failing from the other direction.
 
 **And absence from the built CSS proves nothing on its own.** Tailwind emits
 only the utilities something in the tree asks for, so checking whether a

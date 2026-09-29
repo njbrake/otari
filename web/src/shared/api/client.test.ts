@@ -1,9 +1,71 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { API_ROOT } from "@/shared/api/client"
-import { ApiError, apiFetch, createSession, deleteSession } from "./client"
+import { API_ROOT, DASHBOARD_BUILD_PATH } from "@/shared/api/client"
+import type { RequestPolicy } from "@/shared/api/requestPolicy"
+import {
+  ApiError,
+  apiFetch,
+  createSession,
+  deleteSession,
+  siteFetch,
+} from "./client"
+
+// The seam this build answers "same origin" through, made mutable so the
+// cases below can stand in for a build that answers with another host.
+const policy = vi.hoisted(
+  (): RequestPolicy => ({ origin: "", credentials: "same-origin" }),
+)
+vi.mock("@/shared/api/overlayRequestPolicy", () => ({
+  prepareRequests: async () => {},
+  requestPolicy: () => policy,
+}))
 
 afterEach(() => {
   vi.restoreAllMocks()
+  policy.origin = ""
+  policy.credentials = "same-origin"
+})
+
+describe("the request policy", () => {
+  it("builds every management URL on the policy's origin and sends its credential", async () => {
+    policy.origin = "https://eu.example.com"
+    policy.credentials = "include"
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ ok: true }))
+
+    await apiFetch("/models")
+    await createSession({ masterKey: "k" })
+    await deleteSession()
+
+    for (const [url, init] of fetchMock.mock.calls) {
+      expect(String(url)).toMatch(/^https:\/\/eu\.example\.com\/api\/v1\//)
+      expect((init as RequestInit).credentials).toBe("include")
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it("stays relative, with the page's own cookies, in this build", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ ok: true }))
+
+    await apiFetch("/models")
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(`${API_ROOT}/models`)
+    expect((init as RequestInit).credentials).toBe("same-origin")
+  })
+
+  it("leaves a site read on the page's own origin whatever the policy says", async () => {
+    policy.origin = "https://eu.example.com"
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ build: "x" }))
+
+    await siteFetch(DASHBOARD_BUILD_PATH)
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(DASHBOARD_BUILD_PATH)
+  })
 })
 
 describe("apiFetch", () => {
@@ -69,6 +131,34 @@ describe("apiFetch", () => {
     })
   })
 
+  it("explains a reply that is not JSON instead of quoting the markup at the operator", async () => {
+    // The edge in front of a hosted deployment serves the dashboard's own page
+    // at 200 for the statuses it remaps, so a refused write arrives here looking
+    // like a successful one. `response.json()` then throws a SyntaxError whose
+    // message is the markup it choked on, and the banner rendered exactly that
+    // (otari-ai#2147).
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("<!DOCTYPE html><html><body>otari</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    )
+
+    const failure = apiFetch(`${API_ROOT}/organizations/me/spend-ceilings`, {
+      method: "POST",
+      body: "{}",
+    })
+
+    await expect(failure).rejects.toBeInstanceOf(ApiError)
+    await expect(failure).rejects.toMatchObject({
+      status: 200,
+      message: expect.stringContaining("not JSON"),
+    })
+    await expect(failure).rejects.not.toMatchObject({
+      message: expect.stringContaining("DOCTYPE"),
+    })
+  })
+
   it("passes a caller's signal through instead of imposing its own", async () => {
     const controller = new AbortController()
     const seen: (AbortSignal | null | undefined)[] = []
@@ -110,6 +200,65 @@ describe("apiFetch", () => {
     await expect(apiFetch(`${API_ROOT}/models`)).rejects.toMatchObject({
       message: expect.stringContaining("could not reach the gateway"),
     })
+  })
+})
+
+describe("siteFetch", () => {
+  it("asks for the path as given, with no API root in front of it", async () => {
+    // The whole point of the helper, and the regression it exists for: the
+    // build poll went through `apiFetch` after the API moved under /api/v1
+    // (#1026), so it asked for /api/v1/dashboard-build.json against a route
+    // mounted at the gateway's own root, and 404d for months without anything
+    // reporting it.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ build: "abc", version: "1.0.0" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+
+    await expect(siteFetch(DASHBOARD_BUILD_PATH)).resolves.toEqual({
+      build: "abc",
+      version: "1.0.0",
+    })
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(DASHBOARD_BUILD_PATH)
+    expect(String(fetchSpy.mock.calls[0]?.[0])).not.toContain(API_ROOT)
+  })
+
+  it("sends no credential, which fetch would otherwise attach", async () => {
+    // `fetch` defaults to `credentials: "same-origin"`, so leaving it unset
+    // puts the session cookie on a public poll that runs once a minute for the
+    // life of every open tab. Nothing reads it there.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ build: "abc", version: "1.0.0" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+
+    await siteFetch(DASHBOARD_BUILD_PATH)
+
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ credentials: "omit" })
+  })
+
+  it("reports a refusal as an ApiError rather than resolving with nothing", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("gone", { status: 404 }),
+    )
+
+    await expect(siteFetch(DASHBOARD_BUILD_PATH)).rejects.toBeInstanceOf(
+      ApiError,
+    )
+  })
+
+  it("reports an unreachable gateway rather than throwing a raw fetch failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("nope"))
+
+    await expect(siteFetch(DASHBOARD_BUILD_PATH)).rejects.toThrow(
+      "Network error: could not reach the gateway.",
+    )
   })
 })
 
@@ -179,7 +328,7 @@ describe("createSession", () => {
       // a refusal that must not be recorded anywhere. A deployment frozen for
       // maintenance and a wrong credential are not the same funnel step.
       await expect(createSession({ masterKey: "test-key" })).resolves.toEqual({
-        ok: false,
+        isOk: false,
         message: "refused, and here is why",
         status,
       })
@@ -198,7 +347,7 @@ describe("createSession credentials", () => {
       password: "a-real-password",
     })
 
-    expect(result).toEqual({ ok: true })
+    expect(result).toEqual({ isOk: true })
     expect(fetchMock.mock.calls[0][1]?.body).toBe(
       JSON.stringify({
         email: "operator@example.com",
@@ -225,7 +374,7 @@ describe("createSession credentials", () => {
       // refusals apart without re-reading the wording, which is the one part of
       // a refusal that must not be recorded anywhere.
       await expect(createSession({ masterKey: "k" })).resolves.toEqual({
-        ok: false,
+        isOk: false,
         message: detail,
         status,
       })

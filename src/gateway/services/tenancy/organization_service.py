@@ -1,37 +1,15 @@
-"""Organizations: active-organization resolution, CRUD, and membership.
+"""This module resolves a caller's active organization and manages organizations and their members.
 
-Rehomed from the platform's ``OrganizationService`` plus the membership half of
-``OrganizationMembershipService``, converted to async. The authorization rules,
-the membership constraints, and the response shapes are the platform's; what is
-gone is the depth that has no home in the OSS base yet: mixpanel tracking,
-managed provider-key and default-gateway provisioning, email-domain auto-join,
-teams, and the org's budget and pricing surfaces. Those arrive with their own
-slices, tracked under mozilla-ai/otari-ai#1452, and this service is where they
-attach. Emailed invitations shipped here in mozilla-ai/otari#641 (see
-``invite_active_organization_member_for_user``/``accept_invitation`` below);
-``create_active_organization_member_for_user`` is the older, still-supported
-immediate path this replaced no part of.
+A method that acts for a caller never trusts an organization that the request names.
+It acts in the caller's active organization, or in one it reaches through the caller's own membership.
+An ID that names another tenant's row answers not-found, so a caller cannot probe which IDs exist.
 
-One rule runs through every method: a caller only ever acts inside the
-organization their identity is currently pointed at, and every method but one
-resolves that organization from the caller alone rather than from the request.
-The exception is ``switch_active_organization_for_user``, which is the method
-that *moves* the pointer and so has to be told where to; it answers not-found
-for an id the caller holds no active membership in, so naming another tenant's
-organization tells the caller nothing about it.
-
-A standalone deployment still *boots* one organization, provisioned at first
-boot, and that is the shape almost every deployment keeps. But a second one is
-reachable (accept an invitation into an organization elsewhere on the same
-deployment and you hold two memberships), so creating one, listing the ones you
-belong to, and switching between them are part of this surface rather than an
-overlay's: the tables are here, the invariants that decide who becomes owner
-and what happens to ``active_organization_id`` are here, and an overlay that
-contributes no tables could only fork them (mozilla-ai/otari#715). Deleting an
-organization is still absent, which is a separate question: the rows every
-historical attribution resolves through hang off it.
+A deployment can hold more than one organization.
+Creating, listing and switching organizations therefore belong here rather than in an overlay.
+The service offers no way to delete an organization, because historical attribution resolves through its rows.
 """
 
+import asyncio
 import hashlib
 import re
 import secrets
@@ -42,6 +20,23 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import GatewayConfig
+from gateway.exceptions import TenancyConflictError, TenancyValidationError
+from gateway.exceptions.organizations_exceptions import (
+    InvitationAlreadyPendingError,
+    InvitationAlreadyUsedError,
+    InvitationExpiredError,
+    InvitationNotFoundError,
+    InvitationPasswordNotAcceptedError,
+    MembershipUpdateError,
+    NotAuthorizedError,
+    OrganizationMemberAlreadyExistsError,
+    OrganizationMemberNotFoundError,
+    OrganizationNameRequiredError,
+    OrganizationNotFoundError,
+    OrganizationSlugUnavailableError,
+    WorkspaceNotFoundError,
+)
+from gateway.models.money import as_float
 from gateway.models.tenancy import (
     MANAGEMENT_ROLES,
     AcceptInvitationResultPublic,
@@ -50,6 +45,9 @@ from gateway.models.tenancy import (
     ActiveOrganizationMemberPublic,
     ActiveOrganizationMembersPublic,
     ActiveOrganizationMemberUpdateRequest,
+    BulkInvitationFailurePublic,
+    BulkInviteOrganizationMembersRequest,
+    BulkInviteOrganizationMembersResultPublic,
     CallerIdentityPublic,
     CallerOrganizationMembershipPublic,
     CallerOrganizationMembershipsPublic,
@@ -58,15 +56,21 @@ from gateway.models.tenancy import (
     InvitationPreviewPublic,
     InviteOrganizationMemberRequest,
     InviteOrganizationMemberResultPublic,
+    MemberAttributionPublic,
+    MemberCeilingPublic,
+    MemberWorkspacePlacementPublic,
     Organization,
     OrganizationCreateRequest,
     OrganizationMember,
+    OrganizationMemberRole,
     OrganizationMembershipContextPublic,
     OrganizationPublic,
     PendingOrganizationInvitationPublic,
     PendingOrganizationInvitationsPublic,
     User,
+    Workspace,
     WorkspaceAssignmentRequest,
+    WorkspaceMember,
     WorkspaceMemberUpdate,
 )
 from gateway.repositories.tenancy import (
@@ -78,27 +82,15 @@ from gateway.repositories.tenancy import (
     WorkspaceRepository,
 )
 from gateway.repositories.users_repository import (
+    attribution_spend,
     get_or_create_attribution_user,
     live_attribution_user_ids,
 )
 from gateway.services.mail import Mailer
+from gateway.services.password_service import hash_password_async
 from gateway.services.secret_box import secret_box_configured
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.email_address import validated_email as _validated_email
-from gateway.services.tenancy.errors import (
-    InvitationAlreadyPendingError,
-    InvitationAlreadyUsedError,
-    InvitationExpiredError,
-    InvitationNotFoundError,
-    MembershipUpdateError,
-    NotAuthorizedError,
-    OrganizationMemberAlreadyExistsError,
-    OrganizationMemberNotFoundError,
-    OrganizationNameRequiredError,
-    OrganizationNotFoundError,
-    OrganizationSlugUnavailableError,
-    WorkspaceNotFoundError,
-)
 from gateway.services.tenancy.invitation_email import render_invitation_email
 
 # The name first boot gives an organization's workspace, reused so a created
@@ -107,7 +99,9 @@ from gateway.services.tenancy.invitation_email import render_invitation_email
 # into the tenancy graph is a function-local import), so this direction of the
 # dependency is the safe one; ``tests/unit/test_service_module_imports.py``
 # pins it.
-from gateway.services.tenancy.provisioning_service import DEFAULT_WORKSPACE_NAME
+from gateway.services.tenancy.membership_listener import MembershipListener
+from gateway.services.tenancy.password_policy import validate_new_password
+from gateway.services.tenancy.provisioning_service import DEFAULT_WORKSPACE_NAME, password_claims_deployment
 
 
 def _validated_organization_name(name: str | None) -> str:
@@ -132,6 +126,16 @@ def _hash_invitation_token(token: str) -> str:
     as a password, so it is hashed at rest and compared by hash.
     """
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _has_never_signed_in(user: User) -> bool:
+    """Whether an identity has no way in yet: no password, and no verified address.
+
+    The verified address is what a provider sign-in leaves behind on an identity
+    that never set a password, so checking the password alone would treat an
+    account someone signs in to with Google as unclaimed.
+    """
+    return user.is_active and user.hashed_password is None and user.email_verified_at is None
 
 
 def _invitation_accept_path(token: str) -> str:
@@ -205,11 +209,16 @@ def _default_organization_name(email: str, full_name: str | None) -> str:
 CALLER_WORKSPACE_LIMIT = 1000
 
 
+# How many invitation emails a bulk invite sends at once.
+_BULK_INVITE_MAIL_CONCURRENCY = 5
+
+
 class OrganizationService:
     """Business logic for the organization surface."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, *, membership_listener: MembershipListener | None):
         self.db = db
+        self._membership_listener = membership_listener
         self.organizations = OrganizationRepository(db)
         self.members = OrganizationMemberRepository(db)
         self.users = UserRepository(db)
@@ -240,8 +249,8 @@ class OrganizationService:
         return membership
 
     @staticmethod
-    def _enforce_management_role(membership: OrganizationMember, user: User) -> None:
-        if membership.role not in MANAGEMENT_ROLES and not user.is_superuser:
+    def _enforce_management_role(membership: OrganizationMember) -> None:
+        if membership.role not in MANAGEMENT_ROLES:
             raise NotAuthorizedError
 
     async def require_active_organization_management_access(
@@ -252,12 +261,57 @@ class OrganizationService:
     ) -> OrganizationMember:
         """Return the caller's membership, refusing unless it may manage the organization."""
         membership = await self._require_active_membership(user, organization)
-        self._enforce_management_role(membership, user)
+        self._enforce_management_role(membership)
         return membership
 
     async def user_has_active_membership(self, *, organization_id: uuid.UUID, user_id: uuid.UUID) -> bool:
         """Whether an identity is an active member of an organization."""
         return await self.members.get_active_by_organization_and_user(organization_id, user_id) is not None
+
+    async def has_organization(self, organization_id: uuid.UUID) -> bool:
+        """Return whether an organization with this ID exists."""
+        return await self.organizations.get(organization_id) is not None
+
+    async def get_organization_id_for_workspace(self, workspace_id: uuid.UUID) -> uuid.UUID | None:
+        """Return the ID of the organization that owns a workspace, or None when the workspace does not exist."""
+        return await self.workspace_rows.get_organization_id(workspace_id)
+
+    async def lock_workspace(self, workspace_id: uuid.UUID) -> None:
+        """Serialize this transaction against every other writer holding the workspace's row lock."""
+        await self.workspace_rows.lock(workspace_id)
+
+    async def get_organization_id_for_organization_member(
+        self,
+        organization_member_id: uuid.UUID,
+    ) -> uuid.UUID | None:
+        """Return the ID of the organization a membership belongs to, or None when the membership does not exist."""
+        return await self.members.get_organization_id(organization_member_id)
+
+    async def get_workspace_id_for_workspace_member(self, workspace_member_id: uuid.UUID) -> uuid.UUID | None:
+        """Return the ID of the workspace a membership belongs to, or None when the membership does not exist."""
+        return await self.workspaces.get_workspace_id(workspace_member_id)
+
+    async def get_workspace_ids_in_organization(self, organization_id: uuid.UUID) -> list[uuid.UUID]:
+        """Return the ID of every workspace in an organization."""
+        return await self.workspace_rows.get_ids_by_organization(organization_id)
+
+    async def get_organization_member_ids(self, organization_id: uuid.UUID) -> list[uuid.UUID]:
+        """Return the ID of every membership in an organization, whatever its status."""
+        return await self.members.get_ids_by_organization(organization_id)
+
+    async def get_workspace_member_ids_in_organization(self, organization_id: uuid.UUID) -> list[uuid.UUID]:
+        """Return the ID of every membership in an organization's workspaces, whatever its status."""
+        return await self.workspaces.get_ids_by_organization(organization_id)
+
+    async def page_active_workspace_member_ids(
+        self, workspace_id: uuid.UUID, *, skip: int, limit: int
+    ) -> tuple[list[uuid.UUID], int]:
+        """Return a page of the IDs of a workspace's active memberships, plus how many there are.
+
+        NOTE: callers must authorize the workspace themselves.
+        This applies no organization predicate, so it answers for whichever workspace it is given.
+        """
+        return await self.workspaces.page_active_ids_for_workspace(workspace_id, skip=skip, limit=limit)
 
     async def _to_context(
         self,
@@ -284,6 +338,8 @@ class OrganizationService:
                 user_id=user.id,
                 email=user.email,
                 full_name=user.full_name,
+                has_password=user.hashed_password is not None,
+                claims_deployment=await password_claims_deployment(self.db, user),
             ),
             # The platform answers "does this org have a self-hosted gateway
             # attached". A standalone deployment reading this *is* that gateway,
@@ -627,11 +683,18 @@ class OrganizationService:
         user: User,
         skip: int = 0,
         limit: int = 100,
+        search: str | None = None,
     ) -> ActiveOrganizationMembersPublic:
-        """List the organization's roster. Any active member may read it."""
+        """List the organization's roster. Any active member may read it.
+
+        ``search`` narrows on name and email so a picker over this roster can ask
+        the server rather than filtering the page it was given (otari#1380).
+        """
         organization = await self.get_active_organization_for_user(user)
 
-        rows, count = await self.members.get_by_organization_with_users(organization.id, skip=skip, limit=limit)
+        rows, count = await self.members.get_by_organization_with_users(
+            organization.id, skip=skip, limit=limit, search=search
+        )
         # One query for the whole page rather than a lookup per row: the roster is
         # the picker the dashboard builds its key-owner list from, so every row
         # needs to say whether it can own a key.
@@ -642,6 +705,40 @@ class OrganizationService:
             membership.id for membership, _ in rows if membership.status == "invited"
         )
         invitation_by_member = {invitation.organization_member_id: invitation.id for invitation in pending}
+        # Where each member is and what they may spend there, for the page and
+        # not per workspace: the roster used to fan a read out per workspace and
+        # join the results in the browser (otari#1381).
+        placements = await self.members.placements_for_users(
+            organization.id, [member_user.id for _, member_user in rows]
+        )
+        ceiling_rows = await self.members.ceilings_for_memberships(
+            membership.id for by_user in placements.values() for membership, _ in by_user
+        )
+        ceilings = {
+            scope_id: MemberCeilingPublic(
+                id=ceiling.id,
+                budget_id=ceiling.budget_id,
+                max_budget=as_float(budget.max_budget),
+            )
+            for scope_id, (ceiling, budget) in ceiling_rows.items()
+        }
+        # Deployment-wide, so withheld rather than zeroed from a caller who does
+        # not operate the deployment: `/api/v1/users` refuses them, and a zero
+        # would read as a member who has spent nothing.
+        spend_rows = (
+            await attribution_spend(self.db, [str(member_user.id) for _, member_user in rows])
+            if await DeploymentUserService(self.db).has_administration_access(user)
+            else {}
+        )
+        spend = {
+            user_id: MemberAttributionPublic(
+                spend=float(row.spend),
+                reserved=float(row.reserved),
+                blocked=row.blocked,
+                allowed_models=row.allowed_models,
+            )
+            for user_id, row in spend_rows.items()
+        }
         return ActiveOrganizationMembersPublic(
             data=[
                 self._to_member_public(
@@ -649,6 +746,9 @@ class OrganizationService:
                     member_user,
                     live=live,
                     invitation_id=invitation_by_member.get(membership.id),
+                    placements=placements.get(member_user.id, []),
+                    ceilings=ceilings,
+                    spend=spend.get(str(member_user.id)),
                 )
                 for membership, member_user in rows
             ],
@@ -815,6 +915,12 @@ class OrganizationService:
         }
         return [assignment for assignment in assignments if assignment.workspace_id in found]
 
+    def _require_membership_listener(self) -> MembershipListener:
+        if self._membership_listener is None:
+            msg = "This organization service cannot change workspace membership"
+            raise RuntimeError(msg)
+        return self._membership_listener
+
     async def _apply_workspace_assignments(
         self,
         *,
@@ -832,33 +938,22 @@ class OrganizationService:
         An existing membership is updated rather than skipped, as the platform's
         own assignment path does: a suspended row that is left alone would leave
         the member listed in a workspace they were just granted while still
-        being refused everything in it. Reviving one is materialized exactly
-        as creating one is: a suspended member could have missed a default
-        created while they were out, and the revive is the only signal that
-        they are back to being covered by the workspace's defaults again.
-        Gated on the row actually having been inactive: re-applying the same
-        assignment to an already-active membership (a repeat invitation
-        accept, say) is not a join, and materializing it would resurrect a
-        per-member ceiling an admin deliberately deleted through
-        `/v1/scoped-budgets`.
+        being refused everything in it. Reviving one is announced exactly as
+        creating one is, because a revive is the only signal that the member
+        is back. Gated on the row actually having been inactive: re-applying
+        the same assignment to an already-active membership (a repeat
+        invitation accept, say) is not a join, and announcing it would
+        resurrect state an admin deliberately deleted.
 
         Each target workspace is locked (`WorkspaceRepository.lock`) before
-        its create-or-revive-and-materialize step, same as
+        its create-or-revive-and-announce step, same as
         `WorkspaceService.add_member`, and in a stable order (`wanted` is
         walked sorted by id, not in insertion order) so two requests naming
         the same workspaces in different orders cannot deadlock each other.
-        Imported locally, not at module top: `WorkspaceBudgetDefaultService`
-        reaches back to `OrganizationService` (for its own authorization
-        checks), and importing it at the top of this module would close that
-        into a real cycle. See `tests/unit/test_service_module_imports.py`.
         """
-        from gateway.services.tenancy.workspace_budget_default_service import (
-            WorkspaceBudgetDefaultService,
-        )
-
+        listener = self._require_membership_listener()
         members = WorkspaceMemberRepository(self.db)
         workspaces = WorkspaceRepository(self.db)
-        budget_defaults = WorkspaceBudgetDefaultService(self.db)
         wanted: dict[uuid.UUID, str] = {}
         for assignment in assignments:
             wanted.setdefault(assignment.workspace_id, assignment.role)
@@ -879,10 +974,10 @@ class OrganizationService:
                 was_inactive = existing.status != "active"
                 revived = await members.update(existing, WorkspaceMemberUpdate(role=role, status="active"))
                 if was_inactive:
-                    await budget_defaults.materialize_for_member(revived)
+                    await listener.member_joined(revived)
                 continue
             member = await members.create(workspace_id=workspace_id, user_id=user_id, role=role)
-            await budget_defaults.materialize_for_member(member)
+            await listener.member_joined(member)
 
     async def invite_active_organization_member_for_user(
         self,
@@ -923,94 +1018,224 @@ class OrganizationService:
         if actor_membership.role != "owner" and request.role == "owner":
             raise MembershipUpdateError("Only organization owners can grant the owner role")
 
-        target = await self.users.get_by_email(email)
         try:
-            if target is None:
-                target = await self.users.create_local_identity(
-                    full_name=None,
-                    email=email,
-                    active_organization_id=organization.id,
-                )
-
-            # Locked before the status check that decides create/revive/refuse,
-            # not just inside the revive branch below: two concurrent invites to
-            # the same suspended membership can otherwise both read "suspended"
-            # (nothing has committed yet to see), both fall through to revive
-            # it, and both mint their own live pending invitation for the one
-            # membership, since organization_member_id carries no uniqueness to
-            # catch that as an IntegrityError instead. The second caller through
-            # this lock re-reads the membership fresh, so it sees the first
-            # caller's write.
-            await self.organizations.lock(organization.id)
-            membership = await self.members.get_by_organization_and_user(organization.id, target.id)
-            if membership is not None and membership.status == "active":
-                raise OrganizationMemberAlreadyExistsError(email)
-            if membership is not None and membership.status == "invited":
-                # Expiry is lazy: `_resolve_pending_invitation` only flips a
-                # `pending` row to `expired` when someone presents its token,
-                # so a link nobody ever opened can sit `pending` in the
-                # database indefinitely with its `expires_at` already in the
-                # past. Re-checking the timestamp here, not the stored status,
-                # is what keeps re-inviting from dead-ending on an
-                # unaccepted, unopened, long-expired link forever.
-                pending = await self.invitations.get_pending_by_organization_members([membership.id])
-                now = datetime.now(UTC)
-                if any(invitation.expires_at >= now for invitation in pending):
-                    raise InvitationAlreadyPendingError(email)
-                # Every row here is stale; expire them explicitly so this
-                # fresh invite is the only `pending` one for the membership,
-                # rather than leaving one whose own timestamp has already
-                # passed to fight the new one over which invitation_id the
-                # roster shows.
-                for stale in pending:
-                    await self.invitations.update_status(stale, {"status": "expired"})
-
-            if membership is None:
-                membership = await self.members.create_membership(
-                    organization_id=organization.id,
-                    user_id=target.id,
-                    role=request.role,
-                    status="invited",
-                )
-            else:
-                # Reviving a suspended membership: the same guard the plain
-                # add-member revive branch uses, since this also writes a role.
-                await self._validate_membership_update(
-                    actor_membership=actor_membership,
-                    target_membership=membership,
-                    update_data={"role": request.role, "status": "invited"},
-                    organization_id=organization.id,
-                )
-                membership = await self.members.update_membership(
-                    membership,
-                    {"role": request.role, "status": "invited"},
-                )
-
-            token = secrets.token_urlsafe(32)
-            expires_at = datetime.now(UTC) + timedelta(hours=config.invitation_expiry_hours)
-            invitation = await self.invitations.create_invitation(
-                organization_id=organization.id,
-                organization_member_id=membership.id,
+            invitation, membership, token = await self._stage_invitation(
+                user=user,
+                organization=organization,
+                actor_membership=actor_membership,
                 email=email,
-                invited_by_user_id=user.id,
-                token_hash=_hash_invitation_token(token),
-                workspace_assignments=[assignment.model_dump(mode="json") for assignment in assignments],
-                expires_at=expires_at,
+                role=request.role,
+                assignments=assignments,
+                config=config,
             )
             await self.db.commit()
         except IntegrityError:
             # Two admins inviting the same address at once: the unique index on
             # (organization, user) decides which racer's insert wins, and the
             # loser reports the conflict rather than a 500. The row lock taken
-            # above is what actually decides the invited-vs-suspended-vs-active
-            # question this branch answers; `Invitation.organization_member_id`
-            # itself carries no uniqueness (see its own comment on the model),
-            # since a membership can be invited, revoked, and re-invited more
-            # than once over its life.
+            # in `_stage_invitation` is what actually decides the
+            # invited-vs-suspended-vs-active question this branch answers;
+            # `Invitation.organization_member_id` itself carries no uniqueness
+            # (see its own comment on the model), since a membership can be
+            # invited, revoked, and re-invited more than once over its life.
             await self.db.rollback()
             raise OrganizationMemberAlreadyExistsError(email) from None
 
+        return await self._mail_invitation(
+            mailer=Mailer(config),
+            user=user,
+            organization=organization,
+            invitation=invitation,
+            membership=membership,
+            token=token,
+            config=config,
+        )
+
+    async def invite_active_organization_members_for_user(
+        self,
+        *,
+        user: User,
+        request: BulkInviteOrganizationMembersRequest,
+        config: GatewayConfig,
+    ) -> BulkInviteOrganizationMembersResultPublic:
+        """Invite several addresses to the caller's organization at once.
+
+        Each address goes through the same checks as a single invite, inside its
+        own savepoint, so one that is refused (already a member, say) is reported
+        in ``failed`` and does not stop the rest. The invitations commit together
+        and the emails then go out concurrently, so every result still carries
+        whether its own email was sent.
+        """
+        organization = await self.get_active_organization_for_user(user)
+        actor_membership = await self.require_active_organization_management_access(
+            user=user,
+            organization=organization,
+        )
+        assignments = request.workspace_assignments or []
+        await self._require_workspaces_in_organization(organization, assignments)
+        if actor_membership.role != "owner" and request.role == "owner":
+            raise MembershipUpdateError("Only organization owners can grant the owner role")
+
+        staged: list[tuple[Invitation, OrganizationMember, str]] = []
+        failed: list[BulkInvitationFailurePublic] = []
+        seen: set[str] = set()
+        for raw in request.emails:
+            try:
+                email = _validated_email(raw)
+                if email in seen:
+                    failed.append(BulkInvitationFailurePublic(email=raw, detail=f"{email} is listed more than once"))
+                    continue
+                seen.add(email)
+                # A savepoint, not a rollback: rolling the whole transaction back
+                # would expire every instance loaded so far, the organization
+                # and the caller's membership included.
+                async with self.db.begin_nested():
+                    staged.append(
+                        await self._stage_invitation(
+                            user=user,
+                            organization=organization,
+                            actor_membership=actor_membership,
+                            email=email,
+                            role=request.role,
+                            assignments=assignments,
+                            config=config,
+                        )
+                    )
+            except IntegrityError:
+                failed.append(
+                    BulkInvitationFailurePublic(
+                        email=raw, detail=str(OrganizationMemberAlreadyExistsError(raw.strip()))
+                    )
+                )
+            except (TenancyConflictError, TenancyValidationError) as exc:
+                failed.append(BulkInvitationFailurePublic(email=raw, detail=str(exc)))
+        await self.db.commit()
+
         mailer = Mailer(config)
+        # Bounded, so a large batch does not open a hundred SMTP connections at once.
+        limit = asyncio.Semaphore(_BULK_INVITE_MAIL_CONCURRENCY)
+
+        async def mail(
+            invitation: Invitation, membership: OrganizationMember, token: str
+        ) -> InviteOrganizationMemberResultPublic:
+            async with limit:
+                return await self._mail_invitation(
+                    mailer=mailer,
+                    user=user,
+                    organization=organization,
+                    invitation=invitation,
+                    membership=membership,
+                    token=token,
+                    config=config,
+                )
+
+        invited = await asyncio.gather(*(mail(*one) for one in staged))
+        return BulkInviteOrganizationMembersResultPublic(invited=list(invited), failed=failed)
+
+    async def _stage_invitation(
+        self,
+        *,
+        user: User,
+        organization: Organization,
+        actor_membership: OrganizationMember,
+        email: str,
+        role: OrganizationMemberRole,
+        assignments: list[WorkspaceAssignmentRequest],
+        config: GatewayConfig,
+    ) -> tuple[Invitation, OrganizationMember, str]:
+        """Write one invitation and its ``invited`` membership, uncommitted; return them with the raw token.
+
+        Refuses an address that already holds an active membership, or one with
+        a still-unexpired invitation pending.
+        """
+        target = await self.users.get_by_email(email)
+        if target is None:
+            target = await self.users.create_local_identity(
+                full_name=None,
+                email=email,
+                active_organization_id=organization.id,
+            )
+
+        # Locked before the status check that decides create/revive/refuse,
+        # not just inside the revive branch below: two concurrent invites to
+        # the same suspended membership can otherwise both read "suspended"
+        # (nothing has committed yet to see), both fall through to revive
+        # it, and both mint their own live pending invitation for the one
+        # membership, since organization_member_id carries no uniqueness to
+        # catch that as an IntegrityError instead. The second caller through
+        # this lock re-reads the membership fresh, so it sees the first
+        # caller's write.
+        await self.organizations.lock(organization.id)
+        membership = await self.members.get_by_organization_and_user(organization.id, target.id)
+        if membership is not None and membership.status == "active":
+            raise OrganizationMemberAlreadyExistsError(email)
+        if membership is not None and membership.status == "invited":
+            # Expiry is lazy: `_resolve_pending_invitation` only flips a
+            # `pending` row to `expired` when someone presents its token,
+            # so a link nobody ever opened can sit `pending` in the
+            # database indefinitely with its `expires_at` already in the
+            # past. Re-checking the timestamp here, not the stored status,
+            # is what keeps re-inviting from dead-ending on an
+            # unaccepted, unopened, long-expired link forever.
+            pending = await self.invitations.get_pending_by_organization_members([membership.id])
+            now = datetime.now(UTC)
+            if any(invitation.expires_at >= now for invitation in pending):
+                raise InvitationAlreadyPendingError(email)
+            # Every row here is stale; expire them explicitly so this
+            # fresh invite is the only `pending` one for the membership,
+            # rather than leaving one whose own timestamp has already
+            # passed to fight the new one over which invitation_id the
+            # roster shows.
+            for stale in pending:
+                await self.invitations.update_status(stale, {"status": "expired"})
+
+        if membership is None:
+            membership = await self.members.create_membership(
+                organization_id=organization.id,
+                user_id=target.id,
+                role=role,
+                status="invited",
+            )
+        else:
+            # Reviving a suspended membership: the same guard the plain
+            # add-member revive branch uses, since this also writes a role.
+            await self._validate_membership_update(
+                actor_membership=actor_membership,
+                target_membership=membership,
+                update_data={"role": role, "status": "invited"},
+                organization_id=organization.id,
+            )
+            membership = await self.members.update_membership(
+                membership,
+                {"role": role, "status": "invited"},
+            )
+
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(UTC) + timedelta(hours=config.invitation_expiry_hours)
+        invitation = await self.invitations.create_invitation(
+            organization_id=organization.id,
+            organization_member_id=membership.id,
+            email=email,
+            invited_by_user_id=user.id,
+            token_hash=_hash_invitation_token(token),
+            workspace_assignments=[assignment.model_dump(mode="json") for assignment in assignments],
+            expires_at=expires_at,
+        )
+        return invitation, membership, token
+
+    async def _mail_invitation(
+        self,
+        *,
+        mailer: Mailer,
+        user: User,
+        organization: Organization,
+        invitation: Invitation,
+        membership: OrganizationMember,
+        token: str,
+        config: GatewayConfig,
+    ) -> InviteOrganizationMemberResultPublic:
+        """Email a committed invitation's accept link, where links can be mailed, and report whether it went."""
+        email = invitation.email
         accept_link = mailer.link(_invitation_accept_path(token))
         mail_sent = False
         # can_send_links, not is_configured: an accept link that is relative
@@ -1071,23 +1296,48 @@ class OrganizationService:
         return invitation, membership, organization
 
     async def get_invitation_preview(self, token: str) -> InvitationPreviewPublic:
-        """Look up a pending invitation by token, for the accept page. No auth: the token is the proof."""
+        """Look up a pending invitation by token, for the accept page. No auth: the token is the proof.
+
+        ``needs_password`` tells the token's holder whether the invited address
+        can already sign in. That is only ever said to someone holding this
+        invitation, which already names the address, so it widens nothing
+        signup's enumeration-safety protects.
+        """
         invitation, membership, organization = await self._resolve_pending_invitation(token)
+        invitee = await self.users.get(membership.user_id)
         return InvitationPreviewPublic(
             email=invitation.email,
             organization_name=organization.name,
             role=membership.role,
             expires_at=invitation.expires_at,
+            needs_password=invitee is not None and _has_never_signed_in(invitee),
         )
 
-    async def accept_invitation(self, token: str) -> AcceptInvitationResultPublic:
-        """Resolve a pending invitation to an active membership.
+    async def accept_invitation(
+        self,
+        token: str,
+        *,
+        password: str | None = None,
+        full_name: str | None = None,
+        terms_accepted: bool = False,
+    ) -> AcceptInvitationResultPublic:
+        """Resolve a pending invitation to an active membership, optionally setting a first password.
 
-        No session is minted (see ``AcceptInvitationResultPublic``): this only
+        No session is minted (see ``AcceptInvitationResultPublic``): this
         flips the paired membership to ``active`` and applies the parked
         workspace assignments, the same way immediate ones are applied on
         ``POST /me/members``.
+
+        ``password`` is what lets a deployment with no mail let an invitee in:
+        signup has to mail a verification link, but the invitation link already
+        proves what that link would, since it reached the invitee either by
+        email or from an admin who vouches for the address. It is accepted only
+        for an identity that has never signed in, so a forwarded link can claim
+        an unclaimed seat and never take over an account.
         """
+        if password is not None:
+            # Before the lookup, so a policy refusal says nothing about the token.
+            validate_new_password(password)
         _, _, organization = await self._resolve_pending_invitation(token)
         # Locked, then re-resolved, before any write: two concurrent accepts of
         # the same token could otherwise both pass the pending check above
@@ -1101,7 +1351,33 @@ class OrganizationService:
         # no longer pending, so it raises InvitationAlreadyUsedError instead.
         await self.organizations.lock(organization.id)
         invitation, membership, organization = await self._resolve_pending_invitation(token)
-        return await self._resolve_invitation_to_active_membership(invitation, membership, organization)
+        if password is not None:
+            invitee = await self.users.get(membership.user_id)
+            if invitee is None or not _has_never_signed_in(invitee):
+                raise InvitationPasswordNotAcceptedError
+            now = datetime.now(UTC)
+            values: dict[str, str | datetime | None] = {
+                "email_verified_at": now,
+                "full_name": invitee.full_name or (full_name or "").strip() or None,
+            }
+            if terms_accepted:
+                values["terms_accepted_at"] = now
+            # The check above only gives the common refusal its message: a
+            # signup on the same address can pass its own check meanwhile, and
+            # this conditional write is what decides between the two. It lands
+            # in the same commit as the membership below, so a failed accept
+            # never leaves a claimed identity outside its organization.
+            claimed = await self.users.claim_first_password(
+                invitee.id,
+                hashed_password=await hash_password_async(password),
+                require_unverified=True,
+                values=values,
+            )
+            if not claimed:
+                await self.db.rollback()
+                raise InvitationPasswordNotAcceptedError
+        result = await self._resolve_invitation_to_active_membership(invitation, membership, organization)
+        return result.model_copy(update={"password_set": password is not None})
 
     async def _resolve_invitation_to_active_membership(
         self,
@@ -1582,8 +1858,12 @@ class OrganizationService:
         *,
         live: set[str],
         invitation_id: uuid.UUID | None = None,
+        placements: list[tuple[WorkspaceMember, Workspace]] | None = None,
+        ceilings: dict[str, MemberCeilingPublic] | None = None,
+        spend: MemberAttributionPublic | None = None,
     ) -> ActiveOrganizationMemberPublic:
         attribution_user_id = str(user.id)
+        by_membership = ceilings or {}
         return ActiveOrganizationMemberPublic(
             organization_member_id=membership.id,
             user_id=user.id,
@@ -1595,6 +1875,17 @@ class OrganizationService:
             status=membership.status,
             created_at=membership.created_at,
             updated_at=membership.updated_at,
+            workspaces=[
+                MemberWorkspacePlacementPublic(
+                    workspace_id=workspace.id,
+                    workspace_name=workspace.name,
+                    workspace_member_id=workspace_membership.id,
+                    role=workspace_membership.role,
+                    ceiling=by_membership.get(str(workspace_membership.id)),
+                )
+                for workspace_membership, workspace in (placements or [])
+            ],
+            attribution=spend,
         )
 
 

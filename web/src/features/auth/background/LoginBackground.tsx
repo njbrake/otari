@@ -68,9 +68,17 @@ export function LoginBackground({
       const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5)
       const width = Math.round(bounds.width * pixelRatio)
       const height = Math.round(bounds.height * pixelRatio)
-      if (canvas.width !== width) canvas.width = width
-      if (canvas.height !== height) canvas.height = height
+      // Either assignment wipes the bitmap, so report it: the caller has to
+      // repaint in this same frame. Deferring to the interval below leaves the
+      // background blank for up to a paint, which is the flash that showed on
+      // every keystroke that changed the card's height (otari-ai#2146).
+      const isResized = canvas.width !== width || canvas.height !== height
+      if (isResized) {
+        canvas.width = width
+        canvas.height = height
+      }
       ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+      return isResized
     }
     const readPalette = () => {
       const style = getComputedStyle(canvas)
@@ -85,20 +93,24 @@ export function LoginBackground({
         lastFrame = 0
         return
       }
-      const invalidated = geometryDirty || paletteDirty
-      if (geometryDirty) measure()
+      const isInvalidated = geometryDirty || paletteDirty
+      const isCleared = geometryDirty ? measure() : false
       if (paletteDirty) readPalette()
       geometryDirty = false
       paletteDirty = false
-      const moving = canAnimate()
-      if (moving && lastFrame)
+      const isMoving = canAnimate()
+      if (isMoving && lastFrame)
         time += Math.min((now - lastFrame) / 1000, 0.1) * speed
-      lastFrame = moving ? now : 0
-      if ((invalidated && !moving) || now - lastPaint >= paintInterval) {
+      lastFrame = isMoving ? now : 0
+      if (
+        isCleared ||
+        (isInvalidated && !isMoving) ||
+        now - lastPaint >= paintInterval
+      ) {
         paint()
         lastPaint = now
       }
-      if (moving) frame = requestAnimationFrame(animate)
+      if (isMoving) frame = requestAnimationFrame(animate)
     }
     const schedule = () => {
       if (!frame && !document.hidden) frame = requestAnimationFrame(animate)

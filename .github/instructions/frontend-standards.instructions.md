@@ -34,7 +34,16 @@ full guidance, with worked examples grounded in this dashboard's code, lives in 
    `@layer`, and an unlayered declaration is what outranks a layered one), a shared utility
    once the look repeats, the component's own prop (`variant`, `size`, `isDisabled`,
    `isPending`, `fullWidth`, `isInvalid`), and only then a rule against HeroUI's
-   own classes under the `.otari-*` namespace. HeroUI and Tailwind both permit that last one and
+   own classes under the `.otari-*` namespace. Those names are BEM and the shape is not
+   optional: a block is `otari-<block>`, an element `otari-<block>__<element>`, a modifier
+   `otari-<block>--<modifier>`. A stylesheet is global whatever imports it, so the prefix and
+   the two separators are the collision story, and `src/architecture.test.ts` parses that
+   shape, which makes a name departing from it invisible to the probe rather than merely
+   inconsistent. Which file it goes in is a finding too: a rule whose subject is a
+   `design-system/` primitive's own DOM belongs in `web/src/design-system/design-system.css`,
+   which `globals.css` imports first, while a per-table block and anything whose consumers
+   are feature pages stays in `globals.css`.
+   HeroUI and Tailwind both permit that last one and
    it stays discouraged here, so the finding is not that it is forbidden but that a rung above
    reaches the value: a rule like `.otari-table .table__cell` or
    `.table__body tr:first-child td:first-child` is a finding unless nothing above it can do the
@@ -43,18 +52,28 @@ full guidance, with worked examples grounded in this dashboard's code, lives in 
    `className` re-skinning something the component already styles is a finding too; reserve
    `className` for layout/position. Space siblings with
    `gap-*` on the parent, not `m-*` on children, and write arbitrary values in `rem`
-   (`h-[20rem]`, not `h-[320px]`; a `1px` border is the exception).
+   (`h-[20rem]`, not `h-[320px]`; a `1px` border is the exception). A shared component never
+   bakes an outside margin into its own root: what sits between two things is the parent's
+   decision. An inline `style={{}}` is a finding for anything a class can express, and is
+   **correct** for a value computed at runtime that no class can (a percentage width, a
+   computed offset): Tailwind emits only the utilities the source names, so `w-[${pct}%]`
+   compiles to nothing.
 
 3. **Color and type come from the semantic tokens** in `web/src/styles/globals.css`. The
    tokens are the design system; HeroUI and Tailwind consume it, so a utility that does not
    resolve to a `--color-*` token is outside the system and will not follow a retheme. Use the
    utilities the tokens back (`text-muted`, `bg-surface`, `border-border`, `text-danger`,
    `text-heading`), add a token there rather than scattering a hex, and add it to both theme
-   blocks. A raw hex, a numbered Tailwind palette class, and `bg-white` / `text-black` all
+   blocks *and* to the file's `@theme` block: a token declared and not registered generates no
+   utility, so the class at the call site silently resolves to nothing. A raw hex, a numbered Tailwind palette class, and `bg-white` / `text-black` all
    fail `web/src/styles/foundation.test.ts`, over the whole of `web/src`. Two pairings are
    easy to get wrong: a status word wears its own color on its own subtle fill
    (`text-danger` on `bg-danger-subtle`), but brand text on the brand tint takes
-   `text-primary-subtle-foreground`, not `text-accent`. Type comes from the seven roles, so a
+   `text-primary-subtle-foreground`, not `text-accent`. The two rule tiers are not
+   interchangeable either: `--color-border` divides one section from the next, while
+   `--color-border-subtle` divides repeated rows inside one, and a status dot takes the text
+   ramp (`bg-text-subtle`) because a surface value on a 6px square measures about 1.1:1 and is
+   not a quiet dot but no dot. Type comes from the seven roles, so a
    `text-[11px]` or a `text-2xl font-bold` is a finding. See
    [design-tokens.md](../skills/frontend-standards/design-tokens.md).
 
@@ -66,16 +85,75 @@ full guidance, with worked examples grounded in this dashboard's code, lives in 
    `placeholderData: (prev) => prev`, or the page blanks on every filter change. Don't call
    `fetch()` directly for authenticated management requests; `apiFetch` uses the HttpOnly
    session cookie and signs out on 401, while public sign-in helpers stay outside that path.
-   Never mirror server state into `useState`, and never swallow a mutation error. Bound every
-   "fetch all" loop with a hard page cap. See
+   Anything that must stay live takes `refetchInterval`, never a hand-rolled `setInterval`.
+   Never mirror server state into `useState`, and never swallow a mutation error. **The
+   dashboard is a thin rendering layer**: it does not filter, search, sort, join or aggregate
+   server data, and it does not assemble one view out of several responses and join them by id
+   in the browser. If the endpoint the page needs does not exist, creating it is the change to
+   make, and the gateway is in this repository. **A list hook asks for the page on
+   screen**, taking `skip` and `limit` from the URL state with
+   `placeholderData: (prev) => prev`; every gateway list route accepts both and rejects a
+   `limit` above 1000 rather than clamping. Reading a whole collection is the finding, and a
+   cap on the walk does not answer it: the cap stops the walk looping, it does not paginate the
+   read, and everything downstream still sorts and filters in the browser. A hook that looks
+   like it needs one needs something from the endpoint instead: a search parameter for a
+   picker, an embedded label or a batch lookup where a page is resolving ids. `fetchAllPaged`
+   and `fetchAllRows` serve the nineteen reads that predate the rule (#1376); a new caller of
+   either is a finding. A fire-and-forget call is prefixed with `void`, which
+   marks it as deliberately not awaited and is what lets the floating-promise lint flag the
+   ones that were forgotten. It is a marker and not error handling: `void` discards the
+   rejection too, so it is correct only where the promise cannot reject meaningfully
+   (`invalidateQueries` and `refetch` resolve with state; `useAutosave`'s `run` catches into
+   its own error). A `void` on a call that can fail is the finding, and the fix is a `.catch`
+   that reports or an `await` in a function that owns the failure. See
    [data-fetching.md](../skills/frontend-standards/data-fetching.md).
 
-5. **TypeScript + React hygiene.** `undefined` (not `null`) for absent values in your own
-   types; `unknown` plus a guard where a type is genuinely unknown, not `any`; a discriminated
+5. **TypeScript + React hygiene.** An absent value in your own types and props is the type's
+   own empty value first (`""`, `[]`, `{}`), `undefined` only where no empty value can stand in
+   without colliding with a real one **and the declaration says why**, and never `null` (the API
+   layer mirrors the server JSON, so convert at the boundary). A `null` a refactor merely moves
+   is a finding against that refactor. So is a type widened to carry the wire's spelling rather
+   than converting it: `X | null | undefined` on your own type is the tell, and it means one
+   absent value is now spelled two ways for every reader downstream. Prefer a falsy check or a
+   default over an explicit `=== undefined` where one reads the same (`Boolean(x)`, `!x`,
+   `array.length`); spell the comparison out only where a falsy value is a real answer, as a
+   `0` cap or an empty allow-list is. A `boolean | null` or `boolean | undefined` is a finding
+   in itself: a boolean holds two answers, its empty value is `false`, and a nullable one is a
+   third state smuggled in as an absent value, so it wants a named union and a conversion at the
+   wire. A boolean reads as a question in English (`isPending`,
+   `hasBudget`, `canRevokeKey`), and that covers a local, a prop and a boolean field of a hook's
+   return alike: a bare verb or noun phrase (`operates`, `ready`) reads as the thing rather than
+   as an answer about it. `unknown` plus a guard where a type is genuinely unknown, not `any`; a discriminated
    union rather than a bag of optionals; named exports and named imports, no barrel files;
    correct effect dependency arrays with cleanup; derive from props/query data rather than
-   duplicating into state. The React Compiler is enabled, so hand-written
-   `useMemo`/`useCallback`/`React.memo` needs a stated reason. See
+   duplicating into state (copying a prop into `useState` and re-syncing it with an effect is
+   the finding; adjusting the state during render is the fix, and a `key` only where the draft
+   is worth discarding, since keying on the value remounts the control and throws away whatever
+   was being typed). Cleanup covers **timers**, and
+   covers one started from an event handler or a mutation callback, not only from an effect:
+   an uncleared timer touches a gone component and stacks rather than replaces when its
+   trigger fires twice inside the window. Names say what a value is, and a single letter says
+   less than the generic nouns already banned, so `(entry) => entry.latency_ms` rather than
+   `(e) => …`; the exemptions are a comparator's `(a, b)` and a `setState` updater's previous
+   value. A function name starts with a verb (`formatCost`, `findFallthroughTarget`,
+   `describePartialScopeSave`), because one named for its return value (`cost()`, `weightsOf()`)
+   reads like a variable at the call site. A callback prop is named for the event
+   (`onConfirm`, `onRevoke`, `onSaved`) and the function behind it for the intent
+   (`revokeSelected`, `dismissBanner`), where `handleClick` says only that a click happened. A loop that produces a value is a transformation written the long way, so `for...of`,
+   `for...in` and an index loop all read better as `map`/`filter`/`reduce`/`find`/`flatMap`
+   (`for...in` additionally walks inherited keys: use `Object.entries`). `forEach` is correct
+   where the body is genuinely only a side effect, and takes a block body: Biome's
+   `useIterableCallbackReturn` rejects a concise arrow whose body is a call, reading the shape
+   rather than the type, so a call returning `void` is flagged too. (`(id) => void fn(id)`
+   passes lint and is therefore not a finding, but no code here is written that way.)
+   `forEach` is wrong where it is a transformation with the result pushed into an outer
+   variable.
+   Consuming a stream and a bounded request walk stay imperative. The React Compiler is
+   enabled, so the plain expression is the default and reflexive memoization is the finding.
+   Hand-written `useMemo`/`useCallback`/`React.memo` is correct where it earns its place (an
+   expensive computation, a reference something else identity-checks, a component the compiler
+   could not optimize because it could not verify the rules of hooks), so do not flag one that
+   does: the rule is judgment, not a ban and not a requirement. See
    [typescript-and-react.md](../skills/frontend-standards/typescript-and-react.md) and
    [performance.md](../skills/frontend-standards/performance.md).
 
@@ -111,13 +189,23 @@ full guidance, with worked examples grounded in this dashboard's code, lives in 
    JSX; no structural markup copy-pasted between files. See
    [component-architecture.md](../skills/frontend-standards/component-architecture.md).
 
+   **A file is named for what it exports**, and nothing enforces that, so it is review's to
+   catch: a file with one component subject is `PascalCase.tsx` named for that component, a
+   hook is `useCamelCase.ts(x)`, and a helper or pure module is `camelCase.ts`. A file under
+   `web/src/routes/` takes whatever file-based routing requires (`tools.guardrails.tsx`) and
+   is never renamed by hand. One component sitting in a `camelCase.tsx`, or a `PascalCase.ts`
+   holding only helpers, is the finding. A module whose exports share no one subject keeps a
+   camelCase name and is not (`design-system/metrics/charts.tsx`,
+   `features/providers/providerFields.tsx`), the same carve-out `tabs.test.tsx` has. See
+   [naming-conventions.md](../skills/frontend-standards/naming-conventions.md).
+
 8. **Navigation is data, and its three gates stay three.** A *rail* destination is declared in
    `web/src/app/nav/registry.ts` and nowhere else; flag a sidebar link hand-written into a
-   component. Two routes are chrome rather than navigation and are hand-written `Link`s on
-   purpose, so do not flag them or ask for them to be registered: `/docs` (top bar, and the
-   account menu below `md`) and `/account` (that menu's first row). The registry is what the
-   rails render, so registering either would duplicate into the sidebar a row the design draws
-   once. An entry gates on `surface` (the deployment axis, from `GET /v1/bootstrap`
+   component. `/playground`, `/docs`, and `/account` are chrome destinations, so they
+   use hand-written `Link`s outside the sidebar sections. Playground and Documentation
+   appear in the top bar and in the account menu below `md`; Account settings is that
+   menu's first row. Playground remains in route lookup to preserve its surface gate.
+   An entry gates on `surface` (the deployment axis, from `GET /v1/bootstrap`
    via `useDeployment`), `capability` (the entitlement axis, via `useEntitlements`), and
    `operatorOnly` (the caller axis, via `useDeploymentAdminAccess`), composed as AND by
    `useNavVisibility`. Do not fold one into another, and do not reach past them: a page
@@ -149,8 +237,65 @@ full guidance, with worked examples grounded in this dashboard's code, lives in 
 
 10. **Tests for changed behavior.** Colocated Vitest tests (`Foo.tsx` → `Foo.test.tsx`) that
     query the way a user would (`getByRole`/`getByLabelText`/`getByText`, not `getByTestId`),
-    render real providers, and mock only the network boundary (`apiFetch`), not the hooks. Each
+    render real providers, and mock only the network boundary, not the hooks. Two forms reach
+    that boundary and both are correct: `vi.spyOn(apiClient, "apiFetch")` for an authenticated
+    page test, and `vi.mock("@/shared/api/client", importOriginal)` where the subject reaches
+    the transport through several exports or before a spy lands, which is the public auth and
+    invitation flows. A class selector used to *find* an element is a finding; the one
+    exception is pinning a layout property jsdom cannot compute (a reserved height, a collapsed
+    edge), asserted with `toHaveClass` on one scoped element, preferring a class that names a
+    token, with the reason at the site. That exception covers the assertion and not the query,
+    so the element is still reached by role, text or a structural step from either, and an
+    absence is the element not being rendered rather than a class going unfound; a
+    `container.querySelector(".some-class")` feeding a layout assertion is a finding. Where a
+    state has an accessible expression, assert that
+    instead: `charts.tsx` switches `role="group"` / `role="img"` on drag selection, so the role
+    is the assertion and the cursor utility is not. A node the accessibility tree hides on
+    purpose is not covered either: `DataTable`'s detail host is `role="presentation"`, so "a row
+    is expanded" is asserted on the detail's own content rather than by counting hosts, and the
+    only thing left on the host is that the same node is reused across a re-render. Each
     file restores the globals it overrode and carries no per-assertion timeout override. A new
     page also needs a screenshot entry in `web/e2e/screenshots/`, which is what will cover it
     at three viewports in both themes; that suite runs on demand today rather than as a PR
     gate, so the entry is owed even though nothing fails without it. See [testing.md](../skills/frontend-standards/testing.md).
+
+11. **Rendering work is part of the review.** Animate `transform` and `opacity`; a property
+    that changes geometry (`width`, `height`, `top`, `max-height`, `grid-template-rows`) runs
+    layout every frame and needs its reason in the rule's comment, as `.otari-detail-reveal`
+    has. Every animation answers `prefers-reduced-motion`. `will-change` is applied for the
+    duration of an animation and removed after, never left on, because a permanent one is a
+    permanent layer. Reading layout (`getBoundingClientRect`, `offsetWidth`, `scrollTop`)
+    forces a synchronous flush, so it does not belong in a pointermove handler or an
+    unthrottled `resize` listener: measure once where the interaction starts, batch reads
+    before writes, prefer a `ResizeObserver`'s `contentRect`, and coalesce through one
+    `requestAnimationFrame` (`features/auth/background/LoginBackground.tsx` is the worked
+    example). `scroll`, `wheel` and `touchmove` listeners take `{ passive: true }` unless they
+    call `preventDefault`. Stacking has no token family yet, so reuse a sibling's `z-` value
+    and say what a new layer sits above rather than inventing a higher number. See
+    [performance.md](../skills/frontend-standards/performance.md) and
+    `web/design/motion-and-access.md`.
+
+    **Nothing flashes and nothing shifts.** A modal is mounted when it opens
+    (`{isConfirming && <ConfirmDialog isOpen … />}`) rather than kept in the tree behind a
+    prop, so its subtree, listeners and queries do not exist while it is closed. A skeleton is
+    the height of what it replaces, or everything below it jumps on swap. Global chrome
+    (sidebar, header, breadcrumbs) belongs to `AppShell` and not to a route component, which
+    remounts it on every navigation. `window.location.reload()` is not a refresh button:
+    invalidate the affected keys instead, and the root error boundary is its one legitimate
+    caller. A pre-paint decision, the theme above all, is resolved in `index.html`'s inline
+    script as well as in `useTheme`, so a change to the storage key, the three-state
+    resolution or the attributes that carry it has to reach both. See
+    [layout-stability.md](../skills/frontend-standards/layout-stability.md).
+
+12. **Numbers, money and dates go through `web/src/shared/helpers/format.ts`.** `Intl` does the
+    work, never string arithmetic: `"$" + value.toFixed(2)` loses grouping and rounds a
+    sub-cent cost to `$0.00`, which for a per-request price is not a rounding error but the
+    whole value. Construct a formatter once per module, not once per row of every render.
+    Numbers and money are pinned to `en-US` because the dashboard bills in USD, and
+    `format.test.ts` sweeps the tree for an unpinned `Intl` formatter and for a bare
+    `toLocaleString()`. A calendar date with no instant in it (`YYYY-MM`) is formatted from the
+    string rather than through a `Date`, which would shift it a day west of UTC, and timezone
+    arithmetic by hand (`d.setHours(d.getHours() - 5)`) breaks across DST. An absent value
+    renders as the placeholder these helpers already return, not as an empty cell and not as
+    `null`. See
+    [formatting-and-i18n.md](../skills/frontend-standards/formatting-and-i18n.md).

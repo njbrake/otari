@@ -27,16 +27,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import col
 
-from gateway.models.entities import (
-    APIKey,
-    Budget,
-    ModelAlias,
-    ModelPricing,
-    UsageLog,
-    User,
-)
+from gateway.models.api_keys import APIKey
+from gateway.models.budgets import Budget
 from gateway.models.money import to_usd
+from gateway.models.pricing import ModelPricing
+from gateway.models.providers import ModelAlias
 from gateway.models.tenancy import Organization, Workspace
+from gateway.models.usage import UsageLog
+from gateway.models.users import User
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "sqlite:///./scripts/demo_gif/demo.db"
 rng = random.Random(4242)  # deterministic values across runs
@@ -285,8 +283,10 @@ for name, (util_target, _duration) in BUDGETS.items():
 
 db.commit()
 
-print(f"Seeded: {len(BUDGETS)} budgets, {len(USERS)} users, {len(KEYS)} keys, "
-      f"{len(MODELS)} priced models, {len(ALIASES)} aliases, {rows} usage rows -> {URL}")
+print(
+    f"Seeded: {len(BUDGETS)} budgets, {len(USERS)} users, {len(KEYS)} keys, "
+    f"{len(MODELS)} priced models, {len(ALIASES)} aliases, {rows} usage rows -> {URL}"
+)
 print("(providers are declared in scripts/demo_gif/otari.yml)")
 for uid, spent in sorted(period_spend.items()):
     bname = USERS[uid][1]

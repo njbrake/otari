@@ -1,7 +1,7 @@
 import { Button, Spinner } from "@heroui/react"
-import { useEffect, useId, useState } from "react"
-
+import { useId, useState } from "react"
 import { INPUT_CLASS } from "@/design-system/forms/inputClass"
+import { formatNumber } from "@/design-system/helpers/format"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 
 // Shared pager for the dashboard tables: rows-per-page on the left, a truthful
@@ -34,6 +34,13 @@ export interface TablePaginationProps {
   isFetching?: boolean
   /** With an unknown total, whether a next page is assumed to exist (usually rowsOnPage === pageSize). */
   hasNextFallback?: boolean
+  /**
+   * What this pager pages, lower case and plural ("rate overrides"), for the
+   * control labels. Two pagers on one page otherwise expose the same four
+   * accessible names with nothing to tell them apart. Omitted where a page has
+   * only one, so the labels stay the shorter ones.
+   */
+  label?: string
 }
 
 export function TablePagination({
@@ -46,8 +53,13 @@ export function TablePagination({
   pageSizeOptions = PAGE_SIZE_OPTIONS,
   isFetching = false,
   hasNextFallback = false,
+  label,
 }: TablePaginationProps) {
   const sizeSelectId = useId()
+  // Comma-appended rather than woven in, so the first words stay identical
+  // across every pager and a screen-reader user hears the distinguishing part
+  // last rather than having to parse a different sentence each time.
+  const named = (control: string) => (label ? `${control}, ${label}` : control)
   const pageCount =
     total != null ? Math.max(1, Math.ceil(total / pageSize)) : null
   const isFirst = page === 0
@@ -59,17 +71,27 @@ export function TablePagination({
     total != null
       ? total === 0
         ? "0 of 0"
-        : `${rangeStart.toLocaleString()}–${rangeEnd.toLocaleString()} of ${total.toLocaleString()}`
+        : `${formatNumber(rangeStart)}–${formatNumber(rangeEnd)} of ${formatNumber(total)}`
       : rowsOnPage > 0
-        ? `${rangeStart.toLocaleString()}–${rangeEnd.toLocaleString()}`
+        ? `${formatNumber(rangeStart)}–${formatNumber(rangeEnd)}`
         : "0"
 
   // Local, editable page box synced to `page`; commits on Enter or blur so
   // intermediate keystrokes do not refetch on every digit.
+  //
+  // The page as this box last saw it, adjusted during render rather than in an
+  // effect: an effect renders the stale number once, commits, then renders
+  // again, and the box is the one thing on the row that must not lag the page
+  // it labels. The reset is unconditional here, unlike `ComboBoxField` and the
+  // settings drafts, because nothing in this box is worth keeping: a half-typed
+  // number is uncommitted by definition, and the page moving is the operator
+  // having pressed something else.
   const [pageText, setPageText] = useState(String(page + 1))
-  useEffect(() => {
+  const [lastSeenPage, setLastSeenPage] = useState(page)
+  if (page !== lastSeenPage) {
+    setLastSeenPage(page)
     setPageText(String(page + 1))
-  }, [page])
+  }
 
   const commitPage = () => {
     const parsed = Number.parseInt(pageText, 10)
@@ -90,8 +112,9 @@ export function TablePagination({
     // `.otari-pagination` is a place, in the sense Toolbar's docstring explains:
     // it declares `--field-height` and `--field-padding-block` for the controls
     // inside it (32px, and 44px on a coarse pointer) rather than restyling them
-    // by descendant selector. It also drops a ghost button's edge. Both live in
-    // globals.css, keyed on this class.
+    // by descendant selector. It also drops a ghost button's edge: the first in
+    // `design-system.css`, the second in `globals.css` with the rest of the
+    // ghost-border family, both keyed on this class.
     <div className="otari-pagination flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-2">
         <label htmlFor={sizeSelectId} className="text-sm text-muted">
@@ -99,7 +122,7 @@ export function TablePagination({
         </label>
         <FilterSelect
           id={sizeSelectId}
-          ariaLabel="Rows per page"
+          ariaLabel={named("Rows per page")}
           value={String(pageSize)}
           onChange={(value) => onPageSizeChange(Number.parseInt(value, 10))}
           options={pageSizeOptions.map((size) => ({
@@ -131,7 +154,7 @@ export function TablePagination({
           <Button
             size="sm"
             variant="ghost"
-            aria-label="First page"
+            aria-label={named("First page")}
             isDisabled={isFirst}
             onPress={() => onPageChange(0)}
           >
@@ -140,7 +163,7 @@ export function TablePagination({
           <Button
             size="sm"
             variant="ghost"
-            aria-label="Previous page"
+            aria-label={named("Previous page")}
             isDisabled={isFirst}
             onPress={() => onPageChange(page - 1)}
           >
@@ -148,7 +171,7 @@ export function TablePagination({
           </Button>
           <span className="inline-flex items-center gap-1 text-sm text-muted">
             <input
-              aria-label="Page number"
+              aria-label={named("Page number")}
               inputMode="numeric"
               value={pageText}
               onChange={(event) =>
@@ -169,15 +192,13 @@ export function TablePagination({
               className={`w-12 text-center tabular-nums ${INPUT_CLASS}`}
             />
             {pageCount != null ? (
-              <span className="tabular-nums">
-                / {pageCount.toLocaleString()}
-              </span>
+              <span className="tabular-nums">/ {formatNumber(pageCount)}</span>
             ) : null}
           </span>
           <Button
             size="sm"
             variant="ghost"
-            aria-label="Next page"
+            aria-label={named("Next page")}
             isDisabled={isLast}
             onPress={() => onPageChange(page + 1)}
           >
@@ -186,7 +207,7 @@ export function TablePagination({
           <Button
             size="sm"
             variant="ghost"
-            aria-label="Last page"
+            aria-label={named("Last page")}
             isDisabled={pageCount == null || isLast}
             onPress={() => pageCount != null && onPageChange(pageCount - 1)}
           >

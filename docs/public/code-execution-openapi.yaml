@@ -92,10 +92,16 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "503":
           description: |
-            At capacity, no session leased. Distinct from a malformed request:
-            retryable in principle, though Otari surfaces it as a failed request
-            rather than backing off, so a backend should not rely on the client
-            re-offering the work.
+            Temporarily unavailable, including capacity or dependency failures.
+            Otari preserves 503 and a valid Retry-After delay-seconds hint for
+            its caller, without automatically retrying the request.
+          headers:
+            Retry-After:
+              description: Optional delay in seconds before another attempt.
+              schema:
+                type: string
+                maxLength: 6
+                pattern: "^[0-9]+$"
           content:
             application/json:
               schema:
@@ -176,6 +182,22 @@ paths:
           description: |
             Malformed request, including an `input` that does not carry the
             fields its tool kind and command require.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: |
+            Temporarily unavailable. Otari preserves 503 and a valid Retry-After
+            delay-seconds hint for its caller, without automatically retrying
+            the request.
+          headers:
+            Retry-After:
+              description: Optional delay in seconds before another attempt.
+              schema:
+                type: string
+                maxLength: 6
+                pattern: "^[0-9]+$"
           content:
             application/json:
               schema:

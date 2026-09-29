@@ -23,6 +23,7 @@ import { renderWithRouter } from "@/tests/router"
 
 const WORKSPACE = "44444444-4444-4444-4444-444444444444"
 const KEY = "gw-setup-guide-key"
+const CONCEALED_KEY = "gw-setup-g••••••••-key"
 const OTHER_KEY = "gw-other-workspace-key"
 
 const OTHER_WORKSPACE = "55555555-5555-5555-5555-555555555555"
@@ -35,6 +36,9 @@ const MEMBERSHIPS = [
 interface ApiOptions {
   activation?: WorkspaceActivation
   models?: string[]
+  apiKey?: string
+  /** Whether the mint reports the fingerprint it stored; a row without one has nothing to show concealed. */
+  hasFingerprint?: boolean
 }
 
 /**
@@ -47,6 +51,8 @@ interface ApiOptions {
  */
 function mockApi({
   activation = workspaceActivation(),
+  apiKey = KEY,
+  hasFingerprint = true,
   models = ["openai:gpt-4o-mini"],
 }: ApiOptions = {}) {
   let current = activation
@@ -58,11 +64,12 @@ function mockApi({
       if (url.includes("/activation/key")) {
         // Distinct per workspace, so a key left over from another one is
         // recognizable rather than indistinguishable.
-        const key = url.includes(OTHER_WORKSPACE) ? OTHER_KEY : KEY
+        const key = url.includes(OTHER_WORKSPACE) ? OTHER_KEY : apiKey
         return Response.json({
           key,
           key_id: "88888888-8888-8888-8888-888888888888",
-          key_prefix: key.slice(0, 10),
+          key_prefix: hasFingerprint ? key.slice(0, 10) : null,
+          key_suffix: hasFingerprint ? key.slice(-4) : null,
           key_name: "Setup guide",
         })
       }
@@ -300,13 +307,48 @@ describe("SetupGuide", () => {
     const user = userEvent.setup()
     await renderGuide()
 
-    expect(await screen.findByLabelText("Your API key")).not.toHaveValue(KEY)
+    expect(await screen.findByLabelText("Your API key")).toHaveValue(
+      CONCEALED_KEY,
+    )
     await user.click(await screen.findByRole("button", { name: "cURL" }))
     expect(snippet("curl")).not.toHaveTextContent(KEY)
+    expect(snippet("curl")).toHaveTextContent(CONCEALED_KEY)
 
     await user.click(screen.getByRole("button", { name: "Show Your API key" }))
     expect(screen.getByDisplayValue(KEY)).toBeInTheDocument()
     expect(snippet("curl")).toHaveTextContent(`Otari-Key: ${KEY}`)
+
+    await user.click(screen.getByRole("button", { name: "Hide Your API key" }))
+    expect(screen.getByLabelText("Your API key")).toHaveValue(CONCEALED_KEY)
+    expect(snippet("curl")).not.toHaveTextContent(KEY)
+    expect(snippet("curl")).toHaveTextContent(CONCEALED_KEY)
+  })
+
+  // Exercise the helper's no-fingerprint fallback through the sheet.
+  it("fully conceals a key whose mint stored no fingerprint", async () => {
+    mockApi({ hasFingerprint: false })
+    const user = userEvent.setup()
+    await renderGuide()
+
+    expect(await screen.findByLabelText("Your API key")).toHaveValue(
+      "••••••••••••••••",
+    )
+    await user.click(screen.getByRole("button", { name: "cURL" }))
+    expect(snippet("curl")).toHaveTextContent("Otari-Key: ••••••••••••••••")
+  })
+
+  it("copies the full activation key while keeping its fingerprint on screen", async () => {
+    mockApi()
+    const user = userEvent.setup()
+    await renderGuide()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Copy Your API key" }),
+    )
+
+    expect(await navigator.clipboard.readText()).toBe(KEY)
+    expect(screen.getByLabelText("Your API key")).toHaveValue(CONCEALED_KEY)
+    expect(await screen.findByText("Copied to clipboard.")).toBeInTheDocument()
   })
 
   it("keeps the manual check visible for the original orb beat", async () => {
@@ -332,8 +374,7 @@ describe("SetupGuide", () => {
     } finally {
       vi.useRealTimers()
     }
-    // A second check is available after the animation ends.
-    await user.click(screen.getByRole("button", { name: "Close" }))
+    await user.click(screen.getByRole("button", { name: "Skip" }))
   })
 
   it("keeps snippet guidance unchanged when revealing and hiding the key", async () => {
@@ -346,11 +387,11 @@ describe("SetupGuide", () => {
       const hint =
         label === "Agent"
           ? screen.getByText(/Works with Claude Code/)
-          : screen.getByText(/Prefer to have an agent wire this up/)
+          : screen.getByText(/Hidden keys use a stand-in/)
       const original = hint.textContent
       if (label !== "Agent") {
-        expect(hint).toHaveTextContent("the example shows a stand-in")
-        expect(hint).toHaveTextContent("copying always includes your real key")
+        expect(hint).toHaveTextContent("Hidden keys use a stand-in")
+        expect(hint).toHaveTextContent("copies include your real key")
       }
       await user.click(
         screen.getByRole("button", { name: "Show Your API key" }),
@@ -465,6 +506,11 @@ describe("SetupGuide", () => {
     expect(
       screen.getByRole("button", { name: "Check now" }),
     ).toBeInTheDocument()
+    // And the sweep around the sheet reports it too: the wait continues, so
+    // the arc keeps running, in the ink the news is written in.
+    expect(screen.getByRole("dialog")).toHaveClass(
+      "[--scan-ink:var(--color-danger)]",
+    )
   })
 
   it("sends a malformed request to the example that answers it, without leaving", async () => {
@@ -541,10 +587,8 @@ describe("SetupGuide", () => {
   it("mints a fresh key per workspace, never carrying one across", async () => {
     // The key belongs to one workspace, and showing it under another
     // workspace's heading would offer a credential that bills somewhere else.
-    // The sheet traps focus, so the switcher is out of reach while it is open;
-    // closing it first is the path an operator has, and the guide being keyed
-    // on the workspace is what resets the state behind it.
-    mockApi()
+    // Skip leaves the workspace switcher accessible; the next workspace is fresh.
+    const api = mockApi()
     const user = userEvent.setup()
     await renderGuide()
 
@@ -553,7 +597,11 @@ describe("SetupGuide", () => {
     )
     expect(await screen.findByDisplayValue(KEY)).toBeInTheDocument()
 
-    await user.click(screen.getByRole("button", { name: "Close" }))
+    await user.click(screen.getByRole("button", { name: "Skip" }))
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    )
+    api.setActivation(workspaceActivation())
     await user.click(
       await screen.findByRole("button", { name: "switch to Research" }),
     )
@@ -586,21 +634,20 @@ describe("SetupGuide", () => {
     expect(dismissed?.[1]?.method).toBe("POST")
   })
 
-  it("closing the sheet is not the same as skipping it", async () => {
-    // Escape and the close control put the sheet away for this page load only.
-    // Retiring the guide is permanent and the server records it, so it takes a
-    // press on the control that says so.
+  it("offers Skip without a temporary close control", async () => {
     const fetchMock = mockApi()
     const user = userEvent.setup()
     await renderGuide()
 
-    await user.click(await screen.findByRole("button", { name: "Close" }))
-
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("heading", { name: "Send your first request" }),
-      ).not.toBeInTheDocument()
+    const heading = await screen.findByRole("heading", {
+      name: "Send your first request",
     })
+    expect(
+      screen.queryByRole("button", { name: "Close" }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Skip" })).toBeInTheDocument()
+    await user.keyboard("{Escape}")
+    expect(heading).toBeInTheDocument()
     expect(
       fetchMock.mock.calls.some(([input]) =>
         String(input).includes("/activation/dismiss"),

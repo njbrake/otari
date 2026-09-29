@@ -34,13 +34,10 @@ export function UseModelDrawer({
   model,
   isOpen,
   onOpenChange,
-  publicView,
 }: {
   model: CatalogModelDetail
   isOpen: boolean
   onOpenChange: (open: boolean) => void
-  /** Ahead of a session: a visitor is told to sign in for a key rather than linked to the page. */
-  publicView: boolean
 }) {
   const deployment = useDeployment()
   const baseUrl = resolveSnippetBaseUrl(deployment)
@@ -53,8 +50,10 @@ export function UseModelDrawer({
   )
   const [language, setLanguage] = useState("curl")
 
-  const cheapest = model.offerings.find((o) => o.selector === model.resolves_to)
-  const pinned = model.offerings.find((o) => o.selector === choice)
+  const cheapest = model.offerings.find(
+    (catalogModel) => catalogModel.selector === model.resolves_to,
+  )
+  const pinned = model.offerings.find((model) => model.selector === choice)
   const sendAs = pinned ? selectorFor(pinned) : (model.selector ?? "")
   const offeringOptions = model.offerings.map((offering) => ({
     value: offering.selector,
@@ -122,8 +121,12 @@ export function UseModelDrawer({
                           per 1M in
                         </>
                       ) : null}
-                      . Pick a provider to pin one instead; its selector is what
-                      you send then.
+                      . Pick a provider to pin one instead and send its
+                      selector, which is the provider and this id:{" "}
+                      <code className="text-mono-caption">
+                        provider:{model.id}
+                      </code>
+                      .
                     </>
                   ) : (
                     <>
@@ -149,26 +152,11 @@ export function UseModelDrawer({
               <section className="flex flex-col gap-2">
                 <h3 className="text-title">2. Get an API key</h3>
                 <p className="text-sm text-muted">
-                  {publicView ? (
-                    <>
-                      <a href="#/" className="text-link hover:text-link-hover">
-                        Sign in
-                      </a>{" "}
-                      and create a key on API keys, then set it as an
-                      environment variable.
-                    </>
-                  ) : (
-                    <>
-                      Create a key on{" "}
-                      <Link
-                        to="/keys"
-                        className="text-link hover:text-link-hover"
-                      >
-                        API keys
-                      </Link>{" "}
-                      and set it as an environment variable.
-                    </>
-                  )}
+                  Create a key on{" "}
+                  <Link to="/keys" className="text-link hover:text-link-hover">
+                    API keys
+                  </Link>{" "}
+                  and set it as an environment variable.
                 </p>
                 <CopyField
                   label="Environment"
@@ -196,7 +184,7 @@ export function UseModelDrawer({
                         isActive={language === "python"}
                         onPress={() => setLanguage("python")}
                       >
-                        Python (OpenAI SDK)
+                        Python (Otari SDK)
                       </Tab>
                     </TabRow>
                     <CopyField
@@ -206,7 +194,7 @@ export function UseModelDrawer({
                           ? buildCurlSnippet(input)
                           : buildPythonSnippet(input)
                       }
-                      multiline
+                      isMultiline
                     />
                   </>
                 )}

@@ -71,8 +71,9 @@ const [models, pricing] = await Promise.all([fetchModels(), fetchPricing()])
 ```
 
 Inside a component this is usually not a question, because two `useQuery` calls already run in
-parallel. It comes up in a `queryFn` that assembles from more than one endpoint, and in the
-bounded walks below.
+parallel. Where it comes up is a `queryFn` reading more than one endpoint, and that is worth a
+second look before it is worth a `Promise.all`: assembling a view out of several responses is
+the work [performance.md](./performance.md) asks the endpoint to do.
 
 ## Mutations invalidate what they change
 
@@ -96,7 +97,19 @@ export function useCreateAlias() {
   changes the model catalog too).
 - Use `setQueryData` when the mutation already returns the fresh object (`useUpdateSettings`
   seeds `[SETTINGS]` from the response, then invalidates the derived model lists).
-- Prefix fire-and-forget invalidations with `void` so the floating-promise lint stays happy.
+- Prefix fire-and-forget invalidations with `void`. What that buys is a marker: it separates
+  "not awaited on purpose" from "forgot to await", which are otherwise the same line, and it
+  is what lets the floating-promise lint flag the second without flagging the first.
+
+  **It is a marker, not error handling.** `void` evaluates the promise and discards the
+  result, rejection included, so a promise that rejects behind one still rejects unhandled and
+  the warning that would have said so is gone. Correct only where the promise cannot reject
+  meaningfully, which is a fact about the call rather than a style choice, and worth checking
+  rather than assuming: `invalidateQueries` and `refetch` resolve with state rather than
+  rejecting, and `useAutosave`'s `run` catches into its own `error`. Anything that can reject
+  gets real handling instead, a `.catch` that reports or an `await` in a function that owns
+  the failure. Reaching for `void` to quiet the lint on a call that can fail converts a
+  warning into a silent failure.
 
 ### An error has to go somewhere
 
@@ -108,25 +121,32 @@ that says why it could not.
 
 401 sign-out and the query client's no-retry handling for 401 and 403 are centralized.
 
-## Bounded pagination
+## Ask for a page, not for everything
 
-When a hook fetches "everything," cap the walk so a backend or proxy that ignores `skip`
-can't turn it into an unbounded request loop. Copy the `fetchAllPricing` shape:
+A list hook asks for the page on screen. `skip` and `limit` come from the URL state so the view
+is shareable and survives the back button, and `placeholderData: (previous) => previous` keeps
+the last page rendered while the next one loads:
 
 ```ts
-const PRICING_PAGE_SIZE = 1000;   // matches the server-side cap
-const PRICING_MAX_PAGES = 100;    // hard stop: 100k rows, far beyond any real history
-
-async function fetchAllPricing(): Promise<PricingResponse[]> {
-  const all: PricingResponse[] = [];
-  for (let page = 0; page < PRICING_MAX_PAGES; page += 1) {
-    const rows = await apiFetch<PricingResponse[]>(`/v1/pricing?skip=${page * PRICING_PAGE_SIZE}&limit=${PRICING_PAGE_SIZE}`);
-    all.push(...rows);
-    if (rows.length < PRICING_PAGE_SIZE) break;
-  }
-  return all;
+export function useKeys({ skip, limit }: { skip: number; limit: number }) {
+  return useQuery({
+    queryKey: [KEYS, skip, limit],
+    queryFn: () => apiFetch<ApiKey[]>(`/keys?skip=${skip}&limit=${limit}`),
+    placeholderData: (previous) => previous,
+  });
 }
 ```
+
+Every list route in the gateway accepts `skip` and `limit`, and rejects a `limit` above 1000
+rather than clamping it, so a page size is a number the dashboard and the gateway agree on
+rather than a hint.
+
+**Reading a whole collection is what [performance.md](./performance.md) forbids**, and a cap
+on the walk does not make it acceptable: it only stops the walk looping. `fetchAllPaged` and
+`fetchAllRows` in `shared/api/paging.ts` serve the nineteen reads that predate the rule (#1376)
+and are not the shape to copy. A new hook that seems to need one needs something from the
+endpoint instead: a search parameter for a picker, an embedded label or a batch lookup where a
+page is resolving ids.
 
 ## Polling
 

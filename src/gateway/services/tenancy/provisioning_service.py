@@ -30,8 +30,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
+from gateway.exceptions import TenancyError, TenancyNotFoundError
+from gateway.exceptions.organizations_exceptions import ForeignTenancyError
 from gateway.log_config import logger
-from gateway.models.entities import RuntimeSetting
+from gateway.models.platform import RuntimeSetting
 from gateway.models.tenancy import Organization, User
 from gateway.repositories.tenancy import (
     OrganizationMemberRepository,
@@ -41,11 +43,7 @@ from gateway.repositories.tenancy import (
     WorkspaceRepository,
 )
 from gateway.repositories.users_repository import get_or_create_attribution_user
-from gateway.services.tenancy.errors import (
-    ForeignTenancyError,
-    TenancyError,
-    WorkspaceBudgetDefaultBudgetNotFoundError,
-)
+from gateway.services.tenancy.membership_listener import MembershipListener
 
 # Stored in runtime_settings, and deliberately not a SETTABLE_KEY, so
 # runtime_settings_service ignores it exactly as it ignores the master-key hash
@@ -69,7 +67,7 @@ class BootstrapIdentityUnavailableError(TenancyError):
         super().__init__("Could not resolve the operator identity; retry the request")
 
 
-async def ensure_bootstrap_identity(db: AsyncSession) -> User:
+async def ensure_bootstrap_identity(db: AsyncSession, *, membership_listener: MembershipListener) -> User:
     """Return the operator identity, provisioning the tenancy root on first call.
 
     Idempotent: the marker row makes the common path a single indexed lookup and
@@ -83,7 +81,7 @@ async def ensure_bootstrap_identity(db: AsyncSession) -> User:
     await _refuse_to_shadow_existing_tenancy(db)
 
     try:
-        return await _provision(db)
+        return await _provision(db, membership_listener=membership_listener)
     except IntegrityError:
         # Two first requests raced. Whichever lost re-reads the winner's work:
         # the slug and the marker are both unique, so exactly one provisioned.
@@ -193,7 +191,18 @@ async def load_bootstrap_identity(db: AsyncSession) -> User | None:
     return await db.get(User, user_id)
 
 
-async def _provision(db: AsyncSession) -> User:
+async def password_claims_deployment(db: AsyncSession, identity: User) -> bool:
+    """Whether setting this identity's password is the act that claims the deployment.
+
+    True for the identity the marker names until it holds a password.
+    """
+    if identity.hashed_password is not None:
+        return False
+    operator = await load_bootstrap_identity(db)
+    return operator is not None and operator.id == identity.id
+
+
+async def _provision(db: AsyncSession, *, membership_listener: MembershipListener) -> User:
     """Create the default organization, workspace, operator identity, and memberships.
 
     Ordered by the foreign keys: the organization exists before the identity that
@@ -249,41 +258,14 @@ async def _provision(db: AsyncSession) -> User:
         user_id=operator.id,
         role="owner",
     )
-    # The fourth path that creates a ``WorkspaceMember``, and it materializes
-    # the workspace's budget defaults like the other three, so
-    # ``WorkspaceService.create_workspace``'s claim that every one of them does
-    # is true. A no-op on a genuine first boot, where a default cannot exist yet:
-    # creating one needs an identity, and there is none until this returns. It
-    # binds when the marker is unresolved on a database that has already run,
-    # which is the identity it names having been deleted (``_load_marked_identity``
-    # reports a marker whose user is gone as no marker) or the row cleared by
-    # hand. The workspace is adopted in that case, and the operator would join a
-    # workspace whose other members are all capped as the one that is not.
-    #
-    # Imported inside the function, matching
-    # ``OrganizationService._apply_workspace_assignments``. There the deferral is
-    # load-bearing, since a module-level import genuinely closes a cycle; here it
-    # is not, and it stays deferred only to keep this module free of an
-    # import-time dependency on the half of the package that imports it back.
-    # ``tests/unit/test_service_module_imports.py`` pins the graph either way.
-    #
-    # Flush-only, so it lands in the commit below and a lost race rolls it back
-    # with everything else.
-    from gateway.services.tenancy.workspace_budget_default_service import (
-        WorkspaceBudgetDefaultService,
-    )
-
+    # A no-op on a genuine first boot, where nothing exists for the listener to act on.
+    # Flush-only, so it lands in the commit below and a lost race rolls it back with it.
     try:
-        await WorkspaceBudgetDefaultService(db).materialize_for_member(member)
-    except WorkspaceBudgetDefaultBudgetNotFoundError as exc:
-        # A stored default naming a budget that is gone, which is only reachable
-        # on a database whose ``RESTRICT`` foreign key was not enforced. Logged
-        # and skipped rather than raised, because raising here is unrecoverable:
-        # the marker below would never be written, every later request would
-        # re-enter this function and fail identically, and deleting the offending
-        # default needs an authorized identity that no longer exists. An operator
-        # who joins uncapped is what happened before this call existed, and the
-        # dashboard can still fix it.
+        await membership_listener.member_joined(member)
+    except TenancyNotFoundError as exc:
+        # The only not-found a listener raises here is a default naming a deleted budget.
+        # Logged and skipped rather than raised: raising would leave the marker unwritten,
+        # so every later request would re-enter this function and fail identically.
         logger.warning("Skipping budget-default materialization for the operator identity: %s", exc)
 
     # Upsert rather than insert: a marker whose value no longer resolves (an
@@ -311,4 +293,5 @@ __all__ = [
     "BootstrapIdentityUnavailableError",
     "ensure_bootstrap_identity",
     "load_bootstrap_identity",
+    "password_claims_deployment",
 ]

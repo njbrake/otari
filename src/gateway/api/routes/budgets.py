@@ -1,33 +1,33 @@
-import uuid
 from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.api.deps import get_db, require_deployment_operator
-from gateway.models.entities import (
-    MAX_COUNT_LIMIT,
-    Budget,
-    BudgetResetLog,
-    ScopedBudget,
-    User,
-    WorkspaceBudgetDefault,
-)
-from gateway.models.money import MAX_USD_LIMIT, as_float, to_usd, to_usd_or_none
+from gateway.core.surface import Surface
+from gateway.models.budgets import Budget, BudgetResetLog, ScopedBudget, WorkspaceBudgetDefault
+from gateway.models.money import to_usd, to_usd_or_none
 from gateway.models.tenancy import Workspace
-from gateway.services.budget_retiming import cadence_of, retime_ceilings_for_budget
-from gateway.services.scoped_budget_service import ResetAlignment
+from gateway.models.users import User
+from gateway.schemas.budgets import (
+    BudgetResetLogResponse,
+    BudgetResponse,
+    CreateBudgetRequest,
+    UpdateBudgetRequest,
+)
+from gateway.services.budgets import cadence_of, retime_ceilings_for_budget
 
 router = APIRouter(
     prefix="/budgets",
     tags=["budgets"],
     dependencies=[Depends(require_deployment_operator)],
 )
+
+SURFACE = Surface("budgets")
 
 # The rollup below sums exact counters, so its coalesce default is exact too.
 _ZERO = Decimal(0)
@@ -45,137 +45,6 @@ def _require_single_period_source(duration: int | None, alignment: str | None) -
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="A budget resets on budget_duration_sec or on reset_alignment, not both",
-        )
-
-
-class CreateBudgetRequest(BaseModel):
-    """Request model for creating a new budget."""
-
-    name: str | None = Field(default=None, description="Admin-facing label for the budget")
-    max_budget: float | None = Field(default=None, ge=0, le=MAX_USD_LIMIT, description="Maximum spending limit")
-    token_limit: int | None = Field(
-        default=None,
-        ge=0,
-        le=MAX_COUNT_LIMIT,
-        description="Maximum tokens over the period. Independent of max_budget; null is unlimited",
-    )
-    request_limit: int | None = Field(
-        default=None,
-        ge=0,
-        le=MAX_COUNT_LIMIT,
-        description="Maximum requests over the period. Independent of max_budget; null is unlimited",
-    )
-    budget_duration_sec: int | None = Field(
-        default=None, gt=0, description="Budget duration in seconds (e.g., 86400 for daily, 604800 for weekly)"
-    )
-    reset_alignment: ResetAlignment | None = Field(
-        default=None,
-        description=(
-            "Reset on a UTC calendar boundary instead of a fixed number of seconds, "
-            "which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec"
-        ),
-    )
-
-
-class BudgetResponse(BaseModel):
-    """Response model for budget information.
-
-    ``max_budget``, ``token_limit`` and ``request_limit`` are the per-user
-    ceilings, each independent and each unlimited when null, and multiple users
-    can share one budget, so the usage rollup is an aggregate over the users
-    assigned to this budget: how many there are and their combined ``spend`` /
-    ``reserved``.
-    Assigning users to a budget is done through the users API (dashboard support
-    lands with user management), so a fresh gateway reports zeros here.
-    """
-
-    budget_id: str
-    # Null for the deployment's own, and a tenant's organization when set. Carried
-    # so a caller can tell the two apart before offering one: an organization's is
-    # listed here for the operator to see, and `POST /api/v1/users` refuses to cap a
-    # gateway user at it (mozilla-ai/otari#881).
-    organization_id: uuid.UUID | None
-    name: str | None
-    max_budget: float | None
-    token_limit: int | None
-    request_limit: int | None
-    budget_duration_sec: int | None
-    reset_alignment: str | None
-    created_at: str
-    updated_at: str
-    user_count: int = 0
-    total_spend: float = 0.0
-    total_reserved: float = 0.0
-
-    @classmethod
-    def from_model(
-        cls,
-        budget: "Budget",
-        *,
-        user_count: int = 0,
-        total_spend: float = 0.0,
-        total_reserved: float = 0.0,
-    ) -> "BudgetResponse":
-        """Create a BudgetResponse from a Budget ORM model and its usage rollup."""
-        return cls(
-            budget_id=budget.budget_id,
-            organization_id=budget.organization_id,
-            name=budget.name,
-            # Narrowed on the way out: the cap is exact in the database, while
-            # the wire contract and the dashboard client stay float.
-            max_budget=as_float(budget.max_budget),
-            token_limit=budget.token_limit,
-            request_limit=budget.request_limit,
-            budget_duration_sec=budget.budget_duration_sec,
-            reset_alignment=budget.reset_alignment,
-            created_at=budget.created_at.isoformat(),
-            updated_at=budget.updated_at.isoformat(),
-            user_count=user_count,
-            total_spend=total_spend,
-            total_reserved=total_reserved,
-        )
-
-
-class UpdateBudgetRequest(BaseModel):
-    """Request model for updating a budget."""
-
-    name: str | None = Field(default=None)
-    max_budget: float | None = Field(default=None, ge=0, le=MAX_USD_LIMIT)
-    token_limit: int | None = Field(
-        default=None,
-        ge=0,
-        le=MAX_COUNT_LIMIT,
-        description="Maximum tokens over the period. Independent of max_budget; null is unlimited",
-    )
-    request_limit: int | None = Field(
-        default=None,
-        ge=0,
-        le=MAX_COUNT_LIMIT,
-        description="Maximum requests over the period. Independent of max_budget; null is unlimited",
-    )
-    budget_duration_sec: int | None = Field(default=None, gt=0)
-    reset_alignment: ResetAlignment | None = Field(default=None)
-
-
-class BudgetResetLogResponse(BaseModel):
-    """Response model for one budget reset event (per user)."""
-
-    id: int
-    user_id: str | None
-    budget_id: str
-    previous_spend: float
-    reset_at: str
-    next_reset_at: str | None
-
-    @classmethod
-    def from_model(cls, log: BudgetResetLog) -> "BudgetResetLogResponse":
-        return cls(
-            id=log.id,
-            user_id=log.user_id,
-            budget_id=log.budget_id,
-            previous_spend=float(log.previous_spend),
-            reset_at=log.reset_at.isoformat(),
-            next_reset_at=log.next_reset_at.isoformat() if log.next_reset_at else None,
         )
 
 
@@ -333,9 +202,7 @@ async def update_budget(
             if "budget_duration_sec" in request.model_fields_set
             else budget.budget_duration_sec
         )
-        alignment = (
-            request.reset_alignment if "reset_alignment" in request.model_fields_set else budget.reset_alignment
-        )
+        alignment = request.reset_alignment if "reset_alignment" in request.model_fields_set else budget.reset_alignment
         _require_single_period_source(duration, alignment)
         budget.budget_duration_sec = duration
         budget.reset_alignment = alignment
@@ -454,9 +321,7 @@ async def list_budget_reset_logs(
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
 ) -> list[BudgetResetLogResponse]:
     """List per-user reset events for a budget, newest first."""
-    budget = (
-        await db.execute(select(Budget.budget_id).where(Budget.budget_id == budget_id))
-    ).scalar_one_or_none()
+    budget = (await db.execute(select(Budget.budget_id).where(Budget.budget_id == budget_id))).scalar_one_or_none()
     if not budget:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

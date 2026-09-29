@@ -78,7 +78,23 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+vi.mock("@/features/auth/overlayPublicAuthFields", () => ({
+  PublicAuthFields: ({ page, isBusy }: { page: string; isBusy: boolean }) => (
+    <p>{`fields for ${page}, ${isBusy ? "busy" : "idle"}`}</p>
+  ),
+}))
+
 describe("Login", () => {
+  it("renders the edition's own fields ahead of the credential, idle until a request is out", () => {
+    render(
+      <Mounted signInMethods={["password"]}>
+        <Login />
+      </Mounted>,
+    )
+
+    expect(screen.getByText("fields for login, idle")).toBeInTheDocument()
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
     window.localStorage.clear()
@@ -115,7 +131,7 @@ describe("Login", () => {
     )
   })
 
-  it("offers no signup or recovery link on a gateway that cannot send mail", () => {
+  it("offers no signup or recovery link on a gateway that cannot send mail", async () => {
     render(
       <Mounted signInMethods={["password"]}>
         <Harness />
@@ -128,10 +144,14 @@ describe("Login", () => {
     expect(
       screen.queryByRole("link", { name: /Forgot your password/ }),
     ).toBeNull()
+    // Opened last: the verification link lives in the Help popover, which
+    // renders nothing while closed, so asserting its absence from the closed
+    // page would pass whatever the bootstrap said.
+    await userEvent.setup().click(screen.getByRole("button", { name: "Help" }))
     expect(screen.queryByRole("link", { name: /verification link/ })).toBeNull()
   })
 
-  it("links to signup, recovery and a fresh verification link once mail works", () => {
+  it("links to signup, recovery and a fresh verification link once mail works", async () => {
     render(
       <Mounted signInMethods={["password"]} mailReady>
         <Harness />
@@ -144,26 +164,32 @@ describe("Login", () => {
     expect(
       screen.getByRole("link", { name: /Forgot your password/ }),
     ).toHaveAttribute("href", "#/recover-password")
+    await userEvent.setup().click(screen.getByRole("button", { name: "Help" }))
     expect(
       screen.getByRole("link", { name: /verification link/ }),
     ).toHaveAttribute("href", "#/resend-verification")
   })
 
-  it("hides recovery on an unclaimed deployment, where no password exists to reset", () => {
+  it("hides recovery on an unclaimed deployment, where no password exists to reset", async () => {
     render(
       <Mounted mailReady>
         <Harness />
       </Mounted>,
     )
 
+    // Signup still stands: a member an admin added by address claims it here.
+    // Asserted before Help opens, because the open popover is a dialog and
+    // takes the rest of the page out of the accessibility tree behind it.
+    expect(
+      screen.getByRole("link", { name: /Set your password/ }),
+    ).toBeInTheDocument()
+    // Both recovery links sit in the Help popover on this branch, so it has to
+    // be open for their absence to mean anything.
+    await userEvent.setup().click(screen.getByRole("button", { name: "Help" }))
     expect(
       screen.queryByRole("link", { name: /Forgot your password/ }),
     ).toBeNull()
     expect(screen.queryByRole("link", { name: /verification link/ })).toBeNull()
-    // Signup still stands: a member an admin added by address claims it here.
-    expect(
-      screen.getByRole("link", { name: /Set your password/ }),
-    ).toBeInTheDocument()
   })
 
   // otari-ai#2100. A deployment publishes both typed credentials whenever a
@@ -268,13 +294,14 @@ describe("Login", () => {
     expect(screen.queryByRole("link", { name: /Set your password/ })).toBeNull()
   })
 
-  it("links to the auth-free welcome page", () => {
+  it("links to the auth-free welcome page", async () => {
     render(
       <Mounted>
         <Harness />
       </Mounted>,
     )
 
+    await userEvent.setup().click(screen.getByRole("button", { name: "Help" }))
     const link = screen.getByRole("link", { name: /welcome/i })
     expect(link).toHaveAttribute("href", "/welcome")
   })
@@ -283,26 +310,28 @@ describe("Login", () => {
   // to name the credential the form above actually took. One block served both
   // branches before, telling anyone signing in with an email and password that
   // their "master key" was exchanged for a cookie.
-  it("names the master key in the credential note on an unclaimed deployment", () => {
+  it("names the master key in the credential note on an unclaimed deployment", async () => {
     render(
       <Mounted>
         <Harness />
       </Mounted>,
     )
 
+    await userEvent.setup().click(screen.getByRole("button", { name: "Help" }))
     expect(
       screen.getByText(/master key/, { selector: "a" }),
     ).toBeInTheDocument()
     expect(screen.queryByText(/^Your password is sent once/)).toBeNull()
   })
 
-  it("names the password in the credential note once the deployment is claimed", () => {
+  it("names the password in the credential note once the deployment is claimed", async () => {
     render(
       <Mounted signInMethods={["password"]}>
         <Harness />
       </Mounted>,
     )
 
+    await userEvent.setup().click(screen.getByRole("button", { name: "Help" }))
     expect(
       screen.getByText(/Your password is sent once and exchanged/),
     ).toBeInTheDocument()
@@ -524,6 +553,66 @@ describe("Login", () => {
     expect(screen.queryByText("SIGNED IN")).not.toBeInTheDocument()
   })
 
+  it("offers a fresh verification link when sign-in is refused for an unverified address", async () => {
+    // The password path's only 403 is the unverified-address refusal, whose
+    // wording tells the reader to request a new verification email. Without
+    // the link the sentence is a dead end.
+    const refusal =
+      "Verify your email before signing in; request a new verification email if yours expired"
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ detail: refusal }, 403),
+    )
+    const user = userEvent.setup()
+
+    render(
+      <Mounted signInMethods={["password"]} mailReady>
+        <Harness />
+      </Mounted>,
+    )
+
+    await user.type(screen.getByLabelText("Email"), "member@example.com")
+    await user.type(screen.getByLabelText("Password"), "right-but-unverified")
+    await user.click(screen.getByRole("button", { name: "Sign in" }))
+
+    expect(await screen.findByText(refusal)).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: "Send a new verification link" }),
+    ).toHaveAttribute("href", "#/resend-verification")
+
+    // The link describes the refusal, not the page, so typing takes both away.
+    await user.type(screen.getByLabelText("Password"), "x")
+    expect(screen.queryByText(refusal)).toBeNull()
+    expect(
+      screen.queryByRole("link", { name: "Send a new verification link" }),
+    ).toBeNull()
+  })
+
+  it("renders the unverified refusal without a link on a gateway that cannot mail one", async () => {
+    // The resend page starts by sending a message, so on a mailless gateway
+    // the link would lead to a flow that can only 503. The refusal still
+    // renders; hiding the action is the same call `mail_ready` already makes
+    // for signup and recovery.
+    const refusal =
+      "Verify your email before signing in; request a new verification email if yours expired"
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ detail: refusal }, 403),
+    )
+    const user = userEvent.setup()
+
+    render(
+      <Mounted signInMethods={["password"]}>
+        <Harness />
+      </Mounted>,
+    )
+
+    await user.type(screen.getByLabelText("Email"), "member@example.com")
+    await user.type(screen.getByLabelText("Password"), "right-but-unverified")
+    await user.click(screen.getByRole("button", { name: "Sign in" }))
+
+    expect(await screen.findByText(refusal)).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: /verification link/ })).toBeNull()
+  })
+
   it("surfaces the retirement message when a stale client posts a master key to a claimed deployment", async () => {
     // A 403 is not a wrong credential, and rendering "Invalid master key." over
     // it (what this screen did before it could post a password) tells the
@@ -546,6 +635,8 @@ describe("Login", () => {
 
     expect(await screen.findByText(retired)).toBeInTheDocument()
     expect(screen.queryByText("Invalid master key.")).not.toBeInTheDocument()
+    // A master-key 403 is retirement, not an unverified address.
+    expect(screen.queryByRole("link", { name: /verification link/ })).toBeNull()
   })
 
   it("offers no credential box when the gateway reports it cannot mint a session", async () => {

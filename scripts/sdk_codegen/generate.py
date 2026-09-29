@@ -52,9 +52,7 @@ DEFAULT_SPEC_VERSION = "0.0.0-dev"
 # management endpoints whose responses are fully typed in the spec. See the
 # module docstring for what is excluded and why (notably batches, whose
 # responses are untyped in the spec and already hand-written in every SDK).
-CONTROL_PLANE_TAGS: frozenset[str] = frozenset(
-    {"keys", "users", "budgets", "pricing", "usage"}
-)
+CONTROL_PLANE_TAGS: frozenset[str] = frozenset({"keys", "users", "budgets", "pricing", "usage"})
 
 
 @dataclass(frozen=True)
@@ -481,9 +479,8 @@ def _patch_rust_cargo_toml(dest: Path) -> None:
 
     # reqwest dependency: pin to 0.12 and keep only the features the SDK builds with.
     text = re.sub(
-        r'^reqwest\s*=\s*\{[^}]*\}',
-        'reqwest = { version = "0.12", default-features = false, '
-        'features = ["json", "multipart"] }',
+        r"^reqwest\s*=\s*\{[^}]*\}",
+        'reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }',
         text,
         count=1,
         flags=re.MULTILINE,
@@ -683,9 +680,7 @@ def _rust_inline_module(dest: Path) -> None:
     _rustfmt_tree(dest)
 
 
-def generate_language(
-    language: str, spec_path: Path, out_dir: Path, target: LanguageTarget, spec_version: str
-) -> Path:
+def generate_language(language: str, spec_path: Path, out_dir: Path, target: LanguageTarget, spec_version: str) -> Path:
     """Run OpenAPI Generator for ``language`` and return the output directory."""
     dest = out_dir / language
     cmd = [

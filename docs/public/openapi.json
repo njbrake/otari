@@ -3,6 +3,38 @@
     "schemas": {
       "AcceptInvitationRequest": {
         "properties": {
+          "full_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Filled in only if not already set.",
+            "title": "Full Name"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sets the invited identity's password in the same step, when the preview reported needs_password. Needs no mail: the link is the proof, whether it was emailed or an admin handed it over.",
+            "title": "Password"
+          },
+          "terms_accepted": {
+            "default": false,
+            "description": "Whether the caller accepted this deployment's terms.",
+            "title": "Terms Accepted",
+            "type": "boolean"
+          },
           "token": {
             "title": "Token",
             "type": "string"
@@ -15,11 +47,17 @@
         "type": "object"
       },
       "AcceptInvitationResultPublic": {
-        "description": "What accepting produces: enough for the accept page to say where the visitor landed.\n\nNo session and no token: accepting resolves the membership to ``active``\nand stops there. The identity it resolves to is password-less on the roster\nuntil it is claimed, so the next step is a sign-up on the\ninvited address, not a sign-in.",
+        "description": "What accepting produces: enough for the accept page to say where the visitor landed.\n\nNo session and no token. When the request carried a password, the identity\ncan sign in straight away; otherwise it stays password-less until claimed by\nsignup or a provider sign-in.",
         "properties": {
           "organization_name": {
             "title": "Organization Name",
             "type": "string"
+          },
+          "password_set": {
+            "default": false,
+            "description": "Whether this accept set the identity's password.",
+            "title": "Password Set",
+            "type": "boolean"
           },
           "role": {
             "title": "Role",
@@ -382,6 +420,16 @@
       "ActiveOrganizationMemberPublic": {
         "description": "A member row joined to the identity behind it, as the roster shows it.\n\nField-for-field the platform's shape, so the ported roster page is not\nrewritten around a new contract, with two consequences of the OSS line:\n``email`` is nullable here (a local operator identity has no sign-in\naddress), and ``invitation_id`` is always null until the invitation flow\nrehomes, which is what fills it.\n\n``attribution_user_id`` is the addition the platform has no counterpart for.\nKeys, budgets, and usage attach to the gateway's string-keyed ``users`` row,\nnot to this UUID identity, so this carries the ``user_id`` a caller passes to\nwhen minting a key for this member. It is null when no usable row\nexists (nobody minted one, or it was soft-deleted through\nsoft-deleted), which is the signal not to offer this member as a key\nowner: key creation would refuse. How the two ids converge is the open\nquestion in otari-ai#1727; this field is the join until it is answered, and\nis what lets either answer land without the dashboard changing.",
         "properties": {
+          "attribution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemberAttributionPublic"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "attribution_user_id": {
             "anyOf": [
               {
@@ -475,6 +523,13 @@
               }
             ],
             "title": "User Id"
+          },
+          "workspaces": {
+            "items": {
+              "$ref": "#/components/schemas/MemberWorkspacePlacementPublic"
+            },
+            "title": "Workspaces",
+            "type": "array"
           }
         },
         "required": [
@@ -1234,6 +1289,50 @@
         "title": "AliasResponse",
         "type": "object"
       },
+      "AllocationHealthResponse": {
+        "description": "One set of capped rows, reduced to what a strip renders.",
+        "properties": {
+          "capped_count": {
+            "description": "Rows with a finite cap, which are the ones that can be judged.",
+            "title": "Capped Count",
+            "type": "integer"
+          },
+          "near_count": {
+            "description": "Rows at 80% of their allowance or more, but not past it.",
+            "title": "Near Count",
+            "type": "integer"
+          },
+          "over_count": {
+            "description": "Rows at or past their allowance.",
+            "title": "Over Count",
+            "type": "integer"
+          },
+          "total_count": {
+            "description": "Rows of any kind, so a caller can tell 'none configured' from 'none caps spend'.",
+            "title": "Total Count",
+            "type": "integer"
+          },
+          "worst": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorstAllocationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "over_count",
+          "near_count",
+          "capped_count",
+          "total_count",
+          "worst"
+        ],
+        "title": "AllocationHealthResponse",
+        "type": "object"
+      },
       "Annotations": {
         "additionalProperties": true,
         "properties": {
@@ -1270,6 +1369,113 @@
           }
         },
         "title": "Annotations",
+        "type": "object"
+      },
+      "AnthropicFileDeleted": {
+        "description": "Anthropic's answer to a delete.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "file_deleted",
+            "default": "file_deleted",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "AnthropicFileDeleted",
+        "type": "object"
+      },
+      "AnthropicFileList": {
+        "description": "A page of files in Anthropic's list shape, whose cursor is an opaque token.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AnthropicFileMetadata"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "next_page": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page"
+          }
+        },
+        "required": [
+          "data",
+          "next_page"
+        ],
+        "title": "AnthropicFileList",
+        "type": "object"
+      },
+      "AnthropicFileMetadata": {
+        "description": "One file in the ``FileMetadata`` shape of Anthropic's GA Files API.\n\n``expires_at`` is always present and ``None`` for a file kept indefinitely.\n``downloadable`` is always true, because the gateway serves every stored file's bytes back.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "downloadable": {
+            "const": true,
+            "default": true,
+            "title": "Downloadable",
+            "type": "boolean"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "mime_type": {
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "type": {
+            "const": "file",
+            "default": "file",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "filename",
+          "mime_type",
+          "size_bytes",
+          "created_at",
+          "expires_at"
+        ],
+        "title": "AnthropicFileMetadata",
         "type": "object"
       },
       "AudioContent": {
@@ -1797,7 +2003,7 @@
         "type": "object"
       },
       "BuiltInGuardrailCatalog": {
-        "description": "Every guardrail this gateway ships, whether or not it can currently run it.",
+        "description": "The guardrails this gateway can build and call itself.",
         "properties": {
           "guardrails": {
             "items": {
@@ -1855,18 +2061,6 @@
             "title": "Guardrail Name",
             "type": "string"
           },
-          "missing_extra": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The Otari extra to install to make this runnable, when one would. Null when it already runs, and null for a guardrail this gateway holds no backend information about",
-            "title": "Missing Extra"
-          },
           "multilingual": {
             "default": false,
             "title": "Multilingual",
@@ -1912,11 +2106,6 @@
           "requires_api_key": {
             "default": false,
             "title": "Requires Api Key",
-            "type": "boolean"
-          },
-          "runnable": {
-            "description": "Whether every module this guardrail's backend needs is installed here. False is a missing package and not a broken guardrail",
-            "title": "Runnable",
             "type": "boolean"
           },
           "stages": {
@@ -1965,10 +2154,98 @@
           "backend",
           "vendor",
           "default_license",
-          "guardrail_name",
-          "runnable"
+          "guardrail_name"
         ],
         "title": "BuiltInGuardrailSpec",
+        "type": "object"
+      },
+      "BulkInvitationFailurePublic": {
+        "description": "An address the bulk invite could not invite, and why.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "detail"
+        ],
+        "title": "BulkInvitationFailurePublic",
+        "type": "object"
+      },
+      "BulkInviteOrganizationMembersRequest": {
+        "description": "Invite several addresses at once, all with the same role and workspace assignments.",
+        "properties": {
+          "emails": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Emails",
+            "type": "array"
+          },
+          "role": {
+            "default": "member",
+            "enum": [
+              "owner",
+              "admin",
+              "member",
+              "viewer"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "workspace_assignments": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/WorkspaceAssignmentRequest"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Assignments"
+          }
+        },
+        "required": [
+          "emails"
+        ],
+        "title": "BulkInviteOrganizationMembersRequest",
+        "type": "object"
+      },
+      "BulkInviteOrganizationMembersResultPublic": {
+        "description": "What a bulk invite produced: one entry per submitted address, repeats included, in one of the two lists.",
+        "properties": {
+          "failed": {
+            "items": {
+              "$ref": "#/components/schemas/BulkInvitationFailurePublic"
+            },
+            "title": "Failed",
+            "type": "array"
+          },
+          "invited": {
+            "items": {
+              "$ref": "#/components/schemas/InviteOrganizationMemberResultPublic"
+            },
+            "title": "Invited",
+            "type": "array"
+          }
+        },
+        "required": [
+          "invited",
+          "failed"
+        ],
+        "title": "BulkInviteOrganizationMembersResultPublic",
         "type": "object"
       },
       "CallToolResult": {
@@ -2035,8 +2312,13 @@
         "type": "object"
       },
       "CallerIdentityPublic": {
-        "description": "Who the caller is, as against what they may do.\n\nThe account control at the foot of the dashboard's sidebar draws a person,\nand no authenticated route reported the caller's own name or address, so it\ndrew a role for everybody who could reach it: \"Operator\", which is not a\nname and on a multi-tenant deployment was not even true\n(mozilla-ai/otari#832).\n\nCarried on the membership context for the reason ``deployment_operator`` is:\nthe shell reads that context before it paints, so an identity taken from it\nneeds no request of its own and cannot arrive a beat after the chrome it\nnames. Publishing it costs nothing either, since it is the caller's own\nidentity and they are holding the credential that resolved to it.\n\nBoth fields are nullable, and for opposite reasons. A local operator\nidentity has no address, because first boot provisions it with a name and\nnothing to sign in with but the master key; a member added to the roster by\naddress has no name until they claim the identity and supply one. So a shell\nhas to be ready to draw either one alone.",
+        "description": "Who the caller is, as against what they may do.\n\nThe account control at the foot of the dashboard's sidebar draws a person,\nand no authenticated route reported the caller's own name or address, so it\ndrew a role for everybody who could reach it: \"Operator\", which is not a\nname and on a multi-tenant deployment was not even true\n(mozilla-ai/otari#832).\n\nCarried on the membership context for the reason ``deployment_operator`` is:\nthe shell reads that context before it paints, so an identity taken from it\nneeds no request of its own and cannot arrive a beat after the chrome it\nnames. Publishing it costs nothing either, since it is the caller's own\nidentity and they are holding the credential that resolved to it.\n\n``email`` and ``full_name`` are nullable for opposite reasons. A local\noperator identity has no address, because first boot provisions it with a\nname and nothing to sign in with but the master key; a member added by\naddress has no name until they claim the identity and supply one. So a shell\nhas to be ready to draw either one alone.",
         "properties": {
+          "claims_deployment": {
+            "description": "Whether setting this identity's password claims the deployment, which stops the master key signing in to the dashboard. True for the deployment's operator until it holds a password, whether or not it already has an address; false for everybody else.",
+            "title": "Claims Deployment",
+            "type": "boolean"
+          },
           "email": {
             "anyOf": [
               {
@@ -2059,6 +2341,11 @@
             ],
             "title": "Full Name"
           },
+          "has_password": {
+            "description": "Whether this identity holds a dashboard password. False for one that signs in only through an OAuth provider or a passkey, and for a roster entry nobody has claimed yet. PUT /api/v1/auth/password requires current_password from a cookie-authenticated caller exactly while this is true.",
+            "title": "Has Password",
+            "type": "boolean"
+          },
           "user_id": {
             "format": "uuid",
             "title": "User Id",
@@ -2066,7 +2353,9 @@
           }
         },
         "required": [
-          "user_id"
+          "user_id",
+          "has_password",
+          "claims_deployment"
         ],
         "title": "CallerIdentityPublic",
         "type": "object"
@@ -2216,6 +2505,16 @@
         },
         "title": "CatalogCapabilities",
         "type": "object"
+      },
+      "CatalogCredential": {
+        "description": "Who may price a catalog offering.",
+        "enum": [
+          "deployment",
+          "organization",
+          "hosted"
+        ],
+        "title": "CatalogCredential",
+        "type": "string"
       },
       "CatalogElsewhere": {
         "description": "A provider models.dev lists for this model that this deployment has not configured.",
@@ -2442,7 +2741,7 @@
                 "type": "null"
               }
             ],
-            "description": "The id as a selector: send it as `model` and the model's cheapest offering answers. Null until the gateway has indexed the catalog.",
+            "description": "The id as a selector: send it as `model` and the model's cheapest offering the caller can reach answers, the vendor's own provider first where it serves the model. Null until the gateway has indexed the catalog.",
             "title": "Selector"
           },
           "selectors": {
@@ -2678,7 +2977,7 @@
                 "type": "null"
               }
             ],
-            "description": "The id as a selector: send it as `model` and the model's cheapest offering answers. Null until the gateway has indexed the catalog.",
+            "description": "The id as a selector: send it as `model` and the model's cheapest offering the caller can reach answers, the vendor's own provider first where it serves the model. Null until the gateway has indexed the catalog.",
             "title": "Selector"
           },
           "selectors": {
@@ -2739,14 +3038,8 @@
             "title": "Context Window"
           },
           "credential": {
-            "description": "Whose key serves it: `deployment` for a `providers:` instance the operator configured, `organization` for a key the viewer's organization holds.",
-            "enum": [
-              "deployment",
-              "organization",
-              "hosted"
-            ],
-            "title": "Credential",
-            "type": "string"
+            "$ref": "#/components/schemas/CatalogCredential",
+            "description": "Who may price it: `deployment` for a `providers:` instance the operator configured, `hosted` for a provider the deployment pays for in any workspace of the viewer's organization, `organization` for one the viewer's organization may set its own rate for. A workspace can still call a `hosted` provider with the organization's own key."
           },
           "discovered": {
             "description": "Whether the provider itself reported this model.",
@@ -2862,7 +3155,7 @@
                 "type": "null"
               }
             ],
-            "description": "A shorter spelling the gateway also accepts: the instance with the model's cleaned id (`fireworks:gpt-oss-120b`). Null where two offerings on the instance would share it, or until the gateway has indexed the catalog.",
+            "description": "The pinned spelling the gateway also accepts for this offering: the instance with the model's catalog id (`fireworks:openai/gpt-oss-120b`), which pins the instance and reaches the model's cheapest offering on it. Null for a dearer sibling on the same instance, or until the gateway has indexed the catalog.",
             "title": "Short Selector"
           },
           "usage_30d": {
@@ -2889,6 +3182,11 @@
       "CatalogResponse": {
         "description": "The grouped catalog, and the facts a reader needs to interpret its prices.",
         "properties": {
+          "count": {
+            "description": "Models matching the search, before the window, so a caller can page without reading them all.",
+            "title": "Count",
+            "type": "integer"
+          },
           "default_pricing": {
             "description": "Whether an unpriced model is metered at the genai-prices default.",
             "title": "Default Pricing",
@@ -2924,6 +3222,7 @@
           "default_pricing",
           "defaults_as_of",
           "metadata_available",
+          "count",
           "models"
         ],
         "title": "CatalogResponse",
@@ -3315,6 +3614,49 @@
         ],
         "title": "ChatCompletionRequest",
         "type": "object"
+      },
+      "CheckVerdictRequest": {
+        "additionalProperties": false,
+        "description": "One verifier gate's verdict, as the caller's own verifier run produced it.\n\nMirrors ``JudgeVerdictRequest`` field-for-field: ``gate_id`` echoes back\nthe gate the policy itself named (same bound, same reason), ``outcome``\nis the caller's own report of the verifier's exit code (0/1/anything\nelse, mapped by the caller to pass/fail/error), and ``detail`` is the\nverifier's captured stdout, capped the same way ``reasoning`` is.",
+        "properties": {
+          "detail": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Detail",
+            "type": "string"
+          },
+          "gate_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Gate Id",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "pass",
+              "fail",
+              "error"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gate_id",
+          "outcome"
+        ],
+        "title": "CheckVerdictRequest",
+        "type": "object"
+      },
+      "CodeExecutor": {
+        "description": "Who runs the code a request's code-execution tool asks for.\n\nValues are read without regard to case or surrounding whitespace.",
+        "enum": [
+          "auto",
+          "otari",
+          "provider"
+        ],
+        "title": "CodeExecutor",
+        "type": "string"
       },
       "ConfigField": {
         "description": "One effective config value surfaced to the dashboard's config viewer.",
@@ -4422,6 +4764,28 @@
         "title": "CreateUserRequest",
         "type": "object"
       },
+      "CurrentPricingPage": {
+        "description": "One page of current model prices, with the total number of priced models.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PricingResponse"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data",
+          "count"
+        ],
+        "title": "CurrentPricingPage",
+        "type": "object"
+      },
       "DeploymentAdminAccessPublic": {
         "description": "Whether the caller may reach the deployment administration surface.\n\nThe one endpoint in that surface that answers 200 for everybody, and\ndeliberately: the rest refuse with 404 so they do not confirm they exist,\nwhich leaves the dashboard nothing to gate its navigation on but a failed\nrequest. This says the same thing a caller could learn by trying, without\nthe try.",
         "properties": {
@@ -4472,6 +4836,11 @@
             ],
             "description": "Where this deployment's documentation lives, when it is not the operator guide bundled with the gateway. Set, the dashboard's Documentation links open it in a new tab; null, they go to the bundled guide at /#/docs, which stays served either way. A link target an operator configured, validated at startup as an absolute http(s) URL carrying no credential, since this response is unauthenticated.",
             "title": "Docs Url"
+          },
+          "feedback_enabled": {
+            "description": "Whether this deployment accepts deliberate feedback submissions.",
+            "title": "Feedback Enabled",
+            "type": "boolean"
           },
           "mail_ready": {
             "description": "Whether this deployment can deliver a message carrying a link back to itself (an invitation's accept link, and the verification and reset links to come), not merely whether a transport is configured: it also needs to know its own public URL to put in one. Lets the dashboard disable or hide a mail-dependent affordance instead of offering one that would fail at send time. Every message this control plane sends carries such a link, which is why this is one flag and not one per feature. False for a hybrid gateway, whose control plane is otari.ai and which sends no mail of its own.",
@@ -4554,6 +4923,18 @@
             "title": "Sign In Methods",
             "type": "array"
           },
+          "site_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where this deployment's public website lives. Set, the logo on the pages a visitor reaches without an account links to it; null, it links to the public catalog where public_catalog is true, and is not a link otherwise. A link target an operator configured, validated at startup as an absolute http(s) URL carrying no credential, since this response is unauthenticated.",
+            "title": "Site Url"
+          },
           "surfaces": {
             "description": "Management API groups this deployment serves, sorted, which is what its dashboard pages gate on. Named surfaces, not capabilities: capability is otari.ai's word for the entitlement (licensing) axis, and this is the deployment (topology) axis. Empty for a hybrid gateway.",
             "items": {
@@ -4584,11 +4965,13 @@
           "docs_url",
           "terms_url",
           "privacy_url",
+          "site_url",
           "sign_in_methods",
           "maintenance_mode",
           "passkeys_ready",
           "oauth_providers",
           "open_signup",
+          "feedback_enabled",
           "mail_ready"
         ],
         "title": "DeploymentBootstrap",
@@ -5429,6 +5812,45 @@
         "title": "ExternalUsageEvent",
         "type": "object"
       },
+      "GateResultResponse": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "enforcement": {
+            "title": "Enforcement",
+            "type": "string"
+          },
+          "gate_id": {
+            "title": "Gate Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gate_id",
+          "enforcement",
+          "outcome",
+          "message"
+        ],
+        "title": "GateResultResponse",
+        "type": "object"
+      },
       "GatewaySettings": {
         "description": "Operator-facing runtime settings surfaced to the dashboard.\n\nThe top-level flags are kept for the callers that read them directly\n(pricing warnings, the models/providers pages); ``config`` is the full\nread-only view with the settable/startup-only marking.",
         "properties": {
@@ -6049,6 +6471,11 @@
             "title": "Expires At",
             "type": "string"
           },
+          "needs_password": {
+            "description": "Whether the invited address has never signed in here, so accepting should also set its password. False when the address already has a way in, and then accept refuses one.",
+            "title": "Needs Password",
+            "type": "boolean"
+          },
           "organization_name": {
             "title": "Organization Name",
             "type": "string"
@@ -6062,7 +6489,8 @@
           "email",
           "organization_name",
           "role",
-          "expires_at"
+          "expires_at",
+          "needs_password"
         ],
         "title": "InvitationPreviewPublic",
         "type": "object"
@@ -6167,6 +6595,39 @@
           "created_at"
         ],
         "title": "InviteOrganizationMemberResultPublic",
+        "type": "object"
+      },
+      "JudgeVerdictRequest": {
+        "additionalProperties": false,
+        "description": "One judge gate's verdict, as the caller's own model call produced it.",
+        "properties": {
+          "gate_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Gate Id",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "pass",
+              "fail",
+              "error"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reasoning": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Reasoning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gate_id",
+          "outcome"
+        ],
+        "title": "JudgeVerdictRequest",
         "type": "object"
       },
       "KeyInfo": {
@@ -6518,7 +6979,7 @@
         "description": "One tool the gateway can run itself.",
         "properties": {
           "accepted_types": {
-            "description": "Every `tools[].type` this deployment currently routes to the tool. Always includes the canonical `otari_*` type; for web search it also includes the provider-named keywords when interception is enabled.",
+            "description": "Every `tools[].type` this deployment currently routes to the tool. Always includes the canonical `otari_*` type; for web search it also includes the provider-named keywords when interception is enabled, and for code execution the provider-named keywords unless the deployment's executor is `provider`.",
             "items": {
               "type": "string"
             },
@@ -6526,7 +6987,7 @@
             "type": "array"
           },
           "available": {
-            "description": "Whether this deployment has a backend configured for the tool. A request declaring an unavailable tool is rejected with 400.",
+            "description": "Whether this deployment has enabled and configured the tool. A request declaring an unavailable tool is rejected with 400.",
             "title": "Available",
             "type": "boolean"
           },
@@ -6806,6 +7267,116 @@
         "title": "McpToolsResponse",
         "type": "object"
       },
+      "MemberAttributionPublic": {
+        "description": "What the gateway identity behind a membership has spent, and may reach.\n\nDeployment-wide facts, so they are withheld from a caller who does not\noperate the deployment rather than zeroed: ``/api/v1/users`` refuses them,\nand a zero here would read as a member who has spent nothing.",
+        "properties": {
+          "allowed_models": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Models"
+          },
+          "blocked": {
+            "title": "Blocked",
+            "type": "boolean"
+          },
+          "reserved": {
+            "title": "Reserved",
+            "type": "number"
+          },
+          "spend": {
+            "title": "Spend",
+            "type": "number"
+          }
+        },
+        "required": [
+          "spend",
+          "reserved",
+          "blocked"
+        ],
+        "title": "MemberAttributionPublic",
+        "type": "object"
+      },
+      "MemberCeilingPublic": {
+        "description": "The spend ceiling on one workspace membership, as the roster reports it.\n\nThree fields rather than the whole ``scoped_budgets`` row: the figure the\nroster prints, the budget its editor picks, and the id that edit writes to.",
+        "properties": {
+          "budget_id": {
+            "title": "Budget Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "max_budget": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Budget"
+          }
+        },
+        "required": [
+          "id",
+          "budget_id",
+          "max_budget"
+        ],
+        "title": "MemberCeilingPublic",
+        "type": "object"
+      },
+      "MemberWorkspacePlacementPublic": {
+        "description": "One workspace a member is in, with their role and ceiling there.\n\nA ceiling is keyed on the *membership*, not on the person, so a member of two\nworkspaces has two of them. The membership id is carried in its own right\nrather than read back off the ceiling, because it is needed precisely when\nthere is no ceiling yet and one is about to be created.",
+        "properties": {
+          "ceiling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemberCeilingPublic"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          },
+          "workspace_member_id": {
+            "format": "uuid",
+            "title": "Workspace Member Id",
+            "type": "string"
+          },
+          "workspace_name": {
+            "title": "Workspace Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "workspace_name",
+          "workspace_member_id",
+          "role"
+        ],
+        "title": "MemberWorkspacePlacementPublic",
+        "type": "object"
+      },
       "MergeUserRequest": {
         "description": "Request model for merging another user into this one.",
         "properties": {
@@ -6890,6 +7461,10 @@
             "anyOf": [
               {
                 "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -7768,8 +8343,175 @@
         "title": "OfferingUsage",
         "type": "object"
       },
+      "OpenAIFileDeleted": {
+        "description": "OpenAI's answer to a delete.",
+        "properties": {
+          "deleted": {
+            "const": true,
+            "default": true,
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "object": {
+            "const": "file",
+            "default": "file",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "OpenAIFileDeleted",
+        "type": "object"
+      },
+      "OpenAIFileList": {
+        "description": "A page of files in OpenAI's list shape, whose cursor is the last entry's ID.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/OpenAIFileObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "first_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Id"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "last_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Id"
+          },
+          "object": {
+            "const": "list",
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "has_more",
+          "first_id",
+          "last_id"
+        ],
+        "title": "OpenAIFileList",
+        "type": "object"
+      },
+      "OpenAIFileObject": {
+        "description": "One file in OpenAI's file object shape.",
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "object": {
+            "const": "file",
+            "default": "file",
+            "title": "Object",
+            "type": "string"
+          },
+          "purpose": {
+            "title": "Purpose",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "bytes",
+          "created_at",
+          "expires_at",
+          "filename",
+          "purpose"
+        ],
+        "title": "OpenAIFileObject",
+        "type": "object"
+      },
+      "OrgProviderAvailableModelsPublic": {
+        "description": "What the provider says it serves on this key's stored credential.\n\nFailure is a field rather than a status: an unreachable upstream, or a\nprovider with no model listing, is an answer about the provider rather than\nabout this request, and the form still has to render (with a plain text box)\nwhen the list cannot be fetched.",
+        "properties": {
+          "discovery_unsupported": {
+            "default": false,
+            "title": "Discovery Unsupported",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "title": "OrgProviderAvailableModelsPublic",
+        "type": "object"
+      },
       "OrgProviderKeyCreateRequest": {
-        "description": "What a caller sends to create a key.\n\nThe plaintext key is never stored as sent: the service encrypts it\n(`services/secret_box.py`) and keeps only the ciphertext and ``last4``,\nthe same convention `entities.ProviderCredential` already uses.",
+        "description": "What a caller sends to create a key.\n\nThe plaintext key is never stored as sent: the service encrypts it\n(`services/secret_box.py`) and keeps only the ciphertext and ``last4``,\nthe same convention `providers.ProviderCredential` already uses.",
         "properties": {
           "api_base": {
             "anyOf": [
@@ -7822,6 +8564,189 @@
           "name"
         ],
         "title": "OrgProviderKeyCreateRequest",
+        "type": "object"
+      },
+      "OrgProviderKeyModelCreateRequest": {
+        "description": "Offer one model on a key, for a backend whose models cannot be listed.",
+        "properties": {
+          "model": {
+            "maxLength": 255,
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "title": "OrgProviderKeyModelCreateRequest",
+        "type": "object"
+      },
+      "OrgProviderKeyModelPublic": {
+        "description": "One offered model, with the rate the caller's organization is charged for it.\n\n``price_source`` says which rung of ``services.pricing_service`` answered:\n``organization`` for a rate an admin set, ``defaults`` for the\ncommunity-maintained rate this surface seeded or the genai-prices fallback,\n``deployment`` for the deployment's own price list, and None when nothing\nprices the model yet. ``pricing_id`` names the organization's own row where\nthere is one, so a client can edit that rate without re-deriving the key.",
+        "properties": {
+          "cache_read_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Read Price Per Million"
+          },
+          "cache_write_1h_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Write 1H Price Per Million"
+          },
+          "cache_write_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Write Price Per Million"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Price Per Million"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "org_provider_key_id": {
+            "format": "uuid",
+            "title": "Org Provider Key Id",
+            "type": "string"
+          },
+          "output_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Price Per Million"
+          },
+          "price_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "organization",
+                  "deployment",
+                  "defaults"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Source"
+          },
+          "pricing_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pricing Id"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "org_provider_key_id",
+          "model",
+          "enabled",
+          "created_at"
+        ],
+        "title": "OrgProviderKeyModelPublic",
+        "type": "object"
+      },
+      "OrgProviderKeyModelUpdateRequest": {
+        "description": "Whether the runtime serves this model. The only field an update may change.\n\nA rate is not here: an organization's rates live in\n``organization_model_pricing`` and are written through\n``/organizations/me/pricing``, so a price set on this surface and a price set\non that one could not disagree.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "OrgProviderKeyModelUpdateRequest",
+        "type": "object"
+      },
+      "OrgProviderKeyModelsPublic": {
+        "description": "One page of a key's offered models, and how many there are in total.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/OrgProviderKeyModelPublic"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data",
+          "count"
+        ],
+        "title": "OrgProviderKeyModelsPublic",
         "type": "object"
       },
       "OrgProviderKeyPublic": {
@@ -7911,6 +8836,11 @@
               }
             ],
             "title": "Updated At"
+          },
+          "usable": {
+            "description": "False when the stored credential cannot be decrypted on this deployment, so the key supplies nothing at dispatch and the catalog withholds its provider. A row this deployment cannot read is still listed, because deleting or replacing it is what fixes it.",
+            "title": "Usable",
+            "type": "boolean"
           }
         },
         "required": [
@@ -7919,6 +8849,7 @@
           "provider",
           "name",
           "is_org_default",
+          "usable",
           "created_at"
         ],
         "title": "OrgProviderKeyPublic",
@@ -7997,6 +8928,52 @@
           "count"
         ],
         "title": "OrgProviderKeysPublic",
+        "type": "object"
+      },
+      "OrgProviderModelsRefreshPublic": {
+        "description": "What a refresh did: what it newly offered, what it repriced, and the list's new size.\n\nFailure is a field rather than a status, for the reason\n``OrgProviderAvailableModelsPublic`` gives: the list is still standing, and\nthe panel renders the reason beside it.",
+        "properties": {
+          "added": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Added",
+            "type": "array"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "discovery_unsupported": {
+            "default": false,
+            "title": "Discovery Unsupported",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "repriced": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Repriced",
+            "type": "array"
+          }
+        },
+        "required": [
+          "added",
+          "repriced",
+          "count"
+        ],
+        "title": "OrgProviderModelsRefreshPublic",
         "type": "object"
       },
       "OrganizationBudgetCreate": {
@@ -8495,7 +9472,7 @@
         "type": "object"
       },
       "OrganizationGuardrailCreate": {
-        "description": "Request body for mandating a guardrail across an organization.\n\n``credential`` is never stored as sent: it is encrypted with\n``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention\n`entities.WorkspaceMcpServer` and `entities.ProviderCredential` use. It is\nsent to the endpoint as ``Authorization: Bearer`` when the guardrail runs,\nso it authenticates this gateway to the guardrails service the entry names.\nA guardrail *vendor's* own key is not this: the guardrails service builds\nits guardrails from the operator's YAML and holds those itself.\n\nA credential therefore requires ``url``. The deployment's ``guardrails_url``\nis not necessarily encrypted (the shipped compose file makes it a same-host\n``http://`` sidecar) and this row cannot see what it is set to, so an entry\nthat fell back to it could not promise the bearer was sent over https. See\n`_require_url_for_credential`.\n\n``on`` is not offered. This plane mandates input-direction checks, which is\nthe only direction the request path enforces\n(`services.guardrails.run_input_guardrails`); an organization that could\nstore an output-direction mandate would be storing one nothing runs.",
+        "description": "Request body for mandating a guardrail across an organization.\n\n``credential`` is never stored as sent: it is encrypted with\n``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention\n`tools.WorkspaceMcpServer` and `providers.ProviderCredential` use. It is\nsent to the endpoint as ``Authorization: Bearer`` when the guardrail runs,\nso it authenticates this gateway to the guardrails service the entry names.\nA guardrail *vendor's* own key is not this: the guardrails service builds\nits guardrails from the operator's YAML and holds those itself.\n\nA credential therefore requires ``url``. The deployment's ``guardrails_url``\nis not necessarily encrypted (the shipped compose file makes it a same-host\n``http://`` sidecar) and this row cannot see what it is set to, so an entry\nthat fell back to it could not promise the bearer was sent over https. See\n`_require_url_for_credential`.\n\n``on`` is not offered. This plane mandates input-direction checks, which is\nthe only direction the request path enforces\n(`services.guardrails.run_input_guardrails`); an organization that could\nstore an output-direction mandate would be storing one nothing runs.",
         "example": {
           "applies_to_all_workspaces": true,
           "credential": "sk-guardrails-...",
@@ -8522,6 +9499,19 @@
             ],
             "description": "Bearer credential for this entry's endpoint. Requires url to be set, and https: an entry with no endpoint of its own falls back to the deployment's guardrails_url, which is commonly a same-host http sidecar. Encrypted at rest, never returned",
             "title": "Credential"
+          },
+          "definition_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A guardrail definition of this organization for Otari to build and run itself, instead of calling a profile on a guardrails service. Mutually exclusive with url and credential, which name a service",
+            "title": "Definition Id"
           },
           "enabled": {
             "default": true,
@@ -8579,7 +9569,7 @@
                 "type": "null"
               }
             ],
-            "description": "Extra kwargs forwarded to the guardrails service /validate call",
+            "description": "Extra kwargs for the check itself, sent to the guardrails service or handed to the guardrail this entry's definition builds",
             "title": "Validate Kwargs"
           },
           "workspace_ids": {
@@ -8599,6 +9589,261 @@
         "title": "OrganizationGuardrailCreate",
         "type": "object"
       },
+      "OrganizationGuardrailDefinitionCreate": {
+        "description": "Request body for defining a guardrail Otari will build and call itself.\n\n``create_kwargs`` carries both halves of the form: the plain arguments and\nthe vendor credentials. Which is which is the catalog's answer, not this\nschema's, so a credential lands in the encrypted map whatever it is called\nand a caller cannot move one into the plain column by naming it oddly.\n\nPer-call arguments are not offered. This row says what a guardrail is built\nwith; what travels with each check is the mandate's ``validate_kwargs``.",
+        "example": {
+          "create_kwargs": {
+            "api_key": "lakera-...",
+            "endpoint": "https://api.lakera.ai"
+          },
+          "enabled": true,
+          "guardrail_name": "lakera_guard",
+          "name": "prod-lakera"
+        },
+        "properties": {
+          "create_kwargs": {
+            "additionalProperties": true,
+            "description": "Constructor arguments for the guardrail. Every argument the catalog marks secret is encrypted at rest and never returned; the rest are stored and returned as sent",
+            "title": "Create Kwargs",
+            "type": "object"
+          },
+          "enabled": {
+            "default": true,
+            "description": "False stops the guardrail everywhere it is mandated",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "guardrail_name": {
+            "description": "The any-guardrail class to build, as the built-in guardrail catalog names it",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Guardrail Name",
+            "type": "string"
+          },
+          "name": {
+            "description": "The organization's own label for this definition, unique within the organization",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "guardrail_name"
+        ],
+        "title": "OrganizationGuardrailDefinitionCreate",
+        "type": "object"
+      },
+      "OrganizationGuardrailDefinitionPublic": {
+        "description": "The API-facing shape. Carries the names of the stored secrets and none of their values.",
+        "properties": {
+          "build_state": {
+            "description": "Whether the worker that answered this request holds a guardrail built from this version of the definition. built means it does and the check runs; failed means that worker tried these exact arguments and could not build them, so every mandate pointing here is unevaluable; pending means it holds nothing for this version yet, which is the answer right after a write and on any worker that has not caught up within the refresh interval; disabled means the definition is switched off and nothing is built on purpose. It answers for one worker, so two reads can disagree while a write propagates. Why a build failed is never reported here: the reason is in the gateway's log",
+            "enum": [
+              "built",
+              "failed",
+              "pending",
+              "disabled"
+            ],
+            "title": "Build State",
+            "type": "string"
+          },
+          "create_kwargs": {
+            "additionalProperties": true,
+            "description": "The constructor arguments the catalog does not mark secret, as they were stored. Returned in clear: the secrets were taken out of this map by flag, and a form has to round-trip an endpoint or a project id",
+            "title": "Create Kwargs",
+            "type": "object"
+          },
+          "create_secrets": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The secret constructor arguments this definition holds, each as ***. Sending one back unchanged keeps the stored value; sending a new one rotates it, and leaving one out clears it",
+            "title": "Create Secrets",
+            "type": "object"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "guardrail_name": {
+            "title": "Guardrail Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "secrets_decryptable": {
+            "description": "False when the stored secrets cannot be read with the current OTARI_SECRET_KEY, in which case create_secrets is empty and the definition needs its credentials sent again",
+            "title": "Secrets Decryptable",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "name",
+          "guardrail_name",
+          "create_kwargs",
+          "create_secrets",
+          "secrets_decryptable",
+          "enabled",
+          "build_state",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "OrganizationGuardrailDefinitionPublic",
+        "type": "object"
+      },
+      "OrganizationGuardrailDefinitionTest": {
+        "additionalProperties": false,
+        "description": "Text to run one definition's guardrail over, as a request would.",
+        "properties": {
+          "text": {
+            "description": "The input to check, as a request's user text would reach it",
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "validate_kwargs": {
+            "additionalProperties": true,
+            "description": "Per-check arguments, as a mandate's validate_kwargs would hand them to this guardrail",
+            "title": "Validate Kwargs",
+            "type": "object"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "OrganizationGuardrailDefinitionTest",
+        "type": "object"
+      },
+      "OrganizationGuardrailDefinitionTestResult": {
+        "description": "The guardrail's own verdict on the text, in the fields a request's check reports.",
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The vendor's reason, when it gives one",
+            "title": "Explanation"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The vendor's score, when it gives one",
+            "title": "Score"
+          },
+          "valid": {
+            "description": "False when the guardrail flagged the text",
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "explanation",
+          "score"
+        ],
+        "title": "OrganizationGuardrailDefinitionTestResult",
+        "type": "object"
+      },
+      "OrganizationGuardrailDefinitionUpdate": {
+        "description": "Partial update. Only the fields the caller sets are applied.\n\n``create_kwargs`` replaces the arguments whole when sent, and an argument the\ncatalog marks secret keeps its stored value where the caller echoes back the\n``***`` a read gave them. Omitting it leaves both columns untouched *and\nreads neither*, which is what lets an admin on a deployment whose\n``OTARI_SECRET_KEY`` has moved still flip ``enabled`` and repair the row by\ntyping the credential again.\n\nChanging ``guardrail_name`` without sending ``create_kwargs`` re-splits the\nstored arguments under the new class, because the plain/secret split is the\nold class's answer and would otherwise go stale.",
+        "example": {
+          "create_kwargs": {
+            "api_key": "***",
+            "endpoint": "https://eu.api.lakera.ai"
+          },
+          "enabled": false
+        },
+        "properties": {
+          "create_kwargs": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Replaces the constructor arguments whole. An argument sent as *** keeps the value stored under that name; a secret left out is cleared. Omit the field to leave the stored arguments alone, and {} to clear them",
+            "title": "Create Kwargs"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "guardrail_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Guardrail Name",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "title": "OrganizationGuardrailDefinitionUpdate",
+        "type": "object"
+      },
+      "OrganizationGuardrailDefinitionsPublic": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/OrganizationGuardrailDefinitionPublic"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data",
+          "count"
+        ],
+        "title": "OrganizationGuardrailDefinitionsPublic",
+        "type": "object"
+      },
       "OrganizationGuardrailPublic": {
         "description": "The API-facing shape. Never carries the credential, nor a credential-shaped parameter.\n\n``validate_kwargs`` is the second place a credential lives on this row, and\nthe one with no column of its own: a guardrail class can take a vendor key\nas a parameter, so the form offers a box for it and whatever is typed there\nis stored as plain JSON. It is masked the way\n``org_provider_keys.client_args`` is, by the *name* of the entry rather than\nby what the guardrail catalog says about it, so the mask still applies when\nthe guardrails service is down and no catalog can be read.",
         "properties": {
@@ -8609,6 +9854,18 @@
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "definition_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition Id"
           },
           "enabled": {
             "title": "Enabled",
@@ -8665,7 +9922,7 @@
                 "type": "null"
               }
             ],
-            "description": "Extra kwargs forwarded to the guardrails service /validate call. A parameter whose name looks credential-shaped comes back as *** rather than its stored value; sending that *** back keeps what is stored",
+            "description": "Extra kwargs for the check itself, sent to the guardrails service or handed to the guardrail this entry's definition builds. A parameter whose name looks credential-shaped comes back as *** rather than its stored value; sending that *** back keeps what is stored",
             "title": "Validate Kwargs"
           },
           "workspace_ids": {
@@ -8683,6 +9940,7 @@
           "profile",
           "url",
           "has_credential",
+          "definition_id",
           "mode",
           "on_unavailable",
           "validate_kwargs",
@@ -8695,8 +9953,80 @@
         "title": "OrganizationGuardrailPublic",
         "type": "object"
       },
+      "OrganizationGuardrailTest": {
+        "additionalProperties": false,
+        "description": "Text to run one mandate's check over, as a request would.",
+        "properties": {
+          "text": {
+            "description": "The input to check, as a request's user text would reach it",
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "validate_kwargs": {
+            "additionalProperties": true,
+            "description": "Per-check arguments to send in place of the stored ones; omitted sends the stored ones. A *** keeps the value stored under that name",
+            "title": "Validate Kwargs",
+            "type": "object"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "OrganizationGuardrailTest",
+        "type": "object"
+      },
+      "OrganizationGuardrailTestResult": {
+        "description": "The guardrails service's verdict on the text, in the fields a request's check reports.",
+        "properties": {
+          "explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The service's reason, when it gives one",
+            "title": "Explanation"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The service's score, when it gives one",
+            "title": "Score"
+          },
+          "valid": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "False when the guardrail flagged the text, null when it gave no verdict",
+            "title": "Valid"
+          }
+        },
+        "required": [
+          "valid",
+          "explanation",
+          "score"
+        ],
+        "title": "OrganizationGuardrailTestResult",
+        "type": "object"
+      },
       "OrganizationGuardrailUpdate": {
-        "description": "Partial update. Only the fields the caller sets are applied.\n\n``credential`` and ``url`` have three states rather than two, which is what\na write-only field and its nullable partner need: omit to leave the stored\nvalue alone, send ``\"\"`` to clear it, send a value to replace it. An\nexplicit ``null`` also leaves them alone, matching\n`WorkspaceMcpServerUpdate`: a client that serializes its whole form back,\nwith an empty credential box it never filled in, must not destroy a\ncredential it was never shown.\n\n``workspace_ids`` replaces the scope whole when sent; ``[]`` clears it.",
+        "description": "Partial update. Only the fields the caller sets are applied.\n\n``credential`` and ``url`` have three states rather than two, which is what\na write-only field and its nullable partner need: omit to leave the stored\nvalue alone, send ``\"\"`` to clear it, send a value to replace it. An\nexplicit ``null`` also leaves them alone, matching\n`WorkspaceMcpServerUpdate`: a client that serializes its whole form back,\nwith an empty credential box it never filled in, must not destroy a\ncredential it was never shown.\n\n``workspace_ids`` replaces the scope whole when sent; ``[]`` clears it.\n\n``definition_id`` diverges: an explicit ``null`` **clears** it. The rule\nabove protects a field the client was never shown, and this one is returned\non every read, so a form sending ``null`` is sending back a field it was\ngiven rather than an empty box it never filled in. Omitting it still leaves\nthe link alone.",
         "example": {
           "credential": "sk-guardrails-...",
           "mode": "monitor",
@@ -8718,6 +10048,19 @@
               }
             ],
             "title": "Credential"
+          },
+          "definition_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The organization's own definition this mandate runs. Unlike url and credential, an explicit null clears the link; omit the field to leave it as it is",
+            "title": "Definition Id"
           },
           "enabled": {
             "title": "Enabled",
@@ -9538,9 +10881,9 @@
           "reset_alignment",
           "period_start",
           "period_end",
-          "manageable",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "manageable"
         ],
         "title": "OrganizationScopedBudgetPublic",
         "type": "object"
@@ -9610,6 +10953,48 @@
         ],
         "title": "OutputShape",
         "type": "string"
+      },
+      "OverviewSummaryResponse": {
+        "description": "What the dashboard overview renders beside its usage chart.\n\n``budgets`` and ``ceilings`` are null where the caller may not see them,\nwhich is not the same as a strip with nothing in it: deployment budgets are\nthe operator's, and spend ceilings are an organization owner's or admin's.",
+        "properties": {
+          "active_keys": {
+            "title": "Active Keys",
+            "type": "integer"
+          },
+          "active_members": {
+            "description": "Active members of the named workspace; 0 when none is named.",
+            "title": "Active Members",
+            "type": "integer"
+          },
+          "budgets": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AllocationHealthResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ceilings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AllocationHealthResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "active_keys",
+          "active_members",
+          "budgets",
+          "ceilings"
+        ],
+        "title": "OverviewSummaryResponse",
+        "type": "object"
       },
       "PasskeySessionResponse": {
         "description": "A dashboard session minted by a passkey (the token travels only in the cookie).\n\nThe same three fields ``POST /api/v1/auth/session`` answers, deliberately: the\ndashboard's sign-in path does not care which credential got it here.",
@@ -10208,6 +11593,153 @@
           "mcp_servers"
         ],
         "title": "PlaygroundToolsResponse",
+        "type": "object"
+      },
+      "PolicyCheckRequest": {
+        "additionalProperties": false,
+        "description": "A policy body plus the evidence to check it against, both caller-supplied.",
+        "properties": {
+          "check_results": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CheckVerdictRequest"
+                },
+                "maxItems": 1000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Verifier verdicts the caller collected for this request's verifier gates.",
+            "title": "Check Results"
+          },
+          "command_scope": {
+            "default": "call",
+            "description": "What `commands` covers: `call` for the single tool call about to run, `session` for every command the session has run so far.",
+            "enum": [
+              "call",
+              "session"
+            ],
+            "title": "Command Scope",
+            "type": "string"
+          },
+          "commands": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Shell commands the caller observed run or is about to run.",
+            "title": "Commands"
+          },
+          "judge_results": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/JudgeVerdictRequest"
+                },
+                "maxItems": 1000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model verdicts the caller collected for this request's judge gates.",
+            "title": "Judge Results"
+          },
+          "path_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pre_tool_use.edit_target",
+                  "pre_tool_use.read_target",
+                  "pre_tool_use.command",
+                  "stop.working_tree",
+                  "stop.session",
+                  "stop.verifier"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which moment `paths` was read at, matching the `runs` values a path gate declares. Only three of the six `runs` values are legal here, because only those three are moments a path can be read at: `pre_tool_use.edit_target` for a write tool's own target before it runs, `pre_tool_use.read_target` for a read tool's, and `stop.working_tree` for `git status` once the turn is over. Required whenever `paths` is non-empty, and rejected with a 422 if omitted or set to any other value: either would resolve every path gate `not_applicable`, which loses enforcement without reporting anything. An empty `paths` needs no source.",
+            "title": "Path Source"
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Repo-relative paths this moment of the session puts in scope: what `git status --porcelain` reports, or the single target a tool call is about to write or read. `path_source` says which.",
+            "title": "Paths"
+          },
+          "policy_yaml": {
+            "maxLength": 262144,
+            "minLength": 1,
+            "title": "Policy Yaml",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_yaml"
+        ],
+        "title": "PolicyCheckRequest",
+        "type": "object"
+      },
+      "PolicyCheckResponse": {
+        "properties": {
+          "blocked": {
+            "title": "Blocked",
+            "type": "boolean"
+          },
+          "policy_id": {
+            "title": "Policy Id",
+            "type": "string"
+          },
+          "provenance": {
+            "default": "client_reported",
+            "title": "Provenance",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/GateResultResponse"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_id",
+          "schema_version",
+          "results",
+          "blocked"
+        ],
+        "title": "PolicyCheckResponse",
         "type": "object"
       },
       "PolicyRequest": {
@@ -12437,15 +13969,15 @@
             "title": "Offerings",
             "type": "integer"
           },
-          "short_selectors": {
-            "description": "Offerings with an unambiguous short spelling.",
-            "title": "Short Selectors",
+          "pinned_selectors": {
+            "description": "Pinned spellings, one per instance a model is offered on.",
+            "title": "Pinned Selectors",
             "type": "integer"
           }
         },
         "required": [
           "offerings",
-          "short_selectors",
+          "pinned_selectors",
           "models"
         ],
         "title": "SelectorIndexResponse",
@@ -13257,6 +14789,20 @@
           "key": {
             "title": "Key",
             "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
           },
           "service": {
             "enum": [
@@ -14110,6 +15656,17 @@
           "web_search_url": "http://searxng:8080"
         },
         "properties": {
+          "code_execution_executor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Execution Executor"
+          },
           "guardrails_url": {
             "anyOf": [
               {
@@ -16253,6 +17810,16 @@
             ],
             "title": "Exec Timeout S"
           },
+          "executor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodeExecutor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "image": {
             "anyOf": [
               {
@@ -16322,6 +17889,7 @@
           "exec_timeout_s",
           "image",
           "tools",
+          "executor",
           "created_at",
           "updated_at"
         ],
@@ -16362,6 +17930,17 @@
             ],
             "description": "Ceiling on one execution's runtime in seconds; only ever lowers the effective limit, so at most 60",
             "title": "Exec Timeout S"
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodeExecutor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who runs a provider-native code-execution declaration for this workspace: 'auto' (the provider when it runs the tool natively for the model, else this gateway's sandbox), 'otari' or 'provider'. Pins over the deployment default and over the request's Otari-Code-Execution header; null leaves both in charge"
           },
           "image": {
             "anyOf": [
@@ -16439,7 +18018,7 @@
         "type": "object"
       },
       "WorkspaceMcpServerCreate": {
-        "description": "Request body for registering a server.\n\n``authorization_token`` is never stored as sent: it is encrypted with\n``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention\n`entities.ProviderCredential` and `OrgProviderKey` already use.",
+        "description": "Request body for registering a server.\n\n``authorization_token`` is never stored as sent: it is encrypted with\n``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention\n`providers.ProviderCredential` and `OrgProviderKey` already use.",
         "properties": {
           "allowed_tools": {
             "anyOf": [
@@ -16970,6 +18549,10 @@
             "title": "Org Provider Key Id",
             "type": "string"
           },
+          "usable": {
+            "title": "Usable",
+            "type": "boolean"
+          },
           "workspace_id": {
             "format": "uuid",
             "title": "Workspace Id",
@@ -16983,6 +18566,7 @@
           "disabled",
           "is_effective_default",
           "is_effective_enabled",
+          "usable",
           "allowed_models"
         ],
         "title": "WorkspaceProviderKeyOverridePublic",
@@ -17297,7 +18881,7 @@
                 "type": "null"
               }
             ],
-            "description": "Results are kept only from these domains; intersected with any list the request sends",
+            "description": "Filters Search results and constrains initial and redirected Fetch destinations; intersected with any list the request sends",
             "title": "Allowed Domains"
           },
           "blocked_domains": {
@@ -17312,11 +18896,11 @@
                 "type": "null"
               }
             ],
-            "description": "Results from these domains are dropped; added to any list the request sends",
+            "description": "Filters Search results and blocks initial and redirected Fetch destinations; added to any list the request sends",
             "title": "Blocked Domains"
           },
           "enabled": {
-            "description": "False refuses web search for this workspace, both the otari_web_search tool and the search endpoint. The fields below narrow the tool only.",
+            "description": "False refuses web access for this workspace through otari_web_search, otari_web_fetch, and POST /api/v1/search.",
             "title": "Enabled",
             "type": "boolean"
           },
@@ -17331,7 +18915,7 @@
                 "type": "null"
               }
             ],
-            "description": "Ceiling on results one search returns; only ever lowers the effective limit, so at most 20",
+            "description": "Search only: ceiling on results one search returns; only ever lowers the effective limit, so at most 20",
             "title": "Max Results"
           },
           "provider_options": {
@@ -17344,7 +18928,7 @@
                 "type": "null"
               }
             ],
-            "description": "Provider-specific knobs forwarded to the search backend; a request's own keys win",
+            "description": "Search only: provider-specific knobs forwarded to the backend; request keys win",
             "title": "Provider Options"
           },
           "purpose_hint": {
@@ -17357,7 +18941,7 @@
                 "type": "null"
               }
             ],
-            "description": "Hint used when a request declares otari_web_search without one of its own",
+            "description": "Search only: hint used when a request declares otari_web_search without one of its own",
             "title": "Purpose Hint"
           }
         },
@@ -17386,6 +18970,69 @@
           "count"
         ],
         "title": "WorkspacesPublic",
+        "type": "object"
+      },
+      "WorstAllocationResponse": {
+        "description": "The row furthest through its allowance.",
+        "properties": {
+          "allocated": {
+            "title": "Allocated",
+            "type": "number"
+          },
+          "budget_id": {
+            "title": "Budget Id",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The row's own name, or null where nobody gave it one.",
+            "title": "Name"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The scope's id, so an unnamed ceiling can be named after it.",
+            "title": "Scope Id"
+          },
+          "scope_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What a spend ceiling caps (workspace, org_member, api_token, ...); null for a budget.",
+            "title": "Scope Type"
+          },
+          "spent": {
+            "title": "Spent",
+            "type": "number"
+          }
+        },
+        "required": [
+          "budget_id",
+          "name",
+          "spent",
+          "allocated",
+          "scope_type",
+          "scope_id"
+        ],
+        "title": "WorstAllocationResponse",
         "type": "object"
       }
     },
@@ -19896,7 +21543,7 @@
     },
     "/api/v1/catalog/models": {
       "get": {
-        "description": "The models this caller may use, one entry each however many providers serve it.\n\nPrices are the caller's: an organization's override where one applies, else\nthe deployment's row, else the genai-prices default. Aliases and routing\npolicies are not models and are not listed; see Routing. A visitor, where\nthe catalog is public, sees the configured instances at the deployment's\nrates and nothing that belongs to a tenant.",
+        "description": "The models this caller may use, one entry each however many providers serve it.\n\nPrices are the caller's: an organization's override where one applies, else\nthe deployment's row, else the genai-prices default. Aliases and routing\npolicies are not models and are not listed; see Routing. A visitor, where\nthe catalog is public, sees the configured instances and the hosted\nmodels at the deployment's rates, and nothing that belongs to a tenant.",
         "operationId": "catalog-list_catalog",
         "parameters": [
           {
@@ -19916,6 +21563,52 @@
               ],
               "description": "Compare prices for a request of this many input tokens: each model's minimum is taken from the pricing tier that request would settle at. Omitted, the base rates compare.",
               "title": "At Context"
+            }
+          },
+          {
+            "description": "Narrow to models whose name, catalog id or any selector contains this text, case-insensitively.",
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Narrow to models whose name, catalog id or any selector contains this text, case-insensitively.",
+              "title": "Search"
+            }
+          },
+          {
+            "description": "Number of models to skip",
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Number of models to skip",
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum number of models to return",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Maximum number of models to return",
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
             }
           }
         ],
@@ -20134,7 +21827,7 @@
     },
     "/api/v1/files": {
       "get": {
-        "description": "List the authenticated user's uploaded files in the request's workspace.\n\n``workspace_id`` narrows a master-key listing to one workspace; a keyed\nrequest is already confined to its key's own and cannot widen or move it.",
+        "description": "List the authenticated user's uploaded files in the request's workspace.\n\n``workspace_id`` narrows a master-key listing to one workspace; a keyed\nrequest is already confined to its key's own and cannot widen or move it.\n\nEach flavor pages with its own cursor.\nOpenAI's ``after`` names the last file of the previous page, and ``has_more`` says whether to ask again.\nAnthropic's ``next_page`` is passed back as ``page``, and ``ids[]`` reads up to 100 named files in one page.\nA cursor whose file has since been deleted or has expired is still a position.\nAn ``after`` the caller never owned is a 404, and a ``page`` token this gateway did not issue is a 400.",
         "operationId": "files-list_files",
         "parameters": [
           {
@@ -20185,6 +21878,83 @@
               ],
               "title": "Workspace Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Order",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ids[]",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ids[]"
+            }
           }
         ],
         "responses": {
@@ -20192,9 +21962,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Files-List Files",
-                  "type": "object"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/OpenAIFileList"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AnthropicFileList"
+                    }
+                  ],
+                  "title": "Response Files-List Files"
                 }
               }
             },
@@ -20225,7 +22001,7 @@
         ]
       },
       "post": {
-        "description": "OpenAI-compatible file upload endpoint.",
+        "description": "Upload a file. Answers in the OpenAI or Anthropic file shape, following the caller's headers.",
         "operationId": "files-create_file",
         "requestBody": {
           "content": {
@@ -20242,9 +22018,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Files-Create File",
-                  "type": "object"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/OpenAIFileObject"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AnthropicFileMetadata"
+                    }
+                  ],
+                  "title": "Response Files-Create File"
                 }
               }
             },
@@ -20311,9 +22093,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Files-Delete File",
-                  "type": "object"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/OpenAIFileDeleted"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AnthropicFileDeleted"
+                    }
+                  ],
+                  "title": "Response Files-Delete File"
                 }
               }
             },
@@ -20378,9 +22166,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Files-Get File",
-                  "type": "object"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/OpenAIFileObject"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AnthropicFileMetadata"
+                    }
+                  ],
+                  "title": "Response Files-Get File"
                 }
               }
             },
@@ -20566,6 +22360,56 @@
         ]
       }
     },
+    "/api/v1/hooks/check": {
+      "post": {
+        "description": "Evaluate a submitted policy against submitted evidence.\n\nAuthenticated with either an API key or the master key (the router-level\ngate), like ``POST /api/v1/usage/external-events``: this identifies who\nsent the request, not whether its evidence is true. `blocked` is set when\na required gate's outcome is not `pass`/`not_applicable` (an unresolved\ngate never counts as a pass).\n\nThe actual parse-and-evaluate work is\n``otari_agent.domain.check.run_policy_check``, shared with ``otari\nhook``'s own local evaluation: this route's own job is authentication,\ntranslating that function's tri-state request fields into its own typed\nones, and turning ``PolicyCheckError`` into a 422.",
+        "operationId": "hooks-check_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Check Policy",
+        "tags": [
+          "hooks"
+        ]
+      }
+    },
     "/api/v1/images/generations": {
       "post": {
         "description": "OpenAI-compatible image generation endpoint.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
@@ -20616,7 +22460,7 @@
     },
     "/api/v1/invitations/accept": {
       "post": {
-        "description": "Accept a pending invitation, resolving it to an active membership.",
+        "description": "Accept a pending invitation, resolving it to an active membership and optionally setting a first password.",
         "operationId": "invitations-accept_invitation",
         "requestBody": {
           "content": {
@@ -22481,6 +24325,297 @@
         ]
       }
     },
+    "/api/v1/organizations/me/guardrail-definitions": {
+      "get": {
+        "description": "List the guardrails the caller's organization has defined.\n\nOrganization owners and admins only. A stored vendor credential is never\nreturned: each one comes back as ``***`` under its own name, which is what a\nform resubmits to keep it.\n\n``build_state`` answers for the worker that served this request, so a read\ntaken moments after a write may still report ``pending`` on a sibling that\nhas not caught up.",
+        "operationId": "organization-guardrail-definitions-list_organization_guardrail_definitions",
+        "parameters": [
+          {
+            "description": "Number of records to skip",
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Number of records to skip",
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum number of records to return",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Maximum number of records to return",
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationGuardrailDefinitionsPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Organization Guardrail Definitions",
+        "tags": [
+          "organization-guardrail-definitions"
+        ]
+      },
+      "post": {
+        "description": "Define a guardrail this deployment will build and call itself. Organization owners and admins only.\n\n``guardrail_name`` must be one the built-in guardrail catalog lists\n(``GET /api/v1/tool-settings/guardrails/catalog``), and\n``create_kwargs`` must satisfy that guardrail's constructor as the catalog\ndescribes it: no argument it does not declare, nothing it types as a live\nobject rather than configuration, and every required argument no environment\nvariable can supply. Arguments the catalog marks secret are encrypted at\nrest.\n\nA definition on its own changes no request. Mandate it through\n``/api/v1/organizations/me/guardrails`` for it to run.\n\nThe definition is saved first and built second, so a guardrail this\ndeployment cannot construct is still stored and answers ``build_state:\n\"failed\"`` rather than refusing the write. Why it failed is not reported: a\nvendor library may put the arguments it was handed, which are your\ncredentials, into its own error message. The reason is in the gateway's log.",
+        "operationId": "organization-guardrail-definitions-create_organization_guardrail_definition",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationGuardrailDefinitionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationGuardrailDefinitionPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Create Organization Guardrail Definition",
+        "tags": [
+          "organization-guardrail-definitions"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/guardrail-definitions/{definition_id}": {
+      "delete": {
+        "description": "Drop a definition and the credentials it holds.\n\nOrganization owners and admins only. Use ``enabled: false`` instead to stop\nthe guardrail everywhere while keeping both.",
+        "operationId": "organization-guardrail-definitions-delete_organization_guardrail_definition",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Definition Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Delete Organization Guardrail Definition",
+        "tags": [
+          "organization-guardrail-definitions"
+        ]
+      },
+      "patch": {
+        "description": "Change a definition's name, guardrail, build arguments, or enabled flag.\n\nOrganization owners and admins only. Omitted fields are left as they are.\n``create_kwargs`` replaces the arguments whole when sent, an argument sent as\n``***`` keeps the value stored under that name, and omitting the field\nentirely leaves the stored credentials untouched and unread.\n\nThe guardrail is rebuilt afterwards and the response reports the outcome in\n``build_state``, so repairing a credential shows the definition running\nagain in the same response, and ``enabled: false`` stops it here rather than\non the next refresh.",
+        "operationId": "organization-guardrail-definitions-update_organization_guardrail_definition",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Definition Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationGuardrailDefinitionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationGuardrailDefinitionPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Update Organization Guardrail Definition",
+        "tags": [
+          "organization-guardrail-definitions"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/guardrail-definitions/{definition_id}/test": {
+      "post": {
+        "description": "Run a definition's guardrail over some text and return its verdict.\n\nOrganization owners and admins only. The guardrail is the one the worker\nthat answered already holds built, so this tests what is running rather\nthan building it again. Nothing is stored and no mandate is involved;\n``validate_kwargs`` stands in for what a mandate would pass with each\ncheck.\n\nA definition this worker does not hold built answers 409, and its\n``build_state`` says why. A vendor call that fails answers 502, and the\nreason is in the gateway's log only: a vendor library may put the\ncredentials it was handed into its own message.",
+        "operationId": "organization-guardrail-definitions-test_organization_guardrail_definition",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Definition Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationGuardrailDefinitionTest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationGuardrailDefinitionTestResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Test Organization Guardrail Definition",
+        "tags": [
+          "organization-guardrail-definitions"
+        ]
+      }
+    },
     "/api/v1/organizations/me/guardrails": {
       "get": {
         "description": "List the guardrails the caller's organization mandates.\n\nOrganization owners and admins only, unlike the pricing overrides next door\nthat any member may read: these rows name the endpoints this gateway\nconnects to and say which of them carry a credential. A credential is never\nreturned, only whether one is set.",
@@ -22710,6 +24845,68 @@
         ]
       }
     },
+    "/api/v1/organizations/me/guardrails/{guardrail_id}/test": {
+      "post": {
+        "description": "Post some text to the guardrails service a mandate names and return its verdict.\n\nOrganization owners and admins only. Uses the mandate's own endpoint and\ncredential, or the deployment's guardrails URL when it names none, and\nfaces the same safety check a request does. Nothing is stored.\n``validate_kwargs`` replaces the stored arguments for this call, a\n``***`` in it keeps the value stored under that name, and omitting it\nsends the stored arguments.\n\nA mandate that runs a configured guardrail answers 409: test that\nguardrail through ``/api/v1/organizations/me/guardrail-definitions``. So\ndoes one with nowhere to send the check. A service that cannot be reached,\nor answers something malformed, answers 502, and the reason is in the\ngateway's log only.",
+        "operationId": "organization-guardrails-test_organization_guardrail",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "guardrail_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Guardrail Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationGuardrailTest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationGuardrailTestResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Test Organization Guardrail",
+        "tags": [
+          "organization-guardrails"
+        ]
+      }
+    },
     "/api/v1/organizations/me/keys": {
       "get": {
         "description": "List the caller's own API keys in their active organization, newest first.\n\nOnly keys billed to the caller's own user: an operator-minted key assigned\nto them is theirs to see here, and nobody else's key ever is. Naming a\nworkspace outside their organization lists nothing rather than refusing, so\nthe filter reports no more than the unfiltered read does.",
@@ -22798,7 +24995,7 @@
         ]
       },
       "post": {
-        "description": "Create an API key owned by the caller, in a workspace they may see.\n\nThe member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the\ncaller's own attribution user, the key is always budget-enforced, and the\nworkspace must be visible to the caller (a member of it, or an organization\nowner/admin/superuser, who see every workspace). The secret is returned once.",
+        "description": "Create an API key owned by the caller, in a workspace they may see.\n\nThe member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the\ncaller's own attribution user, the key is always budget-enforced, and the\nworkspace must be visible to the caller (a member of it, or an organization\nowner/admin, who see every workspace). The secret is returned once.",
         "operationId": "organization-keys-create_own_key",
         "requestBody": {
           "content": {
@@ -23050,6 +25247,56 @@
         ]
       }
     },
+    "/api/v1/organizations/me/member-invitations/bulk": {
+      "post": {
+        "description": "Invite several addresses to the caller's active organization at once.\n\nOrganization owners and admins only. Every address gets the same role and\nworkspace assignments. Each one is checked as ``POST /me/member-invitations``\nwould check it, and an address that is refused lands in ``failed`` with the\nreason rather than failing the request, so the answer is 200 even when some\nor all were refused. Each invited entry carries its own ``mail_sent`` and\naccept link.",
+        "operationId": "organizations-bulk_invite_active_organization_members",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkInviteOrganizationMembersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkInviteOrganizationMembersResultPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Bulk Invite Active Organization Members",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
     "/api/v1/organizations/me/member-invitations/{invitation_id}": {
       "delete": {
         "description": "Revoke an unaccepted invitation. Organization owners and admins only.\n\nSuspends the paired membership rather than deleting it, the same as\nremoving an active member: re-inviting the same address later revives it.",
@@ -23104,7 +25351,7 @@
     },
     "/api/v1/organizations/me/members": {
       "get": {
-        "description": "List the members of the caller's active organization.",
+        "description": "List the members of the caller's active organization.\n\n``search`` narrows the page and the count together, so a caller offering\nthese members as options can ask for the matches instead of filtering\nwhatever page it happened to fetch.",
         "operationId": "organizations-list_active_organization_members",
         "parameters": [
           {
@@ -23132,6 +25379,25 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Narrow to members whose name or email contains this text, case-insensitively.",
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Narrow to members whose name or email contains this text, case-insensitively.",
+              "title": "Search"
             }
           }
         ],
@@ -23575,9 +25841,27 @@
     },
     "/api/v1/organizations/me/pricing": {
       "get": {
-        "description": "List the organization's rate overrides.\n\nReadable by any member: these rates decide what the caller's own requests\ncost, so they are not withheld from the people billed at them. Writing needs\nan owner or admin.\n\nPaged on the same bounds the rest of the tenancy surface uses, because the\ntable grows a row per model per period. ``count`` is the total, so a client\nknows whether another page is owed.",
+        "description": "List the organization's rate overrides.\n\nReadable by any member: these rates decide what the caller's own requests\ncost, so they are not withheld from the people billed at them. Writing needs\nan owner or admin.\n\nPaged on the same bounds the rest of the tenancy surface uses, because the\ntable grows a row per model per period. ``count`` is the total, so a client\nknows whether another page is owed.\n\n``model_key`` narrows to one model, which is what an editor for that model\nneeds: every period stored for it, so it can open on the one in force and\nrefuse a new one that would overlap. Normalized the same way a write is, so\na legacy ``provider/model`` spelling finds the rows a canonical one stored.",
         "operationId": "organization-pricing-list_organization_pricing",
         "parameters": [
+          {
+            "description": "Return only this model's periods, in the canonical 'provider:model' form.",
+            "in": "query",
+            "name": "model_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return only this model's periods, in the canonical 'provider:model' form.",
+              "title": "Model Key"
+            }
+          },
           {
             "description": "Number of records to skip",
             "in": "query",
@@ -23642,7 +25926,7 @@
         ]
       },
       "post": {
-        "description": "Set the organization's rate for a model over a period.\n\nRefused with a 409 when the period overlaps one already stored for that model,\nnaming the period it collides with, rather than shadowing it. Refused with a\n403 when the model is addressed through one of the deployment's own provider\ninstances: the deployment holds that credential and settles its upstream bill,\nso its rate is the deployment price list's rather than a tenant's.\n\nThe key is normalized to its canonical ``instance:model`` form first, the same\ncall ``POST /api/v1/pricing`` makes, and that is what makes one model one row\nrather than one per spelling. Stored verbatim, ``openai:gpt-4o`` and\n``openai/gpt-4o`` are two keys: the overlap rule would not see them as\ncolliding, and both would resolve, with the canonical one preferred, leaving\nthe other dormant until the first is deleted. Normalizing on the way in is\nwhat stops that pair existing at all.",
+        "description": "Set the organization's rate for a model over a period.\n\nRefused with a 409 when the period overlaps one already stored for that model,\nnaming the period it collides with, rather than shadowing it. Refused with a\n403 when the deployment, not the caller's organization, holds the credential\nthat serves the model, whether through one of its own provider instances or a\nhosted credential the bound port supplies because no usable BYO credential of\nthe organization's own covers every one of its workspaces: either way the\ndeployment settles the upstream bill, so its rate is the deployment price\nlist's rather than a tenant's.\n\nThe key is normalized to its canonical ``instance:model`` form first, the same\ncall ``POST /api/v1/pricing`` makes, and that is what makes one model one row\nrather than one per spelling. Stored verbatim, ``openai:gpt-4o`` and\n``openai/gpt-4o`` are two keys: the overlap rule would not see them as\ncolliding, and both would resolve, with the canonical one preferred, leaving\nthe other dormant until the first is deleted. Normalizing on the way in is\nwhat stops that pair existing at all.",
         "operationId": "organization-pricing-create_organization_pricing",
         "requestBody": {
           "content": {
@@ -23876,7 +26160,7 @@
         ]
       },
       "post": {
-        "description": "Create a provider key in the caller's organization. Organization owners and admins only.",
+        "description": "Create a provider key in the caller's organization. Organization owners and admins only.\n\nEverything the provider lists on the new credential is offered at once, so a\nkey starts with its real catalog rather than an empty list an admin retypes\nby hand. A provider that will not say (no listing endpoint, unreachable,\ncredential refused) yields a key with no models rather than a failed create:\nthe credential may still be right for dispatch, and models can be added by\nname. The response is the key either way; the models are read back through\n``GET /{key_id}/models``.",
         "operationId": "provider-keys-create_org_provider_key",
         "requestBody": {
           "content": {
@@ -24088,6 +26372,58 @@
         ]
       }
     },
+    "/api/v1/organizations/me/provider-keys/{key_id}/available-models": {
+      "get": {
+        "description": "Ask the provider what it serves on this key's stored credential.\n\nDials the upstream on every call rather than caching: the caller is a model\npicker, opened rarely and entitled to a current answer. The credential never\nleaves the process; only model names come back. Organization owners and\nadmins only.",
+        "operationId": "provider-keys-list_org_provider_key_available_models",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgProviderAvailableModelsPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Org Provider Key Available Models",
+        "tags": [
+          "provider-keys"
+        ]
+      }
+    },
     "/api/v1/organizations/me/provider-keys/{key_id}/default": {
       "post": {
         "description": "Make a key the organization's default for its provider. Organization owners and admins only.",
@@ -24135,6 +26471,381 @@
           }
         ],
         "summary": "Set Org Provider Key Default",
+        "tags": [
+          "provider-keys"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/provider-keys/{key_id}/models": {
+      "get": {
+        "description": "List the models offered on one key, each with the rate it currently serves at.\n\nOrganization owners and admins only. ``count`` is the total rather than the\npage length, so a client knows whether another page is owed.",
+        "operationId": "provider-keys-list_org_provider_key_models",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Key Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Number of records to skip",
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Number of records to skip",
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum number of records to return",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "description": "Maximum number of records to return",
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgProviderKeyModelsPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Org Provider Key Models",
+        "tags": [
+          "provider-keys"
+        ]
+      },
+      "post": {
+        "description": "Offer one model by name, for a backend whose models cannot be listed.\n\nCarries no rate: an organization's rates are written through\n``/api/v1/organizations/me/pricing``, so a price set here and a price set\nthere could not disagree about what a request costs. The offer seeds the\ncommunity default like any other, and a model nothing prices arrives\ndisabled. Organization owners and admins only.",
+        "operationId": "provider-keys-add_org_provider_key_model",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrgProviderKeyModelCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgProviderKeyModelPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Add Org Provider Key Model",
+        "tags": [
+          "provider-keys"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/provider-keys/{key_id}/models/refresh": {
+      "post": {
+        "description": "Ask the provider again and offer whatever is newly listed.\n\nAdditive only: nothing already offered is removed or switched off, because\ndelisting a model is a decision the serving switch owns and an upstream\nhiccup must not empty a catalog. New models follow the offer rule, seeded\nwith the community default rate and disabled when nothing prices them. A\nrate this surface seeded and nobody has changed moves to today's default.\nOrganization owners and admins only.",
+        "operationId": "provider-keys-refresh_org_provider_key_models",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgProviderModelsRefreshPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Refresh Org Provider Key Models",
+        "tags": [
+          "provider-keys"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/provider-keys/{key_id}/models/{model_id}": {
+      "delete": {
+        "description": "Stop offering one model. Its rate and its history stay. Organization owners and admins only.",
+        "operationId": "provider-keys-remove_org_provider_key_model",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Key Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Remove Org Provider Key Model",
+        "tags": [
+          "provider-keys"
+        ]
+      },
+      "patch": {
+        "description": "Turn one offered model's serving switch on or off. Organization owners and admins only.",
+        "operationId": "provider-keys-set_org_provider_key_model_enabled",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Key Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrgProviderKeyModelUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgProviderKeyModelPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Set Org Provider Key Model Enabled",
+        "tags": [
+          "provider-keys"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/provider-keys/{key_id}/pricing/refresh": {
+      "post": {
+        "description": "Move every rate this surface seeded onto today's community default.\n\nThe other half of the refresh above, without the dial: re-reading community\nrates is cheap and asking a provider for its whole catalog is not, so an\nadmin who only wants the price move does not wait on an upstream. A rate an\nadmin has since set is left alone, and a model that arrived unpriced is\noffered a rate and switched on if one has appeared. Organization owners and\nadmins only.",
+        "operationId": "provider-keys-refresh_org_provider_key_model_pricing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgProviderModelsRefreshPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Refresh Org Provider Key Model Pricing",
         "tags": [
           "provider-keys"
         ]
@@ -24895,7 +27606,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -24905,6 +27616,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -24913,7 +27625,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -25276,7 +27988,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -25286,6 +27998,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -25294,7 +28007,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -25647,7 +28360,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -25657,6 +28370,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -25665,7 +28379,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -25995,7 +28709,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -26005,6 +28719,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -26013,7 +28728,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -26140,9 +28855,70 @@
         ]
       }
     },
+    "/api/v1/overview": {
+      "get": {
+        "description": "Summarize what the dashboard overview shows beside its usage chart.\n\nThe counts and the budget judgment in one answer, so the page does not read\nfour collections to compute them. A workspace outside the caller's\norganization is treated as none given rather than refused, because the id\ncomes from a switcher whose contents can go stale.",
+        "operationId": "overview-get_overview",
+        "parameters": [
+          {
+            "description": "Narrow the counts to one workspace of the caller's organization.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Narrow the counts to one workspace of the caller's organization.",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Overview",
+        "tags": [
+          "overview"
+        ]
+      }
+    },
     "/api/v1/playground/chat/completions": {
       "post": {
-        "description": "Run one chat completion for the signed-in caller.\n\nStreaming and non-streaming both, identically to ``POST\n/api/v1/chat/completions``: this resolves the principal and then calls the\nvery same handler. The request is billed to the caller's own attribution\nuser in the workspace they named (or their organization's default), against\nthat user's budget, and writes the ordinary usage row with no ``api_key_id``,\nbecause there was no key.\n\nThe body is ``ChatCompletionRequest`` unchanged, so the page sends the same\nrequest an SDK would and a model, tool or parameter the gateway gains is\navailable here the day it lands. The workspace rides in the query string\nrather than in the body for that reason: a field added to the body would\nalso have to be added to the pipeline's strip list, and a gateway-internal\nfield that is not stripped is forwarded to the provider as a call kwarg.\n\n``user`` in the body is the one field the pipeline will not read here: spend\nbinds to the session's own attribution user, derived and never accepted.",
+        "description": "Run one chat completion for the signed-in caller.\n\nStreaming and non-streaming both, identically to ``POST\n/api/v1/chat/completions``: this resolves the principal and then calls the\nvery same handler. The request is billed to the caller's own attribution\nuser in the workspace they named (or their organization's default), against\nthat user's budget, and writes the ordinary usage row with no ``api_key_id``,\nbecause there was no key.\n\nThe body is ``ChatCompletionRequest`` unchanged, so the page sends the same\nrequest an SDK would and a model, tool or parameter the gateway gains is\navailable here the day it lands. The workspace rides in the query string\nrather than in the body for that reason: a field added to the body would\nalso have to be added to the pipeline's strip list, and a gateway-internal\nfield that is not stripped is forwarded to the provider as a call kwarg.\n\n``user`` in the body is the one field the pipeline will not read here: spend\nbinds to the session's own attribution user, derived and never accepted.\n\nOn a hosted control plane there is no local pipeline to call, so the same\nprincipal is forwarded to the data-plane gateway instead\n(:func:`_dispatch_to_data_plane`). The request and the response are the same\neither way.",
         "operationId": "playground-playground_chat_completions",
         "parameters": [
           {
@@ -26950,6 +29726,71 @@
           }
         ],
         "summary": "Set Pricing",
+        "tags": [
+          "pricing"
+        ]
+      }
+    },
+    "/api/v1/pricing/current": {
+      "get": {
+        "description": "List the rate each priced model is metered at, one row per model key.\n\nListing prices answers the stored history, one row per ``effective_at``, so a\npage of that is a page of revisions rather than a page of models. This\nanswers one row per key: the newest rate that has taken effect, or the\nearliest scheduled rate for a key that has none yet. ``count`` is the number\nof priced models, so a caller can page without reading the collection to\nlearn how long it is.",
+        "operationId": "pricing-list_current_pricing",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentPricingPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Current Pricing",
         "tags": [
           "pricing"
         ]
@@ -29328,7 +32169,7 @@
     },
     "/api/v1/tool-settings/guardrails/catalog": {
       "get": {
-        "description": "List the guardrails this gateway can run itself, for the form that defines one.\n\nEvery guardrail ``any_guardrail`` ships, with the constructor and per-call\narguments each one takes, so a guardrail is configured by picking it and\nfilling typed fields. A parameter names the environment variable that fills it\nwhere one exists, and ``requirement_groups`` carries the constraints satisfied\nby any of several parameters, which no single required flag can state. This is\nthe counterpart of\n``GET /api/v1/providers/catalog``: the same picker, for a guardrail rather\nthan a provider, and on the same gate that one takes.\n\nReaches no service, so there is no unavailable state to report. ``runnable``\nsays whether the modules a guardrail's backend needs are installed here,\nprobed rather than imported, and ``missing_extra`` names the Otari extra that\nwould fix it.\n\nOn the operator router rather than the reader beside it, on both halves of\nwhat it answers. It is the input to a write that stores a vendor API key\ndeployment-wide, which is an operator's action alone; and ``runnable``\ndescribes the host's installed packages, which is infrastructure rather than\nsomething a tenant is owed about their own requests. A profile *name* is the\none thing a caller needs, and the profiles read next door is where the set of\nthose is published.\n\nNot on ``verify_catalog_reader`` either: that plane is a closed set of three\ndeployment-describing reads a data-plane key may make, and this is a\nmanagement read, not one of them.",
+        "description": "List the guardrails this gateway can run itself, for the form that defines one.\n\nEvery guardrail ``any_guardrail`` reaches over a hosted API, with the\nconstructor and per-call arguments each one takes, so a guardrail is\nconfigured by picking it and filling typed fields. It is not the whole\nlibrary: a guardrail that works by holding model weights in the process\nrunning it belongs in the guardrails service the profiles read beside this one\ndescribes, not here. A parameter names the environment variable that fills it\nwhere one exists, and ``requirement_groups`` carries the constraints satisfied\nby any of several parameters, which no single required flag can state. This is\nthe counterpart of\n``GET /api/v1/providers/catalog``: the same picker, for a guardrail rather\nthan a provider, and on the same gate that one takes.\n\nReaches no service, so there is no unavailable state to report: the answer is\na property of the installed ``any_guardrail``, not of any deployment's state.\n\nOn the catalog router rather than the operator one beside it, because the\nform this feeds belongs to an organization and is filled by an owner or\nadmin, who reaches no operator route. So it is readable without\ndeployment-wide standing, by a dashboard session and by any API key alike.\nWhat it publishes carries no deployment state to withhold: the same bytes on\nevery deployment of the same build, and a parameter's environment variable is\na name, never whether that name is set.\n\nThe profiles read next door keeps the stricter gate, and the difference is\nreach rather than audience. That one dials ``guardrails_url``, so admitting a\nkey there would let a workspace credential probe the deployment's own\nservice. This one dials nothing.",
         "operationId": "tool-settings-list_builtin_guardrails",
         "responses": {
           "200": {
@@ -29761,7 +32602,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -29771,6 +32612,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -29779,7 +32621,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -30142,7 +32984,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -30152,6 +32994,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -30160,7 +33003,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -30593,7 +33436,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -30603,6 +33446,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -30611,7 +33455,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -30991,7 +33835,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -31001,6 +33845,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -31009,7 +33854,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -33568,7 +36413,7 @@
         ]
       },
       "get": {
-        "description": "Read a workspace's web-search configuration.\n\nTakes the same role as setting it (an organization owner/admin, or an\nowner/admin of this workspace), because the row describes the workspace's\nposture rather than one member's allowance. A workspace with no row answers\nwith the unconfigured shape (``configured: false``), which is the\ndeployment's own behavior described in the same shape rather than a 404.",
+        "description": "Read a workspace's web-access configuration.\n\nTakes the same role as setting it (an organization owner/admin, or an\nowner/admin of this workspace), because the row describes the workspace's\nposture rather than one member's allowance. A workspace with no row answers\nwith the unconfigured shape (``configured: false``), which is the\ndeployment's own behavior described in the same shape rather than a 404.",
         "operationId": "workspace-web-search-get_workspace_web_search_config",
         "parameters": [
           {
@@ -33618,7 +36463,7 @@
         ]
       },
       "put": {
-        "description": "Set a workspace's web-search configuration, replacing any existing one.\n\nAn organization owner/admin, or an owner/admin of this workspace, may write\nit. The configuration can only narrow what the deployment permits: turning\nweb search off for the workspace, lowering the result ceiling, and adding to\nthe domains a search may not reach. It never turns on a backend the\ndeployment has not configured, and it carries no credential.",
+        "description": "Set a workspace's web-access configuration, replacing any existing one.\n\nAn organization owner/admin, or an owner/admin of this workspace, may write\nit. The configuration can only narrow what the deployment permits: turning\nweb access off for the workspace, lowering the Search result ceiling, and\nconstraining domains for Search and Fetch. It never turns on a backend the\ndeployment has not configured, and it carries no credential.",
         "operationId": "workspace-web-search-set_workspace_web_search_config",
         "parameters": [
           {

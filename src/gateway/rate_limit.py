@@ -7,7 +7,13 @@ from dataclasses import dataclass
 
 from fastapi import HTTPException, Request, status
 
-from gateway.metrics import record_rate_limit_hit
+from gateway.metrics import REGISTRY, Counter
+
+RATE_LIMIT_HITS = Counter(
+    "gateway_rate_limit_hits",
+    "Total number of rate limit hits",
+    registry=REGISTRY,
+)
 
 
 @dataclass
@@ -23,14 +29,16 @@ class RateLimiter:
     """Simple sliding-window rate limiter.
 
     Tracks request timestamps per user and rejects requests that exceed
-    the configured requests-per-minute (RPM) limit.
+    the configured requests-per-minute (RPM) limit. ``window_sec`` widens the
+    window for a limit counted over longer than a minute; ``rpm`` is then the
+    allowance per window.
     """
 
     _CLEANUP_INTERVAL = 1000
 
-    def __init__(self, rpm: int) -> None:
+    def __init__(self, rpm: int, *, window_sec: float = 60.0) -> None:
         self._rpm = rpm
-        self._window_sec = 60.0
+        self._window_sec = window_sec
         self._requests: dict[str, deque[float]] = defaultdict(deque)
         self._call_count = 0
 
@@ -59,7 +67,7 @@ class RateLimiter:
         if len(timestamps) >= self._rpm:
             oldest = timestamps[0]
             retry_after = math.ceil(oldest - cutoff)
-            record_rate_limit_hit()
+            RATE_LIMIT_HITS.inc()
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Rate limit exceeded",

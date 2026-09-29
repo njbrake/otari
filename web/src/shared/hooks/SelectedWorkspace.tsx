@@ -24,15 +24,15 @@ interface SelectedWorkspace {
 
 const Context = createContext<SelectedWorkspace | null>(null)
 
-function readStored(): string | null {
-  if (typeof window === "undefined") return null
+function readStored(): string | undefined {
+  if (typeof window === "undefined") return undefined
   try {
-    return window.localStorage.getItem(STORAGE_KEY)
+    return window.localStorage.getItem(STORAGE_KEY) ?? undefined
   } catch {
     // Private-mode Safari and a disabled-storage policy both throw here. A
     // remembered workspace is a convenience, so losing it is not worth failing
     // the shell over; the first membership is picked instead.
-    return null
+    return undefined
   }
 }
 
@@ -55,11 +55,14 @@ export function SelectedWorkspaceProvider({
     () => context.data?.workspace_memberships ?? [],
     [context.data],
   )
-  const [chosen, setChosen] = useState<string | null>(readStored)
+  const [chosen, setChosen] = useState(readStored)
 
   const selected = useMemo(() => {
     if (memberships.length === 0) return null
-    return memberships.find((m) => m.workspace_id === chosen) ?? memberships[0]
+    return (
+      memberships.find((membership) => membership.workspace_id === chosen) ??
+      memberships[0]
+    )
   }, [memberships, chosen])
 
   // Write the resolved id back, not the chosen one, so a stale stored id is

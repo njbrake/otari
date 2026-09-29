@@ -230,19 +230,11 @@ export type CreateBudgetRequest = Schemas["CreateBudgetRequest"]
 export type UpdateBudgetRequest = Schemas["UpdateBudgetRequest"]
 export type BudgetResetLog = Schemas["BudgetResetLogResponse"]
 
-// A ceiling names a `Budget` and holds the counters for spending it. It is not a
-// variant of a budget: a budget is the only shape that maps a cap to an amount,
-// and the two differ in what they enforce against. A budget reached through
-// `User.budget_id` is checked against that person's own spend, so N people on one
-// budget each get the full amount. A budget reached through a ceiling is checked
-// against the ceiling's counters, so everyone the scope names shares one
-// allowance. `max_budget` and the cadence travel on a ceiling's wire shape but
-// are read off the budget, never stored on it.
-//
-// `provider_key_id` is the odd name here and it is the wire's, not ours: the
-// column holds a provider *instance* name (`openai`, or a configured instance),
-// which is what `scoped_budget_service` matches a request's resolved provider
-// against. Anything picking a value for it wants `ProviderInfo["instance"]`.
+// A ceiling names a `Budget` and holds the counters for spending it.
+// Everyone a ceiling's scope names shares one allowance, while each person on
+// a `User.budget_id` budget gets the full amount.
+// `provider_key_id` holds a provider instance name, so a value for it comes
+// from `ProviderInfo["instance"]`.
 export type ScopedBudget = Schemas["ScopedBudgetResponse"]
 export type CreateScopedBudgetRequest = Schemas["CreateScopedBudgetRequest"]
 export type UpdateScopedBudgetRequest = Schemas["UpdateScopedBudgetRequest"]
@@ -264,7 +256,14 @@ export type ModelMetadataResponse = Schemas["ModelMetadataResponse"]
 export type DiscoverableModel = Schemas["DiscoverableModel"]
 export type DiscoverableProvider = Schemas["DiscoverableProvider"]
 export type DiscoverableModelsResponse = Schemas["DiscoverableModelsResponse"]
+// The overview's strips, judged server-side: the page renders three integers
+// and one worst-case row, and used to download four collections to get them.
+export type OverviewSummary = Schemas["OverviewSummaryResponse"]
+export type AllocationHealth = Schemas["AllocationHealthResponse"]
+export type WorstAllocation = Schemas["WorstAllocationResponse"]
+
 export type PricingResponse = Schemas["PricingResponse"]
+export type CurrentPricingPage = Schemas["CurrentPricingPage"]
 export type PricingTier = Schemas["PricingTier"]
 
 // The catalog folded by model (`/v1/catalog`): one summary per model in the
@@ -316,6 +315,8 @@ export type OrganizationBudget = Schemas["OrganizationBudgetPublic"]
 export type CreateOrganizationBudget = Schemas["OrganizationBudgetCreate"]
 export type UpdateOrganizationBudget = Schemas["OrganizationBudgetUpdate"]
 export type OrganizationSpendCeiling = Schemas["OrganizationScopedBudgetPublic"]
+export type OrganizationSpendCeilings =
+  Schemas["OrganizationScopedBudgetsPublic"]
 export type CreateOrganizationSpendCeiling =
   Schemas["OrganizationScopedBudgetCreate"]
 export type UpdateOrganizationSpendCeiling =
@@ -348,6 +349,21 @@ export type OrgProviderKey = Schemas["OrgProviderKeyPublic"]
 // which types the envelope itself, so a name for it would have no consumer.
 export type CreateOrgProviderKeyRequest = Schemas["OrgProviderKeyCreateRequest"]
 export type UpdateOrgProviderKeyRequest = Schemas["OrgProviderKeyUpdateRequest"]
+
+// The models an organization offers on one of those keys. `price_source` names
+// the rung of the pricing ladder that answered, in the vocabulary the Models
+// page already uses, so a rate shown here and a rate shown there cannot claim
+// different provenance for the same number. A refresh reports its own failure in
+// the body rather than throwing, which is why `error` is on the result type.
+export type OrgProviderModel = Schemas["OrgProviderKeyModelPublic"]
+export type OrgProviderModels = Schemas["OrgProviderKeyModelsPublic"]
+export type OfferOrgProviderModelRequest =
+  Schemas["OrgProviderKeyModelCreateRequest"]
+export type UpdateOrgProviderModelRequest =
+  Schemas["OrgProviderKeyModelUpdateRequest"]
+export type OrgProviderModelsRefresh = Schemas["OrgProviderModelsRefreshPublic"]
+export type OrgProviderAvailableModels =
+  Schemas["OrgProviderAvailableModelsPublic"]
 
 // An organization's email-domain claims. A claim is inert until its DNS TXT
 // record is found, so `verified_at` is the field the UI branches on and
@@ -413,6 +429,14 @@ export type GuardrailProfileSpec = Schemas["GuardrailProfileSpec"]
 export type GuardrailParameterSpec = Schemas["GuardrailParameterSpec"]
 export type GuardrailParameterType = GuardrailParameterSpec["type"]
 
+// The guardrails this gateway can build itself, as the installed any-guardrail
+// library describes them. A property of the deployment, not of a service; see
+// `build_builtin_guardrail_catalog` in the same module.
+export type BuiltInGuardrailCatalog = Schemas["BuiltInGuardrailCatalog"]
+export type BuiltInGuardrailSpec = Schemas["BuiltInGuardrailSpec"]
+export type GuardrailCategory = Schemas["GuardrailCategory"]
+export type RequirementGroup = Schemas["RequirementGroup"]
+
 // ---------------------------------------------------------------------------
 // Search tools
 // ---------------------------------------------------------------------------
@@ -459,6 +483,10 @@ export type CallerWorkspaceMembership =
 export type UpdateOrganizationRequest =
   Schemas["ActiveOrganizationUpdateRequest"]
 export type OrganizationMember = Schemas["ActiveOrganizationMemberPublic"]
+export type OrganizationMembers = Schemas["ActiveOrganizationMembersPublic"]
+export type MemberWorkspacePlacement = Schemas["MemberWorkspacePlacementPublic"]
+export type MemberCeiling = Schemas["MemberCeilingPublic"]
+export type MemberAttribution = Schemas["MemberAttributionPublic"]
 export type UpdateOrganizationMemberRequest =
   Schemas["ActiveOrganizationMemberUpdateRequest"]
 export type CreateOrganizationMemberRequest = Defaulted<
@@ -523,7 +551,17 @@ export type InviteOrganizationMemberRequest = Defaulted<
 >
 export type InviteOrganizationMemberResult =
   Schemas["InviteOrganizationMemberResultPublic"]
+export type BulkInviteOrganizationMembersRequest = Defaulted<
+  Schemas["BulkInviteOrganizationMembersRequest"],
+  "role"
+>
+export type BulkInviteOrganizationMembersResult =
+  Schemas["BulkInviteOrganizationMembersResultPublic"]
 export type InvitationPreview = Schemas["InvitationPreviewPublic"]
+export type AcceptInvitationRequest = Defaulted<
+  Schemas["AcceptInvitationRequest"],
+  "terms_accepted"
+>
 export type AcceptInvitationResult = Schemas["AcceptInvitationResultPublic"]
 
 // The invitee's side of the same flow: what is waiting on the signed-in
@@ -533,11 +571,9 @@ export type AcceptInvitationResult = Schemas["AcceptInvitationResultPublic"]
 export type PendingOrganizationInvitation =
   Schemas["PendingOrganizationInvitationPublic"]
 
-// A workspace-level template for a per-member `scoped_budgets` ceiling; see
-// `src/gateway/services/tenancy/workspace_budget_default_service.py`. The DTO
-// name is `WorkspaceMemberBudgetPolicy*` on the wire (kept recognizable
-// against otari-ai's own hosted equivalent); the dashboard's own name for the
-// concept is "budget default".
+// A "budget default" is a workspace-level template for a per-member
+// `scoped_budgets` ceiling.
+// Its wire name is `WorkspaceMemberBudgetPolicy*`.
 export type WorkspaceBudgetDefault =
   Schemas["WorkspaceMemberBudgetPolicyPublic"]
 export type CreateWorkspaceBudgetDefaultRequest =
@@ -593,6 +629,33 @@ export type CreateOrganizationGuardrailRequest = Defaulted<
 >
 export type UpdateOrganizationGuardrailRequest =
   Schemas["OrganizationGuardrailUpdate"]
+// Posting some text to the service a mandate names, which stores nothing.
+export type TestOrganizationGuardrailRequest = Defaulted<
+  Schemas["OrganizationGuardrailTest"],
+  "validate_kwargs"
+>
+export type OrganizationGuardrailTestResult =
+  Schemas["OrganizationGuardrailTestResult"]
+// A guardrail the organization defined for Otari to build and run itself. A
+// mandate points at one through `definition_id`; see
+// `src/gateway/services/tenancy/organization_guardrail_definition_service.py`.
+export type OrganizationGuardrailDefinition =
+  Schemas["OrganizationGuardrailDefinitionPublic"]
+export type GuardrailBuildState = OrganizationGuardrailDefinition["build_state"]
+export type CreateOrganizationGuardrailDefinitionRequest = Defaulted<
+  Schemas["OrganizationGuardrailDefinitionCreate"],
+  "enabled"
+>
+export type UpdateOrganizationGuardrailDefinitionRequest =
+  Schemas["OrganizationGuardrailDefinitionUpdate"]
+// Running one definition's built guardrail over some text, which stores nothing.
+// `validate_kwargs` carries a schema default, so the form may leave it out.
+export type TestOrganizationGuardrailDefinitionRequest = Defaulted<
+  Schemas["OrganizationGuardrailDefinitionTest"],
+  "validate_kwargs"
+>
+export type GuardrailTestResult =
+  Schemas["OrganizationGuardrailDefinitionTestResult"]
 
 // The MCP servers a workspace has registered, which a request names by id in
 // `mcp_server_ids`; see

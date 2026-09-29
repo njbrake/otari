@@ -4,16 +4,19 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
+from gateway.models.budgets import Budget, ScopedBudget
 from gateway.models.tenancy import (
     Organization,
     OrganizationMember,
     OrganizationMemberCreate,
     OrganizationMemberUpdate,
     User,
+    Workspace,
+    WorkspaceMember,
 )
 from gateway.repositories.base_repository import BaseRepository
 from gateway.repositories.tenancy.user_repository import user_alphabetical_order
@@ -21,6 +24,24 @@ from gateway.repositories.tenancy.user_repository import user_alphabetical_order
 # Statuses a membership can hold and still belong on the roster. Removal
 # suspends rather than deletes, so "suspended" is the one that drops off.
 LISTABLE_STATUSES = ("active", "invited")
+
+
+_LIKE_ESCAPE = "\\"
+
+
+def _contains_pattern(term: str) -> str:
+    """A case-folded ``LIKE`` pattern matching ``term`` anywhere.
+
+    The wildcards are escaped, so searching for ``100%`` finds the members whose
+    name contains that text rather than every member: a picker takes whatever
+    somebody types, and an unescaped ``%`` or ``_`` there is a wildcard nobody
+    asked for.
+    """
+
+    escaped = term.lower()
+    for character in (_LIKE_ESCAPE, "%", "_"):
+        escaped = escaped.replace(character, _LIKE_ESCAPE + character)
+    return f"%{escaped}%"
 
 
 class OrganizationMemberRepository(
@@ -126,6 +147,20 @@ class OrganizationMemberRepository(
         )
         return result.scalars().first()
 
+    async def get_organization_id(self, organization_member_id: uuid.UUID) -> uuid.UUID | None:
+        """Return the ID of the organization a membership belongs to, or None."""
+        result = await self.db.execute(
+            select(col(OrganizationMember.organization_id)).where(col(OrganizationMember.id) == organization_member_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_ids_by_organization(self, organization_id: uuid.UUID) -> list[uuid.UUID]:
+        """Return the ID of every membership in an organization, whatever its status."""
+        result = await self.db.execute(
+            select(col(OrganizationMember.id)).where(col(OrganizationMember.organization_id) == organization_id)
+        )
+        return list(result.scalars().all())
+
     async def create_membership(
         self,
         *,
@@ -198,29 +233,43 @@ class OrganizationMemberRepository(
         *,
         skip: int = 0,
         limit: int = 100,
+        search: str | None = None,
     ) -> tuple[list[tuple[OrganizationMember, User]], int]:
         """Return a page of the roster as ``(membership, identity)`` pairs, plus the total.
 
         One join rather than a lookup per row, so a roster of N members costs
         one query instead of N+1.
+
+        ``search`` narrows on the name and the email, case-insensitively, and the
+        count narrows with it: a picker that searched the page it had fetched
+        offered a subset of the roster and said nothing about it (otari#1380), so
+        the match has to happen where every row is.
         """
+        filters = [
+            col(OrganizationMember.organization_id) == organization_id,
+            col(OrganizationMember.status).in_(LISTABLE_STATUSES),
+        ]
+        if term := (search or "").strip():
+            pattern = _contains_pattern(term)
+            filters.append(
+                or_(
+                    func.lower(col(User.full_name)).like(pattern, escape=_LIKE_ESCAPE),
+                    func.lower(col(User.email)).like(pattern, escape=_LIKE_ESCAPE),
+                )
+            )
+
         count_result = await self.db.execute(
             select(func.count())
             .select_from(OrganizationMember)
-            .where(
-                col(OrganizationMember.organization_id) == organization_id,
-                col(OrganizationMember.status).in_(LISTABLE_STATUSES),
-            )
+            .join(User, col(OrganizationMember.user_id) == col(User.id))
+            .where(*filters)
         )
         count = count_result.scalar_one()
 
         result = await self.db.execute(
             select(OrganizationMember, User)
             .join(User, col(OrganizationMember.user_id) == col(User.id))
-            .where(
-                col(OrganizationMember.organization_id) == organization_id,
-                col(OrganizationMember.status).in_(LISTABLE_STATUSES),
-            )
+            .where(*filters)
             .order_by(user_alphabetical_order(), col(OrganizationMember.id))
             .offset(skip)
             .limit(limit)
@@ -287,9 +336,7 @@ class OrganizationMemberRepository(
         if status is not None:
             conditions.append(col(OrganizationMember.status) == status)
 
-        count_result = await self.db.execute(
-            select(func.count()).select_from(OrganizationMember).where(*conditions)
-        )
+        count_result = await self.db.execute(select(func.count()).select_from(OrganizationMember).where(*conditions))
         count = count_result.scalar_one()
 
         result = await self.db.execute(
@@ -301,6 +348,77 @@ class OrganizationMemberRepository(
             .limit(limit)
         )
         return [(member, organization) for member, organization in result.all()], count
+
+    async def placements_for_users(
+        self,
+        organization_id: uuid.UUID,
+        user_ids: Iterable[uuid.UUID],
+    ) -> dict[uuid.UUID, list[tuple[WorkspaceMember, Workspace]]]:
+        """Which workspaces each of these identities belongs to, with the workspace.
+
+        Two bounded reads for a page of members rather than one per workspace:
+        the roster page used to fan out a roster read per workspace and join the
+        results in the browser (otari#1381).
+        """
+
+        ids = list(user_ids)
+        if not ids:
+            return {}
+
+        rows = (
+            await self.db.execute(
+                select(WorkspaceMember, Workspace)
+                .join(Workspace, col(WorkspaceMember.workspace_id) == col(Workspace.id))
+                .where(
+                    col(Workspace.organization_id) == organization_id,
+                    col(WorkspaceMember.user_id).in_(ids),
+                    # Active only, the way ``get_workspaces_for_user`` answers
+                    # the same question: a suspended membership is somebody who
+                    # is no longer in that workspace, and listing it would put
+                    # them somewhere they cannot act.
+                    col(WorkspaceMember.status) == "active",
+                )
+                .order_by(col(Workspace.name), col(Workspace.id))
+            )
+        ).all()
+
+        placements: dict[uuid.UUID, list[tuple[WorkspaceMember, Workspace]]] = {}
+        for membership, workspace in rows:
+            placements.setdefault(membership.user_id, []).append((membership, workspace))
+        return placements
+
+    async def ceilings_for_memberships(
+        self,
+        membership_ids: Iterable[uuid.UUID],
+    ) -> dict[str, tuple[ScopedBudget, Budget]]:
+        """The spend ceiling on each of these workspace memberships, by membership id.
+
+        The aggregate ceiling only, the one narrowed to no provider: a ceiling
+        carrying a ``provider_key_id`` caps one credential rather than the
+        membership, and the roster reports what the member may spend at all.
+        ``WorkspaceBudgetDefault`` is read the same way for the same reason.
+
+        ``scoped_budgets.scope_id`` is text while a membership id is a UUID, so
+        the ids are matched as strings here rather than cast in SQL, which the
+        two engines spell differently.
+        """
+
+        keys = [str(membership_id) for membership_id in membership_ids]
+        if not keys:
+            return {}
+
+        rows = (
+            await self.db.execute(
+                select(ScopedBudget, Budget)
+                .join(Budget, ScopedBudget.budget_id == Budget.budget_id)
+                .where(
+                    ScopedBudget.scope_type == "workspace_member",
+                    ScopedBudget.scope_id.in_(keys),
+                    ScopedBudget.provider_key_id.is_(None),
+                )
+            )
+        ).all()
+        return {ceiling.scope_id: (ceiling, budget) for ceiling, budget in rows}
 
 
 __all__ = ["LISTABLE_STATUSES", "OrganizationMemberRepository"]

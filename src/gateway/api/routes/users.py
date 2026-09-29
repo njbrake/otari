@@ -14,22 +14,33 @@ from gateway.api.deps import (
     TelemetryStoragePortDep,
     get_config,
     get_db,
+    get_unit_of_work,
     require_deployment_operator,
 )
 from gateway.core.config import GatewayConfig
+from gateway.core.surface import Surface
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.log_config import logger
-from gateway.models.entities import APIKey, Budget, UsageLog, User
+from gateway.models.api_keys import APIKey
+from gateway.models.budgets import Budget
 from gateway.models.money import as_float
+from gateway.models.usage import UsageLog
+from gateway.models.users import User
+from gateway.repositories.tenancy import UserMergeRepository
 from gateway.repositories.users_repository import in_organization
-from gateway.services.budget_periods import budget_window
+from gateway.services.alias_service import refresh_alias_cache
+from gateway.services.budgets import budget_window
 from gateway.services.model_access import validate_allowed_models
-from gateway.services.user_merge_service import SameUserMergeError, UserMergeError, merge_users
+from gateway.services.policy_store import refresh_policy_cache
+from gateway.services.tenancy.user_merge import SameUserMergeError, UserMergeError, merge_users
 
 router = APIRouter(
     prefix="/users",
     tags=["users"],
     dependencies=[Depends(require_deployment_operator)],
 )
+
+SURFACE = Surface("users")
 
 
 class CreateUserRequest(BaseModel):
@@ -255,9 +266,7 @@ async def create_user(
     if budget is not None:
         now = datetime.now(UTC)
         window = budget_window(now, budget)
-        user.budget_started_at, user.next_budget_reset_at = (
-            window if window is not None else (now, None)
-        )
+        user.budget_started_at, user.next_budget_reset_at = window if window is not None else (now, None)
 
     try:
         await db.commit()
@@ -288,10 +297,7 @@ async def list_users(
     See ``repositories.users_repository.in_organization``.
     """
     result = await db.execute(
-        select(User)
-        .where(User.deleted_at.is_(None), in_organization(organization_id))
-        .offset(skip)
-        .limit(limit)
+        select(User).where(User.deleted_at.is_(None), in_organization(organization_id)).offset(skip).limit(limit)
     )
     users = result.scalars().all()
 
@@ -350,9 +356,7 @@ async def update_user(
             user.budget_id = request.budget_id
             now = datetime.now(UTC)
             window = budget_window(now, budget)
-            user.budget_started_at, user.next_budget_reset_at = (
-                window if window is not None else (now, None)
-            )
+            user.budget_started_at, user.next_budget_reset_at = window if window is not None else (now, None)
     if request.blocked is not None:
         user.blocked = request.blocked
     if request.metadata is not None:
@@ -432,6 +436,7 @@ async def merge_user(
     user_id: str,
     request: MergeUserRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
     organization_id: CallerOrganization,
 ) -> MergeUserResponse:
     """Merge another user in the caller's organization into this one.
@@ -447,7 +452,7 @@ async def merge_user(
     target = await _load_user_in_organization(db, user_id, organization_id)
     source = await _load_user_in_organization(db, request.source_user_id, organization_id)
     try:
-        moved = await merge_users(db, source=source, target=target)
+        moved = await merge_users(uow, UserMergeRepository(db), source=source, target=target)
     except SameUserMergeError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
     except UserMergeError as exc:
@@ -457,7 +462,23 @@ async def merge_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database error",
         ) from None
+    await _refresh_caches_after_merge(db, moved)
     return MergeUserResponse(user=UserResponse.from_model(target), moved=moved)
+
+
+async def _refresh_caches_after_merge(db: AsyncSession, moved: dict[str, int]) -> None:
+    """Reload the per-user alias and policy caches a merge changed.
+
+    The merge is committed, so a refresh failure is logged rather than raised;
+    other workers converge on their next background refresh.
+    """
+    try:
+        if moved.get("model_aliases"):
+            await refresh_alias_cache(db)
+        if moved.get("routing_policies"):
+            await refresh_policy_cache(db)
+    except SQLAlchemyError:
+        logger.warning("Cache refresh failed after merging users; converges on the next background refresh")
 
 
 @router.get("/{user_id}/usage")

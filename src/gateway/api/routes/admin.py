@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import CurrentIdentity, get_db, verify_master_key
+from gateway.core.surface import Surface
 from gateway.models.tenancy import (
     DeploymentAdminAccessPublic,
     DeploymentUserPasswordPublic,
@@ -38,6 +39,8 @@ router = APIRouter(
     tags=["admin"],
     dependencies=[Depends(verify_master_key)],
 )
+
+SURFACE = Surface("admin")
 
 
 def get_deployment_user_service(db: Annotated[AsyncSession, Depends(get_db)]) -> DeploymentUserService:

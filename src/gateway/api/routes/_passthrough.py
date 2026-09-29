@@ -51,10 +51,13 @@ from gateway.core.metered_pricing import quantize_cost
 from gateway.inflight import track_request
 from gateway.log_config import logger
 from gateway.model_labeling import relabel_model, served_model_headers
-from gateway.models.entities import APIKey, ModelPricing, UsageLog
+from gateway.models.api_keys import APIKey
+from gateway.models.pricing import ModelPricing
+from gateway.models.usage import UsageLog
 from gateway.rate_limit import check_rate_limit
-from gateway.services.budget_service import (
+from gateway.services.budgets import (
     ZERO,
+    BudgetScopeRequest,
     ReservationHandle,
     reconcile_reservation,
     refund_reservation,
@@ -68,7 +71,6 @@ from gateway.services.pricing_service import (
     pricing_required_but_missing,
 )
 from gateway.services.provider_kwargs import ResolvedProvider, resolve_provider_selector
-from gateway.services.scoped_budget_service import BudgetScopeRequest
 from gateway.services.tenancy.org_provider_key_service import cached_org_model_restriction
 from gateway.services.workspace_scope import organization_for_workspace_id, resolve_workspace_id
 
@@ -409,9 +411,7 @@ async def run_passthrough(
     # audio branch reserves before resolve), so refund before rejecting. A key with
     # no list of its own inherits its user's default.
     key_allowlist = await resolve_request_allowlist(db, api_key)
-    if key_allowlist is not None and not is_model_allowed(
-        key_allowlist, f"{resolved.instance}:{resolved.model}"
-    ):
+    if key_allowlist is not None and not is_model_allowed(key_allowlist, f"{resolved.instance}:{resolved.model}"):
         await refund_reservation(db, reservation)
         not_allowed_detail = model_not_allowed_detail(model)
         await _log_rejection(
@@ -553,9 +553,7 @@ async def run_passthrough(
 
     headers = dict(rate_limit_headers(rate_limit_info)) if rate_limit_info else {}
     if relabel:
-        headers.update(
-            served_model_headers(result, requested=model, provider=resolved.instance, model=resolved.model)
-        )
+        headers.update(served_model_headers(result, requested=model, provider=resolved.instance, model=resolved.model))
     if response is not None:
         for key, value in headers.items():
             response.headers[key] = value

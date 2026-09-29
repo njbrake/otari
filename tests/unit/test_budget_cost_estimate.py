@@ -9,8 +9,9 @@ estimate that had gone back to binary floating point.
 from decimal import Decimal
 from typing import Any
 
-from gateway.models.entities import MAX_COUNT_LIMIT, Budget, ModelPricing
-from gateway.services.budget_service import _blocked_axis, estimate_cost, estimate_tokens
+from gateway.models.budgets import MAX_COUNT_LIMIT, Budget
+from gateway.models.pricing import ModelPricing
+from gateway.services.budgets._reservations import _blocked_axis, estimate_cost, estimate_tokens
 
 
 def _micro_dollars(*terms: Decimal | int) -> Decimal:
@@ -157,9 +158,7 @@ def test_estimate_tokens_is_clamped_by_the_reserve_path_not_here() -> None:
     an enormous figure reaches here honestly and ``reserve_budget`` clamps it to
     ``MAX_COUNT_LIMIT`` before it can be added to a BIGINT counter.
     """
-    asked = estimate_tokens(
-        prompt_chars=0, max_output_tokens=10**18, default_output_tokens=4_096
-    )
+    asked = estimate_tokens(prompt_chars=0, max_output_tokens=10**18, default_output_tokens=4_096)
 
     assert asked == 10**18
     assert min(asked, MAX_COUNT_LIMIT) == MAX_COUNT_LIMIT

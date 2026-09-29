@@ -61,6 +61,38 @@ remove it once the SDK pin moves. `service_tier` in
 `src/gateway/api/routes/chat.py` is the worked example. File the upstream issue
 first; a shim with no upstream issue is permanent by accident.
 
+## Does this change belong in Otari?
+
+Decide where a change goes before writing it. There are four answers.
+
+| The change | Where it goes |
+| --- | --- |
+| A feature most deployments want, that the project will maintain | A pull request to Otari |
+| A different implementation of something Otari already has, such as a search backend, a telemetry store or an identity policy | Configuration, or an adapter for a port Otari already has. Where Otari has no port for it yet, the port itself is a pull request to Otari |
+| Something only one deployment wants, or that the project will not maintain | That deployment's overlay |
+| Code loaded into a running gateway at runtime, from an installed package, a directory or a download | Not supported |
+
+**For a change proposed to core**, maintainers weigh three things:
+
+- whether most deployments want it
+- whether the project can maintain it
+- whether it is secure, and respects the terms of any third-party service it calls
+
+A change that most deployments do not want, or that the project cannot
+maintain, still has a home in its deployment's overlay, maintained by the
+people who run that deployment.
+
+Code in the gateway's process has the gateway's access to credentials, the
+database and every request, so it is chosen when a deployment is built and
+never installed into a running gateway. That is why the last row is not
+supported, and why the boundary check refuses package discovery in Otari's
+code.
+
+[Where new code goes](ARCHITECTURE.md#where-new-code-goes) maps each kind of
+change to its mechanism, and
+[How a port is resolved](ARCHITECTURE.md#how-a-port-is-resolved) explains ports
+and overlays. If no row fits, open an issue and ask.
+
 ## Dev setup
 
 **Prerequisites:** Python 3.13+, `uv`, Docker (for integration tests).
@@ -77,6 +109,13 @@ uv run otari serve --config config.yml
 ```
 
 For hot reload: `make dev`.
+
+The `otari` command itself is owned by the workspace member at `cli/` (the
+`otari-agent` distribution), which holds the laptop-side commands (`hook`,
+`import`) and none of the server. `uv sync` installs it next to the gateway, and
+the gateway attaches `serve` and the other server commands to it, so the one
+`otari` in your venv has both sets. See [cli/README.md](cli/README.md) for
+building it alone.
 
 ## Making changes
 
@@ -105,6 +144,36 @@ make openapi-check
 make postman-check
 ```
 
+## Dependencies
+
+Most dependencies are floored (`>=`) rather than pinned, and `uv.lock` is committed
+because CI and the Docker image both install from it with `--frozen`. Two mechanisms
+keep it current, and they cover different things:
+
+- **Dependabot** (`.github/dependabot.yml`) opens weekly version-update PRs for the
+  `uv` and `github-actions` ecosystems. Security updates are separate, need no
+  config, and already cover every supported ecosystem here. The dashboard is not
+  covered by either right now; see #1001.
+- **`.github/workflows/otari-lock-refresh.yml`** re-resolves `uv.lock` weekly against
+  the newest versions the existing constraints already allow, which is the case
+  Dependabot does not open PRs for. A floored dependency can otherwise stay at
+  whatever version was current the day it was first locked.
+
+To do either by hand:
+
+```bash
+uv lock --upgrade --dry-run                    # what would move, and to where
+uv lock --upgrade-package genai-prices         # refresh one package
+uv lock --upgrade                              # refresh everything
+```
+
+A change to dependency resolution also owes the OSS-edition smoke gate, which boots
+the packaged CLI with no dev dependencies:
+
+```bash
+uv run --frozen --no-dev python scripts/oss_edition_smoke.py
+```
+
 ## Tests
 
 - New features need tests covering the happy path and error cases.
@@ -118,6 +187,7 @@ make postman-check
 
 - PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/); CI enforces this.
 - PRs are squash-merged, so the title is what ends up in the changelog.
+- Mark a breaking change with `!` in the title, for example `feat(api)!: ...`. See [Breaking changes](RELEASE.md#breaking-changes).
 - Keep diffs focused; avoid unrelated refactors in the same PR.
 - Do not hand-edit `CHANGELOG.md`; it is regenerated from commit history at release time.
 - The PR description must keep the **PR Type**, **Checklist**, and **AI Usage** sections from the [PR template](https://github.com/mozilla-ai/otari/blob/main/.github/pull_request_template.md). CI checks for these sections and will auto-close PRs that are missing them after 24 hours.

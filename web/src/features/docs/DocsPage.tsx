@@ -5,10 +5,13 @@ import { CodeBlock } from "@/design-system/content/CodeBlock"
 import { Markdown } from "@/design-system/content/Markdown"
 
 import { PageIntro } from "@/design-system/layout/PageIntro"
+import { Section } from "@/design-system/layout/Section"
 // The operator user guide is bundled straight from the repo's docs so the
 // running dashboard ships the guide that matches it, instead of pointing at a
 // docs site that may describe a different version. Rebuilding the dashboard
 // after editing the guide is what keeps them aligned (see AGENTS.md).
+import { welcomeGuideHref } from "@/shared/helpers/welcomeGuide"
+import { useDeployment } from "@/shared/hooks/useDeployment"
 import dashboardGuide from "../../../../docs/dashboard.md?raw"
 
 // The bundled guide lives among sibling docs (configuration.md, quickstart.md,
@@ -45,16 +48,18 @@ function dropSection(md: string, title: string): string {
   const lines = md.split("\n")
   const start = lines.findIndex((line) => line.trim() === `## ${title}`)
   if (start === -1) return md
-  let end = lines.length
-  let inFence = false
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^\s*```/.test(lines[i])) {
-      inFence = !inFence
-    } else if (!inFence && /^## /.test(lines[i])) {
-      end = i
-      break
+  // Fence state carries from line to line, so the search toggles as it walks and
+  // reads a heading only from outside a fenced block. `findIndex` stops at the
+  // first hit, which is the same ground the scan needs to cover.
+  let isInFence = false
+  const offset = lines.slice(start + 1).findIndex((line) => {
+    if (/^\s*```/.test(line)) {
+      isInFence = !isInFence
+      return false
     }
-  }
+    return !isInFence && /^## /.test(line)
+  })
+  const end = offset === -1 ? lines.length : start + 1 + offset
   // Collapse the blank-line run left where the section was removed.
   return [...lines.slice(0, start), ...lines.slice(end)]
     .join("\n")
@@ -88,11 +93,11 @@ export const markdownComponents: Components = {
     const resolved = resolveDocHref(href)
     // Every rewritten link is now an absolute GitHub URL (external), so it opens
     // in a new tab and the operator does not lose the dashboard.
-    const external = isExternal(resolved)
+    const isLinkExternal = isExternal(resolved)
     return (
       <a
         href={resolved}
-        {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+        {...(isLinkExternal ? { target: "_blank", rel: "noreferrer" } : {})}
         {...props}
       >
         {children}
@@ -149,29 +154,42 @@ function MarkdownCodeBlock({ node: _node, children }: MdProps<"pre">) {
 }
 
 export function DocsPage() {
+  // The pointer at the get-started walkthrough is only true where the gateway
+  // serving this dashboard serves that page too; see `welcomeGuideHref`.
+  const welcomeHref = welcomeGuideHref(useDeployment())
+
   return (
     <div className="flex flex-col">
-      {/* The prose measure, not the app's 620px default: on the one page whose
-          subject is the measure, the widest line should not be the scanning-size
-          paragraph at the top of it. */}
-      <PageIntro title="User guide" descriptionClassName="max-w-[560px]">
+      <PageIntro title="User guide">
         A reference for operating this dashboard, bundled with and
-        version-matched to the running gateway. New here? The get-started
-        walkthrough lives at /welcome.
+        version-matched to the running gateway.
+        {welcomeHref ? (
+          <>
+            {" "}
+            New here? The get-started walkthrough lives at{" "}
+            {/* A new tab, like the other links to this page: it leaves the SPA,
+                and the guide is what the reader came here to keep. */}
+            <a
+              href={welcomeHref}
+              target="_blank"
+              rel="noreferrer"
+              className="text-link hover:text-link-hover"
+            >
+              {welcomeHref}
+            </a>
+            .
+          </>
+        ) : null}
       </PageIntro>
-      {/* The prose pattern: a 560px measure at 16px, bounded above by the
-          section rule and on its right by a rule that runs the height of the
-          page, with the ground beyond it left free. The interim 620px cap this
-          replaces was a number chosen on this page; 560 at 16/26 is the measure
-          the pattern sets, and the type steps *up* from the 14px the rest of
-          the product uses, because this is read rather than scanned. */}
-      <div className="flex flex-1 border-t border-border">
-        <div className="min-w-0 border-r border-border px-4 py-8 md:px-6">
-          <Markdown className="max-w-[560px]" components={markdownComponents}>
-            {guideBody}
-          </Markdown>
-        </div>
-      </div>
+      {/* One band of the page, like every other surface: the rule runs the
+          width of the scroll area and the guide fills the page column rather
+          than a measure of its own, so the guide's tables and headings line up
+          with the rest of the product on the window it is read on. The type is
+          16/26 rather than the 14px everything else uses, because this is read
+          rather than scanned. */}
+      <Section className="border-t border-border py-8">
+        <Markdown components={markdownComponents}>{guideBody}</Markdown>
+      </Section>
     </div>
   )
 }

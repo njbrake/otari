@@ -95,15 +95,6 @@ DATA_PLANE_PREFIXES: tuple[tuple[str, str], ...] = (
         "that holds that tenant's request context",
     ),
     (
-        "/playground",
-        "the dashboard's own chat page. Its completions are inference like any "
-        "other, billed to the caller rather than to a key, so they belong on the "
-        "gateway that serves this tenant's traffic. The catch-all takes the page's "
-        "saved transcripts and pinned models with it, which is the right answer "
-        "rather than collateral: content saved from a page this deployment does "
-        "not serve has nowhere to come from",
-    ),
-    (
         "/files",
         "dispatches to no provider and costs nothing to serve, so not the leak "
         "itself. It exists only to be referenced from a completion or a batch, and "
@@ -119,8 +110,7 @@ router = APIRouter(tags=["hosted-mode"], include_in_schema=False)
 def _detail(data_plane_url: str | None) -> str:
     target = data_plane_url or _GENERIC_TARGET
     return (
-        "This deployment is a control plane and does not serve inference. "
-        f"Send inference requests to {target} instead."
+        f"This deployment is a control plane and does not serve inference. Send inference requests to {target} instead."
     )
 
 

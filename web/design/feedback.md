@@ -34,7 +34,7 @@ Is the operator creating or editing an object?
 Is it a frame that is neither a form nor a question?
  └── Dialog                 (a guided step, a receipt, a thing to read and copy)
 Is the product waiting on something to arrive?
- └── ScanBorder             (around the panel that is doing the waiting)
+ └── Dialog isScanning      (the frame doing the waiting sweeps its own border)
 ```
 
 ## Signatures
@@ -53,10 +53,9 @@ FormDialog: { isOpen, onOpenChange, title, description?, size = "md",
   submitLabel, onSubmit, isPending, error?, isDirty?, isDismissable = true,
   isSubmitDisabled?, returnFocusRef?, footerStart?, tabs?, children }
 Dialog: { isOpen, onOpenChange, title, description?, size = "md",
-  mark?, isAnnouncement?, isDismissable = true, status?, footerStart?,
-  actions?, children }
+  mark?, isAnnouncement?, isScanning?, scanTone = "accent" | "danger",
+  isDismissable = true, status?, footerStart?, actions?, children }
 DialogSection: { className?, children }
-ScanBorder: { isActive, tone = "accent" | "danger", className?, children }
 ErrorBoundary: { children, resetKey? }
 ```
 
@@ -127,7 +126,7 @@ about what the frame does. `FormDialog` is a place to work and owns a submit;
 neither: a header, a scrolling body, an optional footer, and a body that is
 whatever is being presented.
 
-It shares `FormDialog`'s geometry class family in `globals.css`, so both sit at
+It shares `FormDialog`'s geometry class family in `design-system.css`, so both sit at
 the same height, cap at the same viewport budget and become the same full-screen
 sheet below 640px in either dimension, and it takes the same three widths.
 
@@ -180,31 +179,33 @@ get-started strip, a first-run panel".
 </Dialog>
 ```
 
-## ScanBorder
+## Dialog isScanning
 
 The one piece of decorative motion in this system, and it earns its place by
-being literally true: an arc travels the band's edge **only while the product is
+being literally true: an arc travels the frame's edge **only while the product is
 watching for something that has not arrived**, and stops when it has. Anywhere
 else, motion on an edge is noise.
 
 It is a masked conic gradient on an `::after`, with the angle animated through
 an `@property`, so there is no dependency behind it and at radius 0 there is no
-corner to get wrong. `tone` picks the arc's ink through a variable, which is how
-a failure turns the sweep red without the stylesheet knowing what a failure is.
+corner to get wrong. `scanTone` picks the arc's ink through a variable, which is
+how a failure turns the sweep red without the stylesheet knowing what a failure
+is.
 
 Under `prefers-reduced-motion` the arc holds still rather than disappearing: the
-band should still read as the thing on the page that is waiting.
+frame should still read as the thing on screen that is waiting.
+
+The frame rather than the band inside it, which is the one decision here worth
+stating. A sheet that exists to wait *is* the wait, so the edge that reports it
+is the sheet's own; drawing it around the status band instead would have made
+the waiting a component of the screen rather than the screen's subject.
 
 ```tsx
 // Correct: the wait is real, and the tone reports the last attempt
-<ScanBorder isActive={!checkFailed} tone={failure ? "danger" : "accent"}>
-  <ListeningRow />
-</ScanBorder>
+<Dialog isScanning={!checkFailed} scanTone={failure ? "danger" : "accent"}>
 
 // Incorrect: nothing is being awaited, so the motion says nothing
-<ScanBorder isActive>
-  <KpiStrip />
-</ScanBorder>
+<Dialog isScanning>
 ```
 
 ## ConfirmDialog
@@ -256,11 +257,14 @@ one question; a form is a place to work.
 ```
 
 **Sizes.** `sm` 440 for one or two fields, `md` 520 by default, `lg` 640 for
-tabs or six fields and up. Below a 640px viewport every size is a full-screen
-sheet. Those widths cannot be spelled as a class: `globals.css` pins
-`.modal__dialog` unlayered, which outranks `@layer utilities` and puts a 448px
-floor under it, so the component sets `--form-dialog-width` inline and the
-geometry is settled beside the rule it has to beat.
+tabs or six fields and up, and `xl` 928 for the one shape the others cannot
+hold: a body that is two columns side by side, where `lg` leaves the second one
+too narrow for its own controls. `ShareDialog` is the only one. Below a 640px
+viewport every size is a full-screen sheet. None of those widths can be spelled
+at a call site: `design-system.css` pins `.modal__dialog` unlayered, which outranks
+`@layer utilities` and puts a 448px floor under it, so the four sizes are
+modifier classes declared beside the rule they have to beat, and a `w-[…]` on a
+dialog compiles, lints, ships and loses. `Dialog` shares the family.
 
 **A field reserves its message line only where it has a description**, which is
 [forms.md](forms.md)'s rule and not a dialog rule: the reserved line exists so an
@@ -273,7 +277,7 @@ it. Measured, a bare field in a dialog is 83px against the 60px it should be.
 The first field takes `autoFocus`.
 
 **Fields fill the dialog.** `Field` and `SecretField` cap themselves at 448px,
-which is right on a page and wrong in a 640px dialog; `globals.css` lifts the cap
+which is right on a page and wrong in a 640px dialog; `design-system.css` lifts the cap
 for this place, so no call site sets a width.
 
 **The footer's height never changes, and the primary keeps its width.** The

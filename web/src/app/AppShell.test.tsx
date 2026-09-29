@@ -22,6 +22,7 @@ import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import {
   bootstrap,
   callerOrganizationMembership,
+  HOSTED_SURFACES,
   organizationContext,
 } from "@/tests/fixtures"
 import { renderWithRouter } from "@/tests/router"
@@ -145,9 +146,13 @@ function renderShell(
     ),
     // The harness already mounts the component under test at `url`, so a probe
     // for that same path would be a duplicate route.
-    routes: [{ path: "/providers", element: <div>PROVIDERS PAGE</div> }].filter(
-      (route) => route.path !== url,
-    ),
+    routes: [
+      { path: "/providers", element: <div>PROVIDERS PAGE</div> },
+      {
+        path: "/organization/provider-keys",
+        element: <div>ORG PROVIDER KEYS PAGE</div>,
+      },
+    ].filter((route) => route.path !== url),
   })
 }
 
@@ -225,13 +230,15 @@ describe("AppShell responsive layout", () => {
   it("dismisses the mobile drawer after navigating to a destination", async () => {
     mockMatchMedia(true)
     const user = userEvent.setup()
-    await renderShell()
+    await renderShell(bootstrap(), { url: "/organization" })
 
     await user.click(screen.getByRole("button", { name: "Open navigation" }))
-    await user.click(await screen.findByRole("link", { name: "Providers" }))
+    await user.click(
+      await screen.findByRole("link", { name: "Deployment providers" }),
+    )
 
     expect(await screen.findByText("PROVIDERS PAGE")).toBeInTheDocument()
-    expect(document.title).toBe("Providers · Otari")
+    expect(document.title).toBe("Deployment providers · Otari")
     // Navigating closes the drawer so the page it landed on is not hidden behind it.
     expect(
       screen.getByRole("button", { name: "Open navigation" }),
@@ -248,24 +255,29 @@ describe("AppShell responsive layout", () => {
     const user = userEvent.setup()
     await renderShell()
 
-    const overview = screen.getByRole("link", { name: "Overview" })
-    // Awaited: Providers is one of the three rows gated `operatorOnly`, so it
-    // arrives with the membership context rather than with the first paint.
-    const providers = await screen.findByRole("link", { name: "Providers" })
+    // On the index first, because that is the half the comment above is about:
+    // "/" lights here and must stop lighting once a page under it is open.
     expect(document.title).toBe("Overview · Otari")
-    expect(overview).toHaveAttribute("aria-current", "page")
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    )
+
+    await user.click(await screen.findByRole("link", { name: "Organization" }))
+    const providers = await screen.findByRole("link", {
+      name: "Deployment providers",
+    })
     expect(providers).not.toHaveAttribute("aria-current")
 
     await user.click(providers)
 
     expect(await screen.findByText("PROVIDERS PAGE")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Providers" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    )
-    expect(screen.getByRole("link", { name: "Overview" })).not.toHaveAttribute(
-      "aria-current",
-    )
+    expect(
+      screen.getByRole("link", { name: "Deployment providers" }),
+    ).toHaveAttribute("aria-current", "page")
+    expect(
+      screen.getByRole("link", { name: "Org settings" }),
+    ).not.toHaveAttribute("aria-current")
   })
 
   it("renders the rail at one fixed width (not a drawer) on desktop", async () => {
@@ -532,13 +544,6 @@ describe("AppShell surface gating", () => {
   it("renders every destination the deployment serves", async () => {
     mockMatchMedia(false)
     await renderShell()
-    // Awaited for the reason the organization rail below is: two of these rows
-    // declare `operatorOnly` and arrive with the membership context, so the
-    // snapshot is a race without it.
-    await within(
-      screen.getByRole("navigation", { name: "Sidebar" }),
-    ).findByRole("link", { name: "Providers" })
-
     // Every label, not a sample: a surface misspelled on a NAV entry hides that
     // destination in every deployment, and only the full list catches it. Kept
     // as an exact comparison rather than a loop of presence checks, because a
@@ -552,10 +557,8 @@ describe("AppShell surface gating", () => {
       "Overview",
       "Activity",
       "Usage",
-      "Playground",
       "Models",
       "API keys",
-      "Providers",
       "Members",
     ])
     // Routing and Tools nest destinations, so they expand rather than
@@ -572,9 +575,13 @@ describe("AppShell surface gating", () => {
     // Same reasoning as above, for the other context: the organization rail is
     // its own registry, and nothing else compares it against a full list.
     await renderShell(bootstrap(), { url: "/organization/members" })
+    // Awaited on Providers rather than on any other row: it is the one that
+    // declares `operatorOnly`, so it arrives with the membership context while
+    // the rest paint with the first render. Waiting on one of those would leave
+    // the snapshot below a race, which it measurably is without this.
     await within(
       screen.getByRole("navigation", { name: "Sidebar" }),
-    ).findByRole("link", { name: "Org settings" })
+    ).findByRole("link", { name: "Providers" })
 
     expect(
       within(screen.getByRole("navigation", { name: "Sidebar" }))
@@ -585,7 +592,9 @@ describe("AppShell surface gating", () => {
       "Members & roles",
       "Email domains",
       "Spend & budgets",
-      "Model pricing",
+      "Providers",
+      "Deployment providers",
+      "Guardrails",
       "Org settings",
     ])
     // Settings and Accounts are on the deployment rail now, not this one.
@@ -595,17 +604,45 @@ describe("AppShell surface gating", () => {
         { name: "Accounts" },
       ),
     ).toBeNull()
-    // General keeps its heading over its one row: it is last, under two
-    // labelled siblings, so without one its row reads as the tail of the
-    // section above.
     expect(screen.getByText("General")).toBeInTheDocument()
-    // The design's rail has two more rows (the organization's own Providers and
-    // Guardrails), and each is gated on a surface a standalone gateway does not
-    // report, so neither is here. The Gateway group is their worst case: its one
-    // row is gated, so the heading goes with it. Billing and Gateways are not
-    // missing rows but overlay-owned ones this registry no longer declares at
-    // all (otari#737).
+    // Guardrails sits in General, so the Gateway group holds nothing in this
+    // build and is not drawn. It stays declared for an overlay's Gateways, a
+    // row this registry does not declare at all (otari#737).
     expect(screen.queryByText("Gateway")).toBeNull()
+  })
+
+  it("puts the hosted deployment's own Providers row in that same place", async () => {
+    mockMatchMedia(false)
+    // The other half of the either/or the two rows encode. A hosted deployment
+    // drops `providers` and reports `organization_providers` in its place, so
+    // the row under General is a different destination with the same label, and
+    // nothing above this asserts that: the registry test reads the declaration,
+    // and the page's own tests render it without a rail.
+    await renderShell(
+      bootstrap({ deployment_type: "hosted", surfaces: HOSTED_SURFACES }),
+      { url: "/organization/members" },
+    )
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar" })
+    const providers = await within(sidebar).findByRole("link", {
+      name: "Providers",
+    })
+    expect(providers).toHaveAttribute("href", "/organization/provider-keys")
+    // Where the deployment's own row stands on standalone, with Guardrails then
+    // Org settings after it, read off the rendered order rather than off the
+    // registry.
+    expect(
+      within(sidebar)
+        .getAllByRole("link")
+        .map((link) => link.textContent)
+        .slice(-3),
+    ).toEqual(["Providers", "Guardrails", "Org settings"])
+
+    const user = userEvent.setup()
+    await user.click(providers)
+
+    expect(
+      await screen.findByText("ORG PROVIDER KEYS PAGE"),
+    ).toBeInTheDocument()
   })
 
   it("hides a destination whose surface the deployment does not host", async () => {
@@ -622,7 +659,7 @@ describe("AppShell surface gating", () => {
     // Ungated and still present: the index is the deployment's front page.
     expect(screen.getByRole("link", { name: "Overview" })).toBeInTheDocument()
     expect(
-      await screen.findByRole("link", { name: "Providers" }),
+      await screen.findByRole("link", { name: "Models" }),
     ).toBeInTheDocument()
   })
 
@@ -631,7 +668,7 @@ describe("AppShell surface gating", () => {
     await renderShell(bootstrap({ surfaces: ["models"] }))
     await screen.findByRole("link", { name: "Models" })
 
-    // "Access" labels keys, providers and the workspace roster; with none of
+    // "Access" labels keys and the workspace roster; with none of
     // them served, an empty heading over nothing is worse than no heading.
     expect(screen.queryByText("Access")).toBeNull()
     expect(screen.getByText("Build")).toBeInTheDocument()
@@ -682,7 +719,7 @@ describe("AppShell entitlement gating", () => {
     })
 
     expect(
-      await screen.findByText("Providers is not available here"),
+      await screen.findByText("Deployment providers is not available here"),
     ).toBeInTheDocument()
     expect(screen.queryByText("PAGE CONTENT")).toBeNull()
   })
@@ -732,23 +769,11 @@ describe("AppShell entitlement gating", () => {
 
   it("adds the operator-only row to the rail once the caller is known to be one", async () => {
     mockMatchMedia(false)
-    // The other half of the same split: the row is what the axis hides, and it
-    // is absent by default in every test above because they answer the gate no.
-    //
-    // Providers, on the workspace rail, because it is the only row left that
-    // declares the axis at all: the two that declared it here are drawn in the
-    // account menu now. So this covers `"refused"`, and `"unlisted"` is covered
-    // where its one destination is drawn (`nav/AccountMenu.test.tsx`).
-    //
-    // Riding on one row makes this case only as good as that row's gate, and a
-    // row losing its gate is a registry edit that says nothing about this file.
-    // So the premise is asserted here rather than described: with the axis
-    // undeclared the row appears for everyone, this case passes on a shell that
-    // no longer gates anything, and nothing points back at it. Measured rather
-    // than supposed: removing the gate and running `src/app` fails one test, and
-    // it is not this one.
+    // The case rides on one row, so it is only as good as that row's gate, and
+    // a row losing its gate is a registry edit that says nothing about this
+    // file. So the premise is asserted rather than assumed.
     expect(navItemForPath("/providers")?.operatorOnly).toBeDefined()
-    await renderShell(bootstrap(), { operator: true })
+    await renderShell(bootstrap(), { operator: true, url: "/organization" })
 
     expect(
       await within(
@@ -1407,13 +1432,15 @@ describe("the telemetry the sidebar records", () => {
   it("records a move to another destination", async () => {
     mockMatchMedia(false)
     const user = userEvent.setup()
-    await renderShell()
+    await renderShell(bootstrap(), { url: "/organization" })
 
-    await user.click(await screen.findByRole("link", { name: "Providers" }))
+    await user.click(
+      await screen.findByRole("link", { name: "Deployment providers" }),
+    )
 
     expect(recordEvent).toHaveBeenCalledWith(TELEMETRY_EVENTS.TAB_CHANGED, {
       tab_name: "providers",
-      context: "workspace_sidebar",
+      context: "organization_settings",
     })
   })
 
@@ -1425,10 +1452,10 @@ describe("the telemetry the sidebar records", () => {
     const user = userEvent.setup()
     await renderShell(bootstrap(), { url: "/organization/members" })
 
-    await user.click(await screen.findByRole("link", { name: "Model pricing" }))
+    await user.click(await screen.findByRole("link", { name: "Providers" }))
 
     expect(recordEvent).toHaveBeenCalledWith(TELEMETRY_EVENTS.TAB_CHANGED, {
-      tab_name: "pricing",
+      tab_name: "provider-keys",
       context: "organization_settings",
     })
   })
@@ -1439,7 +1466,9 @@ describe("the telemetry the sidebar records", () => {
     const user = userEvent.setup()
     await renderShell(bootstrap(), { url: "/providers" })
 
-    await user.click(await screen.findByRole("link", { name: "Providers" }))
+    await user.click(
+      await screen.findByRole("link", { name: "Deployment providers" }),
+    )
 
     expect(recordEvent).not.toHaveBeenCalled()
   })
@@ -1447,7 +1476,7 @@ describe("the telemetry the sidebar records", () => {
   it("names the index rather than reporting it as an empty string", async () => {
     mockMatchMedia(false)
     const user = userEvent.setup()
-    await renderShell(bootstrap(), { url: "/providers" })
+    await renderShell(bootstrap(), { url: "/models" })
 
     await user.click(screen.getByRole("link", { name: "Overview" }))
 
@@ -1458,11 +1487,6 @@ describe("the telemetry the sidebar records", () => {
   })
 
   it("records a deployment page under its own context, not the workspace one", async () => {
-    // On a page that *moved*. The two cases above pin their values on
-    // `/providers` and `/organization/pricing`, neither of which changed rails,
-    // which is why this reported the wrong context silently: the assertions
-    // stayed green while the answer for the pages under change flipped. A
-    // two-way answer over a three-way space does not fail, it falls through.
     mockMatchMedia(false)
     const user = userEvent.setup()
     await renderShell(bootstrap(), { url: "/settings", operator: true })

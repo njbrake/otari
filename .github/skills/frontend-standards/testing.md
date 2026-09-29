@@ -17,8 +17,36 @@ lives in [AGENTS.md](../../../AGENTS.md) under "Test Notes".
 colocated: `Foo.tsx` → `Foo.test.tsx`, `format.ts` → `format.test.ts`.
 
 **Query the way an operator would.** `getByRole`, `getByLabelText`, `getByText`. Not
-`getByTestId`, and never a class selector: `.bg-surface` is a token that will be renamed, and
-a test that breaks on a restyle teaches everyone to stop trusting the suite.
+`getByTestId`, and never a class selector to *find* an element: `.bg-surface` is a token that
+will be renamed, and a test that breaks on a restyle teaches everyone to stop trusting the
+suite. Where a state has an accessible expression, assert that: `design-system/metrics/charts.tsx`
+switches `role="group"` / `role="img"` on whether the chart owns drag selection, so the role is
+the assertion and `.cursor-crosshair` is a hint that follows it.
+
+**The one exception is a layout property jsdom cannot compute.** There is no layout under
+jsdom, so "this tile reserves 42px so a missing chip does not collapse the row" is observable
+only as the class that causes it, and the screenshot suite that could see it is not a gate yet.
+Four rules make that a pin rather than a loophole: assert with `toHaveClass` on one scoped
+element (never `className` with `toContain`, see below), prefer a class naming a token over one
+naming a number (`min-h-[var(--text-caption-step--line-height)]`, not `min-h-10.5`), say at the
+site which layout fact is being pinned, and only for a fact no user-visible query can reach.
+`design-system/forms/FieldMessages.test.tsx:119` is the model.
+
+**The exception covers the assertion, not the query.** Reach the element the way any other test
+would, by its role, its text, or a structural step from either, and assert the class on what you
+found: the description's own parent is the caption line, and a step down from the value reaches
+the tile's aside row. `container.querySelector(".text-caption")` is the exception reopening as
+the rule it was carved out of, and it fails the "one scoped element" clause anyway, since a
+subtree search is not a scope. An absence follows the same shape: "this tile reserves no row"
+is the row not being rendered, not a class going unfound.
+
+A node the accessibility tree hides on purpose is not covered by that exception. `DataTable`'s
+detail host is `role="presentation"` deliberately (`DataTable.tsx:219`), and its comment says
+where to go instead: the content stays in the tree, so "a row is expanded" is asserted on the
+detail's own content rather than by counting hosts. What stays on the host is its identity:
+`DataTable.test.tsx` pins that the same `<tr>` is reused rather than recreated across a
+re-render, which is what stops the panel remounting and has no user-visible form at all. That
+is the whole of it, and it says so at the site.
 
 **Mock the network boundary, nothing inside it.** The page tests spy on the transport and let
 the real hooks, query keys, formatters, and derivations run:
@@ -35,6 +63,22 @@ Mocking `useModels` or `formatCost` instead hides exactly the regressions worth 
 changed query key, a loading state nobody renders, a formatter that rounds wrong. There is no
 `vi.mock("@/shared/api/<domain>")` anywhere in this tree, and adding the first one needs a reason
 in the diff.
+
+**Two forms reach that boundary, and which one to use follows from the page.** The spy above is
+for an authenticated page test, where it is also the assertion surface for the call list. The
+module form is for a subject that reaches the transport through more than one export, or before
+a spy can be installed, which is the public auth and invitation flows:
+
+```tsx
+vi.mock("@/shared/api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/shared/api/client")>()
+  return { ...actual, apiFetch: vi.fn(), siteFetch: vi.fn() }
+})
+```
+
+`importOriginal` is what keeps it a boundary mock: everything but the transport stays real.
+Ten public and pre-authentication files use this form and five authenticated page tests use the
+spy, and that split is the rule rather than drift.
 
 **Render what the app renders.** A component that reads the URL needs a real router:
 `withRouter` / `renderWithRouter` from `src/tests/router.tsx`. The router resolves its first

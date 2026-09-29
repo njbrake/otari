@@ -1,13 +1,8 @@
 """Shared workspace-visibility and workspace-management checks.
 
-Extracted from :class:`WorkspaceService`, whose private methods now delegate
-here, so :class:`WorkspaceBudgetDefaultService` enforces the same two rules
-rather than carrying a second, driftable copy of them. A leaf module on
-purpose: it reaches :class:`OrganizationService` (to resolve the caller's
-active organization and organization-level role) but nothing here reaches
-back, which is what lets ``workspace_budget_default_service`` sit between
-``workspace_service`` and ``organization_service`` in the import graph without
-closing a cycle.
+This is a leaf module: it reaches :class:`OrganizationService`, and nothing in organizations reaches back.
+Every check reads only active organization and workspace membership.
+``User.is_superuser`` is deployment-operator status and is never consulted here.
 """
 
 import uuid
@@ -15,9 +10,9 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.exceptions.organizations_exceptions import NotAuthorizedError, WorkspaceNotFoundError
 from gateway.models.tenancy import MANAGEMENT_ROLES, Organization, User, Workspace
 from gateway.repositories.tenancy import WorkspaceMemberRepository, WorkspaceRepository
-from gateway.services.tenancy.errors import NotAuthorizedError, WorkspaceNotFoundError
 from gateway.services.tenancy.organization_service import OrganizationService
 
 
@@ -30,11 +25,11 @@ async def resolve_visible_workspace(
 ) -> Workspace:
     """Resolve a workspace the caller may see, in their active organization, or raise not-found.
 
-    Visible to a superuser, an organization owner/admin (who see every
-    workspace in it), or an active member of the workspace itself. Every "may
-    not see" case answers 404 rather than 403: another organization's
-    workspace, and a workspace in this organization the caller is not a member
-    of, must be indistinguishable from one that does not exist.
+    Visible to an organization owner/admin (who see every workspace in it), or
+    an active member of the workspace itself. Every "may not see" case answers
+    404 rather than 403: another organization's workspace, and a workspace in
+    this organization the caller is not a member of, must be indistinguishable
+    from one that does not exist.
     """
     organization = await organizations.get_active_organization_for_user(user)
     return await resolve_workspace_in_organization(
@@ -64,9 +59,6 @@ async def resolve_workspace_in_organization(
     if workspace is None or workspace.organization_id != organization.id:
         raise WorkspaceNotFoundError(workspace_id)
 
-    if user.is_superuser:
-        return workspace
-
     organization_membership = await organizations.members.get_active_by_organization_and_user(
         organization.id,
         user.id,
@@ -87,13 +79,7 @@ async def has_workspace_management_access(
     workspace: Workspace,
     organizations: OrganizationService,
 ) -> bool:
-    """Whether the caller is a superuser, an organization owner/admin, or an owner/admin here.
-
-    The superuser arm is what makes this agree with the two checks either side
-    of it: ``resolve_visible_workspace`` grants a superuser read on every
-    workspace, and organization-level management access grants them
-    organization management, so without it a superuser could delete a
-    workspace but not rename it.
+    """Whether the caller is an organization owner/admin, or an owner/admin of this workspace.
 
     The predicate form exists for the one caller that has to *report* the answer
     rather than act on it: the first-request setup guide tells the dashboard
@@ -101,9 +87,6 @@ async def has_workspace_management_access(
     managing it is told "not for you" instead of being refused. Everything else
     wants :func:`require_workspace_management_access`.
     """
-    if user.is_superuser:
-        return True
-
     organization_membership = await organizations.members.get_active_by_organization_and_user(
         workspace.organization_id,
         user.id,
@@ -111,8 +94,8 @@ async def has_workspace_management_access(
     if organization_membership is not None and organization_membership.role in MANAGEMENT_ROLES:
         return True
 
-    membership = await WorkspaceMemberRepository(db).get_by_workspace_and_user(workspace.id, user.id)
-    return membership is not None and membership.status == "active" and membership.role in MANAGEMENT_ROLES
+    membership = await WorkspaceMemberRepository(db).get_active_by_workspace_and_user(workspace.id, user.id)
+    return membership is not None and membership.role in MANAGEMENT_ROLES
 
 
 async def require_workspace_management_access(
@@ -122,7 +105,7 @@ async def require_workspace_management_access(
     workspace: Workspace,
     organizations: OrganizationService,
 ) -> None:
-    """Allow a superuser, an organization owner/admin, or an owner/admin of this workspace."""
+    """Allow an organization owner/admin, or an owner/admin of this workspace."""
     if not await has_workspace_management_access(db, user=user, workspace=workspace, organizations=organizations):
         raise NotAuthorizedError
 
@@ -132,11 +115,15 @@ class VisibleWorkspaceScope:
     """How much of one organization the caller may be shown.
 
     The set form of :func:`resolve_visible_workspace`, and deliberately the same
-    rule: an owner, an admin or a superuser sees every workspace in the
-    organization, and everyone else sees the ones they actively belong to. It is
-    stated once here so a tenant-scoped read cannot invent a fifth answer to
-    "how much of this organization is yours", which is the question the workspace
-    list, the workspace resolver and now the organization's usage all ask.
+    rule: an owner or an admin sees every workspace in the organization, and
+    everyone else sees the ones they actively belong to. Superuser status is
+    not part of that rule (see the module docstring). It is meant to be the one
+    place this breadth decision is stated, so a tenant-scoped read cannot
+    invent a fifth answer to "how much of this organization is yours"; the
+    workspace resolver and the organization's usage and routing reads go
+    through it. ``WorkspaceService.list_workspaces`` still re-derives the same
+    boolean inline rather than calling this, for pagination reasons noted on
+    that method; keep the two in agreement until that is unified.
 
     ``workspace_ids`` is ``None`` for the whole organization rather than a list of
     every workspace in it, so the caller can express that as a predicate over
@@ -149,7 +136,6 @@ class VisibleWorkspaceScope:
     """
 
     organization: Organization
-    role: str
     workspace_ids: list[uuid.UUID] | None
 
     @property
@@ -174,20 +160,15 @@ async def resolve_visible_workspace_scope(
     """
     organization = await organizations.get_active_organization_for_user(user)
     membership = await organizations.members.get_active_by_organization_and_user(organization.id, user.id)
-    # Not None: ``get_active_organization_for_user`` refuses without one. Read
-    # back rather than threaded out of it because the role is what decides the
-    # breadth below, and `workspace_service.list_workspaces` resolves it the
-    # same way.
-    role = membership.role if membership is not None else "member"
-
-    if user.is_superuser or role in MANAGEMENT_ROLES:
-        return VisibleWorkspaceScope(organization=organization, role=role, workspace_ids=None)
+    # Not None: ``get_active_organization_for_user`` refuses without one.
+    if membership is not None and membership.role in MANAGEMENT_ROLES:
+        return VisibleWorkspaceScope(organization=organization, workspace_ids=None)
 
     workspace_ids = await WorkspaceMemberRepository(db).get_workspace_ids_for_user(
         user_id=user.id,
         organization_id=organization.id,
     )
-    return VisibleWorkspaceScope(organization=organization, role=role, workspace_ids=workspace_ids)
+    return VisibleWorkspaceScope(organization=organization, workspace_ids=workspace_ids)
 
 
 __all__ = [

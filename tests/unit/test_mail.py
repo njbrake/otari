@@ -66,6 +66,7 @@ def gateway_logs(caplog: pytest.LogCaptureFixture) -> Iterator[pytest.LogCapture
     finally:
         gateway_logger.removeHandler(caplog.handler)
 
+
 SMTP_CONFIGURED = {"smtp_host": "smtp.example.com", "mail_from_email": "otari@example.com"}
 
 
@@ -108,7 +109,7 @@ def test_none_turns_mail_off_even_where_smtp_is_configured() -> None:
 
 
 def test_missing_settings_name_what_would_turn_mail_on() -> None:
-    """"Unavailable" is only honest if it says what to set."""
+    """ "Unavailable" is only honest if it says what to set."""
     assert GatewayConfig().missing_mail_settings == ("smtp_host", "mail_from_email", "public_base_url")
     assert GatewayConfig(smtp_host="smtp.example.com").missing_mail_settings == (
         "mail_from_email",
@@ -420,6 +421,23 @@ def test_whatever_can_send_links_permits_is_followable_from_an_inbox() -> None:
 
     assert mailer.can_send_links is True
     assert mailer.link("/#/verify-email?token=t") == "https://app.example.com/ui/#/verify-email?token=t"
+
+
+def test_a_query_on_the_interface_address_travels_ahead_of_the_hash_route() -> None:
+    # An edge serving one interface for several deployments needs each link to
+    # say which one built it. Placed before the hash so the page's own location
+    # carries it, where the route's query would only reach the route.
+    mailer = Mailer(_ready(ui_base_url="https://app.example.com/ui/?edge=eu"))
+
+    assert mailer.link("/#/verify-email?token=abc") == "https://app.example.com/ui/?edge=eu#/verify-email?token=abc"
+    assert mailer.link("/x") == "https://app.example.com/ui/x?edge=eu"
+    assert mailer.link("/x?y=1") == "https://app.example.com/ui/x?y=1&edge=eu"
+
+
+def test_a_trailing_slash_inside_a_query_value_survives_the_link() -> None:
+    mailer = Mailer(_ready(ui_base_url="https://app.example.com/ui/?edge=team/"))
+
+    assert mailer.link("/#/verify-email?token=abc") == "https://app.example.com/ui/?edge=team/#/verify-email?token=abc"
 
 
 def test_link_does_not_double_a_trailing_slash() -> None:

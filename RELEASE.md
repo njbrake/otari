@@ -27,6 +27,8 @@ The release runs in two halves so the changelog is reviewable before the tag:
    (`otari-release.yml`) workflow from the Actions UI with the target version
    (for example `0.4.0`). It regenerates `CHANGELOG.md` for `v0.4.0` and opens a
    `release/v0.4.0` PR labeled `release` with the rendered notes in the body.
+   A release that contains a breaking change needs a larger version; see
+   [Breaking changes](#breaking-changes).
 2. **Merge it.** Review the changelog diff and squash-merge the PR.
    **Otari Release (tag + publish)** (`otari-tag-release.yml`) then tags the
    squash commit `v0.4.0` and publishes the GitHub Release with the git-cliff
@@ -35,7 +37,7 @@ The release runs in two halves so the changelog is reviewable before the tag:
 For a local preview of what the next release notes will look like, run
 `make changelog` (set `GITHUB_TOKEN` to resolve PR and author links).
 
-Two workflows react to the published Release:
+Three workflows react to the published Release:
 
 - **`otari-docker.yml`** builds and pushes the multi-arch image to Docker Hub,
   tagged `{{version}}` (e.g. `0.4.0`), `{{major}}.{{minor}}` (e.g. `0.4`), and the
@@ -44,6 +46,13 @@ Two workflows react to the published Release:
   `info.version`.
 - **`otari-sdk-codegen.yml`** regenerates each SDK's typed core, stamps the
   release version into the core, and opens a regeneration PR on each SDK repo.
+- **`otari-homebrew.yml`** ships the agent-side CLI (`cli/`, distribution
+  `otari-agent`) to `mozilla-ai/homebrew-tap`. It stamps the version into the
+  package, builds its sdist, renders `Formula/otari.rb` from
+  `packaging/homebrew/otari.rb.tmpl` and the lock (`scripts/homebrew_formula.py`),
+  uploads the sdist, the pinned requirements and the formula to the Release,
+  installs and `brew test`s the formula on a macOS runner, then commits it to
+  the tap, so `brew install mozilla-ai/tap/otari` follows every release.
 
 ### Continuous (non-release) builds
 
@@ -70,7 +79,8 @@ User-visible prefixes appear in release notes:
 Routine maintenance is intentionally hidden: `chore:` (including `chore(deps):`
 and `chore: release`), `build:`, `ci:`, `docs:`, `style:`, `refactor:`, `test:`.
 Scope visibility via the prefix: `feat(web): ...` / `fix(web): ...` show up;
-`refactor(web):` / `chore(web):` / `test(web):` stay out.
+`refactor(web):` / `chore(web):` / `test(web):` stay out. A breaking change is
+never hidden: see [Breaking changes](#breaking-changes).
 
 A non-conventional title is not silently dropped: `cliff.toml`'s catch-all parser
 routes anything without a recognized prefix into a generic "Other" group, and the
@@ -78,17 +88,57 @@ release workflow fails if git-cliff still flags a parse-error skip. The PR Title
 Check refuses the merge before that can happen, so "Other" should only ever catch
 direct pushes to `main`.
 
+### Breaking changes
+
+A change is breaking when a deployment must do work of its own to upgrade. For
+example, a new required method on a port breaks every adapter that a deployment
+wrote against the old port.
+
+Mark a breaking change with `!` in the PR title, after the type or the scope:
+`feat(api)!: remove GET /v1/usage/summary.csv`. The squash title is what
+git-cliff parses. git-cliff also reads a `BREAKING CHANGE:` footer, but a footer
+reaches the squash commit only from a branch commit message, so do not rely on it.
+
+The release notes put the marker **BREAKING:** at the start of each breaking
+entry. The entry stays in the group of its type. A breaking commit of a hidden
+type, such as `refactor(ports)!:`, appears under "Maintenance".
+
+A release that contains a breaking change raises the minor version while Otari is
+below 1.0 (`0.6.3` becomes `0.7.0`), and the major version from 1.0 on. The
+**Otari Release (open PR)** workflow compares the requested version with the last
+release tag. When the version is too small, it puts a warning at the top of the
+release PR body. It does not stop the release.
+
 ### Prerequisites (repository secrets)
 
 - `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, used by `otari-docker.yml` to push
   the image.
 - `SDK_CODEGEN_TOKEN`, used by `otari-sdk-codegen.yml` to open regeneration PRs
   on the SDK repos.
-- `RELEASE_TOKEN`, used by `otari-release.yml` and `otari-tag-release.yml`. A PAT
-  or GitHub App token with `contents: write` + `pull-requests: write` on this
-  repo. Required because the default `GITHUB_TOKEN` cannot start downstream
-  workflows: a PR it opens would not run CI, and a Release it publishes would not
-  trigger `otari-docker.yml`. Until this secret exists, only the release
+- `HOMEBREW_TAP_GITHUB_TOKEN`, used by `otari-homebrew.yml` to push
+  `Formula/otari.rb` to `mozilla-ai/homebrew-tap`. It is the org secret mcpd
+  and cq publish with, granted per repository, so an org admin has to add this
+  repository to it. Until then the workflow's build and macOS jobs still run
+  and the rendered formula sits on the Release as `otari.rb`; only the push to
+  the tap fails.
+- `RELEASE_APP_CLIENT_ID` (a repository variable, not a secret) and
+  `RELEASE_APP_PRIVATE_KEY`, used by `otari-release.yml` and
+  `otari-tag-release.yml`. They identify the `otari-bot` GitHub App, org-owned
+  and installed on this repo alone, holding exactly `contents: write` +
+  `pull requests: write`. Each run mints its own installation token with
+  `actions/create-github-app-token`, narrowed further to the permissions that
+  job uses and revoked when the job ends, so the release PR is authored by
+  `otari-bot[bot]` rather than by whichever maintainer owned a personal access
+  token. The private key itself does not expire, so it remains the one
+  long-lived credential in the release path and is worth rotating on the same
+  cadence as any other: what the App buys is a narrower blast radius and an
+  identity that outlives any individual, not the removal of a standing secret.
+
+  The default `GITHUB_TOKEN` cannot be used in its place, because events it
+  creates start no workflows: a PR it opened would run neither the PR title
+  check nor the template check, and a Release it published would not trigger
+  `otari-docker.yml`, so no image would be built. An App installation token is a
+  distinct identity and does start them. Until these exist, only the release
   workflows are blocked; normal development is unaffected.
 
 ## SDK releases

@@ -2,7 +2,7 @@
 
 any-llm copies the flag onto the OpenAI ``role: tool`` message it builds for a
 provider with no native Messages API, and a strict backend refuses the request
-for it (see ``gateway.services.tool_result_errors``). Asserted at the
+for it (see ``gateway.services.providers.tool_result_errors``). Asserted at the
 ``amessages`` boundary, which is where the request leaves otari.
 """
 

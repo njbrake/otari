@@ -1,5 +1,6 @@
 import { expect, type Locator, type Page, test } from "@playwright/test"
 
+import { API_ROOT } from "@/shared/api/client"
 import { login, nav, openOrganization, pickOption, tableRows } from "./helpers"
 
 // The tenancy pages against a real gateway: the organization a first boot
@@ -10,7 +11,8 @@ test.describe.configure({ mode: "serial" })
 
 const WORKSPACE = "parity-workspace"
 const RENAMED_WORKSPACE = "parity-workspace-renamed"
-const MEMBER_EMAIL = "parity-member@example.com"
+const GUARDRAIL = "parity-lakera"
+const PROFILE = "parity-injection"
 // What provisioning names the bootstrap identity (OPERATOR_FULL_NAME in
 // provisioning_service.py). It has no email address, which is the point: a
 // standalone operator is a label, not a sign-in.
@@ -21,7 +23,7 @@ async function openPage(
   link: string,
   heading: string,
 ): Promise<void> {
-  await nav(page).getByRole("link", { name: link }).click()
+  await nav(page).getByRole("link", { name: link, exact: true }).click()
   await expect(
     page.getByRole("heading", { name: heading, exact: true }),
   ).toBeVisible()
@@ -49,6 +51,12 @@ async function rename(page: Page, to: string): Promise<void> {
 
 function memberRow(page: Page, name: string | RegExp): Locator {
   return tableRows(page, "Organization members").filter({
+    has: page.getByRole("rowheader", { name }),
+  })
+}
+
+function guardrailRow(page: Page, table: string, name: string): Locator {
+  return tableRows(page, table).filter({
     has: page.getByRole("rowheader", { name }),
   })
 }
@@ -111,59 +119,93 @@ test.describe("standalone tenancy", () => {
     await expect(operator.getByText("Active")).toBeVisible()
   })
 
-  test("adds a member by address, gives them a role, and removes them", async ({
+  test("invites a member, hands back a link that lets them in, gives them a role, and removes them", async ({
+    browser,
     page,
   }) => {
+    // Fresh per run: accepting sets the address's password, and a second run
+    // against the same gateway would otherwise find an account that can
+    // already sign in and get no password form.
+    const email = `parity-member-${Date.now()}@example.com`
     await login(page)
     await openOrganization(page)
     await openPage(page, "Members & roles", "Members")
 
-    await page.getByRole("button", { name: "Add member" }).click()
-    // Scoped: the heading's trigger and the dialog's submit both say "Add
-    // member", so an unscoped press is ambiguous.
-    const addDialog = page.getByRole("dialog", { name: "New member" })
-    await addDialog.getByLabel("Email address").fill(MEMBER_EMAIL)
-    await pickOption(page, "Role", "Member", addDialog)
-    await addDialog.getByRole("button", { name: "Add member" }).click()
+    await page.getByRole("button", { name: "Invite member" }).click()
+    const inviteDialog = page.getByRole("dialog", { name: "Invitation" })
+    await inviteDialog.getByLabel("Email address").fill(email)
+    await pickOption(page, "Role", "Member", inviteDialog)
+    // Scoped: the heading's trigger and the dialog's submit share the label.
+    await inviteDialog.getByRole("button", { name: "Invite member" }).click()
 
-    // Nothing is emailed and nothing has to be accepted: this edition answers
-    // on the "active" arm of the platform's result union, so the row is live
-    // immediately. Re-running revives the membership suspended below rather
-    // than inserting beside it, which is what makes this idempotent.
-    const member = memberRow(page, MEMBER_EMAIL)
-    await expect(member).toBeVisible()
+    // This environment sends no mail, so the link comes back to the operator,
+    // absolute even though the gateway knows no public address of its own.
+    await expect(
+      inviteDialog.getByText(/Otari did not send the email/),
+    ).toBeVisible()
+    const link = await inviteDialog
+      .getByText(/^http:\/\/.+#\/accept-invitation\?token=/)
+      .textContent()
+    expect(link).toBeTruthy()
+    await inviteDialog.getByRole("button", { name: "Done" }).click()
+    await expect(memberRow(page, email).getByText(/^invited$/i)).toBeVisible()
+
+    // The invitee holds no session: a separate context, as a forwarded link
+    // would arrive in someone else's browser.
+    const invitee = await browser.newContext()
+    const inviteePage = await invitee.newPage()
+    await inviteePage.goto(link ?? "")
+    await inviteePage
+      .getByLabel("Password", { exact: true })
+      .fill("parity-password")
+    await inviteePage.getByLabel("Confirm password").fill("parity-password")
+    await inviteePage
+      .getByRole("button", { name: "Accept and set password" })
+      .click()
+    await expect(inviteePage.getByText(/Your password is set/)).toBeVisible()
+    const origin = new URL(link ?? "").origin
+    const signedIn = await invitee.request.post(
+      `${origin}${API_ROOT}/auth/session`,
+      {
+        data: { email, password: "parity-password" },
+      },
+    )
+    expect(signedIn.status()).toBe(200)
+    await invitee.close()
+
+    await page.reload()
+    const member = memberRow(page, email)
+    await expect(member.getByText(/^active$/i)).toBeVisible()
     const role = member.getByRole("button", { name: /Role for / })
     await expect(role).toHaveText(/Member/)
 
     await pickOption(page, /Role for /, "Admin", member)
     await expect(
-      memberRow(page, MEMBER_EMAIL).getByRole("button", { name: /Role for / }),
+      memberRow(page, email).getByRole("button", { name: /Role for / }),
     ).toHaveText(/Admin/)
 
     // Removal suspends rather than deletes, and a suspended membership is not
     // listable, so the row leaves the roster while the attribution behind it
     // survives.
-    await memberRow(page, MEMBER_EMAIL)
-      .getByRole("button", { name: "Remove" })
-      .click()
+    await memberRow(page, email).getByRole("button", { name: "Remove" }).click()
     await page.getByRole("button", { name: "Remove member" }).click()
-    await expect(memberRow(page, MEMBER_EMAIL)).toHaveCount(0)
+    await expect(memberRow(page, email)).toHaveCount(0)
 
-    // Re-adding the same address revives that membership rather than starting a
-    // second one, which is also what lets this spec run twice against one
-    // gateway.
-    await page.getByRole("button", { name: "Add member" }).click()
-    const readdDialog = page.getByRole("dialog", { name: "New member" })
-    await readdDialog.getByLabel("Email address").fill(MEMBER_EMAIL)
-    await readdDialog.getByRole("button", { name: "Add member" }).click()
-    await expect(memberRow(page, MEMBER_EMAIL)).toHaveCount(1)
+    // Re-inviting the same address revives that membership rather than
+    // starting a second one.
+    await page.getByRole("button", { name: "Invite member" }).click()
+    const reinviteDialog = page.getByRole("dialog", { name: "Invitation" })
+    await reinviteDialog.getByLabel("Email address").fill(email)
+    await reinviteDialog.getByRole("button", { name: "Invite member" }).click()
+    await reinviteDialog.getByRole("button", { name: "Done" }).click()
+    await expect(memberRow(page, email)).toHaveCount(1)
 
-    // Leave the roster as this spec found it.
-    await memberRow(page, MEMBER_EMAIL)
-      .getByRole("button", { name: "Remove" })
-      .click()
-    await page.getByRole("button", { name: "Remove member" }).click()
-    await expect(memberRow(page, MEMBER_EMAIL)).toHaveCount(0)
+    // Leave the roster as this spec found it. The invitee's identity keeps its
+    // password, so later specs see a sign-in screen offering both credentials,
+    // which `login` handles.
+    await memberRow(page, email).getByRole("button", { name: "Revoke" }).click()
+    await page.getByRole("button", { name: "Revoke invitation" }).click()
+    await expect(memberRow(page, email)).toHaveCount(0)
   })
 
   test("creates a workspace, renames it, and removes it", async ({ page }) => {
@@ -217,6 +259,68 @@ test.describe("standalone tenancy", () => {
     const dialog = page.getByRole("dialog", { name: "New workspace member" })
     await expect(dialog.getByText(/already in this workspace/)).toBeVisible()
     await dialog.getByRole("button", { name: "Cancel" }).click()
+  })
+
+  test("defines a guardrail, mandates it, edits the mandate, and removes both", async ({
+    page,
+  }) => {
+    await login(page)
+    await openOrganization(page)
+    await openPage(page, "Guardrails", "Guardrails")
+
+    await page.getByRole("button", { name: "Configure guardrail" }).click()
+    const setUp = page.getByRole("dialog", { name: "New guardrail" })
+    await pickOption(
+      page,
+      "What do you want checked?",
+      "Prompt injection",
+      setUp,
+    )
+    await pickOption(page, "Which guardrail?", "Lakera Guard · Lakera", setUp)
+    await setUp.getByLabel("Name").fill(GUARDRAIL)
+    // No vendor is called here: whether the guardrail builds is not what this
+    // flow checks, and CI has no Lakera account.
+    await setUp.getByLabel("Api key").fill("parity-not-a-real-key")
+    await setUp.getByRole("button", { name: "Configure guardrail" }).click()
+    await expect(setUp).toBeHidden()
+    const defined = guardrailRow(
+      page,
+      "Guardrails you have configured",
+      GUARDRAIL,
+    )
+    await expect(defined).toContainText("Api key set")
+
+    // Mandated nowhere: no workspace is chosen, so a guardrail that did not
+    // build cannot refuse another spec's requests while it exists.
+    await page.getByRole("button", { name: "Mandate a guardrail" }).click()
+    const mandate = page.getByRole("dialog", { name: "Mandated guardrail" })
+    await pickOption(page, "Guardrail", GUARDRAIL, mandate)
+    await mandate.getByLabel("Profile a caller sends").fill(PROFILE)
+    await mandate.getByRole("button", { name: "Mandate a guardrail" }).click()
+    await expect(mandate).toBeHidden()
+    const mandated = guardrailRow(page, "Where they run", PROFILE)
+    await expect(mandated).toContainText(GUARDRAIL)
+
+    // An edit of the mandate touches no secret, so the key stays set without
+    // being typed again.
+    await mandated.getByRole("button", { name: `Edit ${PROFILE}` }).click()
+    const edit = page.getByRole("dialog", { name: "Mandated guardrail" })
+    await pickOption(page, "Mode", "Block", edit)
+    await edit.getByRole("button", { name: "Save mandate" }).click()
+    await expect(edit).toBeHidden()
+    await expect(mandated).toContainText("Block")
+    await expect(defined).toContainText("Api key set")
+
+    // Leave the organization as this spec found it: the mandate first, since
+    // the definition cannot go while one still names it.
+    await mandated.getByRole("button", { name: `Remove ${PROFILE}` }).click()
+    await page.getByRole("button", { name: "Remove permanently" }).click()
+    await expect(guardrailRow(page, "Where they run", PROFILE)).toHaveCount(0)
+    await defined.getByRole("button", { name: `Remove ${GUARDRAIL}` }).click()
+    await page.getByRole("button", { name: "Remove permanently" }).click()
+    await expect(
+      guardrailRow(page, "Guardrails you have configured", GUARDRAIL),
+    ).toHaveCount(0)
   })
 
   test("leaves creating and switching to the scope switcher, and offers no delete", async ({

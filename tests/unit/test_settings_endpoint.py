@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy.exc import OperationalError
 
 from gateway.api.routes import settings as settings_route
@@ -61,9 +62,7 @@ def test_rotate_generated_master_key_invalidates_old_key(tmp_path: Path, monkeyp
         assert new_response.json()["master_key_source"] == "generated"
 
 
-def test_rotate_generated_master_key_rejects_a_stale_rotation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_rotate_generated_master_key_rejects_a_stale_rotation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(master_key_service, "generate_master_key", lambda: "otari-mk-old")
 
     async def _stale_rotation(*_: object) -> tuple[str, str]:
@@ -98,9 +97,10 @@ def test_rotation_invalidates_the_old_generated_key_on_another_replica(
             assert rotated.status_code == 200, rotated.text
 
             assert second_client.get(f"{API_ROOT}/settings", headers=old_auth).status_code == 401
-            assert second_client.get(
-                f"{API_ROOT}/settings", headers={"Authorization": "Bearer otari-mk-new"}
-            ).status_code == 200
+            assert (
+                second_client.get(f"{API_ROOT}/settings", headers={"Authorization": "Bearer otari-mk-new"}).status_code
+                == 200
+            )
 
 
 def test_settings_reports_pricing_flags(tmp_path: Path) -> None:
@@ -225,6 +225,7 @@ def test_settings_includes_full_config_view(tmp_path: Path) -> None:
     for name in (
         "mcp_allow_private_hosts",
         "web_search_allow_private_hosts",
+        "web_retrieval_trust_env_proxy",
         "provider_allow_private_hosts",
         "sandbox_url",
         "guardrails_url",
@@ -244,6 +245,17 @@ def test_settings_includes_full_config_view(tmp_path: Path) -> None:
     # Secrets and complex catalog fields are never surfaced here.
     for secret in ("master_key", "providers", "pricing", "aliases", "platform"):
         assert secret not in by_key, secret
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_web_fetch_enablement_is_visible_and_startup_only(enabled: bool) -> None:
+    config = GatewayConfig(web_fetch_enabled=enabled)
+    field = next(field for field in _config_fields(config) if field.key == "web_fetch_enabled")
+
+    assert field.value is enabled
+    assert field.group == "Tools & network access"
+    assert field.type == "bool"
+    assert field.settable is False
 
 
 def test_config_view_redacts_url_credentials() -> None:
@@ -326,6 +338,16 @@ def test_the_viewer_shows_the_ui_base_url_actually_in_use() -> None:
 
     assert shown["ui_base_url"] == "https://otari.example.com"
     assert GatewayConfig(ui_base_url="https://app.example.com").ui_base_url == "https://app.example.com"
+
+
+def test_the_ui_base_url_keeps_a_query_and_refuses_a_fragment() -> None:
+    # A query is how an edge serving one interface for several deployments
+    # tells each link apart; a fragment would collide with the hash route.
+    assert GatewayConfig(ui_base_url="https://app.example.com/ui/?edge=eu").ui_base_url == (
+        "https://app.example.com/ui?edge=eu"
+    )
+    with pytest.raises(ValidationError, match="no fragment"):
+        GatewayConfig(ui_base_url="https://app.example.com/ui#/login")
 
 
 def test_every_config_field_is_shown_or_deliberately_omitted() -> None:

@@ -41,8 +41,8 @@ from sqlmodel import col
 from gateway.core.config import GatewayConfig
 from gateway.core.database import create_session
 from gateway.log_config import logger
-from gateway.models.entities import DashboardSession, RuntimeSetting
-from gateway.models.tenancy import User
+from gateway.models.platform import RuntimeSetting
+from gateway.models.tenancy import DashboardSession, User
 from gateway.services.master_key_service import hash_master_key
 
 SESSION_COOKIE_NAME = "otari_dashboard_session"
@@ -64,9 +64,7 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-async def create_dashboard_session(
-    db: AsyncSession, ttl_hours: int, *, user_id: uuid.UUID
-) -> tuple[str, datetime]:
+async def create_dashboard_session(db: AsyncSession, ttl_hours: int, *, user_id: uuid.UUID) -> tuple[str, datetime]:
     """Stage a new session row for ``user_id`` and return ``(token, expires_at)``.
 
     ``user_id`` names the tenancy identity the session speaks for, and is

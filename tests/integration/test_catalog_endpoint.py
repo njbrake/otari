@@ -17,12 +17,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_ROOT, GatewayConfig
-from gateway.models.entities import DashboardSession, OrganizationModelPricing
-from gateway.models.tenancy import Organization, OrganizationMember, User
+from gateway.models.pricing import OrganizationModelPricing
+from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User
 from gateway.services import model_catalog_service as mcs
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
 from .conftest import build_test_client
+from .hosted_port_helpers import HostedModelProvider, bind_model_provider
 
 # Two providers serving one model under two spellings, one of them Fireworks'
 # ``p``-for-point and path prefix, plus a second model on one of them.
@@ -163,6 +164,81 @@ def test_the_catalog_folds_two_spellings_into_one_model(priced: TestClient, mast
     # A capability one offering reports is the model's.
     assert glm["capabilities"]["structured_output"] is True
     assert glm["open_weights"] is True
+
+
+def test_the_search_matches_the_name_a_reader_sees(priced: TestClient, master_header: dict[str, str]) -> None:
+    body = _get(priced, f"{API_ROOT}/catalog/models?search=kimi", headers=master_header)
+
+    assert [model["id"] for model in body["models"]] == ["moonshotai/kimi-k2.6"]
+    # The count narrows with the page, so a caller pages the matches and not the
+    # catalog.
+    assert body["count"] == 1
+
+
+def test_the_search_matches_a_selector_too(priced: TestClient, master_header: dict[str, str]) -> None:
+    """A picker is typed into by somebody who knows the selector they will send,
+    not only the name the catalog prints."""
+
+    body = _get(priced, f"{API_ROOT}/catalog/models?search=fireworks", headers=master_header)
+
+    assert [model["id"] for model in body["models"]] == ["z-ai/glm-5.3"]
+
+
+def test_the_search_ignores_case(priced: TestClient, master_header: dict[str, str]) -> None:
+    body = _get(priced, f"{API_ROOT}/catalog/models?search=KIMI", headers=master_header)
+
+    assert [model["id"] for model in body["models"]] == ["moonshotai/kimi-k2.6"]
+
+
+def test_a_blank_search_is_no_filter(priced: TestClient, master_header: dict[str, str]) -> None:
+    """A cleared box is not a search for the empty string."""
+
+    body = _get(priced, f"{API_ROOT}/catalog/models?search=%20%20", headers=master_header)
+
+    assert body["count"] == 2
+
+
+def test_an_unmatched_search_is_an_empty_catalog_rather_than_an_error(
+    priced: TestClient,
+    master_header: dict[str, str],
+) -> None:
+    body = _get(priced, f"{API_ROOT}/catalog/models?search=nothing-serves-this", headers=master_header)
+
+    assert body["models"] == []
+    assert body["count"] == 0
+
+
+def test_the_window_pages_the_matches(priced: TestClient, master_header: dict[str, str]) -> None:
+    first = _get(priced, f"{API_ROOT}/catalog/models?skip=0&limit=1", headers=master_header)
+    second = _get(priced, f"{API_ROOT}/catalog/models?skip=1&limit=1", headers=master_header)
+
+    # The total is the catalog's, on both, so a pager can say how far it is
+    # through something it has not read.
+    assert first["count"] == second["count"] == 2
+    assert len(first["models"]) == len(second["models"]) == 1
+    assert first["models"][0]["id"] != second["models"][0]["id"]
+
+
+def test_the_search_cannot_widen_what_the_caller_may_see(
+    priced: TestClient,
+    master_header: dict[str, str],
+) -> None:
+    """Narrowing only. A term matching nothing this caller may name still lists
+    nothing, rather than reaching past the catalog they were given."""
+
+    everything = _get(priced, f"{API_ROOT}/catalog/models", headers=master_header)
+    searched = _get(priced, f"{API_ROOT}/catalog/models?search=glm", headers=master_header)
+
+    assert {model["id"] for model in searched["models"]} <= {model["id"] for model in everything["models"]}
+
+
+def test_the_window_is_bounded(priced: TestClient, master_header: dict[str, str]) -> None:
+    with patch.object(mcs, "_fetch", new=AsyncMock(return_value=CATALOG)):
+        over = priced.get(f"{API_ROOT}/catalog/models?limit=1001", headers=master_header)
+        long_term = priced.get(f"{API_ROOT}/catalog/models?search={'x' * 201}", headers=master_header)
+
+    assert over.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert long_term.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 def test_the_detail_lists_every_offering_cheapest_first(priced: TestClient, master_header: dict[str, str]) -> None:
@@ -358,7 +434,7 @@ def test_prices_compare_at_the_tier_a_request_size_settles_at(
 def test_the_catalog_names_the_short_spellings_the_gateway_accepts(
     priced: TestClient, master_header: dict[str, str]
 ) -> None:
-    """After the index is built, a row says its short selector and the model says its slug resolves."""
+    """After the index is built, a row says its pinned spelling and the model says its id resolves."""
     from typing import cast
 
     from fastapi import FastAPI
@@ -374,16 +450,20 @@ def test_the_catalog_names_the_short_spellings_the_gateway_accepts(
         assert rebuilt.json()["models"] >= 1
         detail = _get(priced, f"{API_ROOT}/catalog/models/z-ai/glm-5.3", headers=master_header)
         by_selector = {offering["selector"]: offering for offering in detail["offerings"]}
-        assert by_selector[_NEBIUS_GLM]["short_selector"] == "nebius:glm-5.3"
-        assert by_selector[_FIREWORKS_GLM]["short_selector"] == "fireworks:glm-5.3"
+        assert by_selector[_NEBIUS_GLM]["short_selector"] == "nebius:z-ai/glm-5.3"
+        assert by_selector[_FIREWORKS_GLM]["short_selector"] == "fireworks:z-ai/glm-5.3"
         # Nebius is the cheaper of the two, so the slug lands there.
         assert detail["selector"] == "z-ai/glm-5.3"
         assert detail["resolves_to"] == _NEBIUS_GLM
 
         resolved = resolve_provider_selector(config, "z-ai/glm-5.3")
         assert (resolved.instance, resolved.model, resolved.alias) == ("nebius", "zai-org/GLM-5.3", "z-ai/glm-5.3")
-        short = resolve_provider_selector(config, "fireworks:glm-5.3")
-        assert short.model == "accounts/fireworks/models/glm-5p3"
+        pinned = resolve_provider_selector(config, "fireworks:z-ai/glm-5.3")
+        assert (pinned.instance, pinned.model, pinned.alias) == (
+            "fireworks",
+            "accounts/fireworks/models/glm-5p3",
+            "fireworks:z-ai/glm-5.3",
+        )
     finally:
         selectors.reset_selector_index()
 
@@ -445,6 +525,34 @@ def test_a_visitor_in_hosted_mode_reads_the_deployments_own_instances(
     assert offering["usage_30d"] is None
 
 
+def test_a_visitor_in_hosted_mode_reads_the_hosted_models_too(
+    hosted_public_client: TestClient, master_header: dict[str, str]
+) -> None:
+    """The models the deployment pays for are its own offerings, so a visitor sees them.
+
+    What the port advertises with no organization, and no more: a priced model
+    the port does not advertise stays off the list, as it does for a tenant.
+    """
+    model_provider = HostedModelProvider("groq", models={"groq": ["glm-5.3"]})
+    bind_model_provider(hosted_public_client, model_provider)
+    _price(hosted_public_client, master_header, "groq:glm-5.3", 0.4, 1.6)
+    _price(hosted_public_client, master_header, "groq:glm-4.7", 0.3, 1.2)
+
+    body = _get(hosted_public_client, f"{API_ROOT}/catalog/models")
+    selectors = {selector for model in body["models"] for selector in model["selectors"]}
+    assert "groq:glm-5.3" in selectors
+    assert "groq:glm-4.7" not in selectors
+
+    model_id = next(model["id"] for model in body["models"] if "groq:glm-5.3" in model["selectors"])
+    detail = _get(hosted_public_client, f"{API_ROOT}/catalog/models/{model_id}")
+    offering = next(offering for offering in detail["offerings"] if offering["selector"] == "groq:glm-5.3")
+    assert offering["credential"] == "hosted"
+    assert offering["price_source"] == "deployment"
+    assert offering["usage_30d"] is None
+    # Asked for the deployment-wide answer, never for somebody's organization.
+    assert set(model_provider.asked_for) == {None}
+
+
 @pytest.fixture
 def throttled_public_client(postgres_url: str, clean_database: None) -> Generator[TestClient]:
     mcs.clear_catalog_cache()
@@ -475,8 +583,8 @@ def test_a_signed_in_caller_sees_their_own_usage_of_an_offering(
     """The listed rate is what a token costs; this is what the tokens cost."""
     from sqlmodel import select
 
-    from gateway.models.entities import UsageLog
     from gateway.models.tenancy import Workspace
+    from gateway.models.usage import UsageLog
 
     # The master key acts in the default workspace, which boot provisioned.
     assert priced.get(f"{API_ROOT}/organizations/me", headers=master_header).status_code == status.HTTP_200_OK

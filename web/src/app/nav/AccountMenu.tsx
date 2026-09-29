@@ -10,13 +10,19 @@ import {
   FiFileText,
   FiHardDrive,
   FiLogOut,
+  FiMessageCircle,
   FiMoon,
   FiSettings,
   FiShield,
 } from "react-icons/fi"
 
+import {
+  AccountBadge,
+  useAccountBadgeLabel,
+} from "@/app/nav/overlayAccountBadge"
+import { PLAYGROUND_NAV_ITEM } from "@/app/nav/registry"
+import { useSurfaceVisibility } from "@/app/nav/useNavVisibility"
 import type { OrganizationContext } from "@/client"
-import { Avatar } from "@/design-system/indicators/Avatar"
 import { useAuth } from "@/features/auth/AuthContext"
 import { useOrganizationContext } from "@/shared/api/organizations"
 import { useDeployment } from "@/shared/hooks/useDeployment"
@@ -150,6 +156,7 @@ function MenuItem({
   trailing,
   trailingIcon,
   ariaLabel,
+  className = "",
 }: {
   label: string
   /** A Feather mark, named at the call site and dressed here. */
@@ -161,6 +168,7 @@ function MenuItem({
   /** Fills the same lane as `trailing`, for a mark rather than a value. */
   trailingIcon?: ReactNode
   ariaLabel?: string
+  className?: string
 }) {
   return (
     <button
@@ -174,7 +182,7 @@ function MenuItem({
         isDisabled && title ? `${label} (${title})` : (ariaLabel ?? undefined)
       }
       onClick={onPress}
-      className={`${MENU_ROW} ${isDisabled ? MENU_ROW_DISABLED : MENU_ROW_RESTING}`}
+      className={`${MENU_ROW} ${isDisabled ? MENU_ROW_DISABLED : MENU_ROW_RESTING} ${className}`}
     >
       <Icon aria-hidden="true" className={MENU_ICON_CLASS} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -298,12 +306,13 @@ function AppearanceControl() {
 }
 
 export function AccountMenu({
-  collapsed,
+  isCollapsed,
   deploymentLanding,
   triggerRef,
   onOpenDeploymentLevel,
+  onOpenFeedback,
 }: {
-  collapsed: boolean
+  isCollapsed: boolean
   /**
    * Where the Deployment row goes, or nothing when that rail has no rows for
    * this caller. Resolved by the shell rather than here, because it is the
@@ -317,12 +326,22 @@ export function AccountMenu({
    * opens it as a level inside the drawer, and this popover has closed by then.
    */
   onOpenDeploymentLevel?: () => void
+  /**
+   * Below `md`, opens the feedback dialog, which the shell mounts outside this
+   * popover. From `md` up the top bar carries it beside Documentation.
+   */
+  onOpenFeedback?: () => void
 }) {
   const { logout } = useAuth()
-  const { docs_url, terms_url, privacy_url } = useDeployment()
+  const { docs_url, terms_url, privacy_url, feedback_enabled } = useDeployment()
+  const hostsSurface = useSurfaceVisibility()
   const organization = useOrganizationContext()
   const [open, setOpen] = useState(false)
   const identity = sessionIdentity(organization.data?.caller)
+  const badgeLabel = useAccountBadgeLabel()
+  const triggerLabel = badgeLabel
+    ? `Account: ${identity.name}, ${badgeLabel}`
+    : `Account: ${identity.name}`
 
   return (
     <Popover isOpen={open} onOpenChange={setOpen}>
@@ -338,19 +357,20 @@ export function AccountMenu({
         // otherwise hears "Account" and never who is signed in. On the
         // collapsed rail the name is not rendered at all, so this is the only
         // place it could reach anybody there. `AppearanceControl` folds its own
-        // visible state in for the same reason.
-        aria-label={`Account: ${identity.name}`}
+        // visible state in for the same reason. What the badge shows follows
+        // the name when a build gives it words of its own.
+        aria-label={triggerLabel}
         // `expandedJustify` rather than a `justify-start` appended here: this is
         // a HeroUI `Button`, which arrives centered, and the collapsed rail
         // wants the monogram in the icon column instead.
         className={navRowClass({
-          collapsed,
-          band: true,
+          isCollapsed,
+          isBand: true,
           expandedJustify: "start",
         })}
       >
-        <Avatar initials={identity.initials} />
-        {collapsed ? null : (
+        <AccountBadge initials={identity.initials} />
+        {isCollapsed ? null : (
           <>
             <span className="min-w-0 flex-1 truncate text-left text-foreground">
               {identity.name}
@@ -447,13 +467,16 @@ export function AccountMenu({
             )
           ) : null}
           <div className={MENU_DIVIDER} />
-          {/* The top bar owns Documentation above `md` (that cluster is
-              `hidden md:flex`), and this menu is the one surface that renders
-              inside the mobile drawer, so this row is what keeps documentation
-              reachable on a phone. Hidden from `md` up rather than shown
-              everywhere, because the design's menu draws no such row.
-              It follows the top bar's target: the deployment's own docs site
-              when it named one, the bundled guide otherwise. */}
+          {/* The top bar's destinations remain reachable in the mobile drawer. */}
+          {hostsSurface(PLAYGROUND_NAV_ITEM) && (
+            <MenuLink
+              label={PLAYGROUND_NAV_ITEM.label}
+              icon={PLAYGROUND_NAV_ITEM.icon}
+              to={PLAYGROUND_NAV_ITEM.to}
+              onNavigate={() => setOpen(false)}
+              className="md:hidden"
+            />
+          )}
           {docs_url ? (
             <MenuExternalLink
               label="Documentation"
@@ -470,6 +493,17 @@ export function AccountMenu({
               className="md:hidden"
             />
           )}
+          {feedback_enabled && onOpenFeedback ? (
+            <MenuItem
+              label="Feedback"
+              icon={FiMessageCircle}
+              className="md:hidden"
+              onPress={() => {
+                setOpen(false)
+                onOpenFeedback()
+              }}
+            />
+          ) : null}
           {terms_url ? (
             <MenuExternalLink
               label="Terms of service"

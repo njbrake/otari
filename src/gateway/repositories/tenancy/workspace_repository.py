@@ -33,7 +33,7 @@ class WorkspaceRepository(BaseRepository[Workspace, WorkspaceCreate, WorkspaceUp
         a workspace's own rows, decides something from their combined state,
         and writes based on that decision needs the whole read-decide-write
         sequence to run as if serialized, which no single row's unique index
-        can enforce on its own. Two independent races share this lock:
+        can enforce on its own. Several independent races share this lock:
 
         - "At most one pinned provider-key override per workspace+provider"
           spans a variable set of override rows, one per candidate key.
@@ -47,6 +47,12 @@ class WorkspaceRepository(BaseRepository[Workspace, WorkspaceCreate, WorkspaceUp
           excepted, since a just-created workspace has no default that could
           race it) takes this same lock before its own read, so the two either
           serialize or, for ``create_workspace``, never overlap.
+        - A workspace's deletion reads its memberships before announcing them,
+          and a membership created after that read rides the delete cascade
+          while the ceiling keyed on it survives.
+        - A workspace's deletion sweeps the ceilings keyed on the workspace and
+          on its memberships, and a ceiling created directly on either scope
+          after that sweep outlives the workspace.
 
         ``FOR UPDATE`` is a no-op on SQLite, which admits one writer at a time
         for the whole database anyway; PostgreSQL is where this is
@@ -86,6 +92,18 @@ class WorkspaceRepository(BaseRepository[Workspace, WorkspaceCreate, WorkspaceUp
             .limit(limit)
         )
         return list(result.scalars().all()), count
+
+    async def get_ids_by_organization(self, organization_id: uuid.UUID) -> list[uuid.UUID]:
+        """Return the ID of every workspace in an organization."""
+        result = await self.db.execute(
+            select(col(Workspace.id)).where(col(Workspace.organization_id) == organization_id)
+        )
+        return list(result.scalars().all())
+
+    async def get_organization_id(self, workspace_id: uuid.UUID) -> uuid.UUID | None:
+        """Return the ID of the organization that owns a workspace, or None."""
+        result = await self.db.execute(select(col(Workspace.organization_id)).where(col(Workspace.id) == workspace_id))
+        return result.scalar_one_or_none()
 
     async def get_by_organization_and_name(self, organization_id: uuid.UUID, name: str) -> Workspace | None:
         """Return an organization's workspace with this name, or None."""
@@ -132,11 +150,7 @@ class WorkspaceRepository(BaseRepository[Workspace, WorkspaceCreate, WorkspaceUp
 
 
 class WorkspaceMemberRepository:
-    """Repository for workspace membership rows.
-
-    Not a ``BaseRepository``: every access is keyed by the (workspace, user)
-    pair rather than by the row's own id, so none of the generic helpers apply.
-    """
+    """Repository for workspace membership rows."""
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -283,6 +297,43 @@ class WorkspaceMemberRepository:
                 col(Workspace.organization_id) == organization_id,
                 col(WorkspaceMember.status) == "active",
             )
+        )
+        return list(result.scalars().all())
+
+    async def ids_for_workspace(self, workspace_id: uuid.UUID) -> list[uuid.UUID]:
+        """Every membership ID in a workspace."""
+        result = await self.db.execute(
+            select(col(WorkspaceMember.id)).where(col(WorkspaceMember.workspace_id) == workspace_id)
+        )
+        return list(result.scalars().all())
+
+    async def page_active_ids_for_workspace(
+        self, workspace_id: uuid.UUID, *, skip: int, limit: int
+    ) -> tuple[list[uuid.UUID], int]:
+        """Return a page of the IDs of a workspace's active memberships, plus how many there are.
+
+        Ordered by ID, so two pages of an unchanged set neither repeat nor omit a row.
+        """
+        active = (col(WorkspaceMember.workspace_id) == workspace_id, col(WorkspaceMember.status) == "active")
+        count_result = await self.db.execute(select(func.count()).select_from(WorkspaceMember).where(*active))
+        result = await self.db.execute(
+            select(col(WorkspaceMember.id)).where(*active).order_by(col(WorkspaceMember.id)).offset(skip).limit(limit)
+        )
+        return list(result.scalars().all()), count_result.scalar_one()
+
+    async def get_workspace_id(self, workspace_member_id: uuid.UUID) -> uuid.UUID | None:
+        """Return the ID of the workspace a membership belongs to, or None."""
+        result = await self.db.execute(
+            select(col(WorkspaceMember.workspace_id)).where(col(WorkspaceMember.id) == workspace_member_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_ids_by_organization(self, organization_id: uuid.UUID) -> list[uuid.UUID]:
+        """Return the ID of every membership in an organization's workspaces, whatever its status."""
+        result = await self.db.execute(
+            select(col(WorkspaceMember.id))
+            .join(Workspace, col(Workspace.id) == col(WorkspaceMember.workspace_id))
+            .where(col(Workspace.organization_id) == organization_id)
         )
         return list(result.scalars().all())
 

@@ -2,6 +2,7 @@ import { useState } from "react"
 import { Button } from "@/design-system/actions/Button"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { Checkbox } from "@/design-system/forms/Checkbox"
+import { PublicAuthFields } from "@/features/auth/overlayPublicAuthFields"
 import { useSignup } from "@/shared/api/auth"
 import { ApiError } from "@/shared/api/client"
 import { emailFromHash } from "@/shared/helpers/hashParams"
@@ -15,6 +16,7 @@ import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import { useTelemetry } from "@/shared/telemetry/overlayTelemetry"
 
 import { AuthEmailField, AuthPasswordField, AuthTextField } from "./AuthFields"
+import { AuthHelp } from "./AuthHelp"
 import {
   goToPublicAuthPage,
   PublicAuthLayout,
@@ -48,15 +50,14 @@ import {
  * `terms_accepted_at` column throughout. Where there is a document, accepting
  * it is required, which is what makes the recorded acceptance mean anything.
  *
- * `?email=…` prefills the address, which is how the accept-invitation page
- * hands an invitee straight here (otari#835). It arrives read-only, because
- * the invitation is bound to that address and claiming a different one would
- * answer with the same enumeration-safe sentence while doing nothing at all,
- * which is the failure this whole handoff exists to remove. The footer offers
+ * `?email=…` prefills the address for a link that names an invited one
+ * (otari#835); the accept-invitation page sets a first password itself, so
+ * it no longer sends anyone here. It arrives read-only, because the invitation
+ * is bound to that address and claiming a different one would answer with the
+ * same enumeration-safe sentence while doing nothing at all. The footer offers
  * the plain page for anyone who does need another address. Not a credential
- * and not treated as one: the token that proved anything was spent on the
- * accept, and `POST /v1/auth/signup` checks this address against the roster
- * itself.
+ * and not treated as one: `POST /v1/auth/signup` checks this address against
+ * the roster itself.
  */
 export function SignupPage({ hash }: { hash: string }) {
   const signup = useSignup()
@@ -73,12 +74,12 @@ export function SignupPage({ hash }: { hash: string }) {
   const [isTermsAccepted, setIsTermsAccepted] = useState(false)
 
   const problem = newPasswordProblem(password, confirmPassword)
-  const complete =
+  const isComplete =
     email.trim() !== "" &&
     password !== "" &&
     confirmPassword !== "" &&
     (terms_url === null || isTermsAccepted)
-  const canSubmit = complete && problem === null
+  const canSubmit = isComplete && problem === null
 
   // A refusal describes a call that is no longer the one being made, so typing
   // clears it. Never while one is in flight: `reset()` returns the observer to
@@ -140,27 +141,24 @@ export function SignupPage({ hash }: { hash: string }) {
       title={open_signup ? "Create your account" : "Claim your account"}
       description={
         open_signup
-          ? "Pick an address and a password. You will confirm the address by email before your first sign-in."
+          ? "Create an account, then verify your email to sign in."
           : "Set a password for the address an admin invited or added. You will confirm the address by email before your first sign-in."
       }
       footer={
-        <>
-          <PublicAuthLink to="#/">
-            Already have a password? Sign in
-          </PublicAuthLink>
-          <PublicAuthLink to="#/resend-verification">
-            Need a new verification link?
-          </PublicAuthLink>
-        </>
+        <div className="otari-auth-actions flex flex-wrap items-center justify-between gap-x-4">
+          <PublicAuthLink to="#/">Sign in instead</PublicAuthLink>
+          <AuthHelp offersRecovery />
+        </div>
       }
     >
       <form
-        className="flex flex-col gap-4"
+        className="flex flex-col gap-3"
         onSubmit={(event) => {
           event.preventDefault()
           submit()
         }}
       >
+        <PublicAuthFields page="signup" isBusy={signup.isPending} />
         <AuthEmailField
           value={email}
           onChange={(next) => {
@@ -172,7 +170,7 @@ export function SignupPage({ hash }: { hash: string }) {
             invitedEmail
               ? "The address your invitation was sent to, which is the one it can claim."
               : open_signup
-                ? "Where the verification link goes, and the address you will sign in with."
+                ? undefined
                 : "The address an admin added or invited. Another address has nothing to claim."
           }
         />
@@ -206,6 +204,7 @@ export function SignupPage({ hash }: { hash: string }) {
           }}
           autoComplete="new-password"
           description={`At least ${MIN_PASSWORD_LENGTH} characters, and at most ${MAX_PASSWORD_BYTES} bytes.`}
+          errorMessage={problem ?? undefined}
         />
         <AuthPasswordField
           label="Confirm password"
@@ -221,11 +220,24 @@ export function SignupPage({ hash }: { hash: string }) {
             deployment's `terms_url` says. Required rather than optional: an
             acceptance the form would have submitted either way records nothing.
             A plain anchor and not a router `Link`, because the target is an
-            address an operator configured and is usually off this origin. */}
+            address an operator configured and is usually off this origin, and
+            beside the control rather than inside its label, which is the only
+            arrangement that lets the terms be read: HTML exempts an
+            interactive descendant from a label's own activation, but
+            react-aria presses the label from a document-level handler that
+            knows no such exemption and that nothing on the anchor can stop, so
+            nested the link only ticked the box (otari-ai#2146). `ariaLabel`
+            carries the sentence the visible label no longer holds in full. */}
         {terms_url !== null ? (
-          <Checkbox isSelected={isTermsAccepted} onChange={setIsTermsAccepted}>
-            <span className="text-caption">
-              I accept the{" "}
+          <div className="flex flex-wrap items-center gap-x-1 text-caption">
+            <Checkbox
+              isSelected={isTermsAccepted}
+              onChange={setIsTermsAccepted}
+              ariaLabel="I accept the terms of service"
+            >
+              <span className="text-caption">I accept the</span>
+            </Checkbox>
+            <span>
               <a
                 href={terms_url}
                 target="_blank"
@@ -236,14 +248,9 @@ export function SignupPage({ hash }: { hash: string }) {
               </a>
               .
             </span>
-          </Checkbox>
+          </div>
         ) : null}
 
-        {problem ? (
-          <p role="alert" className="text-caption text-danger">
-            {problem}
-          </p>
-        ) : null}
         <ErrorBanner error={signup.error} />
 
         <Button

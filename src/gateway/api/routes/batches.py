@@ -24,7 +24,9 @@ from gateway.core.config import GatewayConfig
 from gateway.core.metered_pricing import calculate_token_cost, quantize_cost
 from gateway.core.usage import cache_read_tokens_of
 from gateway.log_config import logger
-from gateway.models.entities import APIKey, BatchRecord, UsageLog
+from gateway.models.api_keys import APIKey
+from gateway.models.inference import BatchRecord
+from gateway.models.usage import UsageLog
 from gateway.rate_limit import check_rate_limit
 from gateway.services.batch_service import (
     claim_batch_accounting,
@@ -32,7 +34,8 @@ from gateway.services.batch_service import (
     get_batch_records,
     record_batch,
 )
-from gateway.services.budget_service import (
+from gateway.services.budgets import (
+    BudgetScopeRequest,
     reconcile_reservation,
     record_external_spend,
     refund_reservation,
@@ -42,7 +45,6 @@ from gateway.services.log_writer import LogWriter
 from gateway.services.model_access import is_model_allowed, model_not_allowed_detail, resolve_request_allowlist
 from gateway.services.pricing_service import find_model_pricing
 from gateway.services.provider_kwargs import get_provider_kwargs, resolve_provider_selector
-from gateway.services.scoped_budget_service import BudgetScopeRequest
 from gateway.services.tenancy.org_provider_key_service import cached_org_model_restriction
 from gateway.services.workspace_scope import (
     organization_for_workspace_id,
@@ -183,9 +185,7 @@ def _resolve_batch_provider(
     return impl, get_provider_kwargs(config, impl, workspace_id=workspace_id)
 
 
-async def _lifecycle_workspace_id(
-    db: AsyncSession, record: BatchRecord | None, api_key: APIKey | None
-) -> uuid.UUID:
+async def _lifecycle_workspace_id(db: AsyncSession, record: BatchRecord | None, api_key: APIKey | None) -> uuid.UUID:
     """Which workspace's organization-scoped credentials a lifecycle call should use.
 
     The batch's own stored ``workspace_id`` when there is a record that has one
@@ -252,9 +252,7 @@ def _authorize_record(
         return
     requester = str(api_key.user_id) if api_key and api_key.user_id else None
     denied = record.user_id != requester or (
-        record.workspace_id is not None
-        and api_key is not None
-        and record.workspace_id != api_key.workspace_id
+        record.workspace_id is not None and api_key is not None and record.workspace_id != api_key.workspace_id
     )
     if denied:
         raise HTTPException(
@@ -371,9 +369,7 @@ async def create_batch(
     # refund. Master-key callers have api_key None -> unrestricted. A key with no
     # list of its own inherits its user's default.
     key_allowlist = await resolve_request_allowlist(db, api_key)
-    if key_allowlist is not None and not is_model_allowed(
-        key_allowlist, f"{resolved.instance}:{resolved.model}"
-    ):
+    if key_allowlist is not None and not is_model_allowed(key_allowlist, f"{resolved.instance}:{resolved.model}"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=model_not_allowed_detail(request.model),
@@ -639,11 +635,7 @@ async def list_batches(
             # Same pair as `_authorize_record`, and tolerant of a NULL workspace
             # for the same reason: a batch created before the column existed has
             # no workspace to compare against.
-            in_workspace = (
-                record.workspace_id is None
-                or api_key is None
-                or record.workspace_id == api_key.workspace_id
-            )
+            in_workspace = record.workspace_id is None or api_key is None or record.workspace_id == api_key.workspace_id
             return record.user_id == requester and in_workspace
         return _owns_batch(batch, api_key, is_master_key)
 

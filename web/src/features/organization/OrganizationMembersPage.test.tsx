@@ -14,7 +14,10 @@ import type {
   Workspace,
   WorkspaceMember,
 } from "@/client"
-import { OrganizationMembersPage } from "@/features/organization/OrganizationMembersPage"
+import {
+  OrganizationMembersPage,
+  parseAddresses,
+} from "@/features/organization/OrganizationMembersPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
@@ -51,6 +54,7 @@ function mockApi(opts: {
   // cache that is the real order.
   workspacesGate?: Promise<unknown>
   inviteResult?: unknown
+  bulkInviteResult?: unknown
   // The gateway's spend rows. The roster joins them on `attribution_user_id`
   // to show what a member may call and what they have spent, neither of which
   // is a column on the membership itself.
@@ -72,6 +76,60 @@ function mockApi(opts: {
   const scopedBudgets = opts.scopedBudgets ?? []
   const budgetList = opts.budgets ?? []
   const requests: Request[] = []
+
+  // The join the gateway does now (otari#1381), so a test still describes the
+  // world in its parts: which workspaces exist, who is in them, what each
+  // membership is capped at, and what the gateway identity behind a member has
+  // spent. The page reads the result off the row rather than assembling it.
+  const ceilingFor = (membershipId: string) =>
+    scopedBudgets.find(
+      (budget) =>
+        budget.scope_type === "workspace_member" &&
+        budget.scope_id === membershipId &&
+        // The aggregate one, as the route matches it: a ceiling carrying a
+        // provider key caps that credential rather than the membership.
+        budget.provider_key_id === null,
+    ) ?? null
+  const joined = (member: OrganizationMember): OrganizationMember => ({
+    ...member,
+    workspaces: workspaces.flatMap((workspace) =>
+      (workspaceMembers[workspace.id] ?? [])
+        .filter((row) => row.user_id === member.user_id)
+        .map((row) => {
+          const ceiling = ceilingFor(row.id)
+          return {
+            workspace_id: workspace.id,
+            workspace_name: workspace.name,
+            workspace_member_id: row.id,
+            role: row.role,
+            ceiling: ceiling
+              ? {
+                  id: ceiling.id,
+                  budget_id: ceiling.budget_id,
+                  max_budget: ceiling.max_budget,
+                }
+              : null,
+          }
+        }),
+    ),
+    // Withheld from a caller who does not operate the deployment, which is what
+    // the route does with these deployment-wide figures.
+    attribution: context.deployment_operator
+      ? (() => {
+          const row = users.find(
+            (user) => user.user_id === member.attribution_user_id,
+          )
+          return row
+            ? {
+                spend: row.spend,
+                reserved: row.reserved,
+                blocked: row.blocked,
+                allowed_models: row.allowed_models,
+              }
+            : null
+        })()
+      : null,
+  })
 
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input)
@@ -116,6 +174,9 @@ function mockApi(opts: {
     if (url.includes(`${API_ROOT}/users`)) {
       return jsonResponse(method === "PATCH" ? users[0] : users)
     }
+    if (url.includes(`${API_ROOT}/organizations/me/member-invitations/bulk`)) {
+      return jsonResponse(opts.bulkInviteResult)
+    }
     if (url.includes(`${API_ROOT}/organizations/me/member-invitations`)) {
       if (method === "POST") {
         return jsonResponse(
@@ -137,7 +198,15 @@ function mockApi(opts: {
     }
     if (url.includes(`${API_ROOT}/organizations/me/members`)) {
       if (method === "GET") {
-        return jsonResponse({ data: members, count: members.length })
+        // The window, like the route: a test that ignored it could not tell a
+        // paged read from a read of everything.
+        const params = new URL(url, "http://localhost").searchParams
+        const skip = Number(params.get("skip") ?? 0)
+        const limit = Number(params.get("limit") ?? 100)
+        return jsonResponse({
+          data: members.slice(skip, skip + limit).map(joined),
+          count: members.length,
+        })
       }
       if (method === "POST") {
         return jsonResponse(
@@ -279,7 +348,7 @@ describe("OrganizationMembersPage", () => {
     expect(within(rowFor("Analyst")).getByText("ACTIVE")).toBeInTheDocument()
   })
 
-  it("adds a member by address, into the workspaces that were ticked", async () => {
+  it("invites a member by address, into the workspaces that were ticked", async () => {
     const requests = mockApi({
       members: [OWNER],
       workspaces: [workspace({ id: "ws-1", name: "Production" })],
@@ -287,18 +356,23 @@ describe("OrganizationMembersPage", () => {
     const user = userEvent.setup()
     renderPage(<OrganizationMembersPage />)
 
-    await user.click(await screen.findByRole("button", { name: "Add member" }))
-    await user.type(screen.getByLabelText("Email address"), "ada@example.com")
+    await user.click(
+      await screen.findByRole("button", { name: "Invite member" }),
+    )
+    await user.type(screen.getByLabelText("Email addresses"), "ada@example.com")
     await pickOption(user, "Role", "Admin")
     // Ticked by default, since a member in no workspace can reach nothing.
     expect(await screen.findByLabelText("Production")).toBeChecked()
-    // The header action stays on screen but the open dialog hides the page
-    // behind it from the accessibility tree, so the one button of this name
-    // left to find is the dialog's own submit.
-    await user.click(screen.getByRole("button", { name: "Add member" }))
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Invite member",
+      }),
+    )
 
     const post = requests.find((request) => request.method === "POST")
-    expect(post?.url).toContain(`${API_ROOT}/organizations/me/members`)
+    expect(post?.url).toContain(
+      `${API_ROOT}/organizations/me/member-invitations`,
+    )
     expect(post?.body).toEqual({
       email: "ada@example.com",
       role: "admin",
@@ -306,51 +380,64 @@ describe("OrganizationMembersPage", () => {
     })
   })
 
-  it("keeps both header triggers on screen while a dialog is open", async () => {
-    // The dialog sits over the page rather than replacing the pair, so neither
-    // control vanishes from under the pointer while one of them is open.
+  it.each([false, true])(
+    "offers the invitation whether or not mail can be sent (mail_ready: %s)",
+    async (mailReady) => {
+      // Adding someone straight to `active` left an identity nobody could claim
+      // where mail cannot be sent; an invitation always hands back a link.
+      mockApi({ members: [OWNER] })
+      renderPage(<OrganizationMembersPage />, { mail_ready: mailReady })
+
+      await screen.findByRole("button", { name: "Invite member" })
+      expect(screen.queryByRole("button", { name: "Add member" })).toBeNull()
+    },
+  )
+
+  it("keeps the header trigger on screen while its dialog is open", async () => {
+    // The dialog sits over the page rather than replacing the action, so the
+    // control does not vanish from under the pointer while it is open.
     mockApi({ members: [OWNER] })
     const user = userEvent.setup()
     renderPage(<OrganizationMembersPage />)
 
-    const add = await screen.findByRole("button", { name: "Add member" })
-    const invite = screen.getByRole("button", { name: "Invite member" })
+    const add = await screen.findByRole("button", { name: "Invite member" })
     await user.click(add)
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument()
     expect(add).toBeVisible()
-    expect(invite).toBeVisible()
   })
 
-  it("opens each dialog on a blank draft, not on the last one typed", async () => {
+  it("opens the dialog on a blank draft, not on the last one typed", async () => {
     // Reset on the way in: clearing on the way out would blank the fields
     // while the dialog is still animating away.
     mockApi({ members: [OWNER] })
     const user = userEvent.setup()
     renderPage(<OrganizationMembersPage />)
 
-    await user.click(await screen.findByRole("button", { name: "Add member" }))
-    await user.type(screen.getByLabelText("Email address"), "ada@example.com")
+    await user.click(
+      await screen.findByRole("button", { name: "Invite member" }),
+    )
+    await user.type(screen.getByLabelText("Email addresses"), "ada@example.com")
     // A draft this far along is dirty, so the way out is through the guard.
     await user.keyboard("{Escape}")
     await user.click(screen.getByRole("button", { name: "Discard" }))
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
 
-    await user.click(screen.getByRole("button", { name: "Add member" }))
-    expect(await screen.findByLabelText("Email address")).toHaveValue("")
+    await user.click(screen.getByRole("button", { name: "Invite member" }))
+    expect(await screen.findByLabelText("Email addresses")).toHaveValue("")
   })
 
-  it("reads nothing on its own account for the two closed dialogs", async () => {
-    // Both forms are mounted from the first paint now, so anything they read
-    // would be read on page load. Today they read only the workspace list the
-    // page itself needs, which is why one GET serves all three.
+  it("reads nothing on its own account for the closed dialog", async () => {
+    // The form is mounted from the first paint, so anything it reads would be
+    // read on page load. Today it reads only the workspace list the page itself
+    // needs, which is why one GET serves both.
     const requests = mockApi({
       members: [OWNER],
       workspaces: [workspace({ id: "ws-1", name: "Production" })],
     })
     renderPage(<OrganizationMembersPage />)
 
-    await screen.findByRole("button", { name: "Add member" })
+    await screen.findByRole("button", { name: "Invite member" })
     await waitFor(() =>
       expect(
         requests.filter((request) =>
@@ -368,13 +455,15 @@ describe("OrganizationMembersPage", () => {
     const user = userEvent.setup()
     renderPage(<OrganizationMembersPage />)
 
-    await user.click(await screen.findByRole("button", { name: "Add member" }))
+    await user.click(
+      await screen.findByRole("button", { name: "Invite member" }),
+    )
     const production = await screen.findByLabelText("Production")
     await user.click(production)
 
     // The seed is a starting point, not a value re-imposed on every render:
     // typing after clearing it must not tick the box again.
-    await user.type(screen.getByLabelText("Email address"), "ada@example.com")
+    await user.type(screen.getByLabelText("Email addresses"), "ada@example.com")
     expect(production).not.toBeChecked()
   })
 
@@ -386,13 +475,19 @@ describe("OrganizationMembersPage", () => {
     const user = userEvent.setup()
     renderPage(<OrganizationMembersPage />)
 
-    await user.click(await screen.findByRole("button", { name: "Add member" }))
-    await user.type(screen.getByLabelText("Email address"), "ada@example.com")
+    await user.click(
+      await screen.findByRole("button", { name: "Invite member" }),
+    )
+    await user.type(screen.getByLabelText("Email addresses"), "ada@example.com")
     // Deliberate now rather than the default: clearing the seeded workspace is
     // a choice, and the form says what it costs before the request goes.
     await user.click(await screen.findByLabelText("Production"))
     expect(screen.getByText(/no workspace/)).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Add member" }))
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Invite member",
+      }),
+    )
 
     const post = requests.find((request) => request.method === "POST")
     // No assignment is not the same request as an empty list of them.
@@ -444,8 +539,10 @@ describe("OrganizationMembersPage", () => {
     const user = userEvent.setup()
     renderPage(<OrganizationMembersPage />)
 
-    await user.click(await screen.findByRole("button", { name: "Add member" }))
-    await user.type(screen.getByLabelText("Email address"), "ada@example.com")
+    await user.click(
+      await screen.findByRole("button", { name: "Invite member" }),
+    )
+    await user.type(screen.getByLabelText("Email addresses"), "ada@example.com")
 
     // Now the roster answers and seeds the workspace default.
     release()
@@ -458,7 +555,7 @@ describe("OrganizationMembersPage", () => {
     ).toBeInTheDocument()
   })
 
-  it("guards a role change on the add form, with no address typed", async () => {
+  it("guards a role change on the invite form, with no address typed", async () => {
     // The guard reads one snapshot of the whole draft. It read the address
     // alone, so changing the role, or unticking the seeded workspace the form
     // itself warns about, was discarded with nothing asked.
@@ -469,7 +566,9 @@ describe("OrganizationMembersPage", () => {
     const user = userEvent.setup()
     renderPage(<OrganizationMembersPage />)
 
-    await user.click(await screen.findByRole("button", { name: "Add member" }))
+    await user.click(
+      await screen.findByRole("button", { name: "Invite member" }),
+    )
     await pickOption(user, "Role", "Admin")
 
     // Through Cancel: in jsdom focus lands on `<body>` after picking from a
@@ -487,7 +586,7 @@ describe("OrganizationMembersPage", () => {
       workspaces: [workspace({ id: "ws-1", name: "Production" })],
     })
     const user = userEvent.setup()
-    renderPage(<OrganizationMembersPage />)
+    renderPage(<OrganizationMembersPage />, { mail_ready: true })
 
     await user.click(
       await screen.findByRole("button", { name: "Invite member" }),
@@ -509,18 +608,15 @@ describe("OrganizationMembersPage", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
   })
 
-  it("invites a member by email and shows the accept link when mail is not configured", async () => {
+  it("invites a member by email and shows the accept link when the send did not go out", async () => {
     const requests = mockApi({ members: [OWNER] })
     const user = userEvent.setup()
-    renderPage(<OrganizationMembersPage />, { mail_ready: false })
+    renderPage(<OrganizationMembersPage />, { mail_ready: true })
 
     await user.click(
       await screen.findByRole("button", { name: "Invite member" }),
     )
-    expect(
-      screen.getByText(/Invitation email is unavailable/),
-    ).toBeInTheDocument()
-    await user.type(screen.getByLabelText("Email address"), "ada@example.com")
+    await user.type(screen.getByLabelText("Email addresses"), "ada@example.com")
     // Scoped: the trigger and the submit say the same thing, which is the label
     // rule, so an unscoped press is ambiguous.
     await user.click(
@@ -538,14 +634,148 @@ describe("OrganizationMembersPage", () => {
       role: "member",
     })
 
-    // mail_sent is false in the mocked response, so the link is offered to
-    // share by hand rather than the form just closing, and the dialog says the
-    // email did not go out rather than claiming it did.
+    // mail_sent is false in the mocked response, which with a transport
+    // configured means the send itself failed. The dialog says the email did
+    // not go out rather than claiming it did, and the link the server left
+    // relative is made absolute so it can be pasted anywhere.
     expect(
       await screen.findByText(/Otari did not send the email/),
     ).toBeInTheDocument()
     expect(
-      screen.getByText("/#/accept-invitation?token=abc123"),
+      screen.getByText(
+        `${window.location.origin}${window.location.pathname}#/accept-invitation?token=abc123`,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("confirms the send, and still offers the link, when the email went out", async () => {
+    // The link is offered either way, so an operator can forward it over chat
+    // too. The acknowledgement is one way out of two here, since a delivered
+    // invitation leaves nothing behind that only this dialog holds.
+    mockApi({
+      members: [OWNER],
+      inviteResult: {
+        invitation_id: "invitation-1",
+        organization_member_id: "invited-membership",
+        email: "ada@example.com",
+        role: "member",
+        status: "invited",
+        mail_sent: true,
+        accept_link: "/#/accept-invitation?token=abc123",
+        expires_at: "2026-01-08T00:00:00+00:00",
+        created_at: "2026-01-01T00:00:00+00:00",
+      },
+    })
+    const user = userEvent.setup()
+    renderPage(<OrganizationMembersPage />, { mail_ready: true })
+
+    await user.click(
+      await screen.findByRole("button", { name: "Invite member" }),
+    )
+    await user.type(screen.getByLabelText("Email addresses"), "ada@example.com")
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Invite member",
+      }),
+    )
+
+    const sent = await screen.findByText(
+      /An email with an accept link was sent/,
+    )
+    expect(within(sent).getByText("ada@example.com")).toBeInTheDocument()
+    expect(screen.queryByText(/Otari did not send the email/)).toBeNull()
+    expect(
+      screen.getByText(
+        `${window.location.origin}${window.location.pathname}#/accept-invitation?token=abc123`,
+      ),
+    ).toBeInTheDocument()
+
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("splits pasted addresses on commas, semicolons and whitespace, once each", () => {
+    expect(
+      parseAddresses(
+        " ada@example.com, bob@example.com;\ncy@example.com  ADA@example.com,,",
+      ),
+    ).toEqual(["ada@example.com", "bob@example.com", "cy@example.com"])
+  })
+
+  it("invites several addresses in one call and reports each one", async () => {
+    const invitation = (email: string, mailSent: boolean) => ({
+      invitation_id: `invitation-${email}`,
+      organization_member_id: `membership-${email}`,
+      email,
+      role: "member",
+      status: "invited",
+      mail_sent: mailSent,
+      accept_link: `/#/accept-invitation?token=${email}`,
+      expires_at: "2026-01-08T00:00:00+00:00",
+      created_at: "2026-01-01T00:00:00+00:00",
+    })
+    const requests = mockApi({
+      members: [OWNER],
+      workspaces: [workspace({ id: "ws-1", name: "Production" })],
+      bulkInviteResult: {
+        invited: [
+          invitation("ada@example.com", true),
+          invitation("bob@example.com", false),
+        ],
+        failed: [{ email: "taken@example.com", detail: "Already a member" }],
+      },
+    })
+    const user = userEvent.setup()
+    renderPage(<OrganizationMembersPage />, { mail_ready: true })
+
+    await user.click(
+      await screen.findByRole("button", { name: "Invite member" }),
+    )
+    await screen.findByLabelText("Production")
+    await user.type(
+      screen.getByLabelText("Email addresses"),
+      "ada@example.com, taken@example.com{Enter}bob@example.com",
+    )
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Invite 3 members",
+      }),
+    )
+
+    expect(await screen.findByText(/Invited 2 of 3/)).toBeInTheDocument()
+    const posts = requests.filter(
+      (request) =>
+        request.method === "POST" && request.url.includes("member-invitations"),
+    )
+    // One request, carrying the role and workspaces for every address.
+    expect(posts).toHaveLength(1)
+    expect(posts[0].url).toContain("/member-invitations/bulk")
+    expect(posts[0].body).toEqual({
+      emails: ["ada@example.com", "taken@example.com", "bob@example.com"],
+      role: "member",
+      workspace_assignments: [{ workspace_id: "ws-1", role: "member" }],
+    })
+    expect(screen.getByText("Already a member")).toBeInTheDocument()
+    expect(screen.getByText("Email sent.")).toBeInTheDocument()
+    // Only the address whose email did not go out gets a link to share.
+    expect(
+      screen.getByText(
+        `${window.location.origin}${window.location.pathname}#/accept-invitation?token=bob@example.com`,
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/token=ada@example.com/)).toBeNull()
+  })
+
+  it("says a link comes back to share when mail cannot be sent", async () => {
+    mockApi({ members: [OWNER] })
+    const user = userEvent.setup()
+    renderPage(<OrganizationMembersPage />, { mail_ready: false })
+
+    await user.click(
+      await screen.findByRole("button", { name: "Invite member" }),
+    )
+    expect(
+      screen.getByText(/you get an accept link to share with them/),
     ).toBeInTheDocument()
   })
 
@@ -586,6 +816,85 @@ describe("OrganizationMembersPage", () => {
     expect(revoke?.url).toContain(
       `${API_ROOT}/organizations/me/member-invitations/invitation-1`,
     )
+  })
+
+  it("asks for a page of the roster rather than walking it", async () => {
+    // The other half of otari#1381: with the row carrying its own workspaces,
+    // ceilings and spend, the table has nothing left to join against and can
+    // ask for the window it shows.
+    const requests = mockApi({
+      members: Array.from({ length: 30 }, (_, index) =>
+        organizationMember({
+          organization_member_id: `member-${index}`,
+          user_id: `user-${index}`,
+          full_name: `Member ${String(index).padStart(2, "0")}`,
+        }),
+      ),
+    })
+    renderPage(<OrganizationMembersPage />)
+
+    await screen.findByText("Member 00")
+    // The window's worth, not the roster: 24 is the last of a page of 25.
+    expect(screen.getByText("Member 24")).toBeInTheDocument()
+    expect(screen.queryByText("Member 25")).toBeNull()
+    await waitFor(() => {
+      expect(
+        requests.some((request) =>
+          request.url.includes("/organizations/me/members?skip=0&limit=25"),
+        ),
+      ).toBe(true)
+    })
+  })
+
+  it("pages the roster without reading the rest", async () => {
+    const user = userEvent.setup()
+    const requests = mockApi({
+      members: Array.from({ length: 30 }, (_, index) =>
+        organizationMember({
+          organization_member_id: `member-${index}`,
+          user_id: `user-${index}`,
+          full_name: `Member ${String(index).padStart(2, "0")}`,
+        }),
+      ),
+    })
+    renderPage(<OrganizationMembersPage />)
+
+    await screen.findByText("Member 00")
+    await user.click(screen.getByRole("button", { name: "Next page, members" }))
+
+    await waitFor(() => {
+      expect(
+        requests.some((request) =>
+          request.url.includes("/organizations/me/members?skip=25&limit=25"),
+        ),
+      ).toBe(true)
+    })
+    expect(await screen.findByText("Member 25")).toBeInTheDocument()
+  })
+
+  it("reads the roster alone, and the rest only when the editor opens", async () => {
+    // otari#1381. The table used to fetch seven collections and join them in
+    // the browser: every gateway identity, every workspace, a roster per
+    // workspace, every budget and every ceiling. The row carries what it needs
+    // now, and the three the editor wants are asked for when it opens.
+    const requests = mockApi({
+      context: organizationContext({ deployment_operator: true }),
+      members: [ANALYST],
+      workspaces: [workspace()],
+    })
+    renderPage(<OrganizationMembersPage />)
+    await screen.findByText("Analyst")
+
+    const read = (path: string) =>
+      requests.some(
+        (request) => request.method === "GET" && request.url.includes(path),
+      )
+    await waitFor(() => {
+      expect(read(`${API_ROOT}/organizations/me/members`)).toBe(true)
+    })
+    expect(read(`${API_ROOT}/users`)).toBe(false)
+    expect(read(`${API_ROOT}/scoped-budgets`)).toBe(false)
+    expect(read(`${API_ROOT}/budgets`)).toBe(false)
   })
 
   it("shows what a member may call and what they have spent", async () => {

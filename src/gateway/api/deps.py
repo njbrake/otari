@@ -1,6 +1,7 @@
 import secrets
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import aclosing
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -10,32 +11,68 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.models import hash_key
 from gateway.container import Container
-from gateway.core.config import API_KEY_HEADER, X_API_KEY_HEADER, GatewayConfig
+from gateway.core.config import API_KEY_HEADER, API_ROOT, X_API_KEY_HEADER, GatewayConfig
 from gateway.core.database import DATABASE_ERRORS, create_session, get_db
+from gateway.core.feature import CoreFeature
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.log_config import logger
-from gateway.metrics import record_auth_failure
-from gateway.models.entities import APIKey
+from gateway.metrics import REGISTRY, Counter
+from gateway.models.api_keys import APIKey
 from gateway.models.tenancy import User as TenancyUser
+from gateway.ports.api_key_format_port import ApiKeyFormatPort, Malformed, Misdirected
 from gateway.ports.billing_port import BillingPort
+from gateway.ports.code_execution_port import CodeExecutionPort
 from gateway.ports.entitlement_port import EntitlementPort
+from gateway.ports.file_storage_port import FileStoragePort
 from gateway.ports.growth_signal_port import GrowthSignalPort
 from gateway.ports.identity_provider_port import IdentityProviderPort
+from gateway.ports.mcp_server_port import McpServerPort
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.ports.telemetry_storage_port import TelemetryStoragePort
+from gateway.repositories.api_keys import ApiKeyRepository
+from gateway.repositories.budgets import BudgetRepositories
+from gateway.repositories.files import FileRepositories
+from gateway.repositories.overview.overview_repository import OverviewRepository
+from gateway.repositories.providers import OrgProviderKeyModelRepository
+from gateway.repositories.tenancy import OrganizationGuardrailDefinitionRepository, OrgProviderKeyRepository
+from gateway.services.api_keys import ApiKeyService
+from gateway.services.budgets import BudgetService, WorkspaceBudgetDefaultService
+from gateway.services.code_execution import SandboxContainerRegistry
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, resolve_dashboard_session
-from gateway.services.file_store import FileStore
+from gateway.services.files import FileService, SandboxFileBridge, StagedFile
 from gateway.services.log_writer import LogWriter
 from gateway.services.master_key_service import hash_master_key, is_generated_master_key, load_master_key_hash
+from gateway.services.organization_pricing_service import OrganizationPricingService
+from gateway.services.overview.overview_service import OverviewService
+from gateway.services.providers import OrgProviderModelService
 from gateway.services.routing import clear_router_backend_cache
-from gateway.services.tenancy import OrganizationService
+from gateway.services.tenancy import OrganizationService, organization_guardrail_runner
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
+from gateway.services.tenancy.org_provider_key_service import OrgProviderKeyService, refresh_org_provider_cache
+from gateway.services.tenancy.organization_guardrail_definition_service import (
+    OrganizationGuardrailDefinitionService,
+)
 from gateway.services.tenancy.provisioning_service import ensure_bootstrap_identity
+from gateway.services.tenancy.workspace_service import WorkspaceService
+from gateway.services.workspace_scope import default_workspace_id
 
 # Legacy module-level fallback. Config now lives on ``app.state.config`` (set in
 # ``create_app``); ``get_config`` reads from the request's app state and only
 # falls back to this shim for callers that set it directly (see ``set_config``).
 _config: GatewayConfig | None = None
 _LAST_USED_UPDATE_INTERVAL_SECONDS = 300
+
+AUTH_FAILURES = Counter(
+    "gateway_auth_failures",
+    "Total number of authentication failures",
+    ["reason"],
+    registry=REGISTRY,
+)
+
+
+def record_auth_failure(reason: str) -> None:
+    """Record an authentication failure."""
+    AUTH_FAILURES.labels(reason=reason).inc()
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -90,33 +127,59 @@ def reset_config() -> None:
     clear_router_backend_cache()
 
 
-def _extract_bearer_token(request: Request, config: GatewayConfig) -> str:
-    """Extract the API token from the request headers.
+def get_enabled_features(request: Request) -> tuple[CoreFeature, ...]:
+    """Return the core features this app enabled when it was built."""
+    enabled: tuple[CoreFeature, ...] | None = getattr(request.app.state, "enabled_features", None)
+    if enabled is None:
+        msg = "Enabled features not initialized"
+        raise RuntimeError(msg)
+    return enabled
+
+
+def extract_credential_token(request: Request) -> str:
+    """Extract the caller's credential token from the request headers.
+
+    Every mode reads the same headers through this one helper, so which
+    deployment a caller talks to never changes how their key is presented;
+    only who verifies the token differs (hybrid forwards it to the platform,
+    the other modes check the local database).
 
     The canonical Otari-Key header carries the token directly. A ``Bearer ``
     prefix is accepted and stripped for back-compat, but is not required: a header
     named for the key holds the raw token, matching the ``x-api-key`` convention
     and the snippet the dashboard hands out. The standard Authorization header
     still requires the Bearer scheme. Finally the raw x-api-key header is honored
-    (Anthropic-native clients).
+    (Anthropic-native clients). Surrounding whitespace is stripped, and a
+    credential that is only whitespace is answered as missing rather than sent
+    on to fail verification as a token of spaces.
     """
+    token: str | None = None
     value = request.headers.get(API_KEY_HEADER)
     if value:
-        return value[7:] if value.startswith("Bearer ") else value
+        # Leading whitespace comes off before the scheme check, so a padded
+        # value still has its Bearer prefix recognized rather than kept as
+        # part of the token.
+        value = value.lstrip()
+        token = value[7:] if value.startswith("Bearer ") else value
+    else:
+        auth_header = request.headers.get("Authorization")
+        if auth_header:
+            auth_header = auth_header.lstrip()
+            # A blank value is a missing credential, not a scheme violation;
+            # only a non-empty non-Bearer value is an invalid format.
+            if auth_header and not auth_header.startswith("Bearer "):
+                record_auth_failure("invalid_format")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid header format. Expected 'Bearer <token>'",
+                )
+            token = auth_header[7:]
+        else:
+            token = request.headers.get(X_API_KEY_HEADER)
 
-    auth_header = request.headers.get("Authorization")
-    if auth_header:
-        if not auth_header.startswith("Bearer "):
-            record_auth_failure("invalid_format")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid header format. Expected 'Bearer <token>'",
-            )
-        return auth_header[7:]
-
-    raw_token = request.headers.get(X_API_KEY_HEADER)
-    if raw_token:
-        return raw_token
+    token = token.strip() if token else ""
+    if token:
+        return token
 
     record_auth_failure("missing_credentials")
     raise HTTPException(
@@ -125,13 +188,36 @@ def _extract_bearer_token(request: Request, config: GatewayConfig) -> str:
     )
 
 
-async def _verify_and_update_api_key(db: AsyncSession, token: str) -> APIKey:
+def misdirected_key_detail(host: str) -> str:
+    """The body of a 421, naming where the presented key is served."""
+    return f"This API key belongs to {host}. Send the request there instead."
+
+
+async def _verify_and_update_api_key(db: AsyncSession, token: str, key_format: ApiKeyFormatPort) -> APIKey:
     """Verify API key token and update last_used_at.
 
-    The token's shape is not checked: any presented token is hashed and looked
-    up, so a key minted elsewhere (a migrated platform key) authenticates on its
-    hash and an unrecognized one gets the ordinary "Invalid API key" 401.
+    The bound key format says where the token is checked before anything is
+    looked up. A key another deployment minted is answered 421 naming that
+    deployment, and a key that claims this build's format and fails it is
+    answered 401; neither costs a database round trip. Everything else, which
+    for the open-source format is every key, is hashed and looked up whatever
+    its shape, so a key minted elsewhere (a migrated platform key) authenticates
+    on its hash and an unrecognized one gets the ordinary "Invalid API key" 401.
     """
+    match key_format.route(token):
+        case Misdirected(host=host):
+            record_auth_failure("misdirected_key")
+            raise HTTPException(
+                status_code=status.HTTP_421_MISDIRECTED_REQUEST,
+                detail=misdirected_key_detail(host),
+            )
+        case Malformed():
+            record_auth_failure("invalid_format")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid API key",
+            )
+
     key_hash = hash_key(token)
 
     try:
@@ -217,8 +303,28 @@ def _header_credentials_present(request: Request) -> bool:
 # Sec-Fetch-Site values under which a cookie may authenticate a request:
 # same-origin fetches (the dashboard itself) and non-site-initiated requests
 # ("none", e.g. a direct navigation). "same-site" is deliberately excluded, so a
-# sibling-subdomain page cannot ride the cookie.
+# sibling-subdomain page cannot ride the cookie; ``cookie_may_authenticate``
+# admits it only from an origin the deployment itself listed.
 _COOKIE_SAFE_FETCH_SITES = ("same-origin", "none")
+
+
+def cookie_may_authenticate(request: Request, config: GatewayConfig) -> bool:
+    """Whether the session cookie on this request may authenticate it.
+
+    A same-site request is admitted only when its ``Origin`` is one of
+    ``cors_allow_origins``: that list is where an operator names the origin an
+    edge serves the dashboard from, so a dashboard on a sibling host of this
+    process can hold a session here while every other sibling stays refused.
+    A ``*`` entry never matches, since a wildcard is not an origin and CORS
+    sends no credentials under one either.
+    """
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+    if fetch_site is None or fetch_site in _COOKIE_SAFE_FETCH_SITES:
+        return True
+    if fetch_site != "same-site":
+        return False
+    origin = request.headers.get("Origin", "")
+    return bool(origin) and origin != "*" and origin in config.cors_allow_origins
 
 
 async def get_session_identity(
@@ -247,8 +353,7 @@ async def get_session_identity(
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
         return None
-    fetch_site = request.headers.get("Sec-Fetch-Site")
-    if fetch_site is not None and fetch_site not in _COOKIE_SAFE_FETCH_SITES:
+    if not cookie_may_authenticate(request, config):
         record_auth_failure("cross_site_cookie")
         return None
     try:
@@ -287,12 +392,26 @@ async def _load_generated_master_key_hash(config: GatewayConfig, db: AsyncSessio
     return stored_hash
 
 
+def _api_key_format(request: Request, db: AsyncSession) -> ApiKeyFormatPort:
+    """Resolve the key format for a verify path, off the request rather than a dependency.
+
+    ``verify_api_key_or_master_key`` is called directly from routes that already
+    hold the session, not only as a dependency, so the container is read from the
+    app the request reached instead of being one more positional argument.
+    """
+    return get_container(request).resolve(ApiKeyFormatPort, db)
+
+
 async def verify_api_key(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> APIKey:
-    """Verify API key from Otari-Key header.
+    """Verify API key from the credential headers.
+
+    ``config`` is not consulted, but stays in the signature: like its sibling
+    ``verify_api_key_or_master_key``, this is called directly (not only via
+    ``Depends``) by downstream deployments, so the three-argument shape is API.
 
     Args:
         request: FastAPI request object
@@ -306,8 +425,8 @@ async def verify_api_key(
         HTTPException: If key is invalid, inactive, or expired
 
     """
-    token = _extract_bearer_token(request, config)
-    return await _verify_and_update_api_key(db, token)
+    token = extract_credential_token(request)
+    return await _verify_and_update_api_key(db, token, _api_key_format(request, db))
 
 
 async def verify_master_key(
@@ -336,7 +455,7 @@ async def verify_master_key(
     """
     if session_identity is not None:
         return None
-    token = _extract_bearer_token(request, config)
+    token = extract_credential_token(request)
 
     if config.master_key is None:
         stored_hash = await _load_generated_master_key_hash(config, db)
@@ -393,15 +512,12 @@ async def require_deployment_operator(
     later inherits the gate instead of being reachable with no credential at
     all until someone notices the missing decorator. ``Depends`` caching means
     the master-key verification underneath still runs once per request however
-    many of these a route pulls in. The three modules that hold an exception
-    (``models.py`` and ``pricing.py`` for the catalog reads, ``usage.py`` for
-    external-event ingestion) put it on a router of its own, so admitting a
-    non-operator is spelled at a router instead of hidden in one route's
-    decorator.
+    many of these a route pulls in. A module that holds an exception (a catalog
+    read, the tool-settings reader, external-event ingestion) puts it on a router
+    of its own, so admitting a non-operator is spelled at a router instead of
+    hidden in one route's decorator.
     """
-    if session_identity is not None and not await DeploymentUserService(db).has_administration_access(
-        session_identity
-    ):
+    if session_identity is not None and not await DeploymentUserService(db).has_administration_access(session_identity):
         record_auth_failure("not_deployment_operator")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -442,12 +558,12 @@ async def verify_api_key_or_master_key(
         HTTPException: If key is invalid, inactive, or expired
 
     """
-    token = _extract_bearer_token(request, config)
+    token = extract_credential_token(request)
 
     if await is_valid_master_key(token, config, db):
         return None, True
 
-    api_key = await _verify_and_update_api_key(db, token)
+    api_key = await _verify_and_update_api_key(db, token, _api_key_format(request, db))
     return api_key, False
 
 
@@ -460,14 +576,23 @@ async def verify_catalog_reader(
     """As :func:`verify_api_key_or_master_key`, and a dashboard session also reads.
 
     The narrow exception to the rule above, for the catalog reads that describe
-    the deployment rather than act on it: ``GET /api/v1/models``, ``GET /api/v1/pricing``
-    and ``GET /api/v1/tools`` (with their by-id variants). The dashboard's Models and
-    Pricing pages are built on these, so a session has to reach them; they call
-    no provider, write nothing, and bill nothing, so reaching them
-    deployment-wide costs a signed-in caller's own organization nothing.
+    the deployment rather than act on it: ``GET /api/v1/models``, ``GET /api/v1/pricing``,
+    ``GET /api/v1/tools``, ``GET /api/v1/providers/catalog`` (with their by-id
+    variants) and ``GET /api/v1/tool-settings/guardrails/catalog``. The
+    dashboard's Models and Pricing pages are built on these, so a session has to
+    reach them; they call no provider, write nothing, and bill nothing, so
+    reaching them deployment-wide costs a signed-in caller's own organization
+    nothing.
+
+    The two catalogs are the reads a *tenant* rather than an operator needs. One
+    names the providers any-llm knows, which the organization provider-key form
+    offers as the BYO choices; the other names the guardrails any-guardrail
+    reaches over a hosted API, which the organization guardrail form offers the
+    same way. An owner or admin who reaches no operator route still has to read
+    both.
 
     Split out rather than left as a branch inside the other dependency so that
-    adding a route to this plane defaults to refusing the cookie. The three
+    adding a route to this plane defaults to refusing the cookie. The five
     routers that serve these reads declare it on the router for the same reason,
     so admitting a session is spelled where the route is mounted rather than in
     one route's decorator.
@@ -488,8 +613,8 @@ async def verify_catalog_reader_or_public(
     ``None`` is the anonymous caller, admitted only while ``public_catalog`` is on
     and only when the request carries no credential at all: a credential that is
     present and wrong is refused as it always was, never downgraded to a visitor.
-    The route is what narrows an anonymous read (the configured instances, the
-    deployment price list, no tenant rows); this only decides who is asking.
+    The route is what narrows an anonymous read (the deployment's own
+    offerings, the deployment price list, no tenant rows); this only decides who is asking.
 
     Throttled per client address on its own budget,
     ``public_catalog_rate_limit_per_minute``, the way the public auth routes
@@ -524,8 +649,110 @@ async def get_db_if_needed(
         yield None
         return
 
-    async for db in get_db():
-        yield db
+    # A bare ``async for`` leaves ``get_db`` open when an error or cancellation
+    # is thrown in at teardown, so its session would hold a pooled connection
+    # until garbage collection.
+    async with aclosing(get_db()) as sessions:
+        async for db in sessions:
+            yield db
+
+
+def build_file_service(uow: UnitOfWork, file_store: FileStoragePort, config: GatewayConfig) -> FileService:
+    """Build Files operations for a scoped output request or cleanup job."""
+
+    async def reject_unscoped_upload() -> uuid.UUID:
+        raise RuntimeError("Unscoped uploads are not supported in this context; specify a workspace.")
+
+    return FileService(uow, FileRepositories.on(uow), file_store, config, reject_unscoped_upload)
+
+
+def build_sandbox_file_bridge(
+    *,
+    raw_request: Request,
+    config: GatewayConfig,
+    uow: UnitOfWork | None,
+    user_id: str | None,
+    workspace_id: uuid.UUID | None,
+    inputs: list[StagedFile],
+) -> SandboxFileBridge | None:
+    """The file bridge a completion request's sandbox session gets, or ``None``.
+
+    Built by the route once the billed user and workspace are resolved, on the request's own Unit of Work.
+    It is ``None`` when files are disabled, and in hybrid mode, which has no local database or file store.
+    Produced files are announced under ``public_base_url`` where the deployment knows its address,
+    and otherwise under the one the request arrived on.
+    """
+    file_store = getattr(raw_request.app.state, "file_store", None)
+    if uow is None or not config.files_enabled or file_store is None or user_id is None or workspace_id is None:
+        return None
+    base = (config.public_base_url or str(raw_request.base_url)).rstrip("/")
+    return SandboxFileBridge(
+        file_store=file_store,
+        config=config,
+        files=build_file_service(uow, file_store, config),
+        user_id=user_id,
+        workspace_id=workspace_id,
+        inputs=inputs,
+        base_url=f"{base}{API_ROOT}/files",
+    )
+
+
+def build_sandbox_container_registry(
+    *,
+    config: GatewayConfig,
+    uow: UnitOfWork | None,
+    user_id: str | None,
+    workspace_id: uuid.UUID | None,
+    port: CodeExecutionPort | None,
+) -> SandboxContainerRegistry | None:
+    """The registry a completion request's sandbox session is held in, or ``None``.
+
+    ``None`` is every case in which a sandbox cannot outlive its request: hybrid
+    mode, which has no local database to remember a lease in; a deployment with
+    no sandbox at all; and one that turned reuse off with a zero idle TTL. The
+    lease is scoped to the billed user and workspace, and to the adapter this
+    build runs, so a deployment that changes providers starts fresh.
+    """
+    if (
+        uow is None
+        or user_id is None
+        or workspace_id is None
+        or port is None
+        or config.sandbox_container_idle_ttl_sec <= 0
+    ):
+        return None
+    return SandboxContainerRegistry(
+        uow=uow,
+        user_id=user_id,
+        workspace_id=workspace_id,
+        provider=port.label,
+        idle_ttl_s=config.sandbox_container_idle_ttl_sec,
+        max_lifetime_s=config.sandbox_container_max_lifetime_sec,
+    )
+
+
+def get_unit_of_work(db: Annotated[AsyncSession, Depends(get_db)]) -> UnitOfWork:
+    """Return the request's Unit of Work over its session.
+
+    Gotcha: the rest of the request writes to this same session.
+    A block's commit also stores what that code staged outside a block, and its rollback discards it.
+    Standalone and hosted only: a hybrid gateway has no local database, so it has no Unit of Work.
+    """
+    return UnitOfWork(db)
+
+
+def get_unit_of_work_if_needed(
+    db: Annotated[AsyncSession | None, Depends(get_db_if_needed)],
+) -> UnitOfWork | None:
+    """Return the request's Unit of Work in standalone mode, otherwise ``None``.
+
+    The counterpart of ``get_db_if_needed``, for a route that serves both modes.
+    It is over the session that dependency yields.
+
+    NOTE: a route must take its session from ``get_db_if_needed`` as well.
+    ``get_db`` opens a session of its own, so a route that mixes the two gets two sessions and two Units of Work.
+    """
+    return None if db is None else get_unit_of_work(db)
 
 
 async def get_current_identity(
@@ -554,7 +781,7 @@ async def get_current_identity(
     """
     if session_identity is not None:
         return session_identity
-    return await ensure_bootstrap_identity(db)
+    return await ensure_bootstrap_identity(db, membership_listener=WorkspaceBudgetDefaultService(db))
 
 
 CurrentIdentity = Annotated[TenancyUser, Depends(get_current_identity)]
@@ -591,6 +818,33 @@ ContainerDep = Annotated[Container, Depends(get_container)]
 # for the first kind. A route that means to commit a port's writes with its own
 # must take its session from ``get_db_if_needed`` too.
 PortSessionDep = Annotated[AsyncSession | None, Depends(get_db_if_needed)]
+
+
+def get_api_key_format_port(db: PortSessionDep, container: ContainerDep) -> ApiKeyFormatPort:
+    """Resolve the key-format adapter this build bound at startup."""
+    return container.resolve(ApiKeyFormatPort, db)
+
+
+def get_code_execution_port(
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    container: ContainerDep,
+) -> CodeExecutionPort | None:
+    """Resolve the code-execution adapter this build bound at startup.
+
+    ``None`` where the deployment has configured no sandbox, which is most of
+    them: every completion request resolves this, and one that never asks for
+    code execution must not be refused because there is nowhere to run it. The
+    request that does ask is refused by name in ``prepare_gateway_tools``.
+
+    No session either: the adapter reaches a sandbox, not this database, and
+    which one it reaches is a deployment setting rather than a request fact.
+    """
+    if not config.sandbox_configured():
+        return None
+    return container.resolve(CodeExecutionPort, None)
+
+
+CodeExecutionPortDep = Annotated[CodeExecutionPort | None, Depends(get_code_execution_port)]
 
 
 def get_billing_port(db: PortSessionDep, container: ContainerDep) -> BillingPort:
@@ -637,6 +891,15 @@ def get_identity_provider_port(
     return container.resolve(IdentityProviderPort, db)
 
 
+def get_mcp_server_port(db: PortSessionDep, container: ContainerDep) -> McpServerPort:
+    """Resolve the MCP server adapter this build bound at startup.
+
+    Invariant: a deployment that holds the rows always has a session here, so
+    the refusal inside the adapter's builder is unreachable through this.
+    """
+    return container.resolve(McpServerPort, db)
+
+
 def get_model_provider_port(db: PortSessionDep, container: ContainerDep) -> ModelProviderPort:
     """Resolve the model-provider adapter this build bound at startup."""
     return container.resolve(ModelProviderPort, db)
@@ -656,11 +919,121 @@ def get_telemetry_storage_port(
     return container.resolve(TelemetryStoragePort, db)
 
 
+def get_overview_service(db: Annotated[AsyncSession, Depends(get_db)]) -> OverviewService:
+    """Build the dashboard overview's summary service on the request's session.
+
+    Assembled here rather than in the route, because a route does not name a
+    session type (``scripts/check_architecture.py``, rule 12).
+    """
+    return OverviewService(
+        OverviewRepository(db),
+        OrganizationService(db, membership_listener=None),
+        DeploymentUserService(db),
+        # The listener is for writes; this service only reads, and the same
+        # pairing is what `routes/workspaces.py` builds.
+        WorkspaceService(db, membership_listener=WorkspaceBudgetDefaultService(db)),
+    )
+
+
+OverviewServiceDep = Annotated[OverviewService, Depends(get_overview_service)]
+
+
+def get_organization_service(db: Annotated[AsyncSession, Depends(get_db)]) -> OrganizationService:
+    """Build the request's organization service.
+
+    It reads only. A membership write needs the listener this pairing leaves unset.
+    """
+    return OrganizationService(db, membership_listener=None)
+
+
+OrganizationServiceDep = Annotated[OrganizationService, Depends(get_organization_service)]
+
+
+def get_budget_service(
+    uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> BudgetService:
+    """Build the request's budget service on the request's Unit of Work."""
+    return BudgetService(
+        uow,
+        BudgetRepositories.on(uow),
+        OrganizationService(db, membership_listener=None),
+        ApiKeyService(ApiKeyRepository(uow)),
+    )
+
+
+BudgetServiceDep = Annotated[BudgetService, Depends(get_budget_service)]
+
+
+def get_organization_guardrail_definition_service(
+    uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> OrganizationGuardrailDefinitionService:
+    """Build an organization's guardrail-definition service on the request's Unit of Work.
+
+    Assembled here for the reason the overview service above is: a route does not
+    name a session type (``scripts/check_architecture.py``, rule 12).
+
+    The session is here only for the role gate. The service itself holds none,
+    reaching the database through its repository and committing in the blocks it
+    opens; `OrganizationService` is still in the old shape and takes a session,
+    and both are the request's one session, so a block commits what the gate
+    read.
+
+    The runner is wired in here rather than imported by the service, because the
+    runner imports the service for the function that undoes the secret split and
+    the pair would otherwise form a cycle. This is the composition root, which
+    is where that join belongs anyway.
+    """
+    return OrganizationGuardrailDefinitionService(
+        definitions=OrganizationGuardrailDefinitionRepository(uow),
+        organizations=OrganizationService(db, membership_listener=None),
+        uow=uow,
+        build_state=organization_guardrail_runner.build_state,
+        rebuild=organization_guardrail_runner.rebuild_definition,
+        handle=organization_guardrail_runner.handle,
+    )
+
+
+OrganizationGuardrailDefinitionServiceDep = Annotated[
+    OrganizationGuardrailDefinitionService, Depends(get_organization_guardrail_definition_service)
+]
+
+ApiKeyFormatPortDep = Annotated[ApiKeyFormatPort, Depends(get_api_key_format_port)]
 BillingPortDep = Annotated[BillingPort, Depends(get_billing_port)]
 EntitlementPortDep = Annotated[EntitlementPort, Depends(get_entitlement_port)]
 GrowthSignalPortDep = Annotated[GrowthSignalPort, Depends(get_growth_signal_port)]
 IdentityProviderPortDep = Annotated[IdentityProviderPort, Depends(get_identity_provider_port)]
+McpServerPortDep = Annotated[McpServerPort, Depends(get_mcp_server_port)]
 ModelProviderPortDep = Annotated[ModelProviderPort, Depends(get_model_provider_port)]
+
+
+def get_org_provider_model_service(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    model_provider: ModelProviderPortDep,
+) -> OrgProviderModelService:
+    """Build the offered-models service on the request's session and unit of work.
+
+    The service itself names neither the session nor SQLAlchemy, so its
+    repositories and its cache-refresh callable are assembled here. The unit of
+    work and the services built on the session are over the *same* session (see
+    ``deps.get_unit_of_work``), so a block's commit also settles what they staged.
+    """
+    return OrgProviderModelService(
+        uow,
+        config=config,
+        organizations=OrganizationService(db, membership_listener=None),
+        provider_keys=OrgProviderKeyService(db),
+        org_pricing=OrganizationPricingService(db, config, model_provider=model_provider),
+        models=OrgProviderKeyModelRepository(uow),
+        keys=OrgProviderKeyRepository(db),
+        refresh_overlay=lambda: refresh_org_provider_cache(db),
+    )
+
+
+OrgProviderModelServiceDep = Annotated[OrgProviderModelService, Depends(get_org_provider_model_service)]
 TelemetryStoragePortDep = Annotated[TelemetryStoragePort, Depends(get_telemetry_storage_port)]
 
 
@@ -689,10 +1062,56 @@ def get_log_writer(request: Request) -> LogWriter:
     return writer
 
 
-def get_file_store(request: Request) -> FileStore:
+def get_file_store(request: Request) -> FileStoragePort:
     """Return the configured blob store for uploaded files (standalone mode)."""
-    store: FileStore = request.app.state.file_store
+    store: FileStoragePort = request.app.state.file_store
     return store
+
+
+def get_file_service(
+    uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    file_store: Annotated[FileStoragePort, Depends(get_file_store)],
+) -> FileService:
+    """Build the request's files service on the request's Unit of Work."""
+    return FileService(uow, FileRepositories.on(uow), file_store, config, lambda: default_workspace_id(db))
+
+
+FileServiceDep = Annotated[FileService, Depends(get_file_service)]
+
+
+def get_file_store_if_needed(request: Request) -> FileStoragePort | None:
+    """Return the configured blob store in standalone mode, otherwise ``None``.
+
+    The counterpart of ``get_file_store``, for a route that serves both modes. A
+    hybrid gateway binds none, so the attribute is absent rather than set to None.
+    """
+    store: FileStoragePort | None = getattr(request.app.state, "file_store", None)
+    return store
+
+
+def get_file_service_if_needed(
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    db: Annotated[AsyncSession | None, Depends(get_db_if_needed)],
+    uow: Annotated[UnitOfWork | None, Depends(get_unit_of_work_if_needed)],
+    file_store: Annotated[FileStoragePort | None, Depends(get_file_store_if_needed)],
+) -> FileService | None:
+    """Return the request's files service in standalone mode, otherwise ``None``.
+
+    The counterpart of ``get_file_service``, for a completion route that serves both
+    modes. Hybrid mode has no local database and no blob store, so a stored
+    ``file_id`` cannot be resolved there at all.
+
+    NOTE: a route must take its session from ``get_db_if_needed`` as well, for the
+    reason ``get_unit_of_work_if_needed`` gives.
+    """
+    if uow is None or db is None or file_store is None:
+        return None
+    return FileService(uow, FileRepositories.on(uow), file_store, config, lambda: default_workspace_id(db))
+
+
+OptionalFileServiceDep = Annotated[FileService | None, Depends(get_file_service_if_needed)]
 
 
 async def _caller_organization_id(
@@ -712,7 +1131,7 @@ async def _caller_organization_id(
     so an operator running several organizations behind one gateway works in the
     one they are currently in rather than across all of them (otari#817).
     """
-    return (await OrganizationService(db).get_active_organization_for_user(identity)).id
+    return (await OrganizationService(db, membership_listener=None).get_active_organization_for_user(identity)).id
 
 
 CallerOrganization = Annotated[uuid.UUID, Depends(_caller_organization_id)]
@@ -724,9 +1143,14 @@ __all__ = [
     "CallerOrganization",
     "CurrentIdentity",
     "EntitlementPortDep",
+    "FileServiceDep",
+    "OptionalFileServiceDep",
+    "OverviewServiceDep",
     "GrowthSignalPortDep",
     "IdentityProviderPortDep",
+    "McpServerPortDep",
     "ModelProviderPortDep",
+    "OrgProviderModelServiceDep",
     "TelemetryStoragePortDep",
     "get_config",
     "get_container",
@@ -741,6 +1165,7 @@ __all__ = [
     "get_log_writer",
     "is_valid_master_key",
     "require_capability",
+    "extract_credential_token",
     "verify_api_key",
     "verify_api_key_or_master_key",
     "verify_catalog_reader",

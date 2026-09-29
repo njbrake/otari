@@ -23,8 +23,12 @@ from gateway.repositories.tenancy.org_provider_key_repository import (
     resolve_active_key,
 )
 from gateway.repositories.tenancy.organization_domain_repository import OrganizationDomainRepository
+from gateway.repositories.tenancy.organization_guardrail_definition_repository import (
+    OrganizationGuardrailDefinitionRepository,
+)
 from gateway.repositories.tenancy.organization_member_repository import OrganizationMemberRepository
 from gateway.repositories.tenancy.organization_repository import OrganizationRepository
+from gateway.repositories.tenancy.user_merge_repository import UserMergeRepository
 from gateway.repositories.tenancy.user_repository import UserRepository, user_alphabetical_order
 from gateway.repositories.tenancy.workspace_repository import WorkspaceMemberRepository, WorkspaceRepository
 
@@ -33,8 +37,10 @@ __all__ = [
     "InvitationRepository",
     "OrgProviderKeyRepository",
     "OrganizationDomainRepository",
+    "OrganizationGuardrailDefinitionRepository",
     "OrganizationMemberRepository",
     "OrganizationRepository",
+    "UserMergeRepository",
     "UserRepository",
     "WorkspaceMemberRepository",
     "WorkspaceProviderKeyOverrideRepository",

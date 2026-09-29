@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from gateway.services.tool_result_errors import ERROR_PREFIX, fold_tool_result_errors
+from gateway.services.providers.tool_result_errors import ERROR_PREFIX, fold_tool_result_errors
 
 BRIDGED = "fireworks:accounts/fireworks/models/deepseek-v4-flash-0731"
 NATIVE = "anthropic:claude-opus-4"

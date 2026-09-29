@@ -12,9 +12,9 @@ The wire shapes live here with the build because both surfaces serve them.
 import calendar
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -22,11 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
-from gateway.models.entities import APIKey, ModelPricing
+from gateway.models.api_keys import APIKey
 from gateway.models.money import as_float
+from gateway.models.pricing import ModelPricing, PriceSource
 from gateway.models.pricing_schemas import PricingTier
 from gateway.models.routing import PolicySpec
 from gateway.models.tenancy import User as TenancyUser
+from gateway.ports.model_provider_port import HostedModels, ModelProviderPort
 from gateway.services.alias_service import effective_aliases
 from gateway.services.model_access import is_model_allowed, resolve_request_allowlist
 from gateway.services.model_discovery_service import background_discovery_enabled, discover_all_models
@@ -42,9 +44,19 @@ from gateway.services.pricing_service import (
     pricing_key_forms,
     resolve_organization_override,
 )
-from gateway.services.provider_kwargs import is_deployment_instance_key, normalize_pricing_key
+from gateway.services.provider_kwargs import is_deployment_instance_key, normalize_pricing_key, split_selector
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
-from gateway.services.tenancy.organization_model_access import resolve_session_catalog_scope
+from gateway.services.tenancy.organization_model_access import (
+    hosted_allowlist_entries,
+    resolve_default_workspace_offered_keys,
+    resolve_hosted_models,
+    resolve_organization_byo_providers,
+    resolve_organization_offered_keys,
+    resolve_session_catalog_scope,
+    resolve_workspace_byo_providers,
+    resolve_workspace_offered_keys,
+)
+from gateway.services.workspace_scope import lookup_default_workspace_id, organization_for_workspace_id
 
 if TYPE_CHECKING:
     from any_llm.types.model import Model
@@ -117,25 +129,19 @@ class ModelObject(BaseModel):
     # knows the model. Metadata only (independent of the default_pricing toggle);
     # ``None`` when the dataset has no value for the model.
     context_window: int | None = None
-    # True when this model is addressed through one of the deployment's own
-    # provider instances, so the deployment holds the upstream credential and its
-    # rate is the deployment price list's. False for a bare ``provider:model``
-    # key, which resolves against an organization's own BYO credential, and for
-    # an alias or policy, which is a name rather than a model. It is what lets the
-    # dashboard withhold a rate-override control the gateway would refuse anyway
-    # (``OrganizationPricingService.raise_if_deployment_supplied``).
+    # True when the deployment pays the upstream bill for this model, so the organization may not set its own rate.
+    # An alias or policy is a name, not a model, so it is always False.
     deployment_managed: bool = False
 
 
-
-def mark_deployment_managed(config: GatewayConfig, model: ModelObject) -> ModelObject:
-    """Stamp ``deployment_managed`` from the entry's own id, and hand it back.
-
-    Applied in one pass rather than at each construction site: the answer depends
-    only on the id and the provider map, so deriving it once is what keeps the
-    phases from disagreeing about a model they both build.
-    """
-    model.deployment_managed = is_deployment_instance_key(config, model.id)
+def mark_deployment_managed(
+    config: GatewayConfig, model: ModelObject, *, deployment_supplied_providers: frozenset[str]
+) -> ModelObject:
+    """Sets ``deployment_managed`` on ``model`` and returns it."""
+    split = split_selector(model.id)
+    model.deployment_managed = is_deployment_instance_key(config, model.id) or (
+        split is not None and split[0] in deployment_supplied_providers
+    )
     return model
 
 
@@ -185,9 +191,7 @@ def model_from_pricing(pricing: ModelPricing) -> ModelObject:
     )
 
 
-def alias_model(
-    config: GatewayConfig, alias: str, target: str, pricing_lookup: dict[str, ModelPricing]
-) -> ModelObject:
+def alias_model(config: GatewayConfig, alias: str, target: str, pricing_lookup: dict[str, ModelPricing]) -> ModelObject:
     """Build a ModelObject for an alias, from config.yml or from storage.
 
     The alias id is what the caller sees; pricing is looked up from the resolved
@@ -202,9 +206,7 @@ def alias_model(
         id=alias,
         created=0,
         owned_by=ALIAS_OWNED_BY,
-        pricing=pricing_info(pricing)
-        if pricing
-        else None,
+        pricing=pricing_info(pricing) if pricing else None,
         pricing_source="configured" if pricing else "none",
         # From the resolved target, like pricing: an alias's display name is not a
         # model the dataset knows. Exposing the window does not reveal the target.
@@ -383,6 +385,70 @@ class CatalogScope:
     which is where its own writes land.
     """
 
+    deployment_supplied_providers: frozenset[str]
+    """Hosted providers the deployment pays for in at least one of the organization's workspaces."""
+
+    offered_keys: frozenset[str]
+    """Selectors the caller's organization offers on its own provider keys.
+
+    Listed by nothing else. Discovery (phase 1) dials ``config.providers``
+    instances, and the pricing-only pass (phase 2) lists keys the *deployment*
+    price list names, so a model an organization adopted on its own credential is
+    permitted by the allow-list and published by neither. See phase 2b.
+    """
+
+    hosted_models: HostedModels = field(default_factory=dict)
+    """What the hosted port advertises, for the phase-2 withhold.
+
+    Filled for every API key and for an operator session, whose narrowing is
+    this or nothing. A non-operator session carries the same narrowing in its
+    allow-list instead and is left empty here: narrowing it twice would hide,
+    from an organization holding its own key for the provider, a model it
+    reaches on that key.
+    """
+
+    byo_providers: frozenset[str] = frozenset()
+    """Providers the caller reaches on a key of its own, which the withhold leaves alone.
+
+    Any workspace's key for an operator, who is answered from the whole
+    organization; the key active in the caller's own workspace for an API key
+    and for the master key, which dispatch from one workspace.
+    """
+
+
+def withheld_as_unadvertised(config: GatewayConfig, scope: CatalogScope, model_key: str) -> bool:
+    """Whether a priced key names a hosted model the deployment does not advertise.
+
+    A stored price is what lists a model discovery never heard of, and a hosted
+    deployment keeps a model's rates when it switches the model off, so the
+    price list alone would keep listing a model no request can be served on.
+    The port says which of a hosted provider's priced models are still
+    advertised. It says nothing about a provider that advertises no particular
+    models, about a configured instance (dialed on the deployment's own
+    credential, never the port's), or about a provider the caller reaches on a
+    key of its own.
+    """
+    split = split_selector(model_key)
+    if split is None:
+        return False
+    provider, model = split
+    advertised = scope.hosted_models.get(provider)
+    if advertised is None or is_deployment_instance_key(config, model_key) or provider in scope.byo_providers:
+        return False
+    return model not in advertised
+
+
+async def _operator_offered_keys(db: AsyncSession, identity: TenancyUser) -> frozenset[str]:
+    """The offered models of the organization a deployment operator is acting in.
+
+    ``active_organization_id`` is the pointer the rest of the tenancy surface
+    reads, and an operator who points at nothing has no organization's models to
+    be shown.
+    """
+    if identity.active_organization_id is None:
+        return frozenset()
+    return await resolve_organization_offered_keys(db, identity.active_organization_id)
+
 
 async def catalog_scope(
     db: AsyncSession,
@@ -391,34 +457,96 @@ async def catalog_scope(
     auth: tuple[APIKey | None, bool],
     session_identity: TenancyUser | None,
     anonymous: bool = False,
+    model_provider: ModelProviderPort | None,
+    include_offered: bool = True,
 ) -> CatalogScope:
-    """What this caller may be shown, by the rule that fits how they authenticated.
+    """Returns what this caller may be shown, by how they authenticated.
 
-    Three callers reach the catalog. An API key gets its stored allow-list, as it
-    has always done. A header master key is the deployment credential itself, so
-    it is unrestricted. A dashboard session is unrestricted only while it
-    operates the deployment; otherwise it is answered by its membership, so a
-    member sees the providers their own organization holds rather than every
-    tenant's, and the workspace-scoped rows only where that workspace is theirs
-    (otari-ai#1969).
+    An API key gets its stored allow-list.
+    A master key, and a session that operates the deployment, are unrestricted.
+    Any other session gets what its organization can reach,
+    and the workspace-scoped rows only for workspaces it may see.
+    A visitor to the public catalog gets the configured instances and what the
+    hosted port advertises deployment-wide.
+    ``include_offered=False`` leaves out the organization's offered models, for
+    the deployment-wide view the selector index is built from, which reads every
+    organization's offerings separately.
     """
-    # A visitor, while the catalog is public: the deployment's configured
-    # instances and nothing that belongs to a tenant. Not a member of anything,
+    # A visitor, while the catalog is public: what the deployment itself
+    # serves, its configured instances and the hosted port's deployment-wide
+    # roster, and nothing that belongs to a tenant. Not a member of anything,
     # so no BYO key, no workspace's aliases or policies.
     if anonymous:
-        return CatalogScope(allowlist=[f"{instance}:*" for instance in config.providers], reads_workspace_layer=False)
+        hosted_models = await resolve_hosted_models(model_provider, None)
+        hosted = frozenset(hosted_models)
+        allowlist = {f"{instance}:*" for instance in config.providers}
+        allowlist |= hosted_allowlist_entries(hosted_models, hosted)
+        return CatalogScope(
+            allowlist=sorted(allowlist),
+            reads_workspace_layer=False,
+            deployment_supplied_providers=hosted,
+            offered_keys=frozenset(),
+        )
     if session_identity is not None:
         if await DeploymentUserService(db).has_administration_access(session_identity):
-            return CatalogScope(allowlist=None, reads_workspace_layer=True)
-        scope = await resolve_session_catalog_scope(db, config, user=session_identity)
+            # Unrestricted, and still carrying its *own* organization's offered
+            # models. Not every organization's, which would cross the tenant line
+            # the rest of this function draws, and not none: on a standalone
+            # deployment the operator is also the single organization's owner, so
+            # an empty set would hide the model they just adopted on Providers
+            # from the catalog they were told it joined.
+            organization_id: uuid.UUID | None = session_identity.active_organization_id
+            hosted_models = await resolve_hosted_models(model_provider, organization_id)
+            return CatalogScope(
+                allowlist=None,
+                reads_workspace_layer=True,
+                deployment_supplied_providers=frozenset(),
+                offered_keys=await _operator_offered_keys(db, session_identity) if include_offered else frozenset(),
+                hosted_models=hosted_models,
+                # Read only once something is advertised: the withhold never
+                # consults it otherwise, and the keys cost a decryption each.
+                byo_providers=(
+                    await resolve_organization_byo_providers(db, organization_id) if hosted_models else frozenset()
+                ),
+            )
+        scope = await resolve_session_catalog_scope(db, config, user=session_identity, model_provider=model_provider)
         return CatalogScope(
             allowlist=scope.allowlist,
             reads_workspace_layer=scope.reads_default_workspace,
+            deployment_supplied_providers=scope.deployment_supplied_providers,
+            offered_keys=scope.offered_keys if include_offered else frozenset(),
         )
     api_key, is_master_key = auth
+    # An API key's hosted models stay unflagged, because its organization is
+    # resolved to ask the port and not to say who pays the bill.
+    workspace_id = api_key.workspace_id if api_key is not None else None
+    organization_id = None if workspace_id is None else await organization_for_workspace_id(db, workspace_id)
+    hosted_models = await resolve_hosted_models(model_provider, None if is_master_key else organization_id)
+    # The key active where this caller dispatches from, which for the master key
+    # is the deployment's default workspace, exactly as pricing resolves it. Read
+    # only once something is advertised, and never for the selector index's
+    # deployment-wide view, which must not depend on any organization's keys.
+    byo_providers: frozenset[str] = frozenset()
+    if hosted_models and include_offered:
+        dispatch_workspace_id = await lookup_default_workspace_id(db) if is_master_key else workspace_id
+        byo_providers = await resolve_workspace_byo_providers(db, dispatch_workspace_id)
     return CatalogScope(
         allowlist=None if is_master_key else await resolve_request_allowlist(db, api_key),
         reads_workspace_layer=True,
+        deployment_supplied_providers=frozenset(),
+        # A master key is the deployment acting on its own behalf, which lands in
+        # the default workspace exactly as pricing resolution does for it; a real
+        # key names its own workspace, and what that workspace's organization
+        # offers is what it may be shown.
+        offered_keys=(
+            frozenset()
+            if not include_offered
+            else await resolve_default_workspace_offered_keys(db)
+            if is_master_key
+            else await resolve_workspace_offered_keys(db, workspace_id)
+        ),
+        hosted_models=hosted_models,
+        byo_providers=byo_providers,
     )
 
 
@@ -447,14 +575,20 @@ async def build_merged_catalog(
     provider: str | None = None,
     anonymous: bool = False,
     cached_only: bool = False,
+    model_provider: ModelProviderPort | None,
+    include_offered: bool = True,
 ) -> MergedCatalog:
     """Merge discovery, stored prices, defaults, aliases and policies for one caller.
 
-    ``anonymous`` is the public catalog's visitor, who is answered from the
-    configured instances alone; see :func:`catalog_scope`.
+    ``anonymous`` is the public catalog's visitor, who is answered from what
+    the deployment itself serves; see :func:`catalog_scope`.
 
     ``cached_only`` builds the view without dialing any provider, for a caller
     that runs off the request path; see :func:`discover_all_models`.
+
+    Passing ``None`` as ``model_provider`` lists no hosted providers, and
+    ``include_offered=False`` leaves out the caller's organization's offered
+    models; both are what the selector index's deployment-wide build wants.
     """
     # Aliases are scoped, so the catalog is too: a caller sees their workspace's
     # aliases and the configured ones, plus their own user-scoped layer, never
@@ -466,7 +600,15 @@ async def build_merged_catalog(
     # Resolved before the alias and policy layers are read, not only before they
     # are filtered: it decides whether the workspace-scoped rows may be read at
     # all, which no filter over targets can decide afterwards.
-    scope = await catalog_scope(db, config, auth=auth, session_identity=session_identity, anonymous=anonymous)
+    scope = await catalog_scope(
+        db,
+        config,
+        auth=auth,
+        session_identity=session_identity,
+        anonymous=anonymous,
+        model_provider=model_provider,
+        include_offered=include_offered,
+    )
     pricing_map = await get_pricing_map(db, provider_filter=provider)
     # Snapshot before phase 1 mutates ``pricing_map`` (it pops matched keys), so
     # alias pricing can still be looked up by the target's canonical key. Keys are
@@ -541,9 +683,7 @@ async def build_merged_catalog(
                 id=model_key,
                 created=created_timestamp(model),
                 owned_by=provider_name,
-                pricing=pricing_info(pricing)
-                if pricing
-                else None,
+                pricing=pricing_info(pricing) if pricing else None,
                 pricing_source="configured" if pricing else "none",
                 context_window=context_window_for_key(model_key),
             )
@@ -556,6 +696,8 @@ async def build_merged_catalog(
     for model_key, pricing in pricing_map.items():
         if model_key in merged or normalize_pricing_key(config, model_key) in alias_targets:
             continue
+        if withheld_as_unadvertised(config, scope, model_key):
+            continue
         # A gateway-run tool is priced under the reserved ``otari:`` provider (see
         # ``gateway_tool_pricing_key``). It is not a model: publishing it would put a
         # selectable entry in the OpenAI-compatible catalog whose per-request rate
@@ -563,6 +705,37 @@ async def build_merged_catalog(
         if model_key.startswith(f"{GATEWAY_TOOL_PRICING_PROVIDER}:"):
             continue
         merged[model_key] = model_from_pricing(pricing)
+
+    # Phase 2b: models the caller's organization offers on its own provider keys.
+    #
+    # Neither phase above can list these. A BYO key is not a discovery source
+    # (phase 1 dials ``config.providers`` instances only), and an organization's
+    # own rate lives in ``organization_model_pricing`` rather than in the
+    # deployment price list phase 2 reads. Without this phase an organization can
+    # adopt a model, price it and serve it while the catalog says it does not
+    # exist.
+    #
+    # Priced by phase 3 and then by the per-viewer pass, which reads the
+    # organization's own rate, so nothing here carries a price of its own: doing
+    # so would state a rate from the wrong rung.
+    #
+    # ``?provider=`` filters these like any real model, and the allow-list filter
+    # at the end still applies: an offered model the caller's key may not use is
+    # withheld exactly as a discovered one would be.
+    for model_key in sorted(scope.offered_keys):
+        if model_key in merged or normalize_pricing_key(config, model_key) in alias_targets:
+            continue
+        owner = owner_from_key(model_key)
+        if provider is not None and owner != provider:
+            continue
+        merged[model_key] = ModelObject(
+            id=model_key,
+            created=0,
+            owned_by=owner,
+            pricing=None,
+            pricing_source="none",
+            context_window=context_window_for_key(model_key),
+        )
 
     # Phase 3: fill the genai-prices default for unpriced models, so the catalog
     # shows the effective rate when the fallback is active. Database pricing
@@ -611,7 +784,7 @@ async def build_merged_catalog(
         merged = {mid: obj for mid, obj in merged.items() if _permitted(mid)}
 
     for obj in merged.values():
-        mark_deployment_managed(config, obj)
+        mark_deployment_managed(config, obj, deployment_supplied_providers=scope.deployment_supplied_providers)
 
     return MergedCatalog(
         models=merged,
@@ -619,9 +792,6 @@ async def build_merged_catalog(
         dynamic_policies=dynamic_policies,
         discovered_keys=discovered_keys,
     )
-
-
-PriceSource = Literal["organization", "deployment", "defaults"]
 
 
 class ViewerPrice(NamedTuple):

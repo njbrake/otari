@@ -11,7 +11,7 @@ from any_llm import LLMProvider, acompletion, amessages, aresponses
 from gateway.api.routes._pipeline import RequestContext, _local_attempt_kwargs, scope_prompt_cache_key
 from gateway.api.routes._tools import _strip_gateway_fields
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import ProviderCredential
+from gateway.models.providers import ProviderCredential
 from gateway.services.provider_kwargs import SESSION_AFFINITY_HEADER, get_provider_kwargs, with_session_affinity
 from gateway.services.provider_store_service import _row_to_entry
 from gateway.types.attempt import Attempt
@@ -37,6 +37,7 @@ def _scoped(caller_key: str, config: GatewayConfig) -> str:
     ctx = RequestContext(
         config=config,
         db=None,
+        uow=None,
         log_writer=cast(Any, None),
         hybrid_mode=False,
         route=None,

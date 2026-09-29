@@ -16,37 +16,49 @@ operation into separately-durable pieces.
 
 from typing import Any, Generic, TypeVar
 
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import class_mapper
-from sqlmodel import SQLModel
 
-ModelType = TypeVar("ModelType", bound=SQLModel)
-CreateSchemaType = TypeVar("CreateSchemaType", bound=SQLModel)
-UpdateSchemaType = TypeVar("UpdateSchemaType", bound=SQLModel)
+from gateway.core.unit_of_work import UnitOfWork, session_for
+
+ModelType = TypeVar("ModelType")
+CreateSchemaType = TypeVar("CreateSchemaType", bound=BaseModel)
+UpdateSchemaType = TypeVar("UpdateSchemaType", bound=BaseModel)
 
 
 class BaseRepository(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
-    """Common CRUD operations over one SQLModel table.
+    """Provide the common CRUD operations over one mapped table.
 
-    Repositories are pure data access: no business logic, no authorization, and
-    no commits (see the module docstring).
+    Repositories are pure data access: no business logic, no authorization, and no commits (see the module docstring).
 
     Type Parameters:
-        ModelType: The SQLModel table class.
+        ModelType: The mapped table class.
         CreateSchemaType: The schema describing a creation payload.
         UpdateSchemaType: The schema describing an update payload.
     """
 
-    def __init__(self, db: AsyncSession, model_class: type[ModelType]):
-        """Bind the repository to a session and the table it serves.
+    def __init__(self, db: AsyncSession | UnitOfWork, model_class: type[ModelType]):
+        """Bind the repository to a session or a unit of work, and the table it serves.
 
         Args:
-            db: The active async session.
-            model_class: The SQLModel class for this repository.
+            db: The active async session, or the unit of work whose blocks it runs in.
+            model_class: The mapped class for this repository.
         """
-        self.db = db
+        self._db = db
         self.model_class = model_class
+
+    @property
+    def db(self) -> AsyncSession:
+        """The session this repository's operations run on.
+
+        Raises:
+            OutsideUnitOfWorkError: the repository was built on a unit of work and no block is open.
+        """
+        if isinstance(self._db, UnitOfWork):
+            return session_for(self._db)
+        return self._db
 
     async def get(self, entity_id: Any) -> ModelType | None:
         """Return one entity by primary key, or None."""

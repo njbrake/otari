@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type {
-  ModelListResponse,
+  CatalogResponse,
   OrganizationContext,
   PlaygroundComparisons,
   PlaygroundConsent,
@@ -19,38 +19,39 @@ import {
   SelectedWorkspaceProvider,
   useSelectedWorkspace,
 } from "@/shared/hooks/SelectedWorkspace"
-import { organizationContext } from "@/tests/fixtures"
+import {
+  catalogModelSummary,
+  catalogResponse,
+  organizationContext,
+} from "@/tests/fixtures"
 import { withRouter } from "@/tests/router"
+
+/** Mirrors `RATING_ACKNOWLEDGEMENT_MS` in `hooks/usePlayground.ts`. */
+const RATING_ACKNOWLEDGEMENT_MS = 3000
 
 const WORKSPACE_ID = "44444444-4444-4444-4444-444444444444"
 
-const CATALOG: ModelListResponse = {
-  object: "list",
-  data: [
-    {
-      id: "openai:gpt-4o",
-      object: "model",
-      created: 0,
-      owned_by: "openai",
-      pricing_source: "none",
-    },
-    {
-      id: "anthropic:claude-sonnet-4",
-      object: "model",
-      created: 0,
-      owned_by: "anthropic",
-      pricing_source: "none",
-    },
-    // Not a chat model: it must not reach the picker.
-    {
-      id: "openai:text-embedding-3-small",
-      object: "model",
-      created: 0,
-      owned_by: "openai",
-      pricing_source: "none",
-    },
-  ],
-} as ModelListResponse
+const CATALOG: CatalogResponse = catalogResponse([
+  catalogModelSummary({
+    id: "gpt-4o",
+    vendor: "OpenAI",
+    selector: "gpt-4o",
+    selectors: ["openai:gpt-4o"],
+  }),
+  catalogModelSummary({
+    id: "claude-sonnet-4",
+    vendor: "Anthropic",
+    selector: "claude-sonnet-4",
+    selectors: ["anthropic:claude-sonnet-4"],
+  }),
+  // Not a chat model: it must not reach the picker.
+  catalogModelSummary({
+    id: "text-embedding-3-small",
+    vendor: "OpenAI",
+    selector: "text-embedding-3-small",
+    selectors: ["openai:text-embedding-3-small"],
+  }),
+])
 
 const NO_TOOLS: PlaygroundTools = {
   web_search: {
@@ -115,7 +116,7 @@ interface ApiState {
   conversations?: PlaygroundConversations
   comparisons?: PlaygroundComparisons
   favorites?: PlaygroundFavoriteModels
-  catalog?: ModelListResponse
+  catalog?: CatalogResponse
   messages?: PlaygroundMessages
   context?: OrganizationContext
 }
@@ -144,7 +145,7 @@ function mockApi(state: ApiState = {}) {
       if (path.startsWith("/organizations/me")) {
         return (state.context ?? context()) as never
       }
-      if (path.startsWith("/models")) {
+      if (path.startsWith("/catalog/models")) {
         return (state.catalog ?? CATALOG) as never
       }
       if (path.startsWith("/playground/tools")) return NO_TOOLS as never
@@ -315,14 +316,51 @@ afterEach(() => {
 })
 
 describe("the Playground before the first question", () => {
+  it("offers the model, not its provider offerings", async () => {
+    // The Models page shows one entry for a model two providers serve, and the
+    // picker matches it: one row, keyed by the model-level selector.
+    mockApi({
+      catalog: {
+        ...CATALOG,
+        models: [
+          catalogModelSummary({
+            id: "gpt-4o",
+            vendor: "OpenAI",
+            selector: "gpt-4o",
+            selectors: ["openai:gpt-4o", "backup:gpt-4o"],
+          }),
+          ...CATALOG.models.slice(1),
+        ],
+      },
+    })
+    renderPage()
+    await screen.findByText("Try a prompt.")
+    expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent(
+      "gpt-4o",
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Model" }))
+    expect(screen.queryByText("openai:gpt-4o")).not.toBeInTheDocument()
+    expect(screen.queryByText("backup:gpt-4o")).not.toBeInTheDocument()
+  })
+
+  it("filters comparison history from the shared History control", async () => {
+    mockApi()
+    renderPage()
+    await screen.findByText("Try a prompt.")
+    await userEvent.click(screen.getByRole("button", { name: "History" }))
+    await userEvent.click(screen.getByRole("radio", { name: "Comparisons" }))
+    expect(screen.getByRole("radio", { name: "Comparisons" })).toBeChecked()
+    expect(await screen.findByText("No saved history yet.")).toBeInTheDocument()
+  })
+
   it("greets, and offers the catalog's first chat model", async () => {
     mockApi()
     renderPage()
 
-    expect(await screen.findByText("What can I help with?")).toBeInTheDocument()
+    expect(await screen.findByText("Try a prompt.")).toBeInTheDocument()
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent(
-        "openai:gpt-4o",
+        "gpt-4o",
       )
     })
   })
@@ -330,15 +368,17 @@ describe("the Playground before the first question", () => {
   it("offers no model the gateway could not chat with", async () => {
     mockApi()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await userEvent.click(await screen.findByRole("button", { name: "Model" }))
-    expect(await screen.findByText("gpt-4o")).toBeInTheDocument()
+    expect(
+      await screen.findByRole("button", { name: /gpt-4o.*Selected/ }),
+    ).toBeInTheDocument()
     expect(screen.queryByText("text-embedding-3-small")).not.toBeInTheDocument()
   })
 
   it("says what to do when the deployment serves no models", async () => {
-    mockApi({ catalog: { object: "list", data: [] } as ModelListResponse })
+    mockApi({ catalog: { ...CATALOG, models: [] } })
     renderPage()
 
     expect(
@@ -355,7 +395,7 @@ describe("sending a question", () => {
     mockStream([delta("Hel"), delta("lo there"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
@@ -370,7 +410,7 @@ describe("sending a question", () => {
     const stream = mockStream([delta("ok"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
@@ -381,7 +421,7 @@ describe("sending a question", () => {
       `/playground/chat/completions?workspace_id=${WORKSPACE_ID}`,
     )
     expect(JSON.parse(String(init?.body))).toMatchObject({
-      model: "openai:gpt-4o",
+      model: "gpt-4o",
       stream: true,
       messages: [{ role: "user", content: "hi" }],
     })
@@ -403,7 +443,7 @@ describe("sending a question", () => {
     ])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
@@ -418,7 +458,7 @@ describe("sending a question", () => {
     mockStream([delta("partial "), delta("and more"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
@@ -443,7 +483,7 @@ describe("sending a question", () => {
     mockStream([JSON.stringify({ error: "Upstream refused" })])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
@@ -468,7 +508,7 @@ describe("sending a question", () => {
     ])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
@@ -486,13 +526,14 @@ describe("retention consent", () => {
     mockStream([delta("ok"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
     await screen.findByText("ok")
 
-    await user.click(screen.getByRole("button", { name: "Save conversation" }))
+    await user.click(screen.getByRole("button", { name: "History" }))
+    await user.click(screen.getByRole("button", { name: "Save current chat" }))
     expect(
       await screen.findByText("Save this conversation?"),
     ).toBeInTheDocument()
@@ -515,7 +556,7 @@ describe("retention consent", () => {
       )
       expect(save?.body).toMatchObject({
         workspace_id: WORKSPACE_ID,
-        model: "openai:gpt-4o",
+        model: "gpt-4o",
         title: "hi",
       })
     })
@@ -528,13 +569,14 @@ describe("retention consent", () => {
     mockStream([delta("ok"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
     await screen.findByText("ok")
 
-    await user.click(screen.getByRole("button", { name: "Save conversation" }))
+    await user.click(screen.getByRole("button", { name: "History" }))
+    await user.click(screen.getByRole("button", { name: "Save current chat" }))
 
     await waitFor(() => {
       expect(
@@ -548,6 +590,28 @@ describe("retention consent", () => {
 })
 
 describe("comparing two models", () => {
+  it("waits for model B even when Enter is pressed", async () => {
+    mockApi()
+    const stream = mockStream([delta("answer"), "[DONE]"])
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Try a prompt.")
+    await user.click(screen.getByRole("radio", { name: "Compare" }))
+    await user.type(
+      screen.getByLabelText("Message"),
+      "Compare these answers{Enter}",
+    )
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled()
+    expect(stream).not.toHaveBeenCalled()
+    expect(screen.getByLabelText("Message")).toHaveValue(
+      "Compare these answers",
+    )
+    await user.click(screen.getByRole("button", { name: "Model B" }))
+    expect(screen.getByRole("button", { name: "gpt-4o" })).toBeDisabled()
+    await user.click(await screen.findByText("claude-sonnet-4"))
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled()
+  })
+
   it("asks both models and offers a rating once both answer", async () => {
     mockApi()
     // Two frames, so an answer cut short is observable: a panel aborted after
@@ -555,20 +619,19 @@ describe("comparing two models", () => {
     mockStream([delta("an "), delta("answer"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
-    await user.click(
-      await screen.findByRole("button", { name: "Compare two models" }),
-    )
+    await user.click(await screen.findByRole("radio", { name: "Compare" }))
     expect(
       await screen.findByRole("button", { name: "Model A" }),
     ).toBeInTheDocument()
-    // The second column starts on a different model: comparing a model with
-    // itself produces two answers nobody can tell apart.
-    expect(
-      screen.getByRole("button", { name: "Model B" }),
-    ).not.toHaveTextContent("openai:gpt-4o")
+    // Model B is an explicit choice before either request can start.
+    expect(screen.getByRole("button", { name: "Model B" })).toHaveTextContent(
+      "Choose a model",
+    )
 
+    await user.click(screen.getByRole("button", { name: "Model B" }))
+    await user.click(await screen.findByText("claude-sonnet-4"))
     await user.type(screen.getByLabelText("Message"), "which?")
     await user.click(screen.getByRole("button", { name: "Send message" }))
 
@@ -576,7 +639,12 @@ describe("comparing two models", () => {
     // rating bar, because the failure this catches is specifically one panel
     // cancelling the other: the two streams run at once, and an earlier version
     // shared one abort controller, so starting B stopped A mid-sentence.
-    expect(await screen.findAllByText("an answer")).toHaveLength(2)
+    // `waitFor` on the count, not `findAllByText` then a length assertion:
+    // the two panels stream independently, so a `find` resolves on whichever
+    // answered first and the length is then read one short.
+    await waitFor(() =>
+      expect(screen.getAllByText("an answer")).toHaveLength(2),
+    )
     expect(
       await screen.findByRole("button", { name: "Model A answered better" }),
     ).toBeInTheDocument()
@@ -589,9 +657,11 @@ describe("comparing two models", () => {
     mockStream([delta("an answer"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
-    await user.click(screen.getByRole("button", { name: "Compare two models" }))
+    await user.click(screen.getByRole("radio", { name: "Compare" }))
+    await user.click(screen.getByRole("button", { name: "Model B" }))
+    await user.click(await screen.findByText("claude-sonnet-4"))
     await user.type(screen.getByLabelText("Message"), "which?")
     await user.click(screen.getByRole("button", { name: "Send message" }))
     await user.click(
@@ -614,11 +684,11 @@ describe("comparing two models", () => {
     mockStream([delta("an answer"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
-    await user.click(
-      await screen.findByRole("button", { name: "Compare two models" }),
-    )
+    await user.click(await screen.findByRole("radio", { name: "Compare" }))
+    await user.click(screen.getByRole("button", { name: "Model B" }))
+    await user.click(await screen.findByText("claude-sonnet-4"))
     await user.type(screen.getByLabelText("Message"), "which?")
     await user.click(screen.getByRole("button", { name: "Send message" }))
     await user.click(
@@ -632,12 +702,60 @@ describe("comparing two models", () => {
       expect(rating?.body).toMatchObject({
         workspace_id: WORKSPACE_ID,
         user_question: "which?",
-        model_a: "openai:gpt-4o",
+        model_a: "gpt-4o",
         model_a_answer: "an answer",
         model_b_answer: "an answer",
         preference: "model_b",
       })
     })
+  })
+
+  it("does not dismiss a fresh rating with the previous one's timer", async () => {
+    // The acknowledgement clears itself after RATING_ACKNOWLEDGEMENT_MS. Anything
+    // that moves the rating state in the meantime (regenerating an answer, which
+    // makes the exchange different from the one that was rated) has to cancel it,
+    // or the pending dismissal lands on a fresh unrated exchange and takes the
+    // rating controls away from under the operator.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      mockApi({
+        consent: { store_conversations: false, store_comparisons: true },
+      })
+      mockStream([delta("an answer"), "[DONE]"])
+      renderPage()
+      await screen.findByText("Try a prompt.")
+
+      await user.click(await screen.findByRole("radio", { name: "Compare" }))
+      await user.click(screen.getByRole("button", { name: "Model B" }))
+      await user.click(await screen.findByText("claude-sonnet-4"))
+      await user.type(screen.getByLabelText("Message"), "which?")
+      await user.click(screen.getByRole("button", { name: "Send message" }))
+      await user.click(
+        await screen.findByRole("button", { name: "Model B answered better" }),
+      )
+      await screen.findByText("Recorded. Thanks for the feedback.")
+
+      // Regenerate: the exchange on screen is no longer the one that was rated,
+      // so the rating controls come back and the pending dismissal is stale.
+      mockStream([delta("a different answer"), "[DONE]"])
+      await user.click(
+        (
+          await screen.findAllByRole("button", { name: "Regenerate response" })
+        )[0],
+      )
+      await screen.findByRole("button", { name: "Model B answered better" })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RATING_ACKNOWLEDGEMENT_MS + 500)
+      })
+
+      expect(
+        screen.getByRole("button", { name: "Model B answered better" }),
+      ).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("starts both columns level, clearing what single view had", async () => {
@@ -650,33 +768,31 @@ describe("comparing two models", () => {
     mockStream([delta("an answer"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "asked before")
     await user.click(screen.getByRole("button", { name: "Send message" }))
     expect(await screen.findByText("asked before")).toBeInTheDocument()
 
-    await user.click(screen.getByRole("button", { name: "Compare two models" }))
+    await user.click(screen.getByRole("radio", { name: "Compare" }))
     await screen.findByRole("button", { name: "Model A" })
 
     expect(screen.queryByText("asked before")).not.toBeInTheDocument()
-    expect(await screen.findAllByText("Send a message to start.")).toHaveLength(
-      2,
-    )
+    expect(
+      await screen.findByText("Choose model B to start comparing."),
+    ).toBeInTheDocument()
   })
 
   it("offers no Save while comparing, because there is no one conversation", async () => {
     mockApi()
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
-    await user.click(
-      await screen.findByRole("button", { name: "Compare two models" }),
-    )
+    await user.click(await screen.findByRole("radio", { name: "Compare" }))
     await screen.findByRole("button", { name: "Model A" })
     expect(
-      screen.queryByRole("button", { name: "Save conversation" }),
+      screen.queryByRole("button", { name: "Save current chat" }),
     ).not.toBeInTheDocument()
   })
 })
@@ -690,7 +806,7 @@ describe("state that must not outlive what produced it", () => {
     const stream = openStream()
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
@@ -719,14 +835,14 @@ describe("state that must not outlive what produced it", () => {
     const stream = openStream()
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
     await stream.push(delta("mid-flight"))
     await screen.findByText("mid-flight")
 
-    await user.click(screen.getByRole("button", { name: "Compare two models" }))
+    await user.click(screen.getByRole("radio", { name: "Compare" }))
     await screen.findByRole("button", { name: "Model A" })
 
     // The frame that matters: one delivered *after* the switch. An uncancelled
@@ -735,7 +851,9 @@ describe("state that must not outlive what produced it", () => {
     await stream.close()
 
     expect(screen.queryByText(/mid-flight/)).not.toBeInTheDocument()
-    expect(screen.getAllByText("Send a message to start.")).toHaveLength(2)
+    expect(
+      screen.getByText("Choose model B to start comparing."),
+    ).toBeInTheDocument()
   })
 
   it("starts over when the selected workspace changes", async () => {
@@ -746,7 +864,7 @@ describe("state that must not outlive what produced it", () => {
     mockStream([delta("first workspace answer"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
@@ -754,7 +872,7 @@ describe("state that must not outlive what produced it", () => {
 
     await user.click(screen.getByRole("button", { name: "Select Second" }))
 
-    expect(await screen.findByText("What can I help with?")).toBeInTheDocument()
+    expect(await screen.findByText("Try a prompt.")).toBeInTheDocument()
     expect(screen.queryByText("first workspace answer")).not.toBeInTheDocument()
   })
 
@@ -766,7 +884,7 @@ describe("state that must not outlive what produced it", () => {
     mockStream([delta("first answer"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
@@ -780,12 +898,12 @@ describe("state that must not outlive what produced it", () => {
     ).toBeInTheDocument()
     // Still the old model until they confirm.
     expect(screen.getByLabelText("Model", { exact: true })).toHaveTextContent(
-      "openai:gpt-4o",
+      "gpt-4o",
     )
 
     await user.click(screen.getByRole("button", { name: "Switch model" }))
     expect(screen.getByLabelText("Model", { exact: true })).toHaveTextContent(
-      "anthropic:claude-sonnet-4",
+      "claude-sonnet-4",
     )
     expect(screen.queryByText("first answer")).not.toBeInTheDocument()
   })
@@ -794,7 +912,7 @@ describe("state that must not outlive what produced it", () => {
     mockApi()
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.click(await screen.findByLabelText("Model", { exact: true }))
     await user.click(await screen.findByText("claude-sonnet-4"))
@@ -803,7 +921,7 @@ describe("state that must not outlive what produced it", () => {
       screen.queryByText("Switch model and start over?"),
     ).not.toBeInTheDocument()
     expect(screen.getByLabelText("Model", { exact: true })).toHaveTextContent(
-      "anthropic:claude-sonnet-4",
+      "claude-sonnet-4",
     )
   })
 })
@@ -818,7 +936,7 @@ describe("when a write fails", () => {
     mockStream([delta("ok"), "[DONE]"])
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
     await user.type(await screen.findByLabelText("Message"), "hi")
     await user.click(screen.getByRole("button", { name: "Send message" }))
@@ -835,7 +953,8 @@ describe("when a write fails", () => {
       return previous?.(path, init) as never
     })
 
-    await user.click(screen.getByRole("button", { name: "Save conversation" }))
+    await user.click(screen.getByRole("button", { name: "History" }))
+    await user.click(screen.getByRole("button", { name: "Save current chat" }))
 
     expect(
       await screen.findByText("Saving conversations requires consent."),
@@ -849,7 +968,7 @@ describe("when a write fails", () => {
       id: "conv-1",
       workspace_id: WORKSPACE_ID,
       title: "How does OAuth work",
-      model: "openai:gpt-4o",
+      model: "gpt-4o",
       message_count: 2,
       created_at: "2026-01-01T00:00:00Z",
     }
@@ -866,11 +985,9 @@ describe("when a write fails", () => {
     })
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
-    await user.click(
-      await screen.findByRole("button", { name: "Conversation history" }),
-    )
+    await user.click(await screen.findByRole("button", { name: "History" }))
     const dialog = await screen.findByRole("dialog")
     await user.click(
       within(dialog).getByRole("button", { name: /^How does OAuth work/ }),
@@ -883,22 +1000,56 @@ describe("when a write fails", () => {
 })
 
 describe("history", () => {
-  it("hides the history control until there is history", async () => {
+  it("opens an empty history before the first save", async () => {
     mockApi()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
 
-    expect(
-      screen.queryByRole("button", { name: "Conversation history" }),
-    ).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "History" }))
+    expect(await screen.findByText("No saved history yet.")).toBeInTheDocument()
   })
 
-  it("loads a saved transcript into the conversation", async () => {
+  it("falls back to a servable model when the saved one is gone", async () => {
+    mockApi({
+      consent: { store_conversations: true, store_comparisons: true },
+      conversations: {
+        data: [
+          {
+            id: "conv-2",
+            workspace_id: WORKSPACE_ID,
+            title: "Asked a retired model",
+            // Not in CATALOG, which is what a transcript outliving its model
+            // looks like: restoring the key would leave the picker blank while
+            // Send still dispatched it.
+            model: "openai:gpt-4-retired",
+            message_count: 1,
+            created_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      },
+      messages: { data: [{ role: "user", content: "Asked a retired model" }] },
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Try a prompt.")
+
+    await user.click(await screen.findByRole("button", { name: "History" }))
+    const dialog = await screen.findByRole("dialog")
+    await user.click(
+      within(dialog).getByRole("button", { name: /^Asked a retired model/ }),
+    )
+
+    const picker = await screen.findByRole("button", { name: "Model" })
+    expect(picker).toHaveTextContent("gpt-4o")
+    expect(picker).not.toHaveTextContent("gpt-4-retired")
+  })
+
+  it("loads a saved transcript with its model and exits comparison", async () => {
     const SAVED = {
       id: "conv-1",
       workspace_id: WORKSPACE_ID,
       title: "How does OAuth work",
-      model: "openai:gpt-4o",
+      model: "claude-sonnet-4",
       message_count: 2,
       created_at: "2026-01-01T00:00:00Z",
     }
@@ -914,11 +1065,10 @@ describe("history", () => {
     })
     const user = userEvent.setup()
     renderPage()
-    await screen.findByText("What can I help with?")
+    await screen.findByText("Try a prompt.")
+    await user.click(screen.getByRole("radio", { name: "Compare" }))
 
-    await user.click(
-      await screen.findByRole("button", { name: "Conversation history" }),
-    )
+    await user.click(await screen.findByRole("button", { name: "History" }))
     const dialog = await screen.findByRole("dialog")
     // Anchored, so it picks the row and not the delete beside it, whose name
     // is `Delete conversation "How does OAuth work"`.
@@ -929,5 +1079,12 @@ describe("history", () => {
     expect(
       await screen.findByText("It delegates authorization."),
     ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent(
+      "claude-sonnet-4",
+    )
+    expect(
+      screen.queryByRole("button", { name: "Model B" }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole("radio", { name: "Compare" })).toBeInTheDocument()
   })
 })

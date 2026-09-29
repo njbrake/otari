@@ -21,7 +21,7 @@ from gateway.api.routes._attempts import (
     walk_attempts,
 )
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
-from gateway.services.sandbox_backend import SandboxNotReachableError
+from gateway.services.sandbox_backend import SandboxNotReachableError, SandboxUnavailableError
 from gateway.types.attempt import Attempt
 
 
@@ -305,9 +305,7 @@ async def test_empty_plan_is_a_500_that_leaks_nothing() -> None:
         raise AssertionError("must not be called")
 
     with pytest.raises(HTTPException) as exc_info:
-        await walk_attempts(
-            attempts=[], base_request_fields={}, run_attempt=run_attempt, max_tool_iterations=10
-        )
+        await walk_attempts(attempts=[], base_request_fields={}, run_attempt=run_attempt, max_tool_iterations=10)
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.detail == EMPTY_PLAN_DETAIL
@@ -384,6 +382,7 @@ def _request_context(plan: Any) -> Any:
     return RequestContext(
         config=GatewayConfig(),
         db=None,
+        uow=None,
         # No settlement happens in these tests; the merge reads only `ctx.plan`.
         log_writer=cast(Any, None),
         hybrid_mode=False,
@@ -401,9 +400,7 @@ def _request_context(plan: Any) -> Any:
 def _ctx_with_guardrails(*guardrails: Any) -> Any:
     from gateway.services.routing import CompiledPlan
 
-    return _request_context(
-        CompiledPlan(policy_name="p", attempts=[_attempt(1, "m")], guardrails=list(guardrails))
-    )
+    return _request_context(CompiledPlan(policy_name="p", attempts=[_attempt(1, "m")], guardrails=list(guardrails)))
 
 
 def _guardrail(
@@ -474,3 +471,10 @@ def test_an_unrouted_request_keeps_exactly_the_callers_guardrails() -> None:
     caller = [_guardrail("pii", mode="monitor")]
     assert merge_guardrail_layers(unrouted, caller, []).configs is caller
     assert merge_guardrail_layers(unrouted, None, []).configs is None
+
+
+@pytest.mark.asyncio
+async def test_capacity_failure_does_not_try_another_provider() -> None:
+    with pytest.raises(SandboxUnavailableError) as caught:
+        await _walk([_attempt(1, "a"), _attempt(2, "b")], [SandboxUnavailableError("15"), "ok"])
+    assert caught.value.retry_after == "15"

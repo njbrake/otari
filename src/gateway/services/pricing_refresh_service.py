@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.core.config import GatewayConfig
 from gateway.core.database import create_session
 from gateway.log_config import logger
-from gateway.models.entities import PricingSnapshot, PricingSnapshotHistory
+from gateway.models.pricing import PricingSnapshot, PricingSnapshotHistory
 from gateway.services.pricing_service import normalize_effective_at, reset_price_cache
 
 _PREVIEW_CHANGE_LIMIT = 100
@@ -186,9 +186,7 @@ async def confirm_price_refresh(session: AsyncSession, *, accepted_by: str = "op
     # lock is defensive rather than load-bearing.
     pending_row = (
         await session.execute(
-            select(PricingSnapshot)
-            .where(PricingSnapshot.source == GENAI_PRICES_PENDING_SOURCE)
-            .with_for_update()
+            select(PricingSnapshot).where(PricingSnapshot.source == GENAI_PRICES_PENDING_SOURCE).with_for_update()
         )
     ).scalar_one_or_none()
     if pending_row is None:
@@ -346,8 +344,7 @@ async def claim_poll_tick(session: AsyncSession, interval_seconds: float) -> boo
         )
         .values(updated_at=now)
     )
-    # getattr with a default: mypy sees .execute() as Result, and rowcount lives
-    # on CursorResult. Matches budget_service's conditional updates.
+    # ``rowcount`` lives on CursorResult, and mypy sees the result of ``execute()`` as Result.
     if getattr(result, "rowcount", 0) == 1:
         await session.commit()
         return True
@@ -398,9 +395,7 @@ async def reject_price_refresh(session: AsyncSession) -> bool:
     # See confirm_price_refresh: best-effort lock, a no-op on SQLite.
     pending_row = (
         await session.execute(
-            select(PricingSnapshot)
-            .where(PricingSnapshot.source == GENAI_PRICES_PENDING_SOURCE)
-            .with_for_update()
+            select(PricingSnapshot).where(PricingSnapshot.source == GENAI_PRICES_PENDING_SOURCE).with_for_update()
         )
     ).scalar_one_or_none()
     if pending_row is None:

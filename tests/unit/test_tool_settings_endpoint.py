@@ -6,7 +6,6 @@ from typing import Any
 
 import httpx
 import pytest
-from any_guardrail.base import GuardrailName
 from fastapi.testclient import TestClient
 
 from gateway.api.routes import tool_settings
@@ -303,7 +302,13 @@ def test_guardrail_catalog_lists_what_this_gateway_can_run(tmp_path: Path) -> No
 
     assert resp.status_code == 200
     guardrails = resp.json()["guardrails"]
-    assert len(guardrails) == len(GuardrailName)
+    listed = {row["guardrail_name"] for row in guardrails}
+    # What this gateway can run is what it can reach over a hosted API. A
+    # guardrail that would hold model weights here belongs in the service the
+    # profiles read beside this one describes, and susfactor is one of those
+    # despite also declaring a hosted path it gives a stored row no way to pick.
+    assert "lakera_guard" in listed
+    assert not listed & {"llama_guard", "injec_guard", "susfactor"}
     lakera = next(row for row in guardrails if row["guardrail_name"] == "lakera_guard")
     # The create stage is what makes this worth serving: it carries the API key.
     assert any(row["name"] == "api_key" and row["secret"] for row in lakera["create_parameters"])
@@ -320,19 +325,39 @@ def test_guardrail_catalog_requires_master_key(tmp_path: Path) -> None:
         )
 
 
-def test_guardrail_catalog_is_an_operator_read(tmp_path: Path) -> None:
-    """The reader router is what a member reaches, and this is not a member's to read.
+def test_guardrail_catalog_is_a_catalog_read(tmp_path: Path) -> None:
+    """Three routers, and each of these two reads is on the one its caller reaches.
 
-    It is the picker behind a write that stores a vendor key deployment-wide, and
-    ``runnable`` describes the host's installed packages. The profiles read beside
-    it stays on the reader, because a profile name is what a caller sends.
+    The built-in catalog is the picker an organization's own guardrail form
+    fills from, so an owner or admin reaches it without operator standing. The
+    profiles read stays on the reader, because it dials ``guardrails_url`` and a
+    profile name is what a caller sends.
     """
     # Router paths, so without API_ROOT: the prefix is added where they mount.
-    catalog = "/tool-settings/guardrails/catalog"
+    builtin = "/tool-settings/guardrails/catalog"
     profiles = "/tool-settings/guardrails/profiles"
     operator = {route.path for route in tool_settings.operator_router.routes}  # type: ignore[attr-defined]
     reader = {route.path for route in tool_settings.reader_router.routes}  # type: ignore[attr-defined]
+    catalog = {route.path for route in tool_settings.catalog_router.routes}  # type: ignore[attr-defined]
 
-    assert catalog in operator
-    assert catalog not in reader
+    assert builtin in catalog
+    assert not {builtin} & (operator | reader)
     assert profiles in reader
+    assert profiles not in catalog
+
+
+def test_the_executor_is_an_operator_setting_with_a_closed_vocabulary(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        before = _fields(client.get(f"{API_ROOT}/tool-settings", headers=AUTH).json())
+        assert before["code_execution_executor"]["service"] == "sandbox"
+        assert before["code_execution_executor"]["options"] == ["auto", "otari", "provider"]
+        assert before["code_execution_executor"]["value"] is None
+        assert before["sandbox_url"]["options"] is None
+
+        patched = client.patch(f"{API_ROOT}/tool-settings", json={"code_execution_executor": "Otari"}, headers=AUTH)
+        assert patched.status_code == 200, patched.text
+        refused = client.patch(f"{API_ROOT}/tool-settings", json={"code_execution_executor": "anthropic"}, headers=AUTH)
+        assert refused.status_code == 422
+        after = _fields(client.get(f"{API_ROOT}/tool-settings", headers=AUTH).json())
+
+    assert after["code_execution_executor"]["value"] == "otari"

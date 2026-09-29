@@ -16,7 +16,7 @@ plain failover policy it was written from.
 
 The store is a linear cosine scan over the records the requesting user has in the
 requesting workspace, held in the gateway DB
-(:class:`gateway.models.entities.RoutingMemory`). That holds into the low
+(:class:`gateway.models.routing.RoutingMemory`). That holds into the low
 thousands of records per partition (the ``router_max_records_per_user`` cap,
 which bounds one user's records in one workspace, since that is what a decision
 loads); larger pools need an indexed vector store. Records carry an
@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.database import create_session
 from gateway.log_config import logger
-from gateway.models.entities import RoutingMemory
+from gateway.models.routing import RoutingMemory
 from gateway.services.pricing_service import find_model_pricing
 from gateway.services.provider_kwargs import resolve_provider_selector
 from gateway.services.routing.backends import RoutingContext, RoutingDecision
@@ -237,9 +237,7 @@ class KnnRoutingMemory:
         # still match: a miss is silent, and leaves the cheap candidate scoreless
         # while the pool reports warm.
         cache: dict[str, str] = {}
-        key_of = {
-            model: self._canonical(model, ctx.user_id, cache, workspace_id=ctx.workspace_id) for model in pool
-        }
+        key_of = {model: self._canonical(model, ctx.user_id, cache, workspace_id=ctx.workspace_id) for model in pool}
         recorded = [
             self._canonical_qualities(record.qualities, ctx.user_id, cache, workspace_id=ctx.workspace_id)
             for _, record in neighbors
@@ -320,9 +318,7 @@ class KnnRoutingMemory:
         canonical = cache.get(selector)
         if canonical is None:
             try:
-                resolved = resolve_provider_selector(
-                    self.config, selector, user_id, workspace_id=workspace_id
-                )
+                resolved = resolve_provider_selector(self.config, selector, user_id, workspace_id=workspace_id)
                 canonical = f"{resolved.instance}:{resolved.model}"
             except (ValueError, AnyLLMError):
                 canonical = selector
@@ -430,9 +426,7 @@ class KnnRoutingMemory:
             return
         partition = (RoutingMemory.user_id == user_id, RoutingMemory.workspace_id == workspace_id)
         async with create_session() as db:
-            count = (
-                await db.execute(select(func.count()).select_from(RoutingMemory).where(*partition))
-            ).scalar_one()
+            count = (await db.execute(select(func.count()).select_from(RoutingMemory).where(*partition))).scalar_one()
             if count <= self.max_records:
                 return
             # Delete by timestamp rather than by an id NOT IN list. The list would
@@ -467,15 +461,11 @@ class KnnRoutingMemory:
 
     # -- pricing -----------------------------------------------------------
 
-    async def _candidate_prices(
-        self, pool: list[str], *, workspace_id: uuid.UUID | None = None
-    ) -> dict[str, float]:
+    async def _candidate_prices(self, pool: list[str], *, workspace_id: uuid.UUID | None = None) -> dict[str, float]:
         async with create_session() as db:
             return {model: await self._input_price(db, model, workspace_id=workspace_id) for model in pool}
 
-    async def _input_price(
-        self, db: AsyncSession, selector: str, *, workspace_id: uuid.UUID | None = None
-    ) -> float:
+    async def _input_price(self, db: AsyncSession, selector: str, *, workspace_id: uuid.UUID | None = None) -> float:
         """Input price per million tokens for one candidate.
 
         Resolved through ``resolve_provider_selector`` rather than split by hand so
@@ -527,9 +517,7 @@ class KnnRoutingMemory:
         others fixes.
         """
         resolved = resolve_provider_selector(self.config, self.embedding_model)
-        result = await aembedding(
-            model=resolved.model, inputs=text, provider=resolved.provider, **resolved.kwargs
-        )
+        result = await aembedding(model=resolved.model, inputs=text, provider=resolved.provider, **resolved.kwargs)
         vector = list(result.data[0].embedding)
         return _unit([float(x) for x in vector])
 

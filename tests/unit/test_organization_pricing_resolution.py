@@ -24,7 +24,9 @@ from sqlmodel import SQLModel
 
 import gateway.models  # noqa: F401  (registers every table on the shared metadata)
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import ModelPricing, OrganizationModelPricing
+from gateway.exceptions import TenancyValidationError
+from gateway.exceptions.pricing_exceptions import OrganizationPricingOverlapError
+from gateway.models.pricing import ModelPricing, OrganizationModelPricing
 from gateway.models.tenancy import Organization
 from gateway.services.external_usage_service import _load_pricing_index, _resolve_pricing
 from gateway.services.organization_pricing_service import (
@@ -32,10 +34,6 @@ from gateway.services.organization_pricing_service import (
     validate_period,
 )
 from gateway.services.pricing_service import find_model_pricing, price_tool_calls
-from gateway.services.tenancy.errors import (
-    OrganizationPricingOverlapError,
-    TenancyValidationError,
-)
 
 T = TypeVar("T")
 
@@ -368,7 +366,7 @@ def test_an_overlapping_period_is_refused_naming_the_period_it_hits() -> None:
 
     async def scenario(session: AsyncSession) -> None:
         organization_id = await _organization(session)
-        service = OrganizationPricingService(session, _CONFIG)
+        service = OrganizationPricingService(session, _CONFIG, model_provider=None)
         await _override(
             session,
             organization_id,
@@ -414,7 +412,7 @@ def test_the_overlap_rule_on_every_arrangement_of_two_periods(
 
     async def scenario(session: AsyncSession) -> None:
         organization_id = await _organization(session)
-        service = OrganizationPricingService(session, _CONFIG)
+        service = OrganizationPricingService(session, _CONFIG, model_provider=None)
         origin = _NOW
         await _override(
             session,
@@ -443,7 +441,7 @@ def test_an_open_ended_stored_period_overlaps_everything_after_it() -> None:
 
     async def scenario(session: AsyncSession) -> None:
         organization_id = await _organization(session)
-        service = OrganizationPricingService(session, _CONFIG)
+        service = OrganizationPricingService(session, _CONFIG, model_provider=None)
         await _override(session, organization_id, effective_from=_NOW)
 
         with pytest.raises(OrganizationPricingOverlapError):
@@ -462,7 +460,7 @@ def test_a_different_model_key_is_not_an_overlap() -> None:
 
     async def scenario(session: AsyncSession) -> None:
         organization_id = await _organization(session)
-        service = OrganizationPricingService(session, _CONFIG)
+        service = OrganizationPricingService(session, _CONFIG, model_provider=None)
         await _override(session, organization_id, effective_from=_NOW, model_key="openai:gpt-4o")
 
         await service.raise_if_overlapping(
@@ -480,7 +478,7 @@ def test_editing_a_row_does_not_overlap_itself() -> None:
 
     async def scenario(session: AsyncSession) -> None:
         organization_id = await _organization(session)
-        service = OrganizationPricingService(session, _CONFIG)
+        service = OrganizationPricingService(session, _CONFIG, model_provider=None)
         row = await _override(session, organization_id, effective_from=_NOW)
 
         await service.raise_if_overlapping(

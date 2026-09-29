@@ -9,6 +9,18 @@ import { API_ROOT } from "@/shared/api/client"
 // Matches web/e2e/otari.yml. The login step needs a known key.
 export const MASTER_KEY = "e2e-master-key"
 
+// Mirrors API_KEY_PREFIX in src/gateway/auth/models.py, which stamps every key
+// the open-source format mints.
+export const API_KEY_PREFIX = "tk-"
+// The fingerprint the default adapter stores: the prefix plus seven random
+// characters (FINGERPRINT_RANDOM_CHARS in src/gateway/adapters/api_key_format_adapter.py).
+const FINGERPRINT_LENGTH = API_KEY_PREFIX.length + 7
+
+// Independent of the UI helper so these assertions can catch its regressions.
+export function expectedKeyFingerprint(key: string): string {
+  return `${key.slice(0, FINGERPRINT_LENGTH)}${"•".repeat(8)}${key.slice(-4)}`
+}
+
 // Scope link lookups to the sidebar navigation landmark. The Overview landing
 // page has tile-links whose names substring-collide with sidebar items
 // ("Providers healthy", "No budgets configured"), so an unscoped
@@ -27,17 +39,26 @@ export const nav = (page: Page): Locator =>
  * the page's `h1` and fails strict mode with two elements. Scoping to `main` is
  * what `nav()` does in the other direction, and it stays right however the rail's
  * markup changes.
+ *
+ * Matched exactly, because the Budgets onboarding heading ("No budgets yet")
+ * would otherwise also substring-match that page's title.
  */
 export const pageHeading = (page: Page, name: string): Locator =>
   page.getByRole("main").getByRole("heading", { name, exact: true })
 
 export async function login(page: Page): Promise<void> {
   await page.goto("/")
-  await page.locator('input[type="password"]').fill(MASTER_KEY)
-  await page.locator('input[type="password"]').press("Enter")
+  // Once any member holds a password (the tenancy spec's invitee does), the
+  // screen offers both credentials and defaults to email and password.
+  const field = page.locator('input[type="password"]')
+  await expect(field.first()).toBeVisible()
+  const useMasterKey = page.getByRole("button", { name: "Use your master key" })
+  if (await useMasterKey.isVisible()) await useMasterKey.click()
+  await field.fill(MASTER_KEY)
+  await field.press("Enter")
   // The sidebar appears once authenticated, regardless of the index landing
   // page.
-  await expect(nav(page).getByRole("link", { name: "Providers" })).toBeVisible()
+  await expect(nav(page).getByRole("link", { name: "Overview" })).toBeVisible()
 }
 
 // The dashboard authenticates with a session cookie, but the seeding and

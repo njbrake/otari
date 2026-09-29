@@ -112,7 +112,8 @@ root, which is a prop for something `.otari-table` currently neutralizes by hand
 for re-skinning something HeroUI already styles.
 
 **4. Discouraged, and only when nothing above reaches it: a rule against the component's own
-classes.** `.otari-*` in `globals.css` is the namespace for it (see
+classes.** `.otari-*` is the namespace for it, in `design-system/design-system.css` when the
+subject is a primitive's own DOM and in `globals.css` otherwise (see
 [design-tokens.md](./design-tokens.md)), and some cases genuinely land here: a keyframe,
 something that has to outrank an inline style, or a value the library paints in a place it gives
 you no other name for. HeroUI documents the route rather than forbidding it, and Tailwind says
@@ -140,7 +141,15 @@ rather than in a wrapper: it does not just style the component, it takes the cal
 to restyle it away.
 
 When you do write one, name in its comment which of the three rungs above does not reach the
-value, so a reader can tell a deliberate last resort from a shortcut.
+value, so a reader can tell a deliberate last resort from a shortcut. **The comment goes on the
+block of related selectors, not on every selector in it**: a table's column widths are one
+decision written as nine rules, and nine copies of the same sentence is not the point. One
+sentence heading the run is what the rule asks for.
+
+A per-table block paired with `TableScrollFrame` is the sanctioned shape rather than a last
+resort, so it owes the reader what the sizing is *for* rather than an argument for existing at
+all. `globals.css:2731`'s "Key lanes stay fixed while the name absorbs the available width" is
+the model.
 
 ## Check the shared primitives before hand-rolling
 

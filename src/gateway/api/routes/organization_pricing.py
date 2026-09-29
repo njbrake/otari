@@ -4,8 +4,8 @@ Thin composition over `gateway.services.organization_pricing_service`: resolve
 the caller's identity, call the service, return its typed result. The overlap
 rule, the role gate, and the refusal to re-price a model the deployment supplies
 the credential for all live there, and the domain errors it raises carry their
-own statuses (see `gateway.services.tenancy.errors`), so nothing here catches
-them.
+own statuses (see `gateway.exceptions.pricing_exceptions`), so nothing here
+catches them.
 
 Scoped to ``/me`` for the same reason `routes/organizations.py` is: a request
 cannot name an organization at all, because a standalone deployment has exactly
@@ -27,10 +27,10 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import CurrentIdentity, get_config, get_db, verify_master_key
+from gateway.api.deps import CurrentIdentity, ModelProviderPortDep, get_config, get_db, verify_master_key
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import OrganizationModelPricing
 from gateway.models.money import as_float
+from gateway.models.pricing import OrganizationModelPricing
 
 # The tier shape comes from the deployment pricing route rather than a second
 # copy here. An override resolves into a transient ``ModelPricing`` and is read by
@@ -212,9 +212,10 @@ class OrganizationModelPricingsPublic(BaseModel):
 def get_organization_pricing_service(
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
+    model_provider: ModelProviderPortDep,
 ) -> OrganizationPricingService:
-    """Build the pricing service on the request's session and provider map."""
-    return OrganizationPricingService(db, config)
+    """Build the pricing service on the request's session, provider map, and hosted-credential port."""
+    return OrganizationPricingService(db, config, model_provider=model_provider)
 
 
 ServiceDep = Annotated[OrganizationPricingService, Depends(get_organization_pricing_service)]
@@ -276,6 +277,11 @@ async def _commit(db: AsyncSession) -> None:
 async def list_organization_pricing(
     identity: CurrentIdentity,
     service: ServiceDep,
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    model_key: Annotated[
+        str | None,
+        Query(description="Return only this model's periods, in the canonical 'provider:model' form."),
+    ] = None,
     skip: Annotated[int, Query(ge=0, description="Number of records to skip")] = 0,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum number of records to return")] = 100,
 ) -> OrganizationModelPricingsPublic:
@@ -288,8 +294,14 @@ async def list_organization_pricing(
     Paged on the same bounds the rest of the tenancy surface uses, because the
     table grows a row per model per period. ``count`` is the total, so a client
     knows whether another page is owed.
+
+    ``model_key`` narrows to one model, which is what an editor for that model
+    needs: every period stored for it, so it can open on the one in force and
+    refuse a new one that would overlap. Normalized the same way a write is, so
+    a legacy ``provider/model`` spelling finds the rows a canonical one stored.
     """
-    overrides, total = await service.list_for_caller(identity, skip=skip, limit=limit)
+    normalized = normalize_pricing_key(config, model_key) if model_key else None
+    overrides, total = await service.list_for_caller(identity, model_key=normalized, skip=skip, limit=limit)
     return OrganizationModelPricingsPublic(
         data=[OrganizationModelPricingPublic.from_model(override) for override in overrides],
         count=total,
@@ -308,9 +320,12 @@ async def create_organization_pricing(
 
     Refused with a 409 when the period overlaps one already stored for that model,
     naming the period it collides with, rather than shadowing it. Refused with a
-    403 when the model is addressed through one of the deployment's own provider
-    instances: the deployment holds that credential and settles its upstream bill,
-    so its rate is the deployment price list's rather than a tenant's.
+    403 when the deployment, not the caller's organization, holds the credential
+    that serves the model, whether through one of its own provider instances or a
+    hosted credential the bound port supplies because no usable BYO credential of
+    the organization's own covers every one of its workspaces: either way the
+    deployment settles the upstream bill, so its rate is the deployment price
+    list's rather than a tenant's.
 
     The key is normalized to its canonical ``instance:model`` form first, the same
     call ``POST /api/v1/pricing`` makes, and that is what makes one model one row

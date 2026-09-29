@@ -40,7 +40,7 @@ plane to [otari.ai](https://otari.ai).
 - Revocable API keys with user, workspace, and model scope
 - Budget checks before spend and usage records after settlement
 - Local routing policies for failover, weighting, and learned selection
-- Optional code execution, web search, MCP, guardrails, and file understanding
+- Optional code execution, web search, MCP, inference guardrails, and file understanding
 
 ## Quickstart
 
@@ -50,7 +50,12 @@ Run an ephemeral standalone gateway with Docker:
 docker run --rm -p 8000:8000 \
   -e OTARI_MASTER_KEY=SET_A_MASTER_KEY \
   -e OPENAI_API_KEY=YOUR_OPENAI_KEY \
-  -e OTARI_CONFIG_YAML='default_pricing: true' \
+  -e OTARI_CONFIG_YAML='
+default_pricing: true
+providers:
+  openai:
+    api_key: ${OPENAI_API_KEY}
+' \
   mzdotai/otari:latest \
   otari serve
 ```
@@ -59,14 +64,14 @@ On the first empty database, Otari creates an API key and prints it once:
 
 ```text
 No API keys found. Created bootstrap key for first run. Save this key now:
-gw-...
+tk-...
 ```
 
 Send a request with that key:
 
 ```bash
 curl http://localhost:8000/api/v1/chat/completions \
-  -H "Authorization: Bearer gw-..." \
+  -H "Authorization: Bearer tk-..." \
   -H "Content-Type: application/json" \
   -d '{
     "model": "openai:gpt-4o-mini",
@@ -79,6 +84,16 @@ OpenAI clients work by setting `base_url` to
 
 This container uses SQLite inside the container and is deleted when it stops.
 Use the Compose setup below for persistent data.
+
+The command a developer runs next to a coding agent (`otari hook`,
+`otari import claude-code`) installs on its own, without the server:
+
+```bash
+brew install mozilla-ai/tap/otari
+```
+
+See [Agent Guardrails](docs/agent-guardrails.md) and
+[Use with Claude Code](docs/use-with-claude-code.md).
 
 ## Run the full stack
 
@@ -114,7 +129,9 @@ One-click deployment templates are available for
 | Hybrid | A data-plane gateway resolves credentials and reports usage to otari.ai. |
 
 When `OTARI_MODE` is unset, `OTARI_AI_TOKEN` selects hybrid mode; otherwise
-Otari defaults to standalone. See [Runtime modes](docs/modes.md).
+Otari defaults to standalone. A mode says what a process serves, not who runs it,
+so "hosted" is not the opposite of "self-hosted". See
+[Runtime modes](docs/modes.md#mode-and-who-runs-it).
 
 ## API and dashboard
 
@@ -165,6 +182,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [Routing](docs/routing.md)
 - [Access control](docs/access-control.md)
 - [Built-in tools](docs/tools.md)
+- [Agent Guardrails](docs/agent-guardrails.md)
 - [SDK and agent integrations](docs/index.md#for-integrators)
 - [Architecture](ARCHITECTURE.md)
 

@@ -13,8 +13,10 @@ import type {
 import { CONTROL_LANE } from "@/design-system/layout/SettingRow"
 import { ToolsGuardrailsPage } from "@/features/tools/ToolsGuardrailsPage"
 import { API_ROOT } from "@/shared/api/client"
-import { organizationContext } from "@/tests/fixtures"
-import { pickOption } from "@/tests/select"
+import { DeploymentProvider } from "@/shared/hooks/useDeployment"
+import { bootstrap, organizationContext } from "@/tests/fixtures"
+import { renderWithRouter } from "@/tests/router"
+import { pickOption, selectTrigger } from "@/tests/select"
 
 const FIELDS: ToolSettingField[] = [
   {
@@ -74,6 +76,14 @@ const FIELDS: ToolSettingField[] = [
     description: "Purpose hint.",
   },
   {
+    key: "code_execution_executor",
+    service: "sandbox",
+    type: "str",
+    value: null,
+    description: "Who runs a provider-native code-execution declaration.",
+    options: ["auto", "otari", "provider"],
+  },
+  {
     key: "guardrails_url",
     service: "guardrails",
     type: "url",
@@ -109,6 +119,19 @@ const TOOLS: ToolsResponse = {
       example: { type: "otari_web_search" },
     },
     {
+      id: "otari_web_fetch",
+      object: "tool",
+      description: "Retrieve bounded content from a public URL.",
+      available: true,
+      accepted_types: ["otari_web_fetch"],
+      input_schema: {
+        type: "object",
+        properties: { url: { type: "string" } },
+        required: ["url"],
+      },
+      example: { type: "otari_web_fetch" },
+    },
+    {
       id: "otari_code_execution",
       object: "tool",
       description: "Execute Python code in a sandboxed REPL.",
@@ -124,11 +147,24 @@ const TOOLS: ToolsResponse = {
   ],
 }
 
+// A deployment that does not publish the organization guardrails page, so the
+// link to it (a router `Link`) is absent and these tests need no router. The
+// one test about that link renders with both, below.
+const WITHOUT_ORGANIZATION_GUARDRAILS = bootstrap({
+  surfaces: bootstrap().surfaces.filter(
+    (surface) => surface !== "organization_guardrails",
+  ),
+})
+
 function renderWithClient(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+  return render(
+    <DeploymentProvider value={WITHOUT_ORGANIZATION_GUARDRAILS}>
+      <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+    </DeploymentProvider>,
+  )
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -206,6 +242,10 @@ const MAX_RESULTS = named("Max results", "web_search_max_results")
 const EXTRACT = named("Extract page content", "web_search_extract")
 const INTERCEPT = named("Intercept provider web search", "web_search_intercept")
 const SANDBOX_URL = named("Backend URL", "sandbox_url")
+const EXECUTOR = named(
+  "Who runs provider code tools",
+  "code_execution_executor",
+)
 const GUARDRAILS_URL = named("Backend URL", "guardrails_url")
 
 /** The last PATCH body the page sent, parsed. */
@@ -219,6 +259,25 @@ function lastPatch(fetchMock: ReturnType<typeof mockApi>) {
 describe("ToolsGuardrailsPage", () => {
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it("points the organization's guardrails at their own page, where it is served", async () => {
+    mockApi()
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    await renderWithRouter(
+      <DeploymentProvider value={bootstrap()}>
+        <QueryClientProvider client={client}>
+          <ToolsGuardrailsPage only="guardrails" />
+        </QueryClientProvider>
+      </DeploymentProvider>,
+      { url: "/tools/guardrails" },
+    )
+
+    expect(
+      await screen.findByRole("link", { name: "Guardrails" }),
+    ).toHaveAttribute("href", "/organization/guardrails")
   })
 
   it("renders every service's groups and effective values", async () => {
@@ -510,6 +569,26 @@ describe("ToolsGuardrailsPage", () => {
     )
   })
 
+  it("offers a closed-vocabulary setting as a select and saves the chosen value", async () => {
+    const fetchMock = mockApi()
+    const user = userEvent.setup()
+    renderWithClient(<ToolsGuardrailsPage only="sandbox" />)
+    await screen.findByLabelText(SANDBOX_URL)
+
+    expect(selectTrigger(EXECUTOR)).toHaveTextContent("Default (auto)")
+    // No sandbox URL in the fixture, so the row says the setting is inert.
+    expect(
+      screen.getByText(/Takes effect once a Backend URL is set/),
+    ).toBeInTheDocument()
+    await pickOption(user, EXECUTOR, "Always here, on this sandbox")
+
+    await waitFor(() =>
+      expect(lastPatch(fetchMock)).toEqual({
+        code_execution_executor: "otari",
+      }),
+    )
+  })
+
   it("surfaces a failed boolean save inline (not silently)", async () => {
     mockApi({
       patchStatus: 422,
@@ -586,6 +665,9 @@ describe("ToolsGuardrailsPage tool status", () => {
       await screen.findByRole("button", { name: /otari_web_search/ }),
     ).toBeInTheDocument()
     expect(
+      screen.getByRole("button", { name: /otari_web_fetch/ }),
+    ).toBeInTheDocument()
+    expect(
       screen.getByRole("button", { name: /otari_code_execution/ }),
     ).toBeInTheDocument()
     // The code-execution fixture has available: false.
@@ -649,7 +731,96 @@ describe("ToolsGuardrailsPage tool status", () => {
     ).toBeInTheDocument()
   })
 
-  it("keeps the editable settings usable when /v1/tools fails", async () => {
+  it("sends an unconfigured sandbox to its own backend field", async () => {
+    // The shortcut is the only thing on the page that moves an operator from
+    // "why is this off" to the field that turns it on, and it is keyed off the
+    // service's url-typed field, not off which tool is being rendered.
+    mockApi()
+    const user = userEvent.setup()
+    renderWithClient(<ToolsGuardrailsPage only="sandbox" />)
+
+    await user.click(
+      await screen.findByRole("button", { name: /otari_code_execution/ }),
+    )
+
+    await user.click(screen.getByRole("button", { name: "Set backend URL ↓" }))
+    expect(screen.getByLabelText(SANDBOX_URL)).toHaveFocus()
+  })
+
+  it("says Fetch is disabled rather than sending it to a URL field", async () => {
+    // Fetch has no backend of its own: web_fetch_enabled is startup-only, so
+    // the default "set a backend URL" reason would name a field that cannot
+    // turn it on.
+    mockApi({
+      tools: {
+        object: "list",
+        data: TOOLS.data.map((tool) =>
+          tool.id === "otari_web_fetch" ? { ...tool, available: false } : tool,
+        ),
+      },
+    })
+    const user = userEvent.setup()
+    renderWithClient(<ToolsGuardrailsPage only="web_search" />)
+
+    const row = await screen.findByRole("button", {
+      name: /otari_web_fetch/,
+    })
+    expect(row).toHaveTextContent("Unavailable · not enabled")
+    await user.click(row)
+
+    expect(
+      screen.getByText(/Set OTARI_WEB_FETCH_ENABLED=true/),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Set backend URL ↓" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("opens the Fetch declaration a client must send", async () => {
+    mockApi()
+    const user = userEvent.setup()
+    renderWithClient(<ToolsGuardrailsPage only="web_search" />)
+
+    await user.click(
+      await screen.findByRole("button", { name: /otari_web_fetch/ }),
+    )
+
+    expect(screen.getByText('"type": "otari_web_fetch"')).toBeInTheDocument()
+    // Fetch's own docs heading, not the Web search one its card sits under.
+    expect(
+      screen.getByRole("link", { name: /Developer docs/ }),
+    ).toHaveAttribute("href", expect.stringContaining("tools.md#web-fetch"))
+  })
+
+  it("renders and saves a separate Fetch per-call price", async () => {
+    const fetchMock = mockApi()
+    const user = userEvent.setup()
+    renderWithClient(<ToolsGuardrailsPage only="web_search" />)
+
+    const price = await screen.findByLabelText(
+      "Price per call for otari:web_fetch",
+    )
+    await waitFor(() => expect(price).toBeEnabled())
+    await user.type(price, "0.0042")
+    await user.tab()
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).includes("/api/v1/pricing") &&
+          (init?.method ?? "") === "POST",
+      )
+      expect(call).toBeDefined()
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+        model_key: "otari:web_fetch",
+        input_price_per_million: 4200,
+        output_price_per_million: 0,
+        unit: "requests",
+      })
+    })
+  })
+
+  it("keeps the editable settings usable when /api/v1/tools fails", async () => {
     // The status row is reference material; a failed discovery fetch must not
     // take the settings form down with it.
     mockApi({ toolsStatus: 500 })
@@ -729,7 +900,7 @@ describe("ToolsGuardrailsPage by caller role", () => {
     // The two workspace cards, in the state a harness with no selected
     // workspace lands in; their real forms are covered by their own suites.
     expect(
-      await screen.findByText(/Per-workspace web search is set on a workspace/),
+      await screen.findByText(/Per-workspace web access is set on a workspace/),
     ).toBeInTheDocument()
     expect(
       screen.getByText(/Per-workspace code execution is set on a workspace/),
@@ -799,7 +970,7 @@ describe("ToolsGuardrailsPage by caller role", () => {
       screen.getByRole("heading", { name: "Search tools" }),
     ).toBeInTheDocument()
     expect(
-      screen.getByText(/Per-workspace web search is set on a workspace/),
+      screen.getByText(/Per-workspace web access is set on a workspace/),
     ).toBeInTheDocument()
   })
 })

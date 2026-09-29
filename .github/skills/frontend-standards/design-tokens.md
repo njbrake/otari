@@ -174,7 +174,7 @@ not adapt and nothing downstream can make them.
 
 The ones we have not aliased are a gap rather than a decision **where
 `@heroui/styles` still declares and reads them**, and the gap decides how much work a
-visual fix is. Not every unaliased name is one: `globals.css:361` records that upstream's
+visual fix is. Not every unaliased name is one: `globals.css:384` records that upstream's
 `--content1` through `--content4` are deliberately left out because HeroUI v3 neither
 declares nor reads them, so aliasing those would restore four inert lines. Check that a
 variable is live upstream before treating its absence here as a gap. A value
@@ -333,6 +333,13 @@ class name needs something that reads class names.
   the role is missing, not the shade.
 - **No numbered Tailwind palette classes.** `bg-emerald-50`, `text-gray-900`, `border-red-200`
   bypass the whole system and are invisible to the dark theme. A status color is a token.
+- **Stacking is not tokenized yet, and that is the known gap.** Twelve Tailwind `z-` utilities
+  across three values (`z-10`, `z-40`, `z-50`) in the whole tree, plus a bare `z-index: 1`
+  used thirteen times in `globals.css`, so "which of these is above which, and why" is
+  answered by reading all of them. Until there is a named family (`--z-sticky`,
+  `--z-overlay`, and so on), reuse a value an existing sibling already uses rather than
+  inventing a higher one, and say in a comment what the new layer sits above. A `z-[999]`
+  is the finding this is here to prevent.
 - **Keep it recognizable as `otari-ai/frontend/src/index.css`.** The control-plane pages land
   here at M5 and have to land on this palette without a reconciliation pass, so a divergence
   in a token's name, value, or reasoning comment costs more than it looks like it does.
@@ -365,9 +372,27 @@ declared again. If you find yourself wanting one, the role is missing from the f
 add the role.
 
 The `otari-` prefix that survives on a handful of **class** names (`.otari-table`,
-`.otari-markdown`, `.otari-detail-row`, `.otari-bulk-bar`) is unrelated: it is the app's
+`.otari-detail-row`, `.otari-bulk-bar`) is unrelated: it is the app's
 namespace for a hook that has to reach inside a HeroUI component's DOM, and those rules
 consume `--color-*` like everything else.
+
+**Those names are BEM, and the shape is not optional.** A block is `otari-<block>`, an
+element inside it is `otari-<block>__<element>`, and a variant of either is
+`otari-<block>--<modifier>`: `.otari-dialog`, `.otari-dialog__footer`,
+`.otari-dialog--lg`. The reason is that a stylesheet imported from a component is still
+global (nothing in React scopes one), so the namespace and the structure together are the
+whole collision story: the prefix keeps the block out of HeroUI's and Tailwind's way, and
+the two separators keep a part of one block from reading as a block of its own. The part
+with teeth is that `src/architecture.test.ts` parses this shape. Its class pattern matches
+an optional `__element`, and its modifier pattern matches the `--` prefix a dialog builds
+at render (`` `otari-dialog--${size}` ``), so a class that departs from the convention is
+invisible to the probe rather than merely inconsistent, and the primitive wearing it goes
+unchecked.
+
+A primitive's rules live in `web/src/design-system/design-system.css`, which
+`globals.css` imports ahead of everything else, and the probe reads that file rather
+than the application's. A per-table block and a rule whose consumers are feature pages
+stay in `globals.css`. That file's header has the split and the cascade consequence of it.
 
 The namespace existing is not the same as the approach being recommended. HeroUI supports a
 rule against its own classes, so the reason this one is last of the four ways to change how

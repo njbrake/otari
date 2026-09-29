@@ -1,8 +1,9 @@
 import { Button, Description, Input, Label, TextField } from "@heroui/react"
 import { useState } from "react"
-import { FiKey, FiSmartphone } from "react-icons/fi"
+import { FiEdit2, FiKey, FiSmartphone, FiTrash2 } from "react-icons/fi"
 
 import type { Passkey } from "@/client"
+import { RowAction, RowActionRow } from "@/design-system/actions/RowAction"
 import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { FieldMessages } from "@/design-system/forms/FieldMessages"
@@ -13,7 +14,6 @@ import {
   useRegisterPasskey,
   useRenamePasskey,
 } from "@/shared/api/auth"
-import { RowActions } from "@/shared/components/deprecated/RowActions"
 import { formatDateTime } from "@/shared/helpers/format"
 import {
   MAX_PASSKEY_NAME_LENGTH,
@@ -82,24 +82,20 @@ function PasskeyRow({
           )}
         </div>
       </div>
-      <RowActions>
-        <Button
-          variant="ghost"
-          size="sm"
+      <RowActionRow>
+        <RowAction
+          icon={FiEdit2}
+          label="Rename"
           isDisabled={isBusy}
           onPress={onRename}
-        >
-          Rename
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
+        />
+        <RowAction
+          icon={FiTrash2}
+          label="Delete"
           isDisabled={isBusy}
           onPress={onDelete}
-        >
-          Delete
-        </Button>
-      </RowActions>
+        />
+      </RowActionRow>
     </li>
   )
 }
@@ -145,9 +141,9 @@ export function PasskeysCard() {
   const offerPasskeySignIn = useOfferPasskeySignIn()
 
   const [newName, setNewName] = useState("")
-  const [renaming, setRenaming] = useState<Passkey | null>(null)
+  const [renaming, setRenaming] = useState<Passkey>()
   const [renamedTo, setRenamedTo] = useState("")
-  const [deleting, setDeleting] = useState<Passkey | null>(null)
+  const [deleting, setDeleting] = useState<Passkey>()
 
   const rows = passkeys.data?.data ?? []
   const isBusy = register.isPending || rename.isPending || remove.isPending
@@ -186,7 +182,7 @@ export function PasskeysCard() {
     }
     rename.mutate(
       { id: renaming.id, name },
-      { onSuccess: () => setRenaming(null) },
+      { onSuccess: () => setRenaming(undefined) },
     )
   }
 
@@ -216,7 +212,7 @@ export function PasskeysCard() {
         if (usableLeft === 0) {
           offerPasskeySignIn(false)
         }
-        setDeleting(null)
+        setDeleting(undefined)
       },
     })
   }
@@ -329,10 +325,10 @@ export function PasskeysCard() {
       </Section>
 
       <ConfirmDialog
-        isOpen={renaming !== null}
+        isOpen={renaming !== undefined}
         onOpenChange={(open) => {
           if (!open) {
-            setRenaming(null)
+            setRenaming(undefined)
           }
         }}
         heading="Rename this passkey"
@@ -355,10 +351,10 @@ export function PasskeysCard() {
       />
 
       <ConfirmDialog
-        isOpen={deleting !== null}
+        isOpen={deleting !== undefined}
         onOpenChange={(open) => {
           if (!open) {
-            setDeleting(null)
+            setDeleting(undefined)
           }
         }}
         heading="Delete this passkey?"

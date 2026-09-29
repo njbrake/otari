@@ -26,11 +26,12 @@ from fastapi import status
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from gateway.auth.models import generate_api_key, hash_key, key_prefix
+from gateway.adapters.api_key_format_adapter import DefaultApiKeyFormatAdapter
+from gateway.auth.models import hash_key
 from gateway.core.config import API_ROOT
-from gateway.models.entities import APIKey, DashboardSession
-from gateway.models.entities import User as BillingUser
-from gateway.models.tenancy import Organization, OrganizationMember, User, Workspace, WorkspaceMember
+from gateway.models.api_keys import APIKey
+from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace, WorkspaceMember
+from gateway.models.users import User as BillingUser
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
 _PREFIX = f"{API_ROOT}/organizations/me/keys"
@@ -232,9 +233,7 @@ def test_a_member_creates_a_key_in_a_workspace_they_belong_to(client: TestClient
     assert row["workspace_id"] == str(world.workspaces["alpha_one"])
 
 
-def test_a_member_cannot_mint_into_a_sibling_workspace_they_do_not_belong_to(
-    client: TestClient, world: _World
-) -> None:
+def test_a_member_cannot_mint_into_a_sibling_workspace_they_do_not_belong_to(client: TestClient, world: _World) -> None:
     """Alpha two is their organization's, so scoping to the organization alone would pass everything but this."""
     code, body = _create(
         client,
@@ -267,9 +266,7 @@ def test_an_owner_may_mint_into_any_workspace_of_their_organization(client: Test
     assert body["user_id"] == str(world.users["alpha_owner"])
 
 
-def test_an_omitted_workspace_means_the_default_one_the_caller_belongs_to(
-    client: TestClient, world: _World
-) -> None:
+def test_an_omitted_workspace_means_the_default_one_the_caller_belongs_to(client: TestClient, world: _World) -> None:
     code, body = _create(client, world, "alpha_member", {"key_name": "defaulted"})
     assert code == status.HTTP_200_OK, body
 
@@ -416,7 +413,7 @@ def test_a_key_the_member_owns_but_did_not_mint_is_theirs_to_manage(
     owner predicate on its own, and that it carries the whole lifecycle rather
     than the list alone.
     """
-    raw = generate_api_key()
+    raw = DefaultApiKeyFormatAdapter(None).mint()
     key_id = str(uuid.uuid4())
     owner_id = str(world.users["alpha_member"])
     session = db_session_factory()
@@ -430,7 +427,7 @@ def test_a_key_the_member_owns_but_did_not_mint_is_theirs_to_manage(
                 id=key_id,
                 workspace_id=world.workspaces["alpha_one"],
                 key_hash=hash_key(raw),
-                key_prefix=key_prefix(raw),
+                key_prefix=DefaultApiKeyFormatAdapter(None).fingerprint(raw),
                 key_name="handed-over",
                 user_id=owner_id,
             )
