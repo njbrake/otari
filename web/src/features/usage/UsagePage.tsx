@@ -661,23 +661,25 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
     () => ({ ...filters, model: undefined }),
     [filters],
   )
-  // Each picker needs its own query only while its own filter is set: otherwise
-  // its filters are the page's, and the page summary already carries the
-  // breakdown it reads. Sending it anyway repeated a whole summary (totals,
-  // series and the grouping) over the same window.
+  // Each picker needs a query of its own only while its own filter is set.
+  // Otherwise its filters are the page's, so it asks for the page summary's key
+  // and shares that request. Staying on one observer is what keeps the options
+  // (and the chip labels read from them) in place across the first pick:
+  // `keepPreviousData` carries the page summary, which is the right window for
+  // the new key, until the picker's own summary lands.
   const ownModelQuery = modelFilters.length > 0
   const modelSuggest = useUsageSummary(
     modelSuggestFilters,
     bucket,
-    MODEL_BREAKDOWN,
-    ownModelQuery,
+    ownModelQuery ? MODEL_BREAKDOWN : PAGE_BREAKDOWNS,
+    true,
     scope,
   )
   const realGroups = (rows: UsageGroupRow[] | undefined) =>
     (rows ?? []).filter((r) => !r.is_other && r.key !== null)
-  const modelOptions = realGroups(
-    (ownModelQuery ? modelSuggest.data : summary.data)?.by_model,
-  ).map((r) => r.key as string)
+  const modelOptions = realGroups(modelSuggest.data?.by_model).map(
+    (r) => r.key as string,
+  )
 
   const entitySuggestFilters: UsageFilters = useMemo(
     () => ({ ...filters, user_id: undefined, api_key_id: undefined }),
@@ -687,11 +689,11 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
   const entitySuggest = useUsageSummary(
     entitySuggestFilters,
     bucket,
-    ENTITY_BREAKDOWNS,
-    ownEntityQuery,
+    ownEntityQuery ? ENTITY_BREAKDOWNS : PAGE_BREAKDOWNS,
+    true,
     scope,
   )
-  const entityData = ownEntityQuery ? entitySuggest.data : summary.data
+  const entityData = entitySuggest.data
   // Name first, id in parentheses: the id is what the row submits, and two
   // people can share a name. Resolved the same way the breakdown table below
   // resolves it, so the same person reads the same in both.

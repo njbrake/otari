@@ -1030,6 +1030,40 @@ describe("UsagePage", () => {
     })
   })
 
+  it("keeps the user options and chip label while the picker's own summary loads", async () => {
+    // The first pick moves the entity picker onto a summary of its own. Until that
+    // lands it has to keep showing the page summary it just read from, or the chip
+    // falls back to the raw id and the picker offers nothing.
+    let holdEntity = false
+    const fetchMock = mockApi(summary())
+    const answer = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input)
+      const dims = new URL(url, "http://x").searchParams.getAll("dimensions")
+      if (holdEntity && dims.join() === "user,api_key") {
+        return new Promise<Response>(() => {})
+      }
+      return answer(input, init)
+    })
+    const user = userEvent.setup()
+    renderPage(<UsagePage />)
+    await screen.findByText("gpt-5.6")
+    holdEntity = true
+
+    const userInput = screen.getByRole("combobox", { name: "User" })
+    await user.click(userInput)
+    await user.type(userInput, "alice")
+    await user.click(await screen.findByRole("option", { name: /alice/ }))
+
+    expect(
+      screen.getByLabelText("Remove User filter Alice (alice)"),
+    ).toBeInTheDocument()
+    await user.click(userInput)
+    expect(
+      await screen.findByRole("option", { name: /Bob/ }),
+    ).toBeInTheDocument()
+  })
+
   it("switches the secondary breakdown between session, endpoint, provider, and source", async () => {
     const user = userEvent.setup()
     mockApi(summary())

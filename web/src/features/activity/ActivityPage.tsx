@@ -1390,8 +1390,8 @@ export function ActivityPage() {
   // not requested.
   // The two suggestion queries below differ only by the filters each drops, plus
   // `priced`, which the model one never applies. With none of those set they ask
-  // the same question, so this one carries all four breakdowns and the entity
-  // query is not sent.
+  // the same question, so both carry all four breakdowns under one key and share
+  // a request.
   const sharedSuggestions =
     modelFilters.length === 0 &&
     userFilters.length === 0 &&
@@ -1420,10 +1420,12 @@ export function ActivityPage() {
   const entitySummary = useUsageSummary(
     entitySuggestFilters,
     "day",
-    ENTITY_BREAKDOWNS,
-    !sharedSuggestions,
+    // Shared through the key rather than by reading `modelSummary`: on the first
+    // pick this observer's own previous data is the right window for its new key,
+    // so the options and chip labels hold until its own summary lands.
+    sharedSuggestions ? SUGGESTION_BREAKDOWNS : ENTITY_BREAKDOWNS,
   )
-  const entityData = sharedSuggestions ? modelSummary.data : entitySummary.data
+  const entityData = entitySummary.data
   const keyOptions = realGroups(entityData?.by_api_key).map((r) => ({
     value: r.key as string,
     label: r.label ?? `${(r.key as string).slice(0, 8)}…`,
