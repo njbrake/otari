@@ -1,5 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react"
-import { FiCheck } from "react-icons/fi"
+import { Fragment } from "react"
 import type {
   ToolServiceName,
   ToolSettingField,
@@ -11,7 +10,6 @@ import { PageIntro } from "@/design-system/layout/PageIntro"
 import { CONTROL_LANE } from "@/design-system/layout/SettingRow"
 import { SettingsGroup } from "@/design-system/layout/SettingsGroup"
 import { isDeploymentOperator } from "@/features/organization/roles"
-import { OrganizationGuardrailsCard } from "@/features/tools/OrganizationGuardrailsCard"
 import { SearchToolsCard } from "@/features/tools/SearchToolsCard"
 import type { FieldCopy } from "@/features/tools/ToolSettingRows"
 import { ToolPriceRow, ToolSettingRow } from "@/features/tools/ToolSettingRows"
@@ -97,12 +95,6 @@ const FIELD_COPY: Record<string, FieldCopy & { defaultLabel?: string }> = {
     help: "Sent to the backend when a tool entry has none of its own.",
     placeholder: "Run untrusted analysis code",
   },
-  guardrails_url: {
-    label: "Backend URL",
-    help: "Used when a request does not pass a guardrail URL of its own.",
-    placeholder: "http://guardrails:8000",
-    machine: true,
-  },
 }
 
 function copyFor(field: ToolSettingField): FieldCopy & {
@@ -135,9 +127,9 @@ interface ServiceSpec {
   label: string
   intro: string
   docsAnchor: string
-  /** The pricing key for a tool Otari runs itself. Guardrails is a check, not billable work. */
+  /** The pricing key for the tool Otari runs itself. */
   pricingKey?: string
-  /** The `/tools` id whose status heads the page. Guardrails declares none. */
+  /** The `/tools` id whose status heads the page. */
   toolId?: string
   groups: GroupSpec[]
 }
@@ -203,57 +195,9 @@ const SERVICES: ServiceSpec[] = [
       },
     ],
   },
-  {
-    key: "guardrails",
-    label: "Guardrails",
-    intro:
-      "The input-guardrails service this deployment checks requests against, and what your organization mandates.",
-    docsAnchor: "who-runs-a-tool",
-    groups: [
-      {
-        title: "Backend",
-        blurb:
-          "Used when a request does not pass a guardrail URL of its own. Guardrails are a check, so they are never priced.",
-        docsAnchor: "who-runs-a-tool",
-        keys: ["guardrails_url"],
-        catchAll: true,
-      },
-    ],
-  },
 ]
 
 const toolsDocs = (anchor?: string) => docsSourceHref("tools.md", anchor)
-
-// Two sibling cards still submit with a Save button of their own and have no
-// row to report into, so they keep the page-level acknowledgement. The setting
-// rows do not use it: each says what happened where it happened.
-function useSaveToast(): [string | null, (message: string) => void] {
-  const [message, setMessage] = useState<string | null>(null)
-  const timer = useRef<number | undefined>(undefined)
-  useEffect(() => () => window.clearTimeout(timer.current), [])
-  return [
-    message,
-    (next: string) => {
-      setMessage(next)
-      window.clearTimeout(timer.current)
-      timer.current = window.setTimeout(() => setMessage(null), 2500)
-    },
-  ]
-}
-
-function SaveToast({ message }: { message: string | null }) {
-  if (!message) return null
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="fixed right-4 bottom-4 z-50 flex items-center gap-2 rounded-lg border border-success bg-success-subtle px-4 py-3 text-sm font-medium text-success shadow-elevation-lg"
-    >
-      <FiCheck aria-hidden="true" className="h-5 w-5" />
-      {message}
-    </div>
-  )
-}
 
 /** The frames, at the real row height, so settings arriving does not move the page. */
 function LoadingGroups() {
@@ -280,7 +224,7 @@ function LoadingGroups() {
 }
 
 /**
- * The tool and guardrail service settings, whole or narrowed to one service.
+ * The tool service settings, whole or narrowed to one service.
  *
  * `only` is what makes the sidebar's Tools group work: each child route renders
  * this page filtered to its own service rather than scrolling one long page.
@@ -292,7 +236,7 @@ function LoadingGroups() {
  * Save button and no page-level toast, because a page of independent settings
  * has nothing for one button to be about.
  */
-export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
+export function ToolsPage({ only }: { only?: ToolServiceName } = {}) {
   // The Tools group is member-visible for the workspace and organization cards
   // below. Of the deployment-wide reads above them, only the tool settings now
   // answer a tenant, without the service endpoints in them (otari-ai#1969), so
@@ -306,7 +250,6 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
   const pricing = usePricing(isOperator)
   const setPricing = useSetPricing()
   const update = useUpdateToolSettings()
-  const [toast, showToast] = useSaveToast()
 
   // Latest rate per key. /api/v1/pricing is history-shaped (one row per
   // effective_at), and the newest row is the one in force.
@@ -326,7 +269,7 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
   return (
     <div className="flex flex-col gap-10 pb-10">
       <PageIntro
-        title={narrowed?.label ?? "Tools & Guardrails"}
+        title={narrowed?.label ?? "Tools"}
         docsHref={toolsDocs(narrowed?.docsAnchor)}
       >
         {/* Two readings: an operator configures the service endpoints, and a
@@ -334,8 +277,8 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
             requests instead of how to configure a backend they cannot reach. */}
         {isOperator
           ? (narrowed?.intro ??
-            "Configure the built-in tool and guardrail service endpoints without a restart. Changes apply immediately and persist.")
-          : "How this deployment's built-in tools behave on your requests, what your workspace may use of them, and what your organization mandates."}
+            "Configure the built-in tool service endpoints without a restart. Changes apply immediately and persist.")
+          : "How this deployment's built-in tools behave on your requests, and what your workspace may use of them."}
       </PageIntro>
 
       <ErrorBanner error={query.error} />
@@ -463,9 +406,6 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
                 docsHref={toolsDocs("per-workspace-code-policy")}
               />
             ) : null}
-            {service.key === "guardrails" ? (
-              <OrganizationGuardrailsCard onSaved={showToast} />
-            ) : null}
           </Fragment>
         )
       })}
@@ -474,8 +414,6 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
           every narrowed view, each of which is one service. `/tools/mcp-servers`
           renders the same card. */}
       {only ? null : <WorkspaceMcpServersCard />}
-
-      <SaveToast message={toast} />
     </div>
   )
 }

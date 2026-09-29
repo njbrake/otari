@@ -274,7 +274,7 @@ function NavRowLink({
  *
  * **Collapsed** and it is an icon that opens a flyout of the children. This is
  * the case the rail used to lose: the parent linked straight to its own page, so
- * Guardrails, Web search and Code execution had no collapsed affordance at all
+ * Web search and Code execution had no collapsed affordance at all
  * and a bookmark was the only way back to them.
  */
 function NavGroup({
@@ -290,10 +290,9 @@ function NavGroup({
   isVisible: (item: NavItem) => boolean
   collapsed: boolean
 }) {
-  // A child declaring its own surface is gated on it. Without this the field
-  // was decoration: Guardrails is grouped under Routing but served by the tools
-  // surface, so a deployment without that surface kept the link and landed on
-  // the "not available here" panel.
+  // A child declaring its own surface is gated on it, so a deployment without
+  // that surface does not keep a link that lands on the "not available here"
+  // panel.
   const children = (item.children ?? []).filter((child) =>
     child.surface ? isVisible({ ...item, surface: child.surface }) : true,
   )
@@ -1189,7 +1188,7 @@ function AppShellChrome() {
               ) : routeIsGatedOff ? (
                 <EmptyState
                   // The leaf's name, not the group's: someone who followed a
-                  // link to Guardrails should not be told "Routing" is missing.
+                  // link to Web search should not be told "Tools" is missing.
                   // `navLabelForPath` answers for every registered path, and only
                   // a registered path can be gated off, so the fallback is there
                   // for the type rather than for a case that happens.

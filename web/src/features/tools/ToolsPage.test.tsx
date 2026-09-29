@@ -11,7 +11,7 @@ import type {
   ToolsResponse,
 } from "@/client"
 import { CONTROL_LANE } from "@/design-system/layout/SettingRow"
-import { ToolsGuardrailsPage } from "@/features/tools/ToolsGuardrailsPage"
+import { ToolsPage } from "@/features/tools/ToolsPage"
 import { API_ROOT } from "@/shared/api/client"
 import { organizationContext } from "@/tests/fixtures"
 import { pickOption } from "@/tests/select"
@@ -73,18 +73,11 @@ const FIELDS: ToolSettingField[] = [
     value: null,
     description: "Purpose hint.",
   },
-  {
-    key: "guardrails_url",
-    service: "guardrails",
-    type: "url",
-    value: "http://guardrails:8000",
-    description: "Guardrails URL.",
-  },
 ]
 
 const RESPONSE: ToolSettingsResponse = { fields: FIELDS }
 
-// What the server hands a non-operator: the same fields with the three
+// What the server hands a non-operator: the same fields with the two
 // service endpoints withheld rather than masked (otari-ai#1969).
 const TENANT_RESPONSE: ToolSettingsResponse = {
   fields: FIELDS.filter((field) => field.type !== "url"),
@@ -197,7 +190,7 @@ function mockApi(opts: MockOpts = {}) {
 }
 
 // The label a control now carries: the visible label and the config key beside
-// it, which is what makes "Backend URL" unique on a page configuring three
+// it, which is what makes "Backend URL" unique on a page configuring two
 // services.
 const named = (label: string, key: string) => `${label} ${key}`
 const WEB_SEARCH_URL = named("Backend URL", "web_search_url")
@@ -206,7 +199,6 @@ const MAX_RESULTS = named("Max results", "web_search_max_results")
 const EXTRACT = named("Extract page content", "web_search_extract")
 const INTERCEPT = named("Intercept provider web search", "web_search_intercept")
 const SANDBOX_URL = named("Backend URL", "sandbox_url")
-const GUARDRAILS_URL = named("Backend URL", "guardrails_url")
 
 /** The last PATCH body the page sent, parsed. */
 function lastPatch(fetchMock: ReturnType<typeof mockApi>) {
@@ -216,16 +208,16 @@ function lastPatch(fetchMock: ReturnType<typeof mockApi>) {
   return call ? (JSON.parse(String(call[1]?.body)) as unknown) : undefined
 }
 
-describe("ToolsGuardrailsPage", () => {
+describe("ToolsPage", () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
   it("renders every service's groups and effective values", async () => {
     mockApi()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
 
-    // The combined page names the service in each group heading, since three
+    // The combined page names the service in each group heading, since two
     // groups called "Backend" would not say which one they configure.
     expect(
       await screen.findByRole("heading", { name: "Web search · Backend" }),
@@ -233,22 +225,14 @@ describe("ToolsGuardrailsPage", () => {
     expect(
       screen.getByRole("heading", { name: "Code execution · Backend" }),
     ).toBeInTheDocument()
-    expect(
-      await screen.findByRole("heading", { name: "Guardrails · Backend" }),
-    ).toBeInTheDocument()
     expect(screen.getByLabelText(WEB_SEARCH_URL)).toHaveValue(
       "http://searxng:8080",
-    )
-    expect(screen.getByLabelText(GUARDRAILS_URL)).toHaveValue(
-      "http://guardrails:8000",
     )
   })
 
   it("leaves the page column to the shell rather than capping its own", async () => {
     mockApi()
-    const { container } = renderWithClient(
-      <ToolsGuardrailsPage only="web_search" />,
-    )
+    const { container } = renderWithClient(<ToolsPage only="web_search" />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     // `<main>` supplies the page column and centers it, so a cap here is not a
@@ -261,7 +245,7 @@ describe("ToolsGuardrailsPage", () => {
   it("saves a URL change on blur, with no Save button on the page", async () => {
     const fetchMock = mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     const input = screen.getByLabelText(WEB_SEARCH_URL)
@@ -280,7 +264,7 @@ describe("ToolsGuardrailsPage", () => {
   it("commits a field on Enter without leaving it by hand", async () => {
     const fetchMock = mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(ENGINES)
 
     await user.type(screen.getByLabelText(ENGINES), "google,bing{Enter}")
@@ -295,7 +279,7 @@ describe("ToolsGuardrailsPage", () => {
   it("does not save a field that was focused and left unchanged", async () => {
     const fetchMock = mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     await user.click(screen.getByLabelText(WEB_SEARCH_URL))
@@ -307,7 +291,7 @@ describe("ToolsGuardrailsPage", () => {
   it("clears a URL to null when emptied", async () => {
     const fetchMock = mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     await user.clear(screen.getByLabelText(WEB_SEARCH_URL))
@@ -321,7 +305,7 @@ describe("ToolsGuardrailsPage", () => {
   it("trims surrounding whitespace when saving a text field", async () => {
     const fetchMock = mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(ENGINES)
 
     await user.type(screen.getByLabelText(ENGINES), "  google,bing  ")
@@ -337,7 +321,7 @@ describe("ToolsGuardrailsPage", () => {
   it("refuses a ceiling that is not a whole number without asking the server", async () => {
     const fetchMock = mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(MAX_RESULTS)
 
     const input = screen.getByLabelText(MAX_RESULTS)
@@ -358,7 +342,7 @@ describe("ToolsGuardrailsPage", () => {
       // that admits a decimal, so its guard is a different regex, not none.
       const fetchMock = mockApi()
       const user = userEvent.setup()
-      renderWithClient(<ToolsGuardrailsPage only="web_search" />)
+      renderWithClient(<ToolsPage only="web_search" />)
       const price = await screen.findByLabelText(
         "Price per call for otari:web_search",
       )
@@ -387,7 +371,7 @@ describe("ToolsGuardrailsPage", () => {
     // The stored column is per million, so 0.07 * 1e6 is 70000.00000000001.
     const fetchMock = mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage only="web_search" />)
+    renderWithClient(<ToolsPage only="web_search" />)
     const price = await screen.findByLabelText(
       "Price per call for otari:web_search",
     )
@@ -412,7 +396,7 @@ describe("ToolsGuardrailsPage", () => {
   it("tests a URL for reachability and announces the result", async () => {
     mockApi({ testBody: { ok: true, reason: "reachable (HTTP 200)" } })
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     await user.click(screen.getByRole("button", { name: "Test web_search" }))
@@ -447,7 +431,7 @@ describe("ToolsGuardrailsPage", () => {
       }
       return jsonResponse([])
     })
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     await user.click(screen.getByRole("button", { name: "Test web_search" }))
@@ -470,7 +454,7 @@ describe("ToolsGuardrailsPage", () => {
       patchDetail: "URL must use http or https, got no scheme.",
     })
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(SANDBOX_URL)
 
     const input = screen.getByLabelText(SANDBOX_URL)
@@ -487,7 +471,7 @@ describe("ToolsGuardrailsPage", () => {
   it("sends web_search_extract=false when the tri-state select is set to Off", async () => {
     const fetchMock = mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     await pickOption(user, EXTRACT, "Off")
@@ -500,7 +484,7 @@ describe("ToolsGuardrailsPage", () => {
   it("saves web_search_intercept from the tri-state select", async () => {
     const fetchMock = mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     await pickOption(user, INTERCEPT, "On")
@@ -516,7 +500,7 @@ describe("ToolsGuardrailsPage", () => {
       patchDetail: "web_search_extract must be a boolean.",
     })
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     await pickOption(user, EXTRACT, "Off")
@@ -544,7 +528,7 @@ describe("ToolsGuardrailsPage", () => {
         ? jsonResponse(organizationContext())
         : jsonResponse(withExtra),
     )
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
 
     expect(
       await screen.findByLabelText("web_search_timeout_s"),
@@ -555,7 +539,7 @@ describe("ToolsGuardrailsPage", () => {
     // One row shape for every field type, which is what keeps the controls in a
     // column down a group whether or not a row also carries a Test button.
     mockApi()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     for (const label of [WEB_SEARCH_URL, ENGINES, MAX_RESULTS]) {
@@ -572,16 +556,16 @@ describe("ToolsGuardrailsPage", () => {
   })
 })
 
-describe("ToolsGuardrailsPage tool status", () => {
+describe("ToolsPage tool status", () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
   it("heads each tool's settings with whether the deployment can run it", async () => {
     mockApi()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
 
-    // One row per gateway-run tool; guardrails declares none, so it has no row.
+    // One row per gateway-run tool.
     expect(
       await screen.findByRole("button", { name: /otari_web_search/ }),
     ).toBeInTheDocument()
@@ -597,7 +581,7 @@ describe("ToolsGuardrailsPage tool status", () => {
   it("opens to the type a client declares and the reason a tool is unavailable", async () => {
     mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage only="sandbox" />)
+    renderWithClient(<ToolsPage only="sandbox" />)
 
     const row = await screen.findByRole("button", {
       name: /otari_code_execution/,
@@ -639,7 +623,7 @@ describe("ToolsGuardrailsPage tool status", () => {
       },
     })
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage only="web_search" />)
+    renderWithClient(<ToolsPage only="web_search" />)
 
     await user.click(
       await screen.findByRole("button", { name: /otari_web_search/ }),
@@ -653,7 +637,7 @@ describe("ToolsGuardrailsPage tool status", () => {
     // The status row is reference material; a failed discovery fetch must not
     // take the settings form down with it.
     mockApi({ toolsStatus: 500 })
-    renderWithClient(<ToolsGuardrailsPage only="web_search" />)
+    renderWithClient(<ToolsPage only="web_search" />)
 
     expect(await screen.findByLabelText(WEB_SEARCH_URL)).toHaveValue(
       "http://searxng:8080",
@@ -671,7 +655,7 @@ describe("ToolsGuardrailsPage tool status", () => {
     // (and whether one is required at all) changes with this very PATCH.
     const fetchMock = mockApi()
     const user = userEvent.setup()
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
     await screen.findByLabelText(WEB_SEARCH_URL)
 
     const providerFetches = () =>
@@ -693,13 +677,13 @@ describe("ToolsGuardrailsPage tool status", () => {
     // The card has no service above it to be filtered with, so the `only` guard
     // is the only thing keeping it off the per-service views.
     mockApi()
-    const { unmount } = renderWithClient(<ToolsGuardrailsPage />)
+    const { unmount } = renderWithClient(<ToolsPage />)
     expect(
       await screen.findByRole("heading", { name: "MCP servers" }),
     ).toBeInTheDocument()
     unmount()
 
-    renderWithClient(<ToolsGuardrailsPage only="sandbox" />)
+    renderWithClient(<ToolsPage only="sandbox" />)
     await screen.findByLabelText(SANDBOX_URL)
     expect(
       screen.queryByRole("heading", { name: "MCP servers" }),
@@ -711,7 +695,7 @@ describe("ToolsGuardrailsPage tool status", () => {
 // the pricing row, and the /api/v1/search tools are operator-only reads, so for
 // everyone else the page was a 403 banner, and the empty field list also
 // dropped the member-appropriate workspace cards nested under it.
-describe("ToolsGuardrailsPage by caller role", () => {
+describe("ToolsPage by caller role", () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
@@ -724,7 +708,7 @@ describe("ToolsGuardrailsPage by caller role", () => {
         role: "member",
       }),
     })
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
 
     // The two workspace cards, in the state a harness with no selected
     // workspace lands in; their real forms are covered by their own suites.
@@ -753,7 +737,7 @@ describe("ToolsGuardrailsPage by caller role", () => {
         role: "member",
       }),
     })
-    renderWithClient(<ToolsGuardrailsPage />)
+    renderWithClient(<ToolsPage />)
 
     // The field is shown, so a member is told what the tools do to their
     // requests, and it is text: there is no control to press.
@@ -763,7 +747,7 @@ describe("ToolsGuardrailsPage by caller role", () => {
     expect(screen.queryByLabelText(MAX_RESULTS)).not.toBeInTheDocument()
     // The service endpoints never arrive, so nothing renders them either.
     expect(screen.queryByText("web_search_url")).not.toBeInTheDocument()
-    expect(screen.queryByText("guardrails_url")).not.toBeInTheDocument()
+    expect(screen.queryByText("sandbox_url")).not.toBeInTheDocument()
     // Nor the per-call rate: /api/v1/pricing is still operator-only, so this row
     // would show a member an editable "unpriced" field that only fails on save.
     expect(screen.queryByText("Price per call")).not.toBeInTheDocument()
@@ -778,7 +762,7 @@ describe("ToolsGuardrailsPage by caller role", () => {
         role: "member",
       }),
     })
-    renderWithClient(<ToolsGuardrailsPage only="sandbox" />)
+    renderWithClient(<ToolsPage only="sandbox" />)
 
     expect(
       await screen.findByText(
@@ -792,7 +776,7 @@ describe("ToolsGuardrailsPage by caller role", () => {
     // The operator is a member too: gating the deployment-wide reads must not
     // have cost them either half of the page.
     mockApi()
-    renderWithClient(<ToolsGuardrailsPage only="web_search" />)
+    renderWithClient(<ToolsPage only="web_search" />)
 
     expect(await screen.findByLabelText(WEB_SEARCH_URL)).toBeInTheDocument()
     expect(

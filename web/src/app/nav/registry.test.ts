@@ -77,7 +77,6 @@ describe("nav registry", () => {
       "Providers",
       "Spend & budgets",
       "Model pricing",
-      "Guardrails",
       "Org settings",
       "Settings",
       "Accounts",
@@ -293,7 +292,7 @@ describe("nav registry", () => {
   })
 
   it("gates every declared-but-unserved destination on a surface", () => {
-    // The organization rail draws three rows this gateway does not offer and
+    // The organization rail draws two rows this gateway does not offer and
     // still declares. Each is declared so the rail matches on a deployment that
     // does serve them, and gated on a surface `STANDALONE_SURFACES` does not
     // report so the row is absent here. Pinned as the whole set, because the
@@ -302,16 +301,14 @@ describe("nav registry", () => {
     // report hides a page that can. A typo in a surface name is silent the same
     // way, since `NavItemBase.surface` is a bare string.
     //
-    // Only the guardrail ceiling is an actual absence: no edition here serves
-    // that API. The other two are editorial, with the API mounted either way,
-    // and they differ in what the choice is about. Provider keys is about which
+    // Both are editorial, with the API mounted either way, and they differ in
+    // what the choice is about. Provider keys is about which
     // credential table the deployment should be showing at all. Usage is about
     // a question that only exists once tenants do (otari-ai#1963): standalone's
     // organization is the deployment, so `/usage` already answers it whole.
-    // One mechanism, three reasons, so the set is worth reading as a list.
+    // One mechanism, two reasons, so the set is worth reading as a list.
     const unserved = new Map([
       ["/organization/provider-keys", "organization_providers"],
-      ["/organization/guardrails", "organization_guardrails"],
       ["/organization/usage", "organization_usage"],
     ])
     for (const [to, surface] of unserved) {
@@ -337,11 +334,8 @@ describe("nav registry", () => {
     for (const surface of unserved.values()) {
       expect(standalone).not.toContain(surface)
     }
-    // The three are not one category past that point, so the other direction is
-    // asserted per row. Two are served by a hosted deployment and withheld from
-    // standalone, which is what makes their rows appear there; the guardrail
-    // ceiling has no endpoint on *either* edition and is declared for a
-    // deployment that does serve it, so it is absent from both lists.
+    // Both are served by a hosted deployment and withheld from standalone,
+    // which is what makes their rows appear there.
     //
     // Read from the fixture the hosted-shell tests render with, which is what
     // keeps that fixture honest: a surface added to the backend's
@@ -350,7 +344,6 @@ describe("nav registry", () => {
     for (const surface of ["organization_providers", "organization_usage"]) {
       expect(HOSTED_SURFACES).toContain(surface)
     }
-    expect(HOSTED_SURFACES).not.toContain("organization_guardrails")
   })
 
   it("declares no destination an overlay owns", () => {
@@ -522,15 +515,6 @@ describe("isPathVisible", () => {
     expect(isPathVisible("/routing", without("routing"))).toBe(false)
   })
 
-  it("gates a nested destination on its own surface, not its group's", () => {
-    // Guardrails is grouped under Routing and served by the tools surface, so
-    // the tools surface is the one that decides. Withholding `routing` leaves
-    // the page served (and the rail without a row for it, which is the grouping
-    // showing through); withholding `tools` is what refuses it.
-    expect(isPathVisible("/tools/guardrails", without("tools"))).toBe(false)
-    expect(isPathVisible("/tools/guardrails", without("routing"))).toBe(true)
-  })
-
   it("inherits the gate of the destination a deeper path sits under", () => {
     expect(isPathVisible("/routing/new", without("routing"))).toBe(false)
   })
@@ -578,13 +562,13 @@ describe("applyNavLabelOverrides", () => {
       {
         sectionId: "gateway",
         label: "Inference",
-        disclosureLabels: { "/routing": "Policies & guardrails" },
+        disclosureLabels: { "/routing": "Routing policies" },
       },
     ])
     expect(section.label).toBe("Inference")
     expect(section.items.map((item) => item.label)).toEqual([
       "Models",
-      "Policies & guardrails",
+      "Routing policies",
     ])
   })
 

@@ -30,10 +30,9 @@ Completion requests follow this order:
 2. Resolve the billed user, workspace, and organization.
 3. Compile local routing or resolve a hybrid attempt plan.
 4. Resolve pricing and reserve applicable budgets.
-5. Apply organization, policy, and request guardrails.
-6. Resolve MCP and gateway-run tool policy.
-7. Dispatch through any-llm.
-8. Record usage and reconcile or refund reservations.
+5. Resolve MCP and gateway-run tool policy.
+6. Dispatch through any-llm.
+7. Record usage and reconcile or refund reservations.
 
 Chat, Messages, and Responses share the pipeline in
 `api/routes/_pipeline.py`; hybrid attempt reporting lives in `_platform.py`,
@@ -144,7 +143,7 @@ Asynchronous router decisions live under `services/routing/` and pass a
 default. The API attempt walker executes the compiled order and owns fallback
 settlement.
 
-## Tools, MCP, and guardrails
+## Tools and MCP
 
 Only `otari_*` tool types run in the gateway; other declarations pass through
 to the provider. The tool loop is in `services/mcp_loop.py`, sandbox and search
@@ -156,7 +155,6 @@ web-search policy can disable or narrow those settings but cannot widen them.
 MCP servers are workspace resources rather than a refinement of a deployment
 server list.
 
-Organization guardrails add restrictions and have no workspace veto.
 `prepare_gateway_tools` resolves workspace policy from the API key's context,
 never a request header. Hybrid mode gets workspace policy from the control
 plane.

@@ -31,7 +31,6 @@ from any_llm.exceptions import AnyLLMError
 
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
-from gateway.models.guardrails import GuardrailConfig
 from gateway.models.routing import MAX_CANDIDATES, PolicySpec, WhenClause
 from gateway.services.model_access import is_model_allowed
 from gateway.services.provider_kwargs import resolve_provider_selector
@@ -124,7 +123,6 @@ class CompiledPlan:
 
     policy_name: str
     attempts: list[Attempt]
-    guardrails: list[GuardrailConfig] = field(default_factory=list)
     dropped: list[DroppedCandidate] = field(default_factory=list)
     router_ordering: RouterOrdering | None = None
     """The router decision this plan used, when a router entry supplied one.
@@ -377,15 +375,5 @@ def compile_policy(
         policy_name=policy_name,
         attempts=attempts,
         router_ordering=router_ordering if routed else None,
-        guardrails=[
-            GuardrailConfig(
-                profile=guardrail.profile,
-                url=guardrail.url,
-                mode=guardrail.mode,
-                on_unavailable=guardrail.on_unavailable,
-                validate_kwargs=guardrail.validate_kwargs,
-            )
-            for guardrail in spec.guardrails
-        ],
         dropped=dropped,
     )

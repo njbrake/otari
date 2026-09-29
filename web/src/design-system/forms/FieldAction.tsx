@@ -17,10 +17,7 @@ import { FieldMessages } from "@/design-system/forms/FieldMessages"
  *
  * Two limits, both real. Every field in these rows must reserve exactly one
  * caption line: a message long enough to wrap makes that one field taller and
- * drops it back out of line, and no reserve here can answer that. This is known
- * to break on the guardrails row, whose two `ModeToggle` hints were measured at
- * 430px and 509px against roughly 1500px needed for a wrap-free line, so at
- * 1280px both wrap and that row misaligns again.
+ * drops it back out of line, and no reserve here can answer that.
  *
  * And these rows are `flex-wrap`, where `items-end` aligns each flex LINE to its
  * own cross-end rather than the row as a whole. So this aligns the action within

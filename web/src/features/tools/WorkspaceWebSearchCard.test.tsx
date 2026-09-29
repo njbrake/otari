@@ -252,7 +252,7 @@ describe("WorkspaceWebSearchCard", () => {
 
   it("refuses a domain that is not a bare hostname without asking the server", async () => {
     // The server matches an entry against a result URL's hostname, so a scheme
-    // or a path matches nothing: on a block-list that is a guardrail that reads
+    // or a path matches nothing: on a block-list that is a restriction that reads
     // as set and blocks nothing.
     const calls = mockApi({
       config: workspaceWebSearchConfig({

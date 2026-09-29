@@ -11,7 +11,7 @@ model removes that drift structurally: a derived schema cannot omit a param
 any-llm understands, and a new any-llm param is picked up automatically.
 
 Usage: build a base with :func:`derive_request_base`, then subclass it to layer
-on gateway-internal fields (``mcp_servers``, ``guardrails``, ...), tighten a
+on gateway-internal fields (``mcp_servers``, ``tools_header``, ...), tighten a
 field (a validator, ``min_length``), or replace an any-llm annotation that is
 unwieldy for a JSON request body (e.g. the Responses ``input`` union, or
 ``response_format``'s ``type`` member). A subclass field redefinition fully

@@ -2,7 +2,7 @@
 
 A routing policy is a caller-facing model name that resolves to one or more real
 models. Use a policy for failover, conditional selection, traffic splitting,
-learned selection, or guardrails the caller cannot remove. Use an
+or learned selection. Use an
 [alias](models.md#model-aliases) when one name always maps to one target.
 
 Policies are a standalone feature. Hybrid gateways receive their attempt plan
@@ -137,29 +137,6 @@ Trace stickiness is process-local. A restart or request routed to another replic
 may choose again. The result is still valid, but prompt-cache locality is not
 guaranteed across replicas.
 
-## Mandatory guardrails
-
-A policy can run guardrails even when the caller did not request them:
-
-```yaml
-routing:
-  policies:
-    safe:
-      select:
-        - default: openai:gpt-5-mini
-      guardrails:
-        - profile: prompt-injection
-          mode: block
-          on_unavailable: block
-```
-
-`mode` is required. `on_unavailable: block` fails closed when the guardrail
-service cannot run; `monitor` lets the request continue and records the skipped
-check. Only input checks can be mandated by a policy.
-
-Organization-mandated and request-provided guardrails compose with policy
-guardrails. See [Guardrails](guardrails.md).
-
 ## Explain a policy
 
 Inspect a policy without calling a provider:
@@ -171,7 +148,7 @@ otari routing explain balanced --allowed-model "anthropic:*"
 ```
 
 The command shows ordered candidates, filtered candidates and their reasons,
-effective weighted shares, and mandatory guardrails. The API equivalent is
+and effective weighted shares. The API equivalent is
 `POST /api/v1/routing/policies/explain`; it can also validate an unsaved draft.
 
 ## Managing policies at runtime
@@ -241,8 +218,8 @@ after the stream begins is returned to the client because switching models
 mid-answer would corrupt the response.
 
 A tool loop that has already produced assistant state cannot be replayed on
-another provider. Shared service failures, such as an unavailable mandatory
-guardrail or sandbox, also do not improve by changing candidates.
+another provider. Shared service failures, such as an unavailable sandbox, also
+do not improve by changing candidates.
 
 If every candidate fails, Otari returns a gateway error based on the final
 failure. If caller restrictions remove every candidate, Otari returns 403

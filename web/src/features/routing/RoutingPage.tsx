@@ -310,23 +310,6 @@ export function RoutingPage() {
         ),
       },
       {
-        id: "guards",
-        header: "Guards",
-        cell: (policy) => {
-          const guardrails = policy.spec.guardrails ?? []
-          // An em dash: no guardrails is an absence, not a zero.
-          if (guardrails.length === 0)
-            return <span className="text-muted">—</span>
-          return (
-            <span className="text-body">
-              {guardrails
-                .map((guardrail) => `${guardrail.profile} (${guardrail.mode})`)
-                .join(", ")}
-            </span>
-          )
-        },
-      },
-      {
         id: "scope",
         header: "Applies to",
         cell: (policy) =>
@@ -475,10 +458,10 @@ export function RoutingPage() {
             told who manages these rather than offered a control they would
             be refused. */}
         {isOperator
-          ? "Named models your callers send as `model`. A policy decides which real model serves each request, what is tried if that fails, and which guardrails always run. It can also split traffic across providers by weight, or let a router learn which prompts a cheaper model handles just as well."
+          ? "Named models your callers send as `model`. A policy decides which real model serves each request, and what is tried if that fails. It can also split traffic across providers by weight, or let a router learn which prompts a cheaper model handles just as well."
           : canEdit
-            ? "Named models your callers send as `model`. A policy decides which real model serves each request, what is tried if that fails, and which guardrails always run. What you create here applies in the selected workspace, and can name any model your organization has a provider key for."
-            : "Named models your callers send as `model`. A policy decides which real model serves each request, what is tried if that fails, and which guardrails always run. These are the ones in force in your workspaces; your organization's admins manage them."}
+            ? "Named models your callers send as `model`. A policy decides which real model serves each request, and what is tried if that fails. What you create here applies in the selected workspace, and can name any model your organization has a provider key for."
+            : "Named models your callers send as `model`. A policy decides which real model serves each request, and what is tried if that fails. These are the ones in force in your workspaces; your organization's admins manage them."}
       </PageIntro>
 
       {/* The reads only. Every delete on this page reports inside its own

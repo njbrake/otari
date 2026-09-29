@@ -10,8 +10,7 @@ same two-level authorization model:
   owners/admins, who see every workspace in the organization.
 
 Dropped on arrival, each with its own slice to arrive in: mixpanel tracking,
-per-member budget-policy materialization, the Playground token anchor, and
-organization guardrail provisioning. Their absence is why creation is a plain
+per-member budget-policy materialization, and the Playground token anchor. Their absence is why creation is a plain
 two-row insert here.
 """
 

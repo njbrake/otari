@@ -244,7 +244,7 @@ def check_file(file_path: Path, src_root: Path) -> list[tuple[int, str, str]]:
     return violations
 
 
-# Service modules are purpose-named (guardrails.py, url_safety.py, ...), so
+# Service modules are purpose-named (mcp_loop.py, url_safety.py, ...), so
 # there is no *_service.py naming rule to enforce.
 def check_naming_conventions(src_root: Path) -> list[str]:
     """Check that repository modules follow the *_repository.py convention."""

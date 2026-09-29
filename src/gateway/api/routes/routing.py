@@ -1,7 +1,7 @@
 """Runtime routing-policy management.
 
 A policy is a model name callers use, which decides which real model serves the
-request, what is tried after a retryable failure, and which guardrails always run.
+request and what is tried after a retryable failure.
 ``config.yml`` policies are read-only here (they are validated at startup and live
 in a file this process does not own); these routes manage the ``routing_policies``
 table, which means the same thing to a request but can change without a restart.
@@ -61,8 +61,8 @@ class PolicyRequest(BaseModel):
     name: str = Field(description="Model name callers send, e.g. 'fast'.")
     spec: dict[str, Any] = Field(
         description=(
-            "The policy body: select (with exactly one `default` entry, last), optional on_failure "
-            "and guardrails. Same schema as a `routing.policies` entry in config.yml, and closed to "
+            "The policy body: select (with exactly one `default` entry, last) and optional "
+            "on_failure. Same schema as a `routing.policies` entry in config.yml, and closed to "
             "unknown keys, so a typo is a 400 rather than a silently ignored setting."
         )
     )
@@ -183,7 +183,6 @@ class ExplainResponse(BaseModel):
     is_dynamic: bool
     candidates: list[CandidateResponse]
     dropped: list[DroppedResponse]
-    guardrails: list[dict[str, Any]]
     # Set when the policy hands its ordering to a router. For a router that needs
     # request state (kNN needs a prompt to embed and stored examples to compare it
     # against) the plan above is the *decline* path, because explain deliberately
@@ -715,7 +714,6 @@ async def explain_policy(
                 DroppedResponse(selector=item.selector, reason=item.reason, detail=item.detail)
                 for item in exc.dropped
             ],
-            guardrails=[],
         )
 
     return ExplainResponse(
@@ -739,5 +737,4 @@ async def explain_policy(
             DroppedResponse(selector=item.selector, reason=item.reason, detail=item.detail)
             for item in plan.dropped
         ],
-        guardrails=[guardrail.model_dump(mode="json", exclude_none=True) for guardrail in plan.guardrails],
     )

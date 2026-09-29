@@ -148,8 +148,7 @@ An alias also withholds its target from model listings in that workspace. This
 does not apply to routing-policy targets.
 
 Aliases are useful for a curated catalog. A routing policy is the broader form
-when a name needs conditions, failover, weighting, learned selection, or
-mandatory guardrails. See [Routing](routing.md).
+when a name needs conditions, failover, weighting, or learned selection. See [Routing](routing.md).
 
 Alias names cannot contain `:` or `/`, collide with provider instances, or
 point to another alias.

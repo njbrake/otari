@@ -67,17 +67,6 @@ describe("rail location memory", () => {
     })
   })
 
-  it("ignores a nested destination whose own surface is gated off", () => {
-    rememberLocation("/routing", showsEverything)
-    // Guardrails is grouped under Routing and served by the tools surface, so
-    // the child's surface is the one that has to be consulted, not its parent's.
-    rememberLocation("/tools/guardrails", withoutSurface("tools"))
-
-    expect(lastLocation("workspace", showsEverything)).toEqual({
-      to: "/routing",
-    })
-  })
-
   it("drops a stored value that is no longer a destination", () => {
     // A stale entry from an older build, or a hand-edited one. Returning it would
     // send someone to the shell's "not available here" panel.

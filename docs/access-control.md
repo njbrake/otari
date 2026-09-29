@@ -18,7 +18,7 @@ Use the master key through `Authorization: Bearer <master-key>` or
 ## Organizations and workspaces
 
 An organization is the tenant boundary. It owns workspaces, members, provider
-keys, pricing overrides, guardrail policy, and organization-wide usage views.
+keys, pricing overrides, and organization-wide usage views.
 
 A workspace groups the resources used by a team or application. API keys, usage,
 aliases, routing policies, MCP servers, and tool policy are resolved in a

@@ -72,10 +72,7 @@ describe("a build that replaces the label-override module", () => {
       "MCP servers",
     ])
     const routing = gateway()?.items.find((item) => item.to === "/routing")
-    expect(routing?.children?.map((child) => child.surface)).toEqual([
-      undefined,
-      "tools",
-    ])
+    expect(routing?.surface).toBe("routing")
   })
 
   it("carries a renamed group into the breadcrumbs", () => {

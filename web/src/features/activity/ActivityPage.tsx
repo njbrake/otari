@@ -1077,7 +1077,7 @@ function RequestDetail({
               {toolCost(entry) === null ? (
                 <span
                   className="text-warning"
-                  title="No per-request price is configured for this tool, so its calls were recorded at zero cost. Set one on the Tools & Guardrails screen."
+                  title="No per-request price is configured for this tool, so its calls were recorded at zero cost. Set one on the Tools screen."
                 >
                   unpriced
                 </span>

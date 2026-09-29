@@ -1,15 +1,14 @@
 """Endpoint tests for /api/v1/tool-settings (sqlite-backed TestClient)."""
 
-from collections.abc import Callable, Iterator
+import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-from any_guardrail.base import GuardrailName
 from fastapi.testclient import TestClient
 
-from gateway.api.routes import tool_settings
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.main import create_app
 
@@ -47,9 +46,9 @@ def test_get_reports_effective_values(tmp_path: Path) -> None:
 
 
 def test_get_redacts_url_password(tmp_path: Path) -> None:
-    with _client(tmp_path, guardrails_url="https://user:secret@guardrails:8000") as client:
+    with _client(tmp_path, sandbox_url="https://user:secret@sandbox:8000") as client:
         body = client.get(f"{API_ROOT}/tool-settings", headers=AUTH).json()
-    value = _fields(body)["guardrails_url"]["value"]
+    value = _fields(body)["sandbox_url"]["value"]
     assert "secret" not in value
     assert "***" in value
 
@@ -79,8 +78,7 @@ def test_patch_accepts_bundled_sidecar_urls(tmp_path: Path) -> None:
             headers=AUTH,
             json={
                 "web_search_url": "http://searxng:8080",
-                "sandbox_url": "http://sandbox:8000",
-                "guardrails_url": "http://localhost:8000",
+                "sandbox_url": "http://localhost:8000",
             },
         )
     assert resp.status_code == 200
@@ -185,9 +183,6 @@ def test_tool_settings_not_mounted_in_hybrid_mode(tmp_path: Path, _hybrid_env: N
     with TestClient(create_app(config)) as client:
         # Standalone-only: the management route is not registered in hybrid mode.
         assert client.get(f"{API_ROOT}/tool-settings", headers=AUTH).status_code == 404
-        # And the catalog reads with it, since they sit on the same router.
-        assert client.get(f"{API_ROOT}/tool-settings/guardrails/profiles", headers=AUTH).status_code == 404
-        assert client.get(f"{API_ROOT}/tool-settings/guardrails/catalog", headers=AUTH).status_code == 404
 
 
 def test_patch_persists_the_sandbox_image(tmp_path: Path) -> None:
@@ -211,128 +206,26 @@ def test_patch_persists_the_sandbox_image(tmp_path: Path) -> None:
     assert "sandbox_allowed_session_images" not in fields
 
 
-def _stub_guardrails_service(
-    monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
-) -> None:
-    """Answer the guardrails service's ``GET /profiles`` from ``handler``.
-
-    Through the transport rather than by patching a method, because the catalog
-    streams the body to cap its size and so calls no single request method.
-    """
-    transport = httpx.MockTransport(handler)
-    real_async_client = httpx.AsyncClient  # captured before patching, to avoid recursion
-
-    def factory(*_args: object, **_kwargs: object) -> httpx.AsyncClient:
-        return real_async_client(transport=transport)
-
-    monkeypatch.setattr("gateway.services.guardrail_catalog.httpx.AsyncClient", factory)
-
-
-def test_guardrail_profiles_lists_what_the_service_built(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == "http://anyguardrails:8000/profiles"
-        return httpx.Response(200, json=[{"name": "house-policy", "guardrail_name": "any_llm"}])
-
-    _stub_guardrails_service(monkeypatch, handler)
-    with _client(tmp_path, guardrails_url="http://anyguardrails:8000") as client:
-        resp = client.get(f"{API_ROOT}/tool-settings/guardrails/profiles", headers=AUTH)
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["available"] is True
-    assert body["profiles"][0]["profile"] == "house-policy"
-    assert "policy" in {parameter["name"] for parameter in body["profiles"][0]["parameters"]}
-
-
-def test_guardrail_profiles_reports_an_unconfigured_service(tmp_path: Path) -> None:
-    """A deployment with no guardrails service gets a reason, not an error.
-
-    This drives the page an operator configures guardrails on, so it has to
-    render before the service they are configuring exists.
-    """
+def test_a_stored_retired_setting_is_ignored(tmp_path: Path) -> None:
+    """A ``guardrails_url`` row left in ``runtime_settings`` neither breaks startup nor reappears."""
     with _client(tmp_path) as client:
-        resp = client.get(f"{API_ROOT}/tool-settings/guardrails/profiles", headers=AUTH)
+        client.patch(f"{API_ROOT}/tool-settings", headers=AUTH, json={"sandbox_url": "http://sandbox:8000"})
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["available"] is False
-    assert body["profiles"] == []
-    assert body["reason"]
-
-
-def test_guardrail_profiles_never_returns_the_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The reader router serves a tenant, from whom the GET above withholds URLs."""
-
-    def handler(_request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
-
-    _stub_guardrails_service(monkeypatch, handler)
-    with _client(tmp_path, guardrails_url="https://guardrails.internal.example") as client:
-        resp = client.get(f"{API_ROOT}/tool-settings/guardrails/profiles", headers=AUTH)
-
-    assert resp.status_code == 200
-    assert "guardrails.internal.example" not in resp.text
-
-
-def test_guardrail_profiles_requires_master_key(tmp_path: Path) -> None:
-    with _client(tmp_path) as client:
-        assert client.get(f"{API_ROOT}/tool-settings/guardrails/profiles").status_code == 401
-
-
-def test_guardrail_profiles_refuses_an_oversized_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The timeout bounds how long the answer takes, not how much of it is held."""
-
-    def handler(_request: httpx.Request) -> httpx.Response:
-        row = {"name": "x" * 200, "guardrail_name": "injec_guard"}
-        return httpx.Response(200, json=[row] * 20_000)
-
-    _stub_guardrails_service(monkeypatch, handler)
-    with _client(tmp_path, guardrails_url="http://anyguardrails:8000") as client:
-        resp = client.get(f"{API_ROOT}/tool-settings/guardrails/profiles", headers=AUTH)
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["available"] is False
-    assert body["profiles"] == []
-
-
-def test_guardrail_catalog_lists_what_this_gateway_can_run(tmp_path: Path) -> None:
-    """No service is configured, and the built-in catalog does not care."""
-    with _client(tmp_path) as client:
-        resp = client.get(f"{API_ROOT}/tool-settings/guardrails/catalog", headers=AUTH)
-
-    assert resp.status_code == 200
-    guardrails = resp.json()["guardrails"]
-    assert len(guardrails) == len(GuardrailName)
-    lakera = next(row for row in guardrails if row["guardrail_name"] == "lakera_guard")
-    # The create stage is what makes this worth serving: it carries the API key.
-    assert any(row["name"] == "api_key" and row["secret"] for row in lakera["create_parameters"])
-
-
-def test_guardrail_catalog_requires_master_key(tmp_path: Path) -> None:
-    with _client(tmp_path) as client:
-        assert client.get(f"{API_ROOT}/tool-settings/guardrails/catalog").status_code == 401
-        assert (
-            client.get(
-                f"{API_ROOT}/tool-settings/guardrails/catalog", headers={"Authorization": "Bearer nope"}
-            ).status_code
-            == 401
+    conn = sqlite3.connect(tmp_path / "tool-settings-test.db")
+    with conn:
+        conn.execute(
+            "INSERT INTO runtime_settings (key, value, updated_at) "
+            "VALUES ('guardrails_url', 'http://x:8000', '2026-01-01')"
         )
+    conn.close()
 
+    with _client(tmp_path) as client:
+        resp = client.get(f"{API_ROOT}/tool-settings", headers=AUTH)
+        stale = client.patch(f"{API_ROOT}/tool-settings", headers=AUTH, json={"guardrails_url": "http://x:8000"})
 
-def test_guardrail_catalog_is_an_operator_read(tmp_path: Path) -> None:
-    """The reader router is what a member reaches, and this is not a member's to read.
-
-    It is the picker behind a write that stores a vendor key deployment-wide, and
-    ``runnable`` describes the host's installed packages. The profiles read beside
-    it stays on the reader, because a profile name is what a caller sends.
-    """
-    # Router paths, so without API_ROOT: the prefix is added where they mount.
-    catalog = "/tool-settings/guardrails/catalog"
-    profiles = "/tool-settings/guardrails/profiles"
-    operator = {route.path for route in tool_settings.operator_router.routes}  # type: ignore[attr-defined]
-    reader = {route.path for route in tool_settings.reader_router.routes}  # type: ignore[attr-defined]
-
-    assert catalog in operator
-    assert catalog not in reader
-    assert profiles in reader
+    assert resp.status_code == 200
+    fields = _fields(resp.json())
+    assert "guardrails_url" not in fields
+    assert fields["sandbox_url"]["value"] == "http://sandbox:8000"
+    # An unknown key in the body is ignored like any other extra field.
+    assert stale.status_code == 200

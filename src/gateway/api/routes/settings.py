@@ -128,7 +128,6 @@ _CONFIG_VIEW: tuple[tuple[str, tuple[str, ...]], ...] = (
         "Tools & network access",
         (
             "sandbox_url",
-            "guardrails_url",
             "tools_header",
             "sandbox_purpose_hint",
             "sandbox_session_image",
@@ -350,7 +349,7 @@ def _scalar_type_name(annotation: Any) -> Literal["bool", "int", "float", "str",
 # token in the userinfo or a query param). They are shown so an operator can
 # confirm the host/db, but any secret is masked so it is never echoed into the
 # API response or the browser's query cache, even for the master-key holder.
-_REDACTED_URL_FIELDS = frozenset({"database_url", "sandbox_url", "guardrails_url"})
+_REDACTED_URL_FIELDS = frozenset({"database_url", "sandbox_url"})
 
 
 def _field_value(config: GatewayConfig, name: str) -> bool | int | float | str | list[str] | None:

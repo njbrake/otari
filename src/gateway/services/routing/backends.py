@@ -2,7 +2,7 @@
 
 A policy entry ``{router: knn, candidates: [...]}`` names a backend here. The
 backend ranks the candidates for one request and the compiler turns that ranking
-into the plan; everything else about the policy (guardrails, ``on_failure``, the
+into the plan; everything else about the policy (``on_failure``, the
 allow-list, the caps) is unchanged, so a router is one decision inside a policy
 rather than a second routing system.
 
@@ -60,7 +60,7 @@ class RoutingContext:
 
     The prompt arrives as already-flattened text rather than as wire messages.
     Flattening is format-specific (chat, Anthropic messages, and responses all
-    shape content differently) and the API layer already does it for guardrails,
+    shape content differently) and the API layer already does it,
     so a backend never has to know which endpoint it is serving.
     """
 

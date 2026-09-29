@@ -1,4 +1,4 @@
-"""Unit tests for the editable tool/guardrail settings service."""
+"""Unit tests for the editable tool settings service."""
 
 import pytest
 
@@ -18,7 +18,7 @@ from gateway.services.tool_settings_service import (
     "url",
     [
         "http://searxng:8080",  # docker-compose private sidecar
-        "http://guardrails:8000",
+        "http://sandbox:8000",
         "http://localhost:8080",  # loopback
         "http://127.0.0.1:9",
         "https://search.example.com",

@@ -1425,17 +1425,6 @@
         "title": "AuthorizeResponse",
         "type": "object"
       },
-      "BackendType": {
-        "description": "How a guardrail executes.",
-        "enum": [
-          "local_encoder",
-          "local_decoder",
-          "hosted_api",
-          "library_wrapped"
-        ],
-        "title": "BackendType",
-        "type": "string"
-      },
       "BatchRequestItem": {
         "properties": {
           "body": {
@@ -1794,181 +1783,6 @@
           "updated_at"
         ],
         "title": "BudgetResponse",
-        "type": "object"
-      },
-      "BuiltInGuardrailCatalog": {
-        "description": "Every guardrail this gateway ships, whether or not it can currently run it.",
-        "properties": {
-          "guardrails": {
-            "items": {
-              "$ref": "#/components/schemas/BuiltInGuardrailSpec"
-            },
-            "title": "Guardrails",
-            "type": "array"
-          }
-        },
-        "title": "BuiltInGuardrailCatalog",
-        "type": "object"
-      },
-      "BuiltInGuardrailSpec": {
-        "description": "One guardrail this gateway can construct and run itself.\n\nUpstream's own metadata model, extended rather than copied, so a field it adds\nis carried instead of waiting on an edit here. The four taxonomy enums document\nthemselves in the published schema, which is why almost nothing below restates\nwhat a field name and its type already say; the descriptions that remain are on\nthe answers only this gateway can give.\n\nInheriting also takes upstream's field serializers, which sort every set-valued\nfield on the way out, so the JSON is stable across calls without sorting anything\nhere.",
-        "properties": {
-          "alternate_backends": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Alternate Backends",
-            "type": "array"
-          },
-          "backend": {
-            "$ref": "#/components/schemas/BackendType"
-          },
-          "categories": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Categories",
-            "type": "array"
-          },
-          "create_parameters": {
-            "description": "Constructor arguments, which is where a vendor API key and an endpoint live",
-            "items": {
-              "$ref": "#/components/schemas/GuardrailParameterSpec"
-            },
-            "title": "Create Parameters",
-            "type": "array"
-          },
-          "default_license": {
-            "title": "Default License",
-            "type": "string"
-          },
-          "description": {
-            "title": "Description",
-            "type": "string"
-          },
-          "display_name": {
-            "title": "Display Name",
-            "type": "string"
-          },
-          "guardrail_name": {
-            "description": "The any-guardrail class, and the name a stored guardrail selects",
-            "title": "Guardrail Name",
-            "type": "string"
-          },
-          "missing_extra": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The Otari extra to install to make this runnable, when one would. Null when it already runs, and null for a guardrail this gateway holds no backend information about",
-            "title": "Missing Extra"
-          },
-          "multilingual": {
-            "default": false,
-            "title": "Multilingual",
-            "type": "boolean"
-          },
-          "multimodal": {
-            "default": false,
-            "title": "Multimodal",
-            "type": "boolean"
-          },
-          "optional_validate_kwargs": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Optional Validate Kwargs",
-            "type": "array"
-          },
-          "output_shapes": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Output Shapes",
-            "type": "array"
-          },
-          "primary_category": {
-            "$ref": "#/components/schemas/GuardrailCategory"
-          },
-          "required_validate_kwargs": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Required Validate Kwargs",
-            "type": "array"
-          },
-          "requirement_groups": {
-            "description": "One-of constraints that no single parameter's required flag can express. At least one member of each group must be supplied, or one of the environment variables that satisfies it",
-            "items": {
-              "$ref": "#/components/schemas/RequirementGroup"
-            },
-            "title": "Requirement Groups",
-            "type": "array"
-          },
-          "requires_api_key": {
-            "default": false,
-            "title": "Requires Api Key",
-            "type": "boolean"
-          },
-          "runnable": {
-            "description": "Whether every module this guardrail's backend needs is installed here. False is a missing package and not a broken guardrail",
-            "title": "Runnable",
-            "type": "boolean"
-          },
-          "stages": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Stages",
-            "type": "array"
-          },
-          "supports_batch": {
-            "default": false,
-            "description": "Whether several inputs run as one real batched call, not a per-item loop",
-            "title": "Supports Batch",
-            "type": "boolean"
-          },
-          "validate_parameters": {
-            "description": "Per-call arguments, sent with the text on every check",
-            "items": {
-              "$ref": "#/components/schemas/GuardrailParameterSpec"
-            },
-            "title": "Validate Parameters",
-            "type": "array"
-          },
-          "variant_licenses": {
-            "items": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "type": "object"
-            },
-            "title": "Variant Licenses",
-            "type": "array"
-          },
-          "vendor": {
-            "title": "Vendor",
-            "type": "string"
-          }
-        },
-        "required": [
-          "description",
-          "display_name",
-          "categories",
-          "primary_category",
-          "stages",
-          "output_shapes",
-          "backend",
-          "vendor",
-          "default_license",
-          "guardrail_name",
-          "runnable"
-        ],
-        "title": "BuiltInGuardrailSpec",
         "type": "object"
       },
       "CallToolResult": {
@@ -2937,7 +2751,7 @@
         "type": "object"
       },
       "ChatCompletionRequest": {
-        "description": "OpenAI-compatible chat completion request.\n\nThe completion-param fields are derived from any-llm's ``CompletionParams``\n(see ``_schema_derive``) so the schema cannot silently drop a param any-llm\nforwards. Fields below either tighten a derived field (``messages``,\n``response_format``), declare an OpenAI wire param ``CompletionParams`` does\nnot model (``service_tier``, forwarded as an any-llm ``**kwargs`` param), add\ngateway-internal behavior (``mcp_servers``, ``mcp_server_ids``,\n``guardrails``, ``tools_header``, ``max_tool_iterations``) that is stripped\nbefore the request is forwarded upstream, or restate a derived field\nunchanged to document it (``max_completion_tokens``), which is only worth\ndoing where the wire contract is not guessable from the field itself.",
+        "description": "OpenAI-compatible chat completion request.\n\nThe completion-param fields are derived from any-llm's ``CompletionParams``\n(see ``_schema_derive``) so the schema cannot silently drop a param any-llm\nforwards. Fields below either tighten a derived field (``messages``,\n``response_format``), declare an OpenAI wire param ``CompletionParams`` does\nnot model (``service_tier``, forwarded as an any-llm ``**kwargs`` param), add\ngateway-internal behavior (``mcp_servers``, ``mcp_server_ids``,\n``tools_header``, ``max_tool_iterations``) that is stripped\nbefore the request is forwarded upstream, or restate a derived field\nunchanged to document it (``max_completion_tokens``), which is only worth\ndoing where the wire contract is not guessable from the field itself.",
         "properties": {
           "frequency_penalty": {
             "anyOf": [
@@ -2949,21 +2763,6 @@
               }
             ],
             "title": "Frequency Penalty"
-          },
-          "guardrails": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/GuardrailConfig"
-                },
-                "maxItems": 8,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Guardrails"
           },
           "logit_bias": {
             "anyOf": [
@@ -5147,14 +4946,6 @@
             "title": "Dropped",
             "type": "array"
           },
-          "guardrails": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "title": "Guardrails",
-            "type": "array"
-          },
           "is_dynamic": {
             "title": "Is Dynamic",
             "type": "boolean"
@@ -5199,8 +4990,7 @@
           "selection_reason",
           "is_dynamic",
           "candidates",
-          "dropped",
-          "guardrails"
+          "dropped"
         ],
         "title": "ExplainResponse",
         "type": "object"
@@ -5486,265 +5276,6 @@
         ],
         "title": "GatewaySettings",
         "type": "object"
-      },
-      "GuardrailCatalog": {
-        "description": "The profiles a guardrail entry may name, or why they could not be listed.",
-        "properties": {
-          "available": {
-            "description": "Whether the guardrails service answered with its profiles",
-            "title": "Available",
-            "type": "boolean"
-          },
-          "profiles": {
-            "items": {
-              "$ref": "#/components/schemas/GuardrailProfileSpec"
-            },
-            "title": "Profiles",
-            "type": "array"
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Why the catalog is unavailable, in terms a tenant can act on",
-            "title": "Reason"
-          }
-        },
-        "required": [
-          "available"
-        ],
-        "title": "GuardrailCatalog",
-        "type": "object"
-      },
-      "GuardrailCategory": {
-        "description": "What a guardrail is designed to detect (a guardrail may span several).",
-        "enum": [
-          "prompt_injection",
-          "content_safety",
-          "toxicity",
-          "pii",
-          "hallucination",
-          "off_topic",
-          "bias",
-          "tool_use",
-          "general_judge"
-        ],
-        "title": "GuardrailCategory",
-        "type": "string"
-      },
-      "GuardrailConfig": {
-        "description": "A single guardrail check the caller wants the gateway to enforce.\n\nURL safety: when ``url`` is supplied it is validated by\n:func:`gateway.services.guardrails.run_input_guardrails` (not here at parse\ntime \u2014 the check does a DNS lookup that must be awaited) with the same\nSSRF guard used for MCP server URLs (loopback allowed by default for\nsame-host sidecars; gated by ``OTARI_MCP_ALLOW_LOOPBACK`` /\n``OTARI_MCP_ALLOW_PRIVATE_HOSTS``). Most deployments omit ``url`` and rely\non the operator-set ``OTARI_GUARDRAILS_URL`` instead.",
-        "properties": {
-          "mode": {
-            "default": "monitor",
-            "enum": [
-              "block",
-              "monitor"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "on": {
-            "items": {
-              "enum": [
-                "input",
-                "output"
-              ],
-              "type": "string"
-            },
-            "title": "On",
-            "type": "array"
-          },
-          "on_unavailable": {
-            "default": "block",
-            "enum": [
-              "block",
-              "monitor"
-            ],
-            "title": "On Unavailable",
-            "type": "string"
-          },
-          "profile": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Profile",
-            "type": "string"
-          },
-          "url": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
-          },
-          "validate_kwargs": {
-            "additionalProperties": true,
-            "title": "Validate Kwargs",
-            "type": "object"
-          }
-        },
-        "required": [
-          "profile"
-        ],
-        "title": "GuardrailConfig",
-        "type": "object"
-      },
-      "GuardrailParameterSpec": {
-        "description": "One ``validate_kwargs`` key a profile accepts, typed for a form control.",
-        "properties": {
-          "choices": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Allowed values for an enum parameter",
-            "title": "Choices"
-          },
-          "default": {
-            "description": "The signature default, or null when there is none",
-            "title": "Default"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "One-line help text from the guardrail's docstring",
-            "title": "Description"
-          },
-          "env_var": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The environment variable that supplies this parameter when no value is stored, so a form can offer that instead of demanding a credential the deployment already has",
-            "title": "Env Var"
-          },
-          "name": {
-            "description": "The keyword argument's name, as it is sent in validate_kwargs",
-            "title": "Name",
-            "type": "string"
-          },
-          "required": {
-            "description": "Whether a value must be supplied for the guardrail to run. Folds together the signature having no default and upstream's effectively-required flag, which covers a parameter that defaults to a value the guardrail then refuses to run without",
-            "title": "Required",
-            "type": "boolean"
-          },
-          "secret": {
-            "default": false,
-            "description": "Whether the value is a credential, so a form masks it and never echoes it back",
-            "title": "Secret",
-            "type": "boolean"
-          },
-          "storable": {
-            "default": true,
-            "description": "Whether a saved value can stand in for this parameter. False for a secret whose type is json, which upstream uses for a live object (an authenticated SDK client or session) that cannot be written down. A form offers no field for one",
-            "title": "Storable",
-            "type": "boolean"
-          },
-          "type": {
-            "description": "Value shape, so a form can render the matching control",
-            "enum": [
-              "string",
-              "integer",
-              "number",
-              "boolean",
-              "enum",
-              "json"
-            ],
-            "title": "Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "type",
-          "required"
-        ],
-        "title": "GuardrailParameterSpec",
-        "type": "object"
-      },
-      "GuardrailProfileSpec": {
-        "description": "One profile the operator's guardrails service has built.",
-        "properties": {
-          "guardrail": {
-            "description": "The any-guardrail class the profile is built from",
-            "title": "Guardrail",
-            "type": "string"
-          },
-          "model_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The model the operator pinned, when they pinned one",
-            "title": "Model Id"
-          },
-          "parameters": {
-            "description": "The validate_kwargs this profile accepts",
-            "items": {
-              "$ref": "#/components/schemas/GuardrailParameterSpec"
-            },
-            "title": "Parameters",
-            "type": "array"
-          },
-          "parameters_known": {
-            "description": "False when this gateway's any-guardrail is older than the service's and has no schema for that class. The profile is still selectable; only its typed fields are missing",
-            "title": "Parameters Known",
-            "type": "boolean"
-          },
-          "profile": {
-            "description": "The name a guardrail entry puts in its profile field",
-            "title": "Profile",
-            "type": "string"
-          }
-        },
-        "required": [
-          "profile",
-          "guardrail",
-          "parameters_known"
-        ],
-        "title": "GuardrailProfileSpec",
-        "type": "object"
-      },
-      "GuardrailStage": {
-        "description": "Where in a request/response flow a guardrail runs.\n\nA guardrail that screens both the prompt and the response has ``stages ==\n{INPUT, OUTPUT}`` (there is no separate ``EITHER`` value). ``RAG_CONTEXT``\nmarks guardrails that additionally consume retrieved documents/context.",
-        "enum": [
-          "input",
-          "output",
-          "rag_context"
-        ],
-        "title": "GuardrailStage",
-        "type": "string"
       },
       "HTTPValidationError": {
         "properties": {
@@ -6858,7 +6389,7 @@
         "type": "object"
       },
       "MessagesRequest": {
-        "description": "Anthropic Messages API-compatible request.\n\nThe wire fields are derived from any-llm's ``MessagesParams`` (see\n``_schema_derive``) so the schema cannot silently drop a param any-llm\nforwards. Gateway-internal fields (``mcp_servers``, ``mcp_server_ids``,\n``guardrails``, ``tools_header``, ``max_tool_iterations``) opt the request\ninto gateway-managed MCP / sandbox / web_search / guardrails without\nchanging the upstream wire shape. They're stripped before the request is\nforwarded.",
+        "description": "Anthropic Messages API-compatible request.\n\nThe wire fields are derived from any-llm's ``MessagesParams`` (see\n``_schema_derive``) so the schema cannot silently drop a param any-llm\nforwards. Gateway-internal fields (``mcp_servers``, ``mcp_server_ids``,\n``tools_header``, ``max_tool_iterations``) opt the request\ninto gateway-managed MCP / sandbox / web_search without\nchanging the upstream wire shape. They're stripped before the request is\nforwarded.",
         "properties": {
           "betas": {
             "anyOf": [
@@ -6908,21 +6439,6 @@
               }
             ],
             "title": "Context Management"
-          },
-          "guardrails": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/GuardrailConfig"
-                },
-                "maxItems": 8,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Guardrails"
           },
           "max_tokens": {
             "title": "Max Tokens",
@@ -8494,323 +8010,6 @@
         "title": "OrganizationDomainsPublic",
         "type": "object"
       },
-      "OrganizationGuardrailCreate": {
-        "description": "Request body for mandating a guardrail across an organization.\n\n``credential`` is never stored as sent: it is encrypted with\n``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention\n`entities.WorkspaceMcpServer` and `entities.ProviderCredential` use. It is\nsent to the endpoint as ``Authorization: Bearer`` when the guardrail runs,\nso it authenticates this gateway to the guardrails service the entry names.\nA guardrail *vendor's* own key is not this: the guardrails service builds\nits guardrails from the operator's YAML and holds those itself.\n\nA credential therefore requires ``url``. The deployment's ``guardrails_url``\nis not necessarily encrypted (the shipped compose file makes it a same-host\n``http://`` sidecar) and this row cannot see what it is set to, so an entry\nthat fell back to it could not promise the bearer was sent over https. See\n`_require_url_for_credential`.\n\n``on`` is not offered. This plane mandates input-direction checks, which is\nthe only direction the request path enforces\n(`services.guardrails.run_input_guardrails`); an organization that could\nstore an output-direction mandate would be storing one nothing runs.",
-        "example": {
-          "applies_to_all_workspaces": true,
-          "credential": "sk-guardrails-...",
-          "mode": "block",
-          "profile": "prompt-injection",
-          "url": "https://guardrails.internal.example/validate"
-        },
-        "properties": {
-          "applies_to_all_workspaces": {
-            "default": false,
-            "description": "True runs this in every workspace of the organization, including one created later; false runs it only in the workspaces named by workspace_ids",
-            "title": "Applies To All Workspaces",
-            "type": "boolean"
-          },
-          "credential": {
-            "anyOf": [
-              {
-                "maxLength": 8192,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Bearer credential for this entry's endpoint. Requires url to be set, and https: an entry with no endpoint of its own falls back to the deployment's guardrails_url, which is commonly a same-host http sidecar. Encrypted at rest, never returned",
-            "title": "Credential"
-          },
-          "enabled": {
-            "default": true,
-            "description": "False stops the guardrail everywhere without discarding it",
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "mode": {
-            "default": "monitor",
-            "description": "block rejects a flagged request with 403; monitor annotates the response and forwards it",
-            "enum": [
-              "block",
-              "monitor"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "on_unavailable": {
-            "default": "block",
-            "description": "What a block-mode entry does when the guardrails service cannot be reached at all",
-            "enum": [
-              "block",
-              "monitor"
-            ],
-            "title": "On Unavailable",
-            "type": "string"
-          },
-          "profile": {
-            "description": "Profile name configured on the guardrails service, unique within the organization",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Profile",
-            "type": "string"
-          },
-          "url": {
-            "anyOf": [
-              {
-                "maxLength": 2048,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Guardrails endpoint for this entry; null uses the deployment's guardrails_url",
-            "title": "Url"
-          },
-          "validate_kwargs": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Extra kwargs forwarded to the guardrails service /validate call",
-            "title": "Validate Kwargs"
-          },
-          "workspace_ids": {
-            "description": "Workspaces this guardrail runs in. Must be empty when applies_to_all_workspaces is true",
-            "items": {
-              "format": "uuid",
-              "type": "string"
-            },
-            "maxItems": 500,
-            "title": "Workspace Ids",
-            "type": "array"
-          }
-        },
-        "required": [
-          "profile"
-        ],
-        "title": "OrganizationGuardrailCreate",
-        "type": "object"
-      },
-      "OrganizationGuardrailPublic": {
-        "description": "The API-facing shape. Never carries the credential, nor a credential-shaped parameter.\n\n``validate_kwargs`` is the second place a credential lives on this row, and\nthe one with no column of its own: a guardrail class can take a vendor key\nas a parameter, so the form offers a box for it and whatever is typed there\nis stored as plain JSON. It is masked the way\n``org_provider_keys.client_args`` is, by the *name* of the entry rather than\nby what the guardrail catalog says about it, so the mask still applies when\nthe guardrails service is down and no catalog can be read.",
-        "properties": {
-          "applies_to_all_workspaces": {
-            "title": "Applies To All Workspaces",
-            "type": "boolean"
-          },
-          "created_at": {
-            "title": "Created At",
-            "type": "string"
-          },
-          "enabled": {
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "has_credential": {
-            "title": "Has Credential",
-            "type": "boolean"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "mode": {
-            "title": "Mode",
-            "type": "string"
-          },
-          "on_unavailable": {
-            "title": "On Unavailable",
-            "type": "string"
-          },
-          "organization_id": {
-            "format": "uuid",
-            "title": "Organization Id",
-            "type": "string"
-          },
-          "profile": {
-            "title": "Profile",
-            "type": "string"
-          },
-          "updated_at": {
-            "title": "Updated At",
-            "type": "string"
-          },
-          "url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
-          },
-          "validate_kwargs": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Extra kwargs forwarded to the guardrails service /validate call. A parameter whose name looks credential-shaped comes back as *** rather than its stored value; sending that *** back keeps what is stored",
-            "title": "Validate Kwargs"
-          },
-          "workspace_ids": {
-            "items": {
-              "format": "uuid",
-              "type": "string"
-            },
-            "title": "Workspace Ids",
-            "type": "array"
-          }
-        },
-        "required": [
-          "id",
-          "organization_id",
-          "profile",
-          "url",
-          "has_credential",
-          "mode",
-          "on_unavailable",
-          "validate_kwargs",
-          "enabled",
-          "applies_to_all_workspaces",
-          "workspace_ids",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "OrganizationGuardrailPublic",
-        "type": "object"
-      },
-      "OrganizationGuardrailUpdate": {
-        "description": "Partial update. Only the fields the caller sets are applied.\n\n``credential`` and ``url`` have three states rather than two, which is what\na write-only field and its nullable partner need: omit to leave the stored\nvalue alone, send ``\"\"`` to clear it, send a value to replace it. An\nexplicit ``null`` also leaves them alone, matching\n`WorkspaceMcpServerUpdate`: a client that serializes its whole form back,\nwith an empty credential box it never filled in, must not destroy a\ncredential it was never shown.\n\n``workspace_ids`` replaces the scope whole when sent; ``[]`` clears it.",
-        "example": {
-          "credential": "sk-guardrails-...",
-          "mode": "monitor",
-          "url": "https://guardrails.internal.example/validate"
-        },
-        "properties": {
-          "applies_to_all_workspaces": {
-            "title": "Applies To All Workspaces",
-            "type": "boolean"
-          },
-          "credential": {
-            "anyOf": [
-              {
-                "maxLength": 8192,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Credential"
-          },
-          "enabled": {
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "mode": {
-            "enum": [
-              "block",
-              "monitor"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "on_unavailable": {
-            "enum": [
-              "block",
-              "monitor"
-            ],
-            "title": "On Unavailable",
-            "type": "string"
-          },
-          "profile": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Profile",
-            "type": "string"
-          },
-          "url": {
-            "anyOf": [
-              {
-                "maxLength": 2048,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
-          },
-          "validate_kwargs": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Replaces the stored kwargs whole. A parameter sent as *** keeps the value stored under that name, which is how a credential-shaped one survives an edit of the rest of the entry",
-            "title": "Validate Kwargs"
-          },
-          "workspace_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                "maxItems": 500,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Workspace Ids"
-          }
-        },
-        "title": "OrganizationGuardrailUpdate",
-        "type": "object"
-      },
-      "OrganizationGuardrailsPublic": {
-        "properties": {
-          "count": {
-            "title": "Count",
-            "type": "integer"
-          },
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/OrganizationGuardrailPublic"
-            },
-            "title": "Data",
-            "type": "array"
-          }
-        },
-        "required": [
-          "data",
-          "count"
-        ],
-        "title": "OrganizationGuardrailsPublic",
-        "type": "object"
-      },
       "OrganizationMembershipContextPublic": {
         "description": "An organization plus the caller's standing in it.\n\nWhat every tenancy page reads first: which organization it is looking at,\nand what the caller may do there.",
         "properties": {
@@ -9598,19 +8797,6 @@
         "title": "OrganizationScopedBudgetsPublic",
         "type": "object"
       },
-      "OutputShape": {
-        "description": "The decision form a guardrail produces (aligns with the populated ``GuardrailOutput`` fields).\n\n``SCORE`` and ``RUBRIC`` are also the queryable signal for whether\n``GuardrailOutput.score`` can ever be populated: a guardrail declaring\n**neither** always leaves ``score`` as ``None`` (it only emits a\ncategorical/binary verdict, not a calibrated risk value). A guardrail\ndeclaring **either** populates ``score`` in the common, successfully-parsed\ncase, but individual guardrails may still leave it ``None`` in specific\nedge cases (e.g. a fail-closed parse-failure path, or a guardrail that\nflags something but has nothing to score) \u2014 consult the guardrail's own\ndocstring for those exceptions.",
-        "enum": [
-          "binary",
-          "multi_label",
-          "categorical",
-          "score",
-          "rubric",
-          "span"
-        ],
-        "title": "OutputShape",
-        "type": "string"
-      },
       "PasskeySessionResponse": {
         "description": "A dashboard session minted by a passkey (the token travels only in the cookie).\n\nThe same three fields ``POST /api/v1/auth/session`` answers, deliberately: the\ndashboard's sign-in path does not care which credential got it here.",
         "properties": {
@@ -10232,7 +9418,7 @@
           },
           "spec": {
             "additionalProperties": true,
-            "description": "The policy body: select (with exactly one `default` entry, last), optional on_failure and guardrails. Same schema as a `routing.policies` entry in config.yml, and closed to unknown keys, so a typo is a 400 rather than a silently ignored setting.",
+            "description": "The policy body: select (with exactly one `default` entry, last) and optional on_failure. Same schema as a `routing.policies` entry in config.yml, and closed to unknown keys, so a typo is a 400 rather than a silently ignored setting.",
             "title": "Spec",
             "type": "object"
           },
@@ -11179,36 +10365,6 @@
         "title": "RequestPasswordResetResponse",
         "type": "object"
       },
-      "RequirementGroup": {
-        "description": "A guardrail-level \"at least one of these must be provided\" constraint.\n\nSome guardrails require *a value* that no single parameter's :attr:`ParameterSpec.required`\nor :attr:`ParameterSpec.effectively_required` can express, because it can be satisfied by any\nof several parameters \u2014 e.g. watsonx needs a ``project_id`` *or* a ``space_id``. Each group\nnames the interchangeable parameters (and any environment variables that also satisfy it); a\nconfig UI should require the user to supply at least one member.",
-        "properties": {
-          "description": {
-            "title": "Description",
-            "type": "string"
-          },
-          "env_vars": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "title": "Env Vars",
-            "type": "array"
-          },
-          "parameters": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Parameters",
-            "type": "array"
-          }
-        },
-        "required": [
-          "description",
-          "parameters"
-        ],
-        "title": "RequirementGroup",
-        "type": "object"
-      },
       "RerankRequest": {
         "description": "Rerank request.",
         "properties": {
@@ -11440,7 +10596,7 @@
       },
       "ResponsesRequest": {
         "additionalProperties": true,
-        "description": "OpenAI Responses API-compatible request.\n\nThe wire fields are derived from any-llm's ``ResponsesParams`` (see\n``_schema_derive``) so the schema cannot silently drop a param any-llm\nforwards. Gateway-internal fields (``mcp_servers``, ``mcp_server_ids``,\n``guardrails``, ``tools_header``, ``max_tool_iterations``) opt the request\ninto gateway-managed MCP / sandbox / web_search / guardrails without\nchanging the upstream wire shape. They're stripped before the request is\nforwarded.",
+        "description": "OpenAI Responses API-compatible request.\n\nThe wire fields are derived from any-llm's ``ResponsesParams`` (see\n``_schema_derive``) so the schema cannot silently drop a param any-llm\nforwards. Gateway-internal fields (``mcp_servers``, ``mcp_server_ids``,\n``tools_header``, ``max_tool_iterations``) opt the request\ninto gateway-managed MCP / sandbox / web_search without\nchanging the upstream wire shape. They're stripped before the request is\nforwarded.",
         "properties": {
           "background": {
             "anyOf": [
@@ -11493,21 +10649,6 @@
               }
             ],
             "title": "Frequency Penalty"
-          },
-          "guardrails": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/GuardrailConfig"
-                },
-                "maxItems": 8,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Guardrails"
           },
           "include": {
             "anyOf": [
@@ -13241,7 +12382,7 @@
         "type": "object"
       },
       "ToolSettingField": {
-        "description": "One editable tool/guardrail field surfaced to the dashboard.",
+        "description": "One editable tool field surfaced to the dashboard.",
         "properties": {
           "description": {
             "anyOf": [
@@ -13261,8 +12402,7 @@
           "service": {
             "enum": [
               "web_search",
-              "sandbox",
-              "guardrails"
+              "sandbox"
             ],
             "title": "Service",
             "type": "string"
@@ -13305,7 +12445,7 @@
         "type": "object"
       },
       "ToolSettingsResponse": {
-        "description": "The effective value of every editable tool/guardrail field.",
+        "description": "The effective value of every editable tool field.",
         "properties": {
           "fields": {
             "items": {
@@ -14110,17 +13250,6 @@
           "web_search_url": "http://searxng:8080"
         },
         "properties": {
-          "guardrails_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Guardrails Url"
-          },
           "sandbox_purpose_hint": {
             "anyOf": [
               {
@@ -15896,25 +15025,6 @@
           "type"
         ],
         "title": "ValidationError",
-        "type": "object"
-      },
-      "VariantLicense": {
-        "description": "License governing a single model variant of a guardrail.\n\nUsed where a guardrail's ``SUPPORTED_MODELS`` span several base models with\ndifferent governing licenses (e.g. Llama Guard's 3.2 / 3.1 / 4 variants, or\nPolyGuard's non-commercial Ministral vs Apache Qwen variants), so a single\n``default_license`` string cannot capture per-variant redistribution terms.\nInstances are frozen, so a ``tuple`` of them keeps :class:`GuardrailMetadata`\nhashable.",
-        "properties": {
-          "license": {
-            "title": "License",
-            "type": "string"
-          },
-          "model_id": {
-            "title": "Model Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "model_id",
-          "license"
-        ],
-        "title": "VariantLicense",
         "type": "object"
       },
       "VerifyEmailRequest": {
@@ -22481,235 +21591,6 @@
         ]
       }
     },
-    "/api/v1/organizations/me/guardrails": {
-      "get": {
-        "description": "List the guardrails the caller's organization mandates.\n\nOrganization owners and admins only, unlike the pricing overrides next door\nthat any member may read: these rows name the endpoints this gateway\nconnects to and say which of them carry a credential. A credential is never\nreturned, only whether one is set.",
-        "operationId": "organization-guardrails-list_organization_guardrails",
-        "parameters": [
-          {
-            "description": "Number of records to skip",
-            "in": "query",
-            "name": "skip",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "description": "Number of records to skip",
-              "minimum": 0,
-              "title": "Skip",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Maximum number of records to return",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "description": "Maximum number of records to return",
-              "maximum": 1000,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationGuardrailsPublic"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "List Organization Guardrails",
-        "tags": [
-          "organization-guardrails"
-        ]
-      },
-      "post": {
-        "description": "Mandate a guardrail across the organization. Organization owners and admins only.\n\nThe guardrail runs on every request from the workspaces it is scoped to, in\naddition to whatever the caller asked for, with the stricter of the two\nsettings applying to a profile both name. Set\n``applies_to_all_workspaces`` for it to cover workspaces created later;\notherwise a new workspace inherits nothing and the entry runs only in the\nworkspaces ``workspace_ids`` lists.",
-        "operationId": "organization-guardrails-create_organization_guardrail",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OrganizationGuardrailCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationGuardrailPublic"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "Create Organization Guardrail",
-        "tags": [
-          "organization-guardrails"
-        ]
-      }
-    },
-    "/api/v1/organizations/me/guardrails/{guardrail_id}": {
-      "delete": {
-        "description": "Stop mandating a guardrail, discarding its credential and scope.\n\nOrganization owners and admins only. Use ``enabled: false`` instead to stop\nit everywhere while keeping both.",
-        "operationId": "organization-guardrails-delete_organization_guardrail",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "guardrail_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Guardrail Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Message"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "Delete Organization Guardrail",
-        "tags": [
-          "organization-guardrails"
-        ]
-      },
-      "patch": {
-        "description": "Change a guardrail's profile, endpoint, credential, modes, or scope.\n\nOrganization owners and admins only. Omitted fields are left as they are;\n``workspace_ids`` replaces the scope whole when sent, and ``url`` and\n``credential`` are cleared by sending an empty string rather than null.",
-        "operationId": "organization-guardrails-update_organization_guardrail",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "guardrail_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Guardrail Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OrganizationGuardrailUpdate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationGuardrailPublic"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "Update Organization Guardrail",
-        "tags": [
-          "organization-guardrails"
-        ]
-      }
-    },
     "/api/v1/organizations/me/keys": {
       "get": {
         "description": "List the caller's own API keys in their active organization, newest first.\n\nOnly keys billed to the caller's own user: an operator-minted key assigned\nto them is theirs to see here, and nobody else's key ever is. Naming a\nworkspace outside their organization lists nothing rather than refusing, so\nthe filter reports no more than the unfiltered read does.",
@@ -29250,7 +28131,7 @@
     },
     "/api/v1/tool-settings": {
       "get": {
-        "description": "Return the effective tool/guardrail settings for the dashboard.\n\nAuthentication only on the router: the role decides *how much* rather than\nwhether, so this is not the deployment-wide gate ``require_deployment_operator``\nnames. A header master key is the deployment credential and reads everything;\na session reads everything only while it operates the deployment, and\notherwise gets the fields without the service endpoints in them.",
+        "description": "Return the effective tool settings for the dashboard.\n\nAuthentication only on the router: the role decides *how much* rather than\nwhether, so this is not the deployment-wide gate ``require_deployment_operator``\nnames. A header master key is the deployment credential and reads everything;\na session reads everything only while it operates the deployment, and\notherwise gets the fields without the service endpoints in them.",
         "operationId": "tool-settings-get_tool_settings",
         "responses": {
           "200": {
@@ -29278,7 +28159,7 @@
         ]
       },
       "patch": {
-        "description": "Persist and apply tool/guardrail setting changes.\n\nUses ``model_fields_set`` so an explicit ``null`` clears a field while an\nomitted field is left unchanged. Operator-gated and standalone-only.",
+        "description": "Persist and apply tool setting changes.\n\nUses ``model_fields_set`` so an explicit ``null`` clears a field while an\nomitted field is left unchanged. Operator-gated and standalone-only.",
         "operationId": "tool-settings-update_tool_settings",
         "requestBody": {
           "content": {
@@ -29321,66 +28202,6 @@
           }
         ],
         "summary": "Update Tool Settings",
-        "tags": [
-          "tool-settings"
-        ]
-      }
-    },
-    "/api/v1/tool-settings/guardrails/catalog": {
-      "get": {
-        "description": "List the guardrails this gateway can run itself, for the form that defines one.\n\nEvery guardrail ``any_guardrail`` ships, with the constructor and per-call\narguments each one takes, so a guardrail is configured by picking it and\nfilling typed fields. A parameter names the environment variable that fills it\nwhere one exists, and ``requirement_groups`` carries the constraints satisfied\nby any of several parameters, which no single required flag can state. This is\nthe counterpart of\n``GET /api/v1/providers/catalog``: the same picker, for a guardrail rather\nthan a provider, and on the same gate that one takes.\n\nReaches no service, so there is no unavailable state to report. ``runnable``\nsays whether the modules a guardrail's backend needs are installed here,\nprobed rather than imported, and ``missing_extra`` names the Otari extra that\nwould fix it.\n\nOn the operator router rather than the reader beside it, on both halves of\nwhat it answers. It is the input to a write that stores a vendor API key\ndeployment-wide, which is an operator's action alone; and ``runnable``\ndescribes the host's installed packages, which is infrastructure rather than\nsomething a tenant is owed about their own requests. A profile *name* is the\none thing a caller needs, and the profiles read next door is where the set of\nthose is published.\n\nNot on ``verify_catalog_reader`` either: that plane is a closed set of three\ndeployment-describing reads a data-plane key may make, and this is a\nmanagement read, not one of them.",
-        "operationId": "tool-settings-list_builtin_guardrails",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BuiltInGuardrailCatalog"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "List Builtin Guardrails",
-        "tags": [
-          "tool-settings"
-        ]
-      }
-    },
-    "/api/v1/tool-settings/guardrails/profiles": {
-      "get": {
-        "description": "List the guardrail profiles this deployment's guardrails service has built.\n\nWhat an organization guardrail's ``profile`` may name, with the\n``validate_kwargs`` each one accepts, so the dashboard offers a picker and\ntyped fields instead of a free-text box beside an unrendered dict. The\nprofiles come from the service itself and the parameter schemas from the\n``any_guardrail`` registry; neither is a list kept in this repository. See\n`gateway.services.guardrail_catalog`.\n\nReports ``available: false`` with a reason rather than an error when the\nservice is unconfigured, unreachable, or older than its ``/profiles``\nendpoint, because a guardrails outage must not also break the page that\nconfigures guardrails.\n\nRead against ``guardrails_url``, which is the deployment's own service. An\nentry that carries an endpoint of its own is not probed: that URL is\ncaller-supplied and fetching it here would make this a way to have the\ngateway request an address of the caller's choosing.\n\nNot on ``verify_catalog_reader``, despite being a catalog read: that plane is\nthe three deployment-describing reads a data-plane key may also make, and\nadmitting a key here would let any workspace credential dial the deployment's\nguardrails service. This is a management read, so it takes the router's own gate.",
-        "operationId": "tool-settings-list_guardrail_profiles",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GuardrailCatalog"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "List Guardrail Profiles",
         "tags": [
           "tool-settings"
         ]

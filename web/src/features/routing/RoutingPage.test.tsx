@@ -101,7 +101,6 @@ function jsonResponse(body: unknown): Response {
 
 function mockApi(
   policies: RoutingPolicyResponse[] = POLICIES,
-  guardrailsUrl: string | null = "http://guardrails:8000",
   aliases: {
     name: string
     target: string
@@ -223,7 +222,6 @@ function mockApi(
               detail: "is not in allowed_models for this caller",
             },
           ],
-          guardrails: [],
         })
       }
       if (url.includes(`${API_ROOT}/routing/status`)) {
@@ -320,18 +318,6 @@ function mockApi(
           return new Response(null, { status: 204 })
         }
         return jsonResponse(aliasList)
-      }
-      if (url.includes(`${API_ROOT}/tool-settings`)) {
-        return jsonResponse({
-          fields: [
-            {
-              key: "guardrails_url",
-              service: "guardrails",
-              type: "url",
-              value: guardrailsUrl,
-            },
-          ],
-        })
       }
       if (url.includes(`${API_ROOT}/users`)) return jsonResponse(USERS)
       if (url.includes(`${API_ROOT}/models`))
@@ -575,8 +561,8 @@ describe("RoutingPage", () => {
   })
 
   it("guards a half-built policy against a stray Escape", async () => {
-    // This form grows a fallback chain, a condition tier and a guardrail list as
-    // they are asked for, so it is exactly the one where ten minutes of work sits
+    // This form grows a fallback chain and a condition tier as they are asked
+    // for, so it is exactly the one where ten minutes of work sits
     // behind one keystroke.
     mockApi([])
     const user = userEvent.setup()
@@ -636,7 +622,7 @@ describe("RoutingPage", () => {
   it("writes exactly one unscoped policy for every caller", async () => {
     // The default tab, asserted rather than assumed: "every caller" and "scoped
     // but nobody chosen" are two states, and only this one is one write.
-    const { calls } = mockApi([], null, [], { members: MEMBERS })
+    const { calls } = mockApi([], [], { members: MEMBERS })
     const user = userEvent.setup()
     renderPage(<RoutingPage />)
 
@@ -652,7 +638,7 @@ describe("RoutingPage", () => {
   it("writes one policy per chosen user, each carrying its own scope", async () => {
     // A policy's key is its name plus its user, so N people are N rows of the
     // same name and spec. There is no batch endpoint; this is the whole design.
-    const { calls } = mockApi([], null, [], { members: MEMBERS })
+    const { calls } = mockApi([], [], { members: MEMBERS })
     const user = userEvent.setup()
     renderPage(<RoutingPage />)
 
@@ -674,7 +660,7 @@ describe("RoutingPage", () => {
   })
 
   it("shows the chosen people by name above the input, not as bare owner ids", async () => {
-    mockApi([], null, [], { members: MEMBERS })
+    mockApi([], [], { members: MEMBERS })
     const user = userEvent.setup()
     renderPage(<RoutingPage />)
 
@@ -691,7 +677,7 @@ describe("RoutingPage", () => {
   })
 
   it("will not submit a scoped policy with nobody chosen", async () => {
-    const { calls } = mockApi([], null, [], { members: MEMBERS })
+    const { calls } = mockApi([], [], { members: MEMBERS })
     const user = userEvent.setup()
     renderPage(<RoutingPage />)
 
@@ -711,7 +697,7 @@ describe("RoutingPage", () => {
     // work out which of the three exist by reading the table. The refusal is in
     // the middle, so this also pins that the writes after it are still
     // attempted rather than one conflict standing in for everyone behind it.
-    const { calls } = mockApi([], null, [], {
+    const { calls } = mockApi([], [], {
       members: MEMBERS,
       refuseFirstWriteFor: ["u-carol"],
     })
@@ -745,7 +731,7 @@ describe("RoutingPage", () => {
     // on unmentioned, or switch to every caller and it lives on ALSO outranking
     // the global one for exactly them, which is the precedence the field's own
     // description promises. The controls are withheld instead, and say why.
-    mockApi([], null, [], {
+    mockApi([], [], {
       members: MEMBERS,
       refuseFirstWriteFor: ["u-carol"],
     })
@@ -779,7 +765,7 @@ describe("RoutingPage", () => {
     // so correcting the name first is not the same policy: skipping them then
     // would leave the corrected one unwritten for exactly the people the old
     // one already reached.
-    const { calls } = mockApi([], null, [], {
+    const { calls } = mockApi([], [], {
       members: MEMBERS,
       refuseFirstWriteFor: ["u-carol"],
     })
@@ -811,7 +797,6 @@ describe("RoutingPage", () => {
         policy("cheap", CHAIN, { user_id: "u-bob" }),
         policy("cheap", CHAIN, { user_id: "u-carol" }),
       ],
-      null,
       [],
       { members: MEMBERS },
     )
@@ -824,15 +809,14 @@ describe("RoutingPage", () => {
     ).toHaveLength(2)
   })
 
-  it("keeps the failure chain and guardrails out of the way until asked for", async () => {
+  it("keeps the failure chain out of the way until asked for", async () => {
     mockApi([])
     const user = userEvent.setup()
     renderPage(<RoutingPage />)
 
     await user.click(await createTrigger())
-    // Naming one model must stay a short task, so neither section is present yet.
+    // Naming one model must stay a short task, so the section is not present yet.
     expect(screen.queryByText("If that fails, try")).not.toBeInTheDocument()
-    expect(screen.queryByText("Always check")).not.toBeInTheDocument()
 
     await user.click(
       screen.getByRole("button", { name: /Add a fallback chain/ }),
@@ -887,30 +871,10 @@ describe("RoutingPage", () => {
     for (const [summon, remove] of [
       [/Tier down when the budget fills up/, "Remove the budget tier-down"],
       [/Add a fallback chain/, "Remove the fallback chain"],
-      [/Add guardrails/, "Remove the guardrails"],
     ] as const) {
       await user.click(screen.getByRole("button", { name: summon }))
       expect(screen.getByRole("button", { name: remove })).toBeInTheDocument()
     }
-  })
-
-  it("disables the guardrails affordance when no guardrails service is configured", async () => {
-    mockApi([], null)
-    const user = userEvent.setup()
-    renderPage(<RoutingPage />)
-
-    await user.click(await createTrigger())
-    const add = await screen.findByRole("button", { name: /Add guardrails/ })
-
-    // Disabled, and never silently: the reason and the route to fixing it sit next
-    // to the control as text, so it works on touch and for a screen reader.
-    expect(add).toBeDisabled()
-    expect(
-      screen.getByText(/No guardrails service is configured/),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole("link", { name: /Tools & Guardrails/ }),
-    ).toHaveAttribute("href", "/tools")
   })
 
   it("refuses a policy name that would shadow a real model selector", async () => {
@@ -935,21 +899,6 @@ describe("RoutingPage", () => {
         name: "Create policy",
       }),
     ).toBeDisabled()
-  })
-
-  it("warns when a guardrail makes the guardrails service a hard dependency", async () => {
-    mockApi([])
-    const user = userEvent.setup()
-    renderPage(<RoutingPage />)
-
-    await user.click(await createTrigger())
-    await user.click(screen.getByRole("button", { name: /Add guardrails/ }))
-
-    // block + block is the honest default, and its cost has to be visible where
-    // the choice is made: an outage then refuses every request through the policy.
-    expect(
-      screen.getByText(/rejects every request through this policy/),
-    ).toBeInTheDocument()
   })
 
   it("refuses a tier-down threshold that could never fire", async () => {
@@ -1086,14 +1035,17 @@ describe("RoutingPage", () => {
   })
 
   it("keeps an alias name fixed, since the alias API cannot rename", async () => {
-    mockApi([], "http://guardrails:8000", [
-      {
-        name: "gpt",
-        target: "openai:gpt-5-mini",
-        source: "stored",
-        user_id: null,
-      },
-    ])
+    mockApi(
+      [],
+      [
+        {
+          name: "gpt",
+          target: "openai:gpt-5-mini",
+          source: "stored",
+          user_id: null,
+        },
+      ],
+    )
     const user = userEvent.setup()
     renderPage(<RoutingPage />)
 
@@ -1134,14 +1086,17 @@ describe("RoutingPage", () => {
   it("lists stored aliases alongside policies, so nothing is unmanageable", async () => {
     // Aliases were folded into this page. If they were not listed here they would
     // be invisible and undeletable from the dashboard, since the Aliases tab is gone.
-    mockApi([], "http://guardrails:8000", [
-      {
-        name: "legacy",
-        target: "openai:gpt-4o-mini",
-        source: "stored",
-        user_id: null,
-      },
-    ])
+    mockApi(
+      [],
+      [
+        {
+          name: "legacy",
+          target: "openai:gpt-4o-mini",
+          source: "stored",
+          user_id: null,
+        },
+      ],
+    )
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("legacy")).closest("tr")!
@@ -1276,7 +1231,7 @@ describe("RoutingPage", () => {
     // the dialog stays, and nothing on screen says why. Its delete equivalent
     // is below; a page-level banner is no use here, because the operator is
     // looking at the modal and a message behind the backdrop is unread.
-    mockApi([], "http://guardrails:8000", [], {
+    mockApi([], [], {
       saveBody: { status: 400, detail: "cheap already names an alias" },
     })
     const user = userEvent.setup()
@@ -1311,7 +1266,7 @@ describe("RoutingPage", () => {
   it("reports a refused delete inside the dialog, leaving the row", async () => {
     // The page banner no longer carries this: the operator is looking at the
     // modal, and a message behind the backdrop is a message they do not read.
-    mockApi([policy("fast", CHAIN)], "http://guardrails:8000", [], {
+    mockApi([policy("fast", CHAIN)], [], {
       deleteBody: { status: 409, detail: "fast is referenced by an alias" },
     })
     const user = userEvent.setup()
@@ -1337,7 +1292,7 @@ describe("RoutingPage", () => {
     // The mutation holds its error until the next call, and the dialog reads it,
     // so without clearing it on close the second row opens already reporting a
     // failure that was about the first.
-    mockApi([policy("fast", CHAIN), policy("smart", LEARNED)], undefined, [], {
+    mockApi([policy("fast", CHAIN), policy("smart", LEARNED)], [], {
       deleteBody: { status: 409, detail: "fast is referenced by an alias" },
     })
     const user = userEvent.setup()
@@ -1361,14 +1316,17 @@ describe("RoutingPage", () => {
   })
 
   it("deletes an alias through the alias endpoint, not the policy one", async () => {
-    const { calls } = mockApi([], "http://guardrails:8000", [
-      {
-        name: "legacy",
-        target: "openai:gpt-4o-mini",
-        source: "stored",
-        user_id: null,
-      },
-    ])
+    const { calls } = mockApi(
+      [],
+      [
+        {
+          name: "legacy",
+          target: "openai:gpt-4o-mini",
+          source: "stored",
+          user_id: null,
+        },
+      ],
+    )
     const user = userEvent.setup()
     renderPage(<RoutingPage />)
 
@@ -1388,14 +1346,17 @@ describe("RoutingPage", () => {
   })
 
   it("will not let an alias grow options an alias cannot hold", async () => {
-    mockApi([], "http://guardrails:8000", [
-      {
-        name: "legacy",
-        target: "openai:gpt-4o-mini",
-        source: "stored",
-        user_id: null,
-      },
-    ])
+    mockApi(
+      [],
+      [
+        {
+          name: "legacy",
+          target: "openai:gpt-4o-mini",
+          source: "stored",
+          user_id: null,
+        },
+      ],
+    )
     const user = userEvent.setup()
     renderPage(<RoutingPage />)
 
@@ -2054,7 +2015,7 @@ describe("RoutingPage", () => {
   it("lists the tenant-scoped policies read-only for a non-operator", async () => {
     // The member half of otari-ai#1942: the page reads
     // /v1/organizations/me/routing-policies and offers nothing that writes.
-    mockApi([], null, [], {
+    mockApi([], [], {
       context: organizationContext({
         deployment_operator: false,
         role: "member",
@@ -2101,7 +2062,7 @@ describe("RoutingPage", () => {
         },
       ],
     )
-    mockApi([], null, [], {
+    mockApi([], [], {
       context: organizationContext({
         deployment_operator: false,
         role: "member",
@@ -2123,7 +2084,7 @@ describe("RoutingPage", () => {
   })
 
   it("never fires the operator reads for a non-operator", async () => {
-    const { calls } = mockApi([], null, [], {
+    const { calls } = mockApi([], [], {
       context: organizationContext({
         deployment_operator: false,
         role: "member",
@@ -2149,7 +2110,7 @@ describe("RoutingPage", () => {
     // role has to be applied at render time. Without that a member on this URL
     // gets a create form whose only outcome is a refusal, and the read-only
     // empty state is suppressed behind it.
-    mockApi([], null, [], {
+    mockApi([], [], {
       context: organizationContext({
         deployment_operator: false,
         role: "member",
@@ -2167,7 +2128,7 @@ describe("RoutingPage", () => {
   })
 
   it("keeps the deep-linked add form for an operator", async () => {
-    mockApi([], null, [], { context: organizationContext() })
+    mockApi([], [], { context: organizationContext() })
     renderPage(<RoutingPage />, "/routing?target=openai:gpt-4o")
 
     expect(
@@ -2176,7 +2137,7 @@ describe("RoutingPage", () => {
   })
 
   it("tells a member with no policies who defines them", async () => {
-    mockApi([], null, [], {
+    mockApi([], [], {
       context: organizationContext({
         deployment_operator: false,
         role: "member",
@@ -2209,7 +2170,7 @@ describe("RoutingPage scoped to the selected workspace", () => {
   }
 
   it("names the selected workspace on the operator's list read", async () => {
-    const { calls } = mockApi([policy("fast", CHAIN)], null, [], {
+    const { calls } = mockApi([policy("fast", CHAIN)], [], {
       context: operatorInWorkspace(),
     })
     renderInWorkspace(<RoutingPage />)
@@ -2227,7 +2188,7 @@ describe("RoutingPage scoped to the selected workspace", () => {
   })
 
   it("names the selected workspace on an admin's list read", async () => {
-    const { calls } = mockApi([], null, [], {
+    const { calls } = mockApi([], [], {
       context: adminContext(),
       memberPolicies: [policy("tenant-fast", CHAIN)],
     })
@@ -2248,7 +2209,7 @@ describe("RoutingPage scoped to the selected workspace", () => {
   it("lands an operator's create in the workspace they are looking at", async () => {
     // Without this the write omitted the workspace, so the row went to the
     // deployment's default one and the page it was created from never showed it.
-    const { calls } = mockApi([], null, [], { context: operatorInWorkspace() })
+    const { calls } = mockApi([], [], { context: operatorInWorkspace() })
     const user = userEvent.setup()
     renderInWorkspace(<RoutingPage />)
 
@@ -2283,7 +2244,6 @@ describe("RoutingPage scoped to the selected workspace", () => {
     const OTHER_WORKSPACE = "66666666-6666-6666-6666-666666666666"
     const { calls } = mockApi(
       [policy("doomed", CHAIN, { workspace_id: OTHER_WORKSPACE })],
-      null,
       [],
       { context: operatorInWorkspace() },
     )
@@ -2309,7 +2269,7 @@ describe("RoutingPage scoped to the selected workspace", () => {
 // scope; an operator keeps the deployment-wide ones, unchanged above.
 describe("RoutingPage for an organization admin", () => {
   it("writes a new policy through the tenant-scoped router", async () => {
-    const { calls } = mockApi([], null, [], {
+    const { calls } = mockApi([], [], {
       context: adminContext(),
       memberPolicies: [],
     })
@@ -2354,7 +2314,7 @@ describe("RoutingPage for an organization admin", () => {
   })
 
   it("offers no user scope, which the tenant router refuses", async () => {
-    mockApi([], null, [], { context: adminContext(), memberPolicies: [] })
+    mockApi([], [], { context: adminContext(), memberPolicies: [] })
     const user = userEvent.setup()
     renderInWorkspace(<RoutingPage />)
 
@@ -2368,7 +2328,7 @@ describe("RoutingPage for an organization admin", () => {
   })
 
   it("deletes through the tenant-scoped router, naming the workspace", async () => {
-    const { calls } = mockApi([], null, [], {
+    const { calls } = mockApi([], [], {
       context: adminContext(),
       memberPolicies: [policy("doomed", CHAIN)],
     })
@@ -2395,7 +2355,7 @@ describe("RoutingPage for an organization admin", () => {
     // live in the workspace the switcher points at. Writing to the selection
     // would create a second policy of that name and leave this one untouched.
     const OTHER_WORKSPACE = "55555555-5555-5555-5555-555555555555"
-    const { calls } = mockApi([], null, [], {
+    const { calls } = mockApi([], [], {
       context: adminContext(),
       memberPolicies: [
         policy("elsewhere", CHAIN, { workspace_id: OTHER_WORKSPACE }),
@@ -2417,7 +2377,7 @@ describe("RoutingPage for an organization admin", () => {
   })
 
   it("lists the tenant-scoped aliases beside the policies", async () => {
-    mockApi([], null, [], {
+    mockApi([], [], {
       context: adminContext(),
       memberPolicies: [policy("mine", CHAIN)],
       memberAliases: [
@@ -2440,7 +2400,7 @@ describe("RoutingPage for an organization admin", () => {
     // `aliasAsRow` dropped `workspace_id`, so every alias row fell back to the
     // selected workspace and an edit landed in the wrong one silently.
     const OTHER_WORKSPACE = "66666666-6666-6666-6666-666666666666"
-    const { calls } = mockApi([], null, [], {
+    const { calls } = mockApi([], [], {
       context: adminContext(),
       memberPolicies: [],
       memberAliases: [
@@ -2470,7 +2430,7 @@ describe("RoutingPage for an organization admin", () => {
 
   it("deletes an alias from the alias's own workspace", async () => {
     const OTHER_WORKSPACE = "77777777-7777-7777-7777-777777777777"
-    const { calls } = mockApi([], null, [], {
+    const { calls } = mockApi([], [], {
       context: adminContext(),
       memberPolicies: [],
       memberAliases: [
@@ -2503,7 +2463,7 @@ describe("RoutingPage for an organization admin", () => {
     // The switcher is seeded from the caller's own memberships, so an admin who
     // joined none has no workspace to scope a write to and gets the read-only
     // page rather than a form whose only outcome is a 422.
-    mockApi([], null, [], {
+    mockApi([], [], {
       context: organizationContext({
         deployment_operator: false,
         role: "admin",
@@ -2522,7 +2482,7 @@ describe("RoutingPage for an organization admin", () => {
   })
 
   it("still withholds the write affordances from a member", async () => {
-    mockApi([], null, [], {
+    mockApi([], [], {
       context: organizationContext({
         deployment_operator: false,
         role: "member",

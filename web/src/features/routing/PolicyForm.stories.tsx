@@ -10,9 +10,8 @@ import { PolicyForm } from "./PolicyForm"
  * The routing form, in the dialog every create and edit in the dashboard opens
  * in.
  *
- * It owns four queries of its own (the model catalog behind both pickers, and
- * the tool settings that decide whether guardrails can be offered at all), so
- * these stories declare a stub gateway through `parameters.api` rather than
+ * It owns queries of its own (the model catalog behind both pickers, and the
+ * scope picker's two reads), so these stories declare a stub gateway through `parameters.api` rather than
  * mocking the hooks.
  */
 const CATALOG = {
@@ -50,10 +49,6 @@ const CATALOG_WITH_A_FAILED_PROVIDER = {
   ],
 }
 
-const GUARDRAILS_ON = {
-  fields: [{ key: "guardrails_url", value: "https://guardrails.internal" }],
-}
-
 /** Who the scope picker can name, and what the roster calls them.
  *
  *  Both halves of the labeling, so the scoped tab shows the real thing: one
@@ -80,7 +75,6 @@ const meta = {
     layout: "fullscreen",
     api: {
       [`${API_ROOT}/models/discoverable`]: CATALOG,
-      [`${API_ROOT}/tool-settings`]: GUARDRAILS_ON,
       // The scope picker's two reads, which the form makes while it is open, so
       // without these the mock answers its deliberate 501 rather than the
       // network's 404.
@@ -106,8 +100,8 @@ export const New: Story = {}
 
 /**
  * The longest policy this form can author, and the reason the routing dialog is
- * `lg` on both of its steps: a fallback chain, a condition tier, a guardrail,
- * and the weighted split that replaces the single target.
+ * `lg` on both of its steps: a fallback chain, a condition tier, and the
+ * weighted split that replaces the single target.
  *
  * This is the scrolling body in its real form rather than a demo one. The header
  * and the footer stay put, the body scrolls between them, and the header gains
@@ -125,7 +119,7 @@ export const LongestPolicy: Story = {
       created_at: "2026-09-10T12:00:00Z",
       updated_at: "2026-09-10T12:00:00Z",
       // The spec is a `select` list, read in order, plus a shared failure
-      // chain and guardrails: a condition tier first, then the weighted split
+      // chain: a condition tier first, then the weighted split
       // that serves everything else.
       spec: {
         select: [
@@ -145,25 +139,7 @@ export const LongestPolicy: Story = {
           { default: "openai:gpt-4o" },
         ],
         on_failure: ["anthropic:claude-sonnet-4-5", "openai:gpt-4o-mini"],
-        guardrails: [
-          { profile: "pii", mode: "block", on_unavailable: "block" },
-        ],
       } satisfies PolicySpec,
-    },
-  },
-}
-
-/**
- * No guardrails service configured, so the affordance says why rather than
- * offering a control that would have nothing to call.
- */
-export const WithoutGuardrailsService: Story = {
-  parameters: {
-    api: {
-      [`${API_ROOT}/models/discoverable`]: CATALOG,
-      [`${API_ROOT}/tool-settings`]: { fields: [] },
-      [`${API_ROOT}/users`]: OWNERS,
-      [`${API_ROOT}/organizations/me/members`]: ROSTER,
     },
   },
 }
@@ -181,7 +157,6 @@ export const CatalogPartlyUnavailable: Story = {
   parameters: {
     api: {
       [`${API_ROOT}/models/discoverable`]: CATALOG_WITH_A_FAILED_PROVIDER,
-      [`${API_ROOT}/tool-settings`]: GUARDRAILS_ON,
       [`${API_ROOT}/users`]: OWNERS,
       [`${API_ROOT}/organizations/me/members`]: ROSTER,
     },

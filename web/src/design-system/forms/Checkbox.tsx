@@ -106,7 +106,7 @@ export function Checkbox({
   isDisabled?: boolean
   /**
    * An accessible name that says more than the visible label does, for a group
-   * whose labels repeat across the page (one workspace list per guardrail, say).
+   * whose labels repeat across the page (one workspace list per row, say).
    * Keep the visible text inside it, so speech input still reaches the control.
    */
   ariaLabel?: string

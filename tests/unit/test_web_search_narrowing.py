@@ -4,7 +4,7 @@ The composition rule is the whole of #656's answer to #655, and it differs from
 the hybrid path's on purpose: there the platform's policy supplies *defaults* a
 request overrides, here the workspace's row *narrows* what the request asked
 for. Everything a request could shed under default-only precedence is pinned
-here, because shedding it is how a guardrail fails open.
+here, because shedding it is how a restriction fails open.
 
 The two ceilings the dashboard card repeats as literals are pinned at the
 bottom, the same drift `test_code_execution_policy_limits.py` catches next door.

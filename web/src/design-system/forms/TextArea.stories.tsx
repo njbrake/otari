@@ -14,7 +14,7 @@ const meta = {
   title: "Design system/Forms/TextArea",
   component: TextArea,
   args: {
-    label: "Guardrail prompt",
+    label: "System prompt",
     value: "",
     onChange: () => {},
     placeholder: "Refuse anything that asks for a customer's address.",
@@ -31,7 +31,7 @@ export const Default: Story = {
     const [text, setText] = useState("")
     return (
       <TextArea
-        label="Guardrail prompt"
+        label="System prompt"
         value={text}
         onChange={setText}
         placeholder="Refuse anything that asks for a customer's address."

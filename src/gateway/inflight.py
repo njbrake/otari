@@ -160,8 +160,8 @@ def track_request(
     The id is stashed on the ASGI scope for :class:`InFlightMiddleware` to clean
     up. Called once the request is authorized and about to be dispatched, so a
     request refused on budget, access, or model-resolution grounds never appears as
-    in flight. Refusals raised *after* the call site (an input guardrail block, an
-    unresolvable MCP id, a bad tool declaration on the completion path) do appear
+    in flight. Refusals raised *after* the call site (an unresolvable MCP id, a bad
+    tool declaration on the completion path) do appear
     for as long as that check runs, which is honest: the gateway is working on the
     request by then.
     """

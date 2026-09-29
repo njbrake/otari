@@ -81,7 +81,7 @@ export const Invalid: Story = {
 }
 
 /**
- * `isRequired` for a secret a guardrail profile declares it cannot run without.
+ * `isRequired` for a secret a provider declares it cannot run without.
  * The marker is the label's, so a form of mixed optional and required fields
  * says which is which before anything is typed rather than on submit.
  */

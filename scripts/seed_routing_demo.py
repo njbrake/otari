@@ -160,17 +160,6 @@ def main() -> int:
             if cheap != args.model
             else []
         ),
-        # A guardrail the caller cannot skip. on_unavailable=monitor so a gateway
-        # without a guardrails service running still serves these requests.
-        (
-            "demo-guarded",
-            {
-                "select": [{"default": args.model}],
-                "guardrails": [
-                    {"profile": "prompt-injection", "mode": "block", "on_unavailable": "monitor"}
-                ],
-            },
-        ),
     ]
     for name, spec in policies:
         status, body = call(url, key, "POST", "/v1/routing/policies", {"name": name, "spec": spec})

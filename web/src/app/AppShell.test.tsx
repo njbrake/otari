@@ -554,17 +554,18 @@ describe("AppShell surface gating", () => {
       "Usage",
       "Playground",
       "Models",
+      "Routing",
       "API keys",
       "Providers",
       "Members",
     ])
-    // Routing and Tools nest destinations, so they expand rather than
-    // navigate; their children are links once the group is open.
+    // Tools nests destinations, so it expands rather than navigates; its
+    // children are links once the group is open.
     expect(
       within(screen.getByRole("navigation", { name: "Sidebar" }))
         .getAllByRole("button")
         .map((button) => button.textContent),
-    ).toEqual(["Routing", "Tools"])
+    ).toEqual(["Tools"])
   })
 
   it("renders every organization destination on that rail", async () => {
@@ -599,12 +600,11 @@ describe("AppShell surface gating", () => {
     // labelled siblings, so without one its row reads as the tail of the
     // section above.
     expect(screen.getByText("General")).toBeInTheDocument()
-    // The design's rail has two more rows (the organization's own Providers and
-    // Guardrails), and each is gated on a surface a standalone gateway does not
-    // report, so neither is here. The Gateway group is their worst case: its one
-    // row is gated, so the heading goes with it. Billing and Gateways are not
-    // missing rows but overlay-owned ones this registry no longer declares at
-    // all (otari#737).
+    // The design's rail has one more row (the organization's own Providers),
+    // gated on a surface a standalone gateway does not report, so it is not
+    // here. The Gateway group declares no rows of its own, so its heading is
+    // absent too. Billing and Gateways are not missing rows but overlay-owned
+    // ones this registry no longer declares at all (otari#737).
     expect(screen.queryByText("Gateway")).toBeNull()
   })
 
@@ -662,9 +662,9 @@ describe("AppShell entitlement gating", () => {
     // would silently drop a page from the sidebar of every gateway.
     await renderShell(bootstrap(), { entitlements: { capabilities: [] } })
 
-    // Routing nests destinations, so it is the group's expander.
+    // Tools nests destinations, so it is the group's expander.
     expect(
-      await screen.findByRole("button", { name: "Routing" }),
+      await screen.findByRole("button", { name: "Tools" }),
     ).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Models" })).toBeInTheDocument()
     expect(screen.getByText("Build")).toBeInTheDocument()
@@ -1284,38 +1284,6 @@ describe("AppShell entitlement gating", () => {
     // renders before it can lead with one.
     await within(crumb).findByText("Default Organization")
     expect(crumb).toHaveTextContent("Overview")
-  })
-
-  it("drops a nested destination whose own surface the deployment lacks", async () => {
-    mockMatchMedia(false)
-    // Guardrails is grouped under Routing but served by the tools surface. The
-    // link used to render anyway and land on the "not available here" panel.
-    await renderShell(bootstrap({ surfaces: ["routing"] }))
-
-    expect(screen.queryByRole("link", { name: "Guardrails" })).toBeNull()
-    // And with Guardrails gone, Routing holds one child, so it stops being a
-    // group: a disclosure that opens onto a single row asks for a click to tell
-    // you nothing. The row wears the parent's name and goes straight to it.
-    expect(screen.queryByRole("button", { name: "Routing" })).toBeNull()
-    const routing = await screen.findByRole("link", { name: "Routing" })
-    expect(routing).toHaveAttribute("href", "/routing")
-    expect(screen.queryByRole("link", { name: "Policies" })).toBeNull()
-  })
-
-  it("answers a nested route with the panel when the child's own surface is gone", async () => {
-    mockMatchMedia(false)
-    // The other half of the case above: dropping the link is not enough, because
-    // a bookmark still reaches the route. `NAV_CHILD_PARENTS` carries the child's
-    // surface onto the entry `navItemForPath` answers with, which is what lets
-    // the shell refuse a path whose *parent* surface it does host.
-    await renderShell(bootstrap({ surfaces: ["routing"] }), {
-      url: "/tools/guardrails",
-    })
-
-    expect(
-      await screen.findByText("Guardrails is not available here"),
-    ).toBeInTheDocument()
-    expect(screen.queryByText("PAGE CONTENT")).toBeNull()
   })
 
   it("publishes the rail's footprint to the stylesheet", async () => {

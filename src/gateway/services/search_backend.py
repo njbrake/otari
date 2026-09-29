@@ -191,7 +191,7 @@ def resolve_search_tool(config: GatewayConfig, name: str | None) -> SearchTool:
         # Names every route in, because the message that named only config.yml
         # was unfollowable on a deployment that has no config file (issue #601).
         msg = (
-            "No search tools are configured. Add one on the dashboard's Tools & Guardrails page "
+            "No search tools are configured. Add one on the dashboard's Tools page "
             f"(or POST {API_ROOT}/search-tools), or declare one under 'search_tools' in your config file, "
             "supplied directly or through OTARI_CONFIG_YAML / OTARI_CONFIG_B64."
         )

@@ -1,33 +1,21 @@
 from __future__ import annotations
 
-import json
 import uuid
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from fastapi import HTTPException, Request, Response, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.core.config import CONVERSATION_HEADER, ROUTER_HEADER, ROUTER_TASK_HEADER
-from gateway.core.env import otari_env
-from gateway.log_config import logger
-from gateway.models.guardrails import GuardrailConfig
 from gateway.models.tenancy import Workspace
-from gateway.services.guardrails import GuardrailsNotReachableError, run_input_guardrails
 from gateway.services.routing.decide import RoutingSignal
-from gateway.services.url_safety import UnsafeURLError
 from gateway.services.workspace_scope import default_workspace_id
 
 if TYPE_CHECKING:
-    from gateway.core.config import GatewayConfig
     from gateway.db import APIKey
-
-
-GUARDRAILS_RESULT_HEADER = "X-Otari-Guardrails"
-"""Response header carrying a compact JSON summary of guardrail verdicts when a
-``monitor``-mode (or otherwise non-blocking) check ran."""
 
 
 def resolve_user_id(
@@ -99,13 +87,12 @@ def resolve_user_id(
 
 
 def text_from_content(content: Any) -> str:
-    """Flatten a message ``content`` value to plain text for guardrail checks.
+    """Flatten a message ``content`` value to plain text for routing signals.
 
     Handles the two wire shapes shared across the chat and Anthropic-messages
     formats: a bare string, or a list of content parts where text parts look
     like ``{"type": "text", "text": "..."}``. Non-text parts (images, tool
-    results, etc.) are ignored — guardrails like prompt-injection detection
-    operate on the textual prompt.
+    results, etc.) are ignored; routers operate on the textual prompt.
 
     Returns:
         The flattened text, or an empty string for unrecognized shapes.
@@ -127,8 +114,7 @@ def latest_user_text(messages: Sequence[Any]) -> str:
     """Return the text of the most recent ``role == "user"`` message.
 
     Falls back to the last message of any role if no user message is present.
-    Used to feed input-direction guardrails the prompt the model is about to
-    see.
+    Used to feed routers the prompt the model is about to see.
 
     Returns:
         The latest user message's text, or an empty string if ``messages`` is
@@ -149,7 +135,7 @@ _ROUTER_HEADER_ON = frozenset({"on", "true", "1", "yes", "auto", "default"})
 def routing_signal_from_messages(messages: Sequence[Any], raw_request: Request, *, has_tools: bool) -> RoutingSignal:
     """Build the router's view of a chat-shaped request.
 
-    Flattens the prompt the same way guardrails do and reads the three routing
+    Flattens the prompt with :func:`text_from_content` and reads the three routing
     headers. Called on every request through the endpoint, whether or not the
     model names a policy with a router, so it stays cheap: three header lookups
     and one pass over the messages.
@@ -259,111 +245,6 @@ def conversation_opening_text(messages: Sequence[Any]) -> str:
     if parts:
         return "\n".join(parts)
     return first_user_text(messages)
-
-
-async def apply_input_guardrails(
-    guardrails: list[GuardrailConfig] | None,
-    input_text: str,
-    *,
-    response: Response,
-    config: GatewayConfig | None = None,
-    credentials: Mapping[str, str] | None = None,
-    mandated: Collection[str] | None = None,
-) -> None:
-    """Enforce the input guardrails for a request before the provider call.
-
-    ``guardrails`` is the effective list: the caller's own, merged with any the
-    caller's organization mandates and any a routing policy mandates (see
-    :func:`gateway.api.routes._pipeline.merge_guardrail_layers`, which is where
-    the merge happens so every completion endpoint enforces a mandate alike).
-    ``credentials`` carries the bearer credential an organization entry stores
-    for the endpoint it names, keyed by profile; it never comes from the request
-    body. ``mandated`` names the profiles a layer above the caller supplied,
-    which is what decides whether a URL that fails its safety check is the
-    caller's malformed request (a 400 naming their own URL) or a stored entry
-    being unevaluable (governed by its ``mode`` / ``on_unavailable``, with the
-    endpoint kept out of the response).
-
-    No-op when ``guardrails`` is empty/None (zero overhead for the common
-    case). On a ``block``-mode flag, raises ``403`` and the provider is never
-    called. On a non-blocking flag (``monitor`` mode), attaches a compact
-    summary to the :data:`GUARDRAILS_RESULT_HEADER` response header and lets
-    the request proceed.
-
-    Service-failure handling depends on ``mode`` and ``on_unavailable`` (see
-    :func:`gateway.services.guardrails.run_input_guardrails`): a ``block``
-    guardrail that can't be evaluated fails closed (``502``) unless it sets
-    ``on_unavailable="monitor"``; a ``monitor`` guardrail fails open (logged,
-    request proceeds).
-
-    Note:
-        The header is set on the injected ``response``, so it reaches
-        non-streaming responses. For streamed responses (where the route
-        returns its own ``StreamingResponse``) the ``monitor`` annotation is
-        not currently propagated; ``block`` still applies (it raises before any
-        bytes are streamed).
-
-    Raises:
-        HTTPException: ``400`` when a *caller-supplied* guardrail's ``url``
-            fails the SSRF/scheme safety check (a mandated entry's failure is a
-            502 or a recorded inconclusive instead, per its own settings);
-            ``403`` when a ``block`` guardrail flags the input; ``502`` when a
-            ``block`` guardrail that fails closed can't be evaluated. The 502
-            body names the profile and not the endpoint, which goes to the log
-            instead.
-    """
-    if not guardrails:
-        return
-
-    # Effective guardrails URL: dashboard override / config / env, falling back to
-    # the env var when no config is threaded in (e.g. unit tests). A dashboard
-    # override mutates config, so it hot-applies on the next request.
-    default_url = (config.guardrails_url if config is not None else None) or otari_env("GUARDRAILS_URL") or None
-    try:
-        verdict = await run_input_guardrails(
-            guardrails,
-            input_text,
-            default_url=default_url,
-            credentials=credentials,
-            mandated=mandated,
-        )
-    except UnsafeURLError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except GuardrailsNotReachableError as exc:
-        # The full reason, endpoint included, goes to the log; the caller gets
-        # the error's `public_detail`, which names the profile and nothing else.
-        # An organization's guardrail endpoint is not the caller's to see
-        # (otari#654), and it is not theirs to fix either.
-        logger.warning("guardrail check could not be evaluated: %s", exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.public_detail) from exc
-
-    if verdict.blocked:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "message": "Request blocked by guardrail policy.",
-                "code": "guardrail_violation",
-                "guardrails": [
-                    {
-                        "profile": r.profile,
-                        "explanation": r.explanation,
-                        "score": r.score,
-                    }
-                    for r in verdict.flagged
-                    if r.mode == "block"
-                ],
-            },
-        )
-
-    if verdict.results:
-        # Non-blocking: surface the verdict for observability (monitor mode, or
-        # a passing block-mode check). Header value is kept compact and free of
-        # the freeform `explanation` to avoid oversized / non-ASCII headers.
-        summary = [
-            {"profile": r.profile, "mode": r.mode, "valid": r.valid, "score": r.score}
-            for r in verdict.results
-        ]
-        response.headers[GUARDRAILS_RESULT_HEADER] = json.dumps(summary, separators=(",", ":"))
 
 
 async def resolve_managed_workspace_id(db: AsyncSession, workspace_id: uuid.UUID | None) -> uuid.UUID:

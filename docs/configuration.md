@@ -365,21 +365,20 @@ Mail has to be configured for either posture, since signup sends a verification
 link. See [Access control](access-control.md) for what each posture does with an
 address nobody has added.
 
-## Built-in tools and guardrails variables
+## Built-in tools variables
 
-The Tools pages and `GET /api/v1/tool-settings` show effective sandbox, web-search,
-and guardrail configuration. Common startup settings are:
+The Tools pages and `GET /api/v1/tool-settings` show effective sandbox and web-search
+configuration. Common startup settings are:
 
 - `sandbox_url`
 - `web_search_url`
 - `web_search_provider` and `web_search_provider_api_key`
-- `guardrails_url`
 - `mcp_allow_loopback` and `mcp_allow_private_hosts`
 - `web_search_allow_private_hosts`
 - `provider_allow_private_hosts`
 
-See [Built-in tools](tools.md), [MCP](mcp.md), and
-[Guardrails](guardrails.md) for behavior and security boundaries.
+See [Built-in tools](tools.md) and [MCP](mcp.md) for behavior and security
+boundaries.
 
 ## Documentation links
 

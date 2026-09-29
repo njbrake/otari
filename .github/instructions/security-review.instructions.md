@@ -109,7 +109,7 @@ Sentry or other telemetry must scrub request headers and bodies.
 
 ## SSRF and untrusted model context
 
-Provider, MCP, guardrail, sandbox, and search URLs follow their existing URL
+Provider, MCP, sandbox, and search URLs follow their existing URL
 safety policy. Search-tool API keys require HTTPS; keyless local SearXNG may use
 HTTP. Other credentials require HTTPS where the service contract says so. Do
 not let an ordinary request turn the gateway into an unrestricted HTTP client.

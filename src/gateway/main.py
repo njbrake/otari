@@ -364,7 +364,7 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
                 # before pricing init so default-pricing behavior is consistent.
                 await apply_overrides_from_db(config, session)
                 await load_persisted_price_snapshot(session)
-                # Persisted tool/guardrail overrides (service URLs + web-search
+                # Persisted tool overrides (service URLs + web-search
                 # knobs) win over config/env too; apply them so the running worker
                 # reflects a dashboard change made in a prior run.
                 await apply_tool_overrides_from_db(config, session)

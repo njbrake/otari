@@ -480,11 +480,6 @@ export function useRemoveWorkspaceProviderKeyModel() {
   })
 }
 
-// The guardrails the caller's organization mandates over its workspaces. A
-// small hand-edited list rather than a growing table, but paged through like
-// the rest of the tenancy surface so a backend that ignored `skip` cannot spin
-// this either.
-
 export function useRemoveWorkspaceMember() {
   const queryClient = useQueryClient()
   return useMutation({

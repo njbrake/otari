@@ -1,12 +1,12 @@
-"""Route-level tests for the MCP-server / guardrail URL SSRF safety check.
+"""Route-level tests for the MCP-server URL SSRF safety check.
 
 The check (`gateway.services.url_safety.validate_mcp_url`) used to run
 synchronously inside a Pydantic `model_validator` at request-body-parse time,
 which surfaced as a 422. It now runs from the async request pipeline (DNS
 resolution must be awaited, and Pydantic validators can't await), so a
 rejected URL surfaces as 400 instead. These tests lock in that behavior and
-confirm the check still runs — no live MCP server or guardrails service is
-needed since the safety check rejects before any network call to either.
+confirm the check still runs; no live MCP server is needed since the safety
+check rejects before any network call.
 """
 
 from __future__ import annotations
@@ -28,48 +28,6 @@ def test_unsafe_mcp_server_url_returns_400(
             "model": "anthropic:claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "hi"}],
             "mcp_servers": [{"name": "evil", "url": _UNSAFE_URL}],
-        },
-        headers=api_key_header,
-    )
-
-    assert resp.status_code == 400, resp.text
-    assert "link-local" in resp.json()["detail"]
-
-
-def test_unsafe_guardrail_url_returns_400(
-    client: TestClient,
-    api_key_header: dict[str, str],
-) -> None:
-    resp = client.post(
-        f"{API_ROOT}/messages",
-        json={
-            "model": "anthropic:claude-3-5-sonnet-20241022",
-            "messages": [{"role": "user", "content": "hi"}],
-            "max_tokens": 100,
-            "guardrails": [{"profile": "prompt-injection", "url": _UNSAFE_URL}],
-        },
-        headers=api_key_header,
-    )
-
-    assert resp.status_code == 400, resp.text
-    assert "link-local" in resp.json()["detail"]
-
-
-def test_unsafe_output_only_guardrail_url_returns_400(
-    client: TestClient,
-    api_key_header: dict[str, str],
-) -> None:
-    """An output-direction guardrail is never *evaluated* today (v1 enforces
-    input only), but its `url` override must still be SSRF-checked: the
-    check covers every configured guardrail regardless of `on` direction, not
-    just the ones currently enforced."""
-    resp = client.post(
-        f"{API_ROOT}/messages",
-        json={
-            "model": "anthropic:claude-3-5-sonnet-20241022",
-            "messages": [{"role": "user", "content": "hi"}],
-            "max_tokens": 100,
-            "guardrails": [{"profile": "prompt-injection", "on": ["output"], "url": _UNSAFE_URL}],
         },
         headers=api_key_header,
     )

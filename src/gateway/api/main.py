@@ -34,7 +34,6 @@ from gateway.api.routes import (
     moderations,
     org_provider_keys,
     organization_budgets,
-    organization_guardrails,
     organization_keys,
     organization_pricing,
     organization_routing,
@@ -200,7 +199,6 @@ def _register_core_routers(api: APIRouter, config: GatewayConfig) -> None:
     api.include_router(organization_budgets.budgets_router)
     api.include_router(organization_budgets.ceilings_router)
     api.include_router(organization_pricing.router)
-    api.include_router(organization_guardrails.router)
     # The tenant-scoped read over the same rows ``/api/v1/usage`` serves to an
     # operator. Mounted with the rest of the ``/api/v1/organizations/me`` surface
     # rather than beside the usage routers, because what it is scoped to is what

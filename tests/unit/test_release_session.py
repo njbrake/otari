@@ -1,12 +1,12 @@
 """Unit tests for handing the request's connection back before the provider call.
 
-The preamble reads the API key, the billed user, the organization's guardrails
-and the workspace's tool rows on the request-scoped session, which holds its
-connection until something ends the transaction. Nothing in the preamble
-commits, so before this the connection stayed checked out for the whole
-upstream call and ``db_pool_size + db_max_overflow`` became a ceiling on
-concurrent provider calls. Past it a request waits ``db_pool_timeout`` and is
-then refused by the auth dependency, which reports a pool timeout as
+The preamble reads the API key, the billed user and the workspace's tool rows
+on the request-scoped session, which holds its connection until something ends
+the transaction. Nothing in the preamble commits, so before this the connection
+stayed checked out for the whole upstream call and
+``db_pool_size + db_max_overflow`` became a ceiling on concurrent provider
+calls. Past it a request waits ``db_pool_timeout`` and is then refused by the
+auth dependency, which reports a pool timeout as
 "Authentication temporarily unavailable, please retry".
 """
 

@@ -262,3 +262,31 @@ def test_a_policy_with_no_router_never_consults_one() -> None:
 
 def test_a_bare_router_policy_always_consults_it() -> None:
     assert selection_consults_router(_router_spec())
+
+
+@pytest.mark.parametrize(
+    "retired",
+    [[], [{"profile": "prompt-injection", "mode": "block", "on_unavailable": "block", "validate_kwargs": {"t": 1}}]],
+    ids=["empty", "populated"],
+)
+def test_a_spec_carrying_retired_guardrails_still_validates_and_compiles(
+    config: GatewayConfig, retired: list[dict[str, object]]
+) -> None:
+    """A policy stored or configured before guardrails were removed still loads.
+
+    Every alias migrated into a policy was stored with ``guardrails: []``, and the
+    spec is otherwise closed to unknown keys, so the retired key is discarded
+    rather than refusing the whole policy.
+    """
+    spec = PolicySpec.model_validate(
+        {"select": [{"default": "openai:gpt-5-mini"}], "on_failure": ["openai:gpt-5"], "guardrails": retired}
+    )
+
+    assert "guardrails" not in spec.model_dump()
+    plan = compile_policy(config, "legacy", spec)
+    assert [attempt.model for attempt in plan.attempts] == ["gpt-5-mini", "gpt-5"]
+
+
+def test_other_unknown_policy_keys_are_still_refused() -> None:
+    with pytest.raises(ValueError, match="guardrail"):
+        PolicySpec.model_validate({"select": [{"default": "openai:gpt-5-mini"}], "guardrail": []})

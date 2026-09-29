@@ -425,7 +425,7 @@ export async function apiFetch<T>(
   // question about *authority*, which signing out cannot change. Signing out on
   // one is a loop, because the sign-in that follows lands on a page that asks
   // again. This used to be reachable through the tenancy routes alone (a plain
-  // member opening organization guardrails is refused 403 by
+  // member opening an organization management page is refused 403 by
   // `require_active_organization_management_access`); since otari-ai#1880 gated
   // the deployment-wide routers on `require_deployment_operator`, a non-operator
   // member meets one on the landing page. Let it surface as an ordinary error

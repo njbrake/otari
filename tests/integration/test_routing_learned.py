@@ -803,7 +803,7 @@ def test_the_preference_surfaces_require_the_master_key(client: TestClient) -> N
     )
 
 
-# -- authoring guardrails --------------------------------------------------
+# -- authoring checks -------------------------------------------------------
 
 
 def test_a_stored_learned_policy_needs_priced_candidates(client: TestClient) -> None:

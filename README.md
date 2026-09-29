@@ -40,7 +40,7 @@ plane to [otari.ai](https://otari.ai).
 - Revocable API keys with user, workspace, and model scope
 - Budget checks before spend and usage records after settlement
 - Local routing policies for failover, weighting, and learned selection
-- Optional code execution, web search, MCP, guardrails, and file understanding
+- Optional code execution, web search, MCP, and file understanding
 
 ## Quickstart
 
@@ -91,11 +91,11 @@ docker compose pull
 docker compose up -d
 ```
 
-Compose runs Otari with PostgreSQL. Optional profiles add the code sandbox,
-web search, and guardrail services:
+Compose runs Otari with PostgreSQL. Optional profiles add the code sandbox
+and web search services:
 
 ```bash
-docker compose --profile code-exec --profile web-search --profile guardrails up -d
+docker compose --profile code-exec --profile web-search up -d
 ```
 
 The dashboard is served at `http://localhost:8000/`. To store provider keys

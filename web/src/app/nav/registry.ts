@@ -13,7 +13,6 @@ import {
   FiMessageSquare,
   FiRepeat,
   FiServer,
-  FiShield,
   FiSliders,
   FiTag,
   FiTool,
@@ -142,44 +141,25 @@ const BASE_NAV_SECTIONS = [
         label: "Routing",
         surface: "routing",
         icon: FiRepeat,
-        // Policies and Guardrails as the navigation prototype groups them. The
-        // prototype's third entry, Aliases, is deliberately absent: this
-        // dashboard lists an alias as the one-target policy it is, in the same
-        // table (see `RoutingPage`), so `/aliases` is a compatibility redirect
-        // onto `/routing` rather than a destination. Linking it would give the
-        // group two entries for one page, and the second could never highlight.
-        // It comes back if and when Routing grows a separate alias view.
-        children: [
-          { to: "/routing", label: "Policies", icon: FiRepeat },
-          {
-            to: "/tools/guardrails",
-            label: "Guardrails",
-            icon: FiShield,
-            // Grouped with Routing, served by the tools surface.
-            surface: "tools",
-          },
-        ],
+        // No Aliases row: this dashboard lists an alias as the one-target
+        // policy it is, in the same table (see `RoutingPage`), so `/aliases` is
+        // a compatibility redirect onto `/routing` rather than a destination.
       },
       {
         to: "/tools",
         label: "Tools",
         surface: "tools",
         icon: FiTool,
-        // Two of the three services the page configures, plus MCP servers;
-        // Guardrails is grouped under Routing, where the prototype puts it.
-        // MCP is the row that is not a tool-service view, so it has a page of
-        // its own rather than a filter over the settings page; web/AGENTS.md
-        // says why.
+        // The two services the page configures, plus MCP servers. MCP is the
+        // row that is not a tool-service view, so it has a page of its own
+        // rather than a filter over the settings page; web/AGENTS.md says why.
         //
         // `to` gates and names the group; it is not somewhere the rail
         // navigates. A group with more than one visible child is a disclosure
         // when expanded and a flyout when collapsed, and neither offers the
-        // parent, so `/tools` (the three services on one page) is reachable by
-        // URL only. Deliberate: each service has its own destination here, and
-        // Guardrails belongs to Routing, so a row for the combined page would
-        // duplicate all three and cross the grouping the design draws. Routing
-        // leads with Policies because `/routing` *is* the policies page, not to
-        // make a parent reachable.
+        // parent, so `/tools` (both services on one page) is reachable by URL
+        // only. Deliberate: each service has its own destination here, so a row
+        // for the combined page would duplicate both.
         children: [
           { to: "/tools/web-search", label: "Web search", icon: FiGlobe },
           {
@@ -241,16 +221,15 @@ const BASE_NAV_SECTIONS = [
  * provisioned for itself. The gate is written anyway because it is the thing
  * that becomes load-bearing the moment per-user sign-in lands (otari-ai#1716).
  *
- * Two of the design's rows are **declared and gated on a surface the standalone
+ * One of the design's rows is **declared and gated on a surface the standalone
  * bootstrap does not report** (`STANDALONE_SURFACES` in
- * `src/gateway/api/routes/bootstrap.py` is that list), so each row is absent
- * here and present on a deployment that serves it, and a group whose every row
- * is gated drops entirely, heading included. The organization guardrail ceiling
- * is one, and this gateway serves no such surface at all. The organization's own
- * provider credentials are the other, and that one is a *choice* rather than an
- * absence: the API and the page both exist, and a hosted deployment reports
- * `organization_providers` in place of the process-global `providers`, because
- * a credential keyed on an instance name alone is served to every tenant.
+ * `src/gateway/api/routes/bootstrap.py` is that list), so it is absent here and
+ * present on a deployment that serves it, and a group whose every row is gated
+ * drops entirely, heading included. It is the organization's own provider
+ * credentials, and that is a *choice* rather than an absence: the API and the
+ * page both exist, and a hosted deployment reports `organization_providers` in
+ * place of the process-global `providers`, because a credential keyed on an
+ * instance name alone is served to every tenant.
  *
  * The design draws two more, Billing and Gateways, and neither is declared here
  * at all, because neither is this build's to declare: Billing is
@@ -271,13 +250,12 @@ const BASE_NAV_SECTIONS = [
  * capability gate cannot express "declared but not served" without relaxing that
  * invariant. A surface gate says exactly this and needs no test change.
  *
- * Both have a page on the *workspace* rail that looks like them and is not:
- * `/providers` is this process's credentials, and `/tools/guardrails` is
- * what this process refuses. The organization ones are a tenant-wide credential
- * set and a ceiling over every workspace, which are different tables behind
- * different endpoints. Pointing the organization rows at the workspace pages
- * would put one destination on both rails, which `navContextForPath` cannot
- * express and `registry.test.ts` forbids.
+ * It has a page on the *workspace* rail that looks like it and is not:
+ * `/providers` is this process's credentials, while the organization row is a
+ * tenant-wide credential set behind a different table and endpoint. Pointing
+ * the organization row at the workspace page would put one destination on both
+ * rails, which `navContextForPath` cannot express and `registry.test.ts`
+ * forbids.
  */
 const ORGANIZATION_NAV_SECTIONS = [
   {
@@ -395,17 +373,9 @@ const ORGANIZATION_NAV_SECTIONS = [
   {
     id: "org-gateway",
     label: "Gateway",
-    items: [
-      // The organization's guardrail ceiling, which is not the workspace rail's
-      // `/tools/guardrails`: that page configures what this process refuses, and
-      // this one would cap what any workspace under the tenant may allow.
-      {
-        to: "/organization/guardrails",
-        label: "Guardrails",
-        surface: "organization_guardrails",
-        icon: FiShield,
-      },
-    ],
+    // No rows of its own: this is where an overlay's Gateways row lands
+    // (`overlayNavItems.ts`), and a section with nothing in it renders nothing.
+    items: [],
   },
   {
     id: "org-general",

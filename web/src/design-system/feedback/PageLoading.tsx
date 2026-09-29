@@ -2,7 +2,7 @@ import { Spinner } from "@heroui/react"
 
 // A full-width loading placeholder for a page (or section) whose content is
 // gated on a first fetch. Without it, config pages that render nothing until
-// `data` arrives (Settings, Tools & Guardrails, the Overview index) flash a bare
+// `data` arrives (Settings, Tools, the Overview index) flash a bare
 // header over blank space, which reads as broken. `role="status"` announces the
 // wait (and its label) to assistive tech.
 export function PageLoading({ label = "Loading…" }: { label?: string }) {

@@ -1,7 +1,7 @@
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'-apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Liberation Sans", "DejaVu Sans", sans-serif','fontSize':'15px','lineColor':'#5e8496','edgeLabelBackground':'#ffffff'}}}%%
 flowchart TB
     clients("Your apps &middot; OpenAI / Anthropic SDKs")
-    otari("<b>Otari</b><br/>auth &middot; virtual keys &middot; budgets &middot; usage log<br/>guardrails &middot; built-in tools")
+    otari("<b>Otari</b><br/>auth &middot; virtual keys &middot; budgets &middot; usage log<br/>built-in tools")
     anyllm("routed by any-llm &middot; 40+ providers")
     clients -->|"OpenAI + Anthropic APIs"| otari
     otari --> anyllm

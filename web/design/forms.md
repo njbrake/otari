@@ -277,7 +277,7 @@ The box fills with `--color-control-indicator` and the mark is
 4.5:1, which is why it is white where text on the accent is near-black.
 
 Pass `ariaLabel` when the visible label repeats across the page (one workspace list
-per guardrail, say). Keep the visible text inside it so speech input still reaches
+per row, say). Keep the visible text inside it so speech input still reaches
 the control.
 
 Pass `description` for help text under a checkbox rather than a sibling paragraph:

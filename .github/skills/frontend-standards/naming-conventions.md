@@ -14,7 +14,7 @@ thing is and what it does without opening it.
   together, so it has no one subject to be named after and splitting it would
   duplicate that rationale across two files. A test with one subject takes its
   subject's name.
-- Routes: whatever file-based routing requires (`tools.guardrails.tsx`), never renamed by hand.
+- Routes: whatever file-based routing requires (`tools.web-search.tsx`), never renamed by hand.
 
 ## Variables
 

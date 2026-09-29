@@ -101,7 +101,7 @@ SettingsGroup      bounded, one per topic
 No Save anywhere on that one: a text field commits on blur and on Enter, a
 select on change. Reach for it when the settings are independent of one another,
 so no single button could say what it is about to write.
-`features/tools/ToolsGuardrailsPage` is the worked example.
+`features/tools/ToolsPage` is the worked example.
 
 A list-and-detail page, which is the shape for a set of records where reading
 one is most of the work:

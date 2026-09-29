@@ -1,8 +1,8 @@
 """End-to-end behavior for routing policies (mozilla-ai/otari#463).
 
 A policy is a model name callers use like any other. It decides which real model
-serves the request (``select``), what is tried after a retryable failure
-(``on_failure``), and which guardrails always run.
+serves the request (``select``) and what is tried after a retryable failure
+(``on_failure``).
 
 The invariants worth defending, and why:
 
@@ -1213,120 +1213,87 @@ def test_a_dynamic_stored_policy_reports_no_single_price(client: TestClient) -> 
 
 
 # ---------------------------------------------------------------------------
-# Mandated guardrails actually reach the guardrail runner
+# Policies written before guardrails were removed still load
 #
-# The regression this guards is that the whole feature was once a no-op: the
-# compiler built the guardrail list and no route ever read it, so the schema, the
-# CLI, the dashboard, and the docs all described enforcement that never happened.
-# Asserting a 200 is not enough, because a guardrail that never runs also returns
-# 200. These assert the runner was actually handed the mandate.
+# Every alias migrated into a policy was stored with `guardrails: []`, and a
+# policy could carry a non-empty list. `PolicySpec` is closed to unknown keys, so
+# without tolerance for this one those rows would be skipped by the loader and
+# their names would stop resolving.
 # ---------------------------------------------------------------------------
 
+_RETIRED_GUARDRAILS = [{"profile": "prompt-injection", "mode": "block", "on_unavailable": "block"}]
 
-@pytest.fixture
-def guarded_client(routing_config: GatewayConfig) -> Generator[TestClient]:
-    guarded = routing_config.model_copy(
+
+def test_a_config_policy_carrying_retired_guardrails_still_serves(routing_config: GatewayConfig) -> None:
+    legacy = routing_config.model_copy(
         update={
             "routing": RoutingConfig.model_validate(
                 {
                     "policies": {
-                        "guarded": {
-                            "select": [{"default": "openai:gpt-5-mini"}],
-                            "guardrails": [
-                                {"profile": "prompt-injection", "mode": "block", "on_unavailable": "block"}
-                            ],
-                        }
+                        "legacy": {"select": [{"default": "openai:gpt-5-mini"}], "guardrails": _RETIRED_GUARDRAILS}
                     }
                 }
             )
         }
     )
-    yield from build_test_client(guarded)
+    for legacy_client in build_test_client(legacy):
+        _create_user(legacy_client)
+        provider = AsyncMock(return_value=_completion("gpt-5-mini"))
+        with patch("gateway.api.routes.chat.acompletion", new=provider):
+            resp = _chat(legacy_client, "legacy")
+
+        assert resp.status_code == 200, resp.text
+        assert _awaited_model(provider) == "openai:gpt-5-mini"
 
 
-def test_a_policy_guardrail_is_handed_to_the_guardrail_runner(guarded_client: TestClient) -> None:
-    _create_user(guarded_client)
-    seen: list[Any] = []
+@pytest.mark.parametrize("retired", [[], _RETIRED_GUARDRAILS], ids=["empty", "populated"])
+def test_a_stored_policy_carrying_retired_guardrails_still_loads(
+    client: TestClient, routing_config: GatewayConfig, retired: list[dict[str, Any]]
+) -> None:
+    _create_user(client)
+    created = client.post(
+        f"{API_ROOT}/routing/policies",
+        json={"name": "legacy", "spec": _spec("openai:gpt-5-mini", ["anthropic:claude-haiku-4-5"])},
+        headers=HEADERS,
+    )
+    assert created.status_code == 200, created.text
 
-    async def capture(guardrails: Any, text: str, **kwargs: Any) -> None:
-        seen.append(guardrails)
-
-    with (
-        patch("gateway.api.routes._pipeline.apply_input_guardrails", new=capture),
-        patch("gateway.api.routes.chat.acompletion", new=AsyncMock(return_value=_completion("gpt-5-mini"))),
-    ):
-        resp = guarded_client.post(
-            f"{API_ROOT}/chat/completions",
-            json={"model": "guarded", "messages": [{"role": "user", "content": "hi"}], "user": "test-user"},
-            headers=HEADERS,
+    # Written the way an older build left it, beneath the API that would now strip it.
+    stored = {
+        "spec_version": 1,
+        "select": [{"default": "openai:gpt-5-mini"}],
+        "on_failure": ["anthropic:claude-haiku-4-5"],
+        "guardrails": retired,
+    }
+    engine = create_engine(routing_config.database_url, pool_pre_ping=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE routing_policies SET spec = :spec WHERE name = 'legacy'"), {"spec": json.dumps(stored)}
         )
+    engine.dispose()
 
-    assert resp.status_code == 200, resp.text
-    assert len(seen) == 1
-    assert seen[0] is not None, "the policy's guardrail never reached the runner"
-    assert [g.profile for g in seen[0]] == ["prompt-injection"]
-    assert seen[0][0].mode == "block"
+    # Any committed write refreshes this worker's cache, which reparses every row.
+    other = client.post(
+        f"{API_ROOT}/routing/policies", json={"name": "other", "spec": _spec("openai:gpt-5-mini")}, headers=HEADERS
+    )
+    assert other.status_code == 200, other.text
 
+    listed = {item["name"]: item for item in client.get(f"{API_ROOT}/routing/policies", headers=HEADERS).json()}
+    assert listed["legacy"]["source"] == "stored"
 
-def test_a_caller_cannot_weaken_a_policy_guardrail_over_the_wire(guarded_client: TestClient) -> None:
-    _create_user(guarded_client)
-    seen: list[Any] = []
+    explained = client.post(f"{API_ROOT}/routing/policies/explain", json={"name": "legacy"}, headers=HEADERS)
+    assert explained.status_code == 200, explained.text
+    assert [c["dispatch_model"] for c in explained.json()["candidates"]] == [
+        "openai:gpt-5-mini",
+        "anthropic:claude-haiku-4-5",
+    ]
+    assert "guardrails" not in explained.json()
 
-    async def capture(guardrails: Any, text: str, **kwargs: Any) -> None:
-        seen.append(guardrails)
-
-    with (
-        patch("gateway.api.routes._pipeline.apply_input_guardrails", new=capture),
-        patch("gateway.api.routes.chat.acompletion", new=AsyncMock(return_value=_completion("gpt-5-mini"))),
-    ):
-        resp = guarded_client.post(
-            f"{API_ROOT}/chat/completions",
-            json={
-                "model": "guarded",
-                "messages": [{"role": "user", "content": "hi"}],
-                "user": "test-user",
-                "guardrails": [{"profile": "prompt-injection", "mode": "monitor", "on_unavailable": "monitor"}],
-            },
-            headers=HEADERS,
-        )
-
-    assert resp.status_code == 200, resp.text
-    assert [g.profile for g in seen[0]] == ["prompt-injection"]
-    assert seen[0][0].mode == "block"
-    assert seen[0][0].on_unavailable == "block"
-
-
-def test_a_blocking_policy_guardrail_refuses_the_request(guarded_client: TestClient) -> None:
-    """End to end: a mandated block guardrail that flags stops the provider call."""
-    _create_user(guarded_client)
     provider = AsyncMock(return_value=_completion("gpt-5-mini"))
-
-    async def flagged(
-        guardrails: Any,
-        input_text: str,
-        *,
-        default_url: str | None,
-        credentials: Any = None,
-        mandated: Any = None,
-    ) -> Any:
-        from gateway.services.guardrails import GuardrailResult, GuardrailVerdict
-
-        return GuardrailVerdict(
-            results=[GuardrailResult(profile=g.profile, mode=g.mode, valid=False) for g in guardrails]
-        )
-
-    with (
-        patch("gateway.api.routes._helpers.run_input_guardrails", new=flagged),
-        patch("gateway.api.routes.chat.acompletion", new=provider),
-    ):
-        resp = guarded_client.post(
-            f"{API_ROOT}/chat/completions",
-            json={"model": "guarded", "messages": [{"role": "user", "content": "hi"}], "user": "test-user"},
-            headers=HEADERS,
-        )
-
-    assert resp.status_code == 403, resp.text
-    provider.assert_not_awaited()
+    with patch("gateway.api.routes.chat.acompletion", new=provider):
+        resp = _chat(client, "legacy")
+    assert resp.status_code == 200, resp.text
+    assert _awaited_model(provider) == "openai:gpt-5-mini"
 
 
 # ---------------------------------------------------------------------------

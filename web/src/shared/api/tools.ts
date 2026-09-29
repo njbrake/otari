@@ -1,17 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
-  CreateOrganizationGuardrailRequest,
   CreateSearchToolRequest,
   CreateWorkspaceMcpServerRequest,
-  GuardrailCatalog,
-  OrganizationGuardrail,
   SearchProviderInfo,
   SearchToolsResponse,
   StoredSearchTool,
   TestServiceResponse,
   ToolSettingsResponse,
   ToolsResponse,
-  UpdateOrganizationGuardrailRequest,
   UpdateSearchToolRequest,
   UpdateToolSettingsRequest,
   UpdateWorkspaceCodeExecutionPolicyRequest,
@@ -23,10 +19,7 @@ import type {
   WorkspaceWebSearchConfig,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
-import { fetchAllPaged } from "@/shared/api/paging"
 import {
-  GUARDRAIL_PROFILES,
-  ORGANIZATION_GUARDRAILS,
   SEARCH_PROVIDERS,
   SEARCH_TOOLS,
   TOOL_SETTINGS,
@@ -71,10 +64,6 @@ export function useUpdateToolSettings() {
       // which this PATCH may have just changed, so the endpoint a blank box
       // resolves to (and whether one is required at all) has to be re-read.
       void queryClient.invalidateQueries({ queryKey: [SEARCH_PROVIDERS] })
-      // Same reasoning one service over: the guardrail catalog is whatever the
-      // host `guardrails_url` names answered with, so pointing that field at a
-      // different sidecar changes which profiles exist.
-      void queryClient.invalidateQueries({ queryKey: [GUARDRAIL_PROFILES] })
     },
   })
 }
@@ -161,90 +150,6 @@ export function useTestService() {
 // The pricing endpoint caps `limit` at 1000 server-side, so page through it
 // rather than truncating: a gateway with a long price history could otherwise
 // have older rows silently vanish from the models table.
-
-// The profiles an organization guardrail may name, and the validate_kwargs each
-// one takes. Read from the guardrails service through the gateway, so an
-// unreachable or unconfigured service resolves to `available: false` with a
-// reason rather than to a query error: the form falls back to naming a profile
-// by hand and has to render either way.
-//
-// Longer-lived than the tool settings beside it, because the answer only changes
-// when the operator edits the sidecar's own YAML and restarts it, which is not
-// something the dashboard can do. The window `useSearchProviders` takes, for the
-// reason it takes it.
-export function useGuardrailProfiles(enabled = true) {
-  return useQuery({
-    queryKey: [GUARDRAIL_PROFILES],
-    queryFn: () =>
-      apiFetch<GuardrailCatalog>("/tool-settings/guardrails/profiles"),
-    staleTime: 300_000,
-    enabled,
-  })
-}
-
-export function useOrganizationGuardrails(enabled = true) {
-  return useQuery({
-    queryKey: [ORGANIZATION_GUARDRAILS],
-    queryFn: () =>
-      fetchAllPaged<OrganizationGuardrail>("/organizations/me/guardrails"),
-    staleTime: 60_000,
-    enabled,
-  })
-}
-
-export function useCreateOrganizationGuardrail() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (body: CreateOrganizationGuardrailRequest) =>
-      apiFetch<OrganizationGuardrail>("/organizations/me/guardrails", {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: [ORGANIZATION_GUARDRAILS],
-      })
-    },
-  })
-}
-
-export function useUpdateOrganizationGuardrail() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({
-      guardrailId,
-      body,
-    }: {
-      guardrailId: string
-      body: UpdateOrganizationGuardrailRequest
-    }) =>
-      apiFetch<OrganizationGuardrail>(
-        `/organizations/me/guardrails/${encodeURIComponent(guardrailId)}`,
-        { method: "PATCH", body: JSON.stringify(body) },
-      ),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: [ORGANIZATION_GUARDRAILS],
-      })
-    },
-  })
-}
-
-export function useDeleteOrganizationGuardrail() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (guardrailId: string) =>
-      apiFetch<{ message: string }>(
-        `/organizations/me/guardrails/${encodeURIComponent(guardrailId)}`,
-        { method: "DELETE" },
-      ),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: [ORGANIZATION_GUARDRAILS],
-      })
-    },
-  })
-}
 
 export function useWorkspaceCodeExecutionPolicy(workspaceId: string | null) {
   return useQuery({

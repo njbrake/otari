@@ -88,7 +88,6 @@ Compose profiles start the bundled service backends:
 ```bash
 docker compose --profile code-exec up -d
 docker compose --profile web-search up -d
-docker compose --profile guardrails up -d
 ```
 
 Web search needs no container when `web_search_provider` names a licensed API
@@ -96,7 +95,7 @@ Web search needs no container when `web_search_provider` names a licensed API
 services are optional; requests that require an unconfigured backend fail
 without affecting ordinary inference.
 
-See [Built-in tools](tools.md) and [Guardrails](guardrails.md).
+See [Built-in tools](tools.md).
 
 ## Configuration
 

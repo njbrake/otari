@@ -58,8 +58,7 @@ without `max_uses` is bounded only by `max_tool_iterations`.
 
 `GET /api/v1/tool-settings` answers any signed-in identity, so a member is told how
 the built-in tools behave on their requests. A caller who does not operate the
-deployment is answered without `web_search_url`, `sandbox_url` and
-`guardrails_url`: those name this deployment's own infrastructure, which is what
+deployment is answered without `web_search_url` and `sandbox_url`: those name this deployment's own infrastructure, which is what
 the network-safety gates on the Settings page are set against, and no tenant
 acts on them. Changing any setting stays a deployment operator's to do.
 

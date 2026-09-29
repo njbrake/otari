@@ -1,9 +1,9 @@
 """Schema for the ``routing:`` config block: named routing policies.
 
 A policy is a named model callers put in the ``model`` field. It decides which
-real model serves the request, in what order candidates are tried, and which
-guardrails always run. A one-target policy is the same thing as an alias, which
-is why ``aliases:`` remains supported as its shorthand.
+real model serves the request and in what order candidates are tried. A
+one-target policy is the same thing as an alias, which is why ``aliases:``
+remains supported as its shorthand.
 
 Two axes, deliberately separate:
 
@@ -34,7 +34,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 __all__ = [
     "MAX_CANDIDATES",
     "WEIGHTED_BACKEND",
-    "PolicyGuardrail",
     "PolicySpec",
     "RoutingConfig",
     "SelectEntry",
@@ -294,40 +293,6 @@ class SelectEntry(BaseModel):
         return self.target if self.target is not None else self.default
 
 
-class PolicyGuardrail(BaseModel):
-    """A guardrail the operator mandates for every request through the policy.
-
-    There is deliberately no ``on`` field. The request-level model accepts
-    ``on: [output]`` and does not enforce it, so allowing it here would let an
-    operator write a mandate that silently does nothing. Policy guardrails are
-    input-direction only until output-direction enforcement exists.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    profile: str = Field(min_length=1, max_length=128)
-    mode: Literal["block", "monitor"] = Field(
-        description=(
-            "Required, with no default: the request-level field defaults to 'monitor', so an omitted "
-            "mode here would read as a mandate and behave as shadow mode."
-        )
-    )
-    on_unavailable: Literal["block", "monitor"] = Field(
-        default="block",
-        description=(
-            "What to do when the guardrails service cannot be reached. 'block' (the default) fails "
-            "closed, which means a guardrails outage rejects every request through this policy, ahead "
-            "of the fallback chain. 'monitor' serves the request and records that the check was skipped."
-        ),
-    )
-    url: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Override the operator-set guardrails service URL. SSRF-checked like the request-level field.",
-    )
-    validate_kwargs: dict[str, Any] = Field(default_factory=dict)
-
-
 class PolicySpec(BaseModel):
     """One named routing policy."""
 
@@ -339,12 +304,25 @@ class PolicySpec(BaseModel):
         default_factory=list,
         description="Selectors to try, in order, after a provider failure on the selected candidate.",
     )
-    guardrails: list[PolicyGuardrail] = Field(default_factory=list)
     # No `limits` yet, deliberately. The only per-request deadline that exists is
     # the streaming first-chunk timeout, and it is applied solely by the hybrid
     # walker; standalone streaming (where policies apply) has none, so a
     # per-policy override would validate, store, and do nothing. It belongs here
     # once standalone streaming grows a deadline of its own.
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_retired_guardrails(cls, data: Any) -> Any:
+        """Accept and discard the ``guardrails`` key a policy could once carry.
+
+        Stored rows and config files written before guardrails were removed carry
+        it (every alias migrated into a policy got ``guardrails: []``), and
+        ``extra="forbid"`` would otherwise refuse the whole policy over a key that
+        no longer means anything.
+        """
+        if isinstance(data, dict) and "guardrails" in data:
+            return {key: value for key, value in data.items() if key != "guardrails"}
+        return data
 
     @model_validator(mode="after")
     def _one_default_and_it_comes_last(self) -> PolicySpec:

@@ -69,7 +69,7 @@ cannot attach to more than one table, so a shared mixin passes `sa_type` plus
 - **Services** (`services/`, one concern per `*_service.py`) hold the business logic and own
   the DB work.
 - Service-specific exceptions live beside their service (e.g. `UnsafeURLError`,
-  `GuardrailsNotReachableError`). Raise `HTTPException` with a clear `detail` in the API layer;
+  `WebSearchNotReachableError`). Raise `HTTPException` with a clear `detail` in the API layer;
   prefer specific exceptions (`ValueError`, `SQLAlchemyError`) over broad `except Exception`.
 - **The tenancy slice is the one exception, deliberately.** `services/tenancy/errors.py`
   declares a `TenancyError` family that each carry their own `status_code`, and one handler

@@ -139,7 +139,7 @@ instead.
 The Playground is the in-product chat page: pick a model the gateway serves and
 talk to it, or put two side by side and record which answered better. Requests
 run through the same path as any other completion, so routing policies,
-guardrails, budgets and the tool loop all apply, and every request appears in
+budgets and the tool loop all apply, and every request appears in
 Activity and Usage.
 
 Two things are worth knowing about how it is billed and what it stores.

@@ -21,7 +21,7 @@ import uuid
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from any_llm import LLMProvider
@@ -88,10 +88,7 @@ def _tool_ctx(**overrides: Any) -> ToolContext:
 
 
 # The preamble resolves the organization from the workspace on every standalone
-# request, so a context without one is a shape production never builds; the
-# organization-guardrail resolve refuses it (fail closed) rather than skipping
-# the mandates. Defaulted here so these tests keep exercising the refusals they
-# are about instead of that one.
+# request, so a context without one is a shape production never builds.
 _ORGANIZATION_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
 
 
@@ -1180,14 +1177,9 @@ def _chunk_id(part: str) -> str | None:
 
 
 async def _call_prepare_gateway_tools(ctx: RequestContext, **overrides: Any) -> ToolContext:
-    from fastapi import Response
-
     kwargs: dict[str, Any] = {
         "adapter": chat._ADAPTER,
         "ctx": ctx,
-        "response": Response(),
-        "guardrails": None,
-        "guardrail_text": "",
         "tools": None,
         "mcp_servers": None,
         "mcp_server_ids": None,
@@ -1195,10 +1187,7 @@ async def _call_prepare_gateway_tools(ctx: RequestContext, **overrides: Any) -> 
         "tools_header": None,
     }
     kwargs.update(overrides)
-    # Stubbed rather than fed a session: every case here is about a *different*
-    # admission refusal, and the organization plane resolves before all of them.
-    with patch("gateway.api.routes._pipeline.resolve_organization_guardrails", new=AsyncMock(return_value=[])):
-        return await prepare_gateway_tools(**kwargs)
+    return await prepare_gateway_tools(**kwargs)
 
 
 @pytest.mark.asyncio
@@ -1246,14 +1235,8 @@ async def test_a_request_without_a_workspace_is_refused_before_any_tool_resolves
 ) -> None:
     """Standalone tool resolution needs a workspace; with none the request is refused, not served.
 
-    Every gate in this block fails closed on a context carrying no workspace,
-    and the organization-guardrail resolve is the first of them (otari#654), so
-    it is the one that answers: a 500, because an unresolvable tenancy is a
-    server invariant rather than something the caller sent wrong. What the case
-    is really about is that the request is refused rather than served with its
-    tool configuration silently dropped, and that the hold does not survive it.
-    `_resolve_mcp_server_ids` keeps its own guard on the same condition; it is
-    simply no longer the first to run.
+    `_resolve_mcp_server_ids` answers a 400 rather than serving the request with
+    its stored servers silently dropped, and the hold does not survive it.
     """
     settlement = _Settlement()
     settlement.install(monkeypatch)
@@ -1264,7 +1247,7 @@ async def test_a_request_without_a_workspace_is_refused_before_any_tool_resolves
             ctx, mcp_server_ids=[cast(Any, "11111111-1111-1111-1111-111111111111")]
         )
 
-    assert exc_info.value.status_code == 500
+    assert exc_info.value.status_code == 400
     assert settlement.refunded == 1
 
 
@@ -1485,24 +1468,6 @@ async def test_a_release_that_also_fails_reraises_the_original(monkeypatch: pyte
         await _call_prepare_gateway_tools(
             ctx, mcp_server_ids=[cast(Any, "11111111-1111-1111-1111-111111111111")]
         )
-
-
-@pytest.mark.asyncio
-async def test_guardrail_block_releases_reservation(monkeypatch: pytest.MonkeyPatch) -> None:
-    settlement = _Settlement()
-    settlement.install(monkeypatch)
-
-    async def blocking_guardrails(*args: Any, **kwargs: Any) -> None:
-        raise HTTPException(status_code=403, detail="blocked")
-
-    monkeypatch.setattr(pipeline, "apply_input_guardrails", blocking_guardrails)
-
-    ctx = _ctx(GatewayConfig(), db=cast(Any, object()), reservation=_reservation(), workspace_id=uuid.uuid4())
-    with pytest.raises(HTTPException) as exc_info:
-        await _call_prepare_gateway_tools(ctx)
-
-    assert exc_info.value.status_code == 403
-    assert settlement.refunded == 1
 
 
 # ---------------------------------------------------------------------------

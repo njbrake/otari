@@ -24,7 +24,7 @@ treats the policy it resolves from otari.ai as a set of *defaults* a request
 overrides. The precedence there is the platform's own contract and is left
 alone; the rule above is this repository's, and it is the stricter of the two:
 under default-only precedence a request could shed a workspace's block-list
-simply by sending a block-list of its own, which is a guardrail that fails open.
+simply by sending a block-list of its own, which is a restriction that fails open.
 
 ``provider_options`` is the one field that keeps the hybrid precedence, merged
 per key with the request winning. It is an opaque bag forwarded to the backend
@@ -339,7 +339,7 @@ def narrow_web_search_tool_entry(
 
     if config.blocked_domains:
         # Union: a workspace block a request could drop by sending a block-list
-        # of its own would be a guardrail that fails open.
+        # of its own would be a restriction that fails open.
         narrowed["blocked_domains"] = _union(_entry_domains(narrowed.get("blocked_domains")), config.blocked_domains)
 
     if config.allowed_domains:

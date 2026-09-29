@@ -15,7 +15,7 @@ their membership of the workspace it will bill
 (``playground_service.resolve_playground_principal``), and hands the result to
 the same pipeline as a
 :class:`~gateway.types.session_principal.SessionPrincipal`. Nothing about
-routing, budget, guardrails, tools, pricing or settlement is reimplemented here:
+routing, budget, tools, pricing or settlement is reimplemented here:
 ``run_chat_completion`` is the same function the public route calls, so the two
 paths cannot drift.
 

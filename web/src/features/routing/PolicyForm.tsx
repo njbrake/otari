@@ -7,11 +7,10 @@
  * lives in `policyModel.ts`.
  */
 
-import { Link } from "@tanstack/react-router"
 import { type ReactNode, type RefObject, useMemo, useState } from "react"
 import { FiTrash2 } from "react-icons/fi"
 
-import type { PolicyGuardrail, PolicySpec, User } from "@/client"
+import type { PolicySpec, User } from "@/client"
 import { Button } from "@/design-system/actions/Button"
 import { errorMessage } from "@/design-system/feedback/errorMessage"
 import { FormDialog } from "@/design-system/feedback/FormDialog"
@@ -33,7 +32,6 @@ import {
   useSetOrganizationRoutingPolicy,
   useSetRoutingPolicy,
 } from "@/shared/api/routing"
-import { useToolSettings } from "@/shared/api/tools"
 import { useUsers } from "@/shared/api/users"
 
 import {
@@ -49,33 +47,6 @@ import {
 } from "./policyModel"
 
 type RouterBackend = typeof KNN_BACKEND | typeof WEIGHTED_BACKEND
-
-/** Whether a guardrails service is configured for this gateway.
- *
- *  A policy guardrail is a request to a separate service (`guardrails_url`). With
- *  no service configured there is nothing to call, so mandating a check would
- *  either fail every request through the policy (mode block, on_unavailable block)
- *  or silently do nothing. Neither is a state to let an operator build by accident,
- *  so the affordance is disabled until a service exists.
- *
- *  While the settings are still loading this returns `true`: a control that starts
- *  enabled and stays enabled is better than one that flickers from disabled to
- *  enabled, which reads as a bug.
- */
-function useGuardrailsConfigured(enabled: boolean): {
-  configured: boolean
-  isLoading: boolean
-} {
-  const settings = useToolSettings(enabled)
-  const field = settings.data?.fields.find(
-    (entry) => entry.key === "guardrails_url",
-  )
-  const value = typeof field?.value === "string" ? field.value.trim() : ""
-  return {
-    configured: settings.isLoading || value !== "",
-    isLoading: settings.isLoading,
-  }
-}
 
 /**
  * A section's own remove, beside the heading that names it.
@@ -299,48 +270,12 @@ function partialScopeReport(
   return `${created}Not created for ${missing}. Submitting again retries only the ones still missing.`
 }
 
-const MODE_VALUES = ["block", "monitor"] as const
-
-/** A two-value mode switch. The codebase has no Select component and four
- *  hand-rolled `aria-pressed` groups, so this follows that pattern rather than
- *  introducing a fifth idiom. */
-function ModeToggle({
-  label,
-  hint,
-  value,
-  onChange,
-}: {
-  label: string
-  hint?: string
-  value: "block" | "monitor"
-  onChange: (value: "block" | "monitor") => void
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-body">{label}</span>
-      <TabRow>
-        {MODE_VALUES.map((mode) => (
-          <Tab
-            key={mode}
-            isActive={value === mode}
-            onPress={() => onChange(mode)}
-          >
-            {mode}
-          </Tab>
-        ))}
-      </TabRow>
-      {hint === undefined ? null : <span className="text-caption">{hint}</span>}
-    </div>
-  )
-}
-
 /** Create or edit a policy.
  *
  *  Reading order mirrors the schema so the form and the YAML teach the same
  *  model: name and scope, then what serves a normal request, then what happens on
- *  failure, then what always runs. The failure and guardrail sections are absent
- *  until summoned rather than collapsed-and-empty, which keeps naming one model a
- *  three-field task.
+ *  failure. The failure and condition sections are absent until summoned rather
+ *  than collapsed-and-empty, which keeps naming one model a three-field task.
  */
 export function PolicyForm({
   existing,
@@ -393,11 +328,6 @@ export function PolicyForm({
   // model_aliases, and silently rewriting it as a policy would leave the original
   // behind under the same name.
   const editingAlias = existing?.kind === "alias"
-  // Gated on the dialog being open, and this is the read where that matters:
-  // it sits in the form's own body rather than inside the modal, so without the
-  // gate it would fetch for every render of the page behind a closed dialog.
-  const guardrails_ = useGuardrailsConfigured(isOpen)
-
   // Where a user scope can be written at all: `/users` is a deployment-wide
   // operator route, so asking for it as a tenant admin buys a 403 for a picker
   // this form does not offer them, and an edit cannot move a scope so it does
@@ -446,9 +376,6 @@ export function PolicyForm({
   const [chain, setChain] = useState<string[]>(existing?.spec.on_failure ?? [])
   const [conditions, setConditions] = useState(
     existing ? conditionsOf(existing.spec) : [],
-  )
-  const [guardrails, setGuardrails] = useState<PolicyGuardrail[]>(
-    existing?.spec.guardrails ?? [],
   )
   // The learned router's pool, and which of its models serves when the router
   // declines. One list rather than a pool plus a separate "Serves" field: the
@@ -518,7 +445,6 @@ export function PolicyForm({
   const conditionsReady = conditions.every(
     (c) => c.target.trim() !== "" && c.threshold > 0 && c.threshold < 100,
   )
-  const guardrailsReady = guardrails.every((g) => g.profile.trim() !== "")
   // A model named twice is refused by the API, and on a weighted policy it would
   // also collapse in the weight map: two rows, one key, so the split submitted is
   // not the split the form showed. Checked over the named rows only, so a pair of
@@ -551,7 +477,6 @@ export function PolicyForm({
     !nameHasDelimiter &&
     scopeReady &&
     conditionsReady &&
-    guardrailsReady &&
     candidatesReady &&
     splitReady &&
     !overCandidateCap &&
@@ -598,7 +523,6 @@ export function PolicyForm({
       ...(chain.length > 0
         ? { on_failure: chain.map((entry) => entry.trim()) }
         : {}),
-      ...(guardrails.length > 0 ? { guardrails } : {}),
     }),
     [
       conditions,
@@ -609,7 +533,6 @@ export function PolicyForm({
       weightValues,
       effectiveTarget,
       chain,
-      guardrails,
     ],
   )
 
@@ -622,23 +545,19 @@ export function PolicyForm({
     target,
     chain,
     conditions,
-    guardrails,
     candidates,
     safeIndex,
     backend,
     weights,
   })
 
-  // An alias has exactly one target, so growing one a chain, a condition, or a
-  // guardrail makes it a policy. Saving it as a policy alone would leave the alias
+  // An alias has exactly one target, so growing one a chain or a condition
+  // makes it a policy. Saving it as a policy alone would leave the alias
   // row in place under the same name, and the API refuses that collision, so the
   // form keeps an alias an alias and points the operator at the way across.
   const outgrewAlias =
     editingAlias &&
-    (chain.length > 0 ||
-      conditions.length > 0 ||
-      guardrails.length > 0 ||
-      candidates.length > 0)
+    (chain.length > 0 || conditions.length > 0 || candidates.length > 0)
   const pending =
     save.isPending ||
     saveAlias.isPending ||
@@ -754,8 +673,7 @@ export function PolicyForm({
         if (!open) onClose()
       }}
       // `lg` on every routing dialog: this form grows a fallback chain, a
-      // condition tier, a weighted split and a guardrail list as they are asked
-      // for, and a frame that changed width while an operator built one up
+      // condition tier and a weighted split as they are asked for, and a frame that changed width while an operator built one up
       // would read as a different dialog each time.
       size="lg"
       title={
@@ -1221,99 +1139,6 @@ export function PolicyForm({
         </div>
       ) : null}
 
-      {/* Guardrails */}
-      {guardrails.length > 0 ? (
-        <div className="flex flex-col gap-3 border border-control-border p-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <span className="text-body">Always check</span>
-              <p className="text-caption">
-                Runs on every request through this policy. Callers can add their
-                own guardrails but cannot weaken these.
-              </p>
-              {guardrails_.configured ? null : (
-                <p className="mt-1 text-caption text-warning">
-                  No guardrails service is configured, so these cannot run. With{" "}
-                  <code>if the service is down</code> set to block, every
-                  request through this policy is refused until one is
-                  configured.{" "}
-                  <Link to="/tools" className="underline">
-                    Set one up
-                  </Link>
-                  , or remove the guardrail.
-                </p>
-              )}
-            </div>
-            <SectionRemove
-              label="Remove the guardrails"
-              onRemove={() => setGuardrails([])}
-            />
-          </div>
-          {guardrails.map((guardrail, index) => (
-            <div key={index} className="flex flex-col gap-3">
-              <div className="flex flex-wrap items-end gap-3">
-                <Field
-                  label="Profile"
-                  value={guardrail.profile}
-                  onChange={(value) =>
-                    setGuardrails((prev) =>
-                      prev.map((g, i) =>
-                        i === index ? { ...g, profile: value } : g,
-                      ),
-                    )
-                  }
-                  placeholder="prompt-injection"
-                  isRequired
-                  description="A profile configured on the guardrails service."
-                />
-                <ModeToggle
-                  label="Mode"
-                  value={guardrail.mode}
-                  onChange={(mode) =>
-                    setGuardrails((prev) =>
-                      prev.map((g, i) => (i === index ? { ...g, mode } : g)),
-                    )
-                  }
-                  hint="block rejects a flagged request; monitor records it and serves anyway."
-                />
-                <ModeToggle
-                  label="If the service is down"
-                  value={guardrail.on_unavailable ?? "block"}
-                  onChange={(mode) =>
-                    setGuardrails((prev) =>
-                      prev.map((g, i) =>
-                        i === index ? { ...g, on_unavailable: mode } : g,
-                      ),
-                    )
-                  }
-                  hint="block fails closed, so a guardrails outage refuses every request through this policy."
-                />
-                <FieldAction>
-                  <Button
-                    variant="ghost"
-                    onPress={() =>
-                      setGuardrails((prev) =>
-                        prev.filter((_, i) => i !== index),
-                      )
-                    }
-                  >
-                    Remove
-                  </Button>
-                </FieldAction>
-              </div>
-              {guardrail.mode === "block" &&
-              (guardrail.on_unavailable ?? "block") === "block" ? (
-                <div className="text-caption text-warning">
-                  With both set to block, a guardrails-service outage rejects
-                  every request through this policy, ahead of any fallback
-                  above.
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
-
       {/* Complexity is summoned, never presented: naming one model stays a
               three-field task. */}
       <div className="flex flex-wrap gap-3 text-sm">
@@ -1369,44 +1194,6 @@ export function PolicyForm({
             + Split traffic across providers by weight
           </button>
         ) : null}
-        {guardrails.length === 0 ? (
-          // Disabled rather than hidden, and never disabled silently: a hidden
-          // control teaches nothing, and a greyed-out one with no explanation
-          // is worse. The reason sits next to it with the route to fixing it,
-          // as text rather than a tooltip so it is readable on touch and by a
-          // screen reader.
-          <span className="flex flex-wrap items-baseline gap-2">
-            <button
-              type="button"
-              disabled={!guardrails_.configured}
-              aria-describedby={
-                guardrails_.configured ? undefined : "guardrails-unavailable"
-              }
-              className={
-                guardrails_.configured
-                  ? "text-link hover:underline"
-                  : "cursor-not-allowed text-muted opacity-60"
-              }
-              onClick={() =>
-                setGuardrails([
-                  { profile: "", mode: "block", on_unavailable: "block" },
-                ])
-              }
-            >
-              + Add guardrails
-            </button>
-            {guardrails_.configured ? null : (
-              <span id="guardrails-unavailable" className="text-caption">
-                No guardrails service is configured, so there would be nothing
-                to call.{" "}
-                <Link to="/tools" className="text-link hover:underline">
-                  Set one up in Tools &amp; Guardrails
-                </Link>
-                .
-              </span>
-            )}
-          </span>
-        ) : null}
       </div>
 
       {/* Each of these explains a mode chosen above it, so it belongs beside
@@ -1429,8 +1216,8 @@ export function PolicyForm({
       ) : null}
       {outgrewAlias ? (
         <p className="text-warning text-xs">
-          An alias holds one target. To add a fallback, a condition, or a
-          guardrail, delete this alias and create a policy with the same name.
+          An alias holds one target. To add a fallback or a condition, delete
+          this alias and create a policy with the same name.
         </p>
       ) : null}
     </FormDialog>

@@ -218,6 +218,7 @@ def test_load_config_promotes_service_level_fields_from_otari_prefix(
     config_file.write_text("{}\n", encoding="utf-8")
 
     monkeypatch.setenv("OTARI_SANDBOX_URL", "http://sandbox:9000")
+    # A retired setting still exported by an old deployment is ignored, not an error.
     monkeypatch.setenv("OTARI_GUARDRAILS_URL", "http://guardrails:8000")
     monkeypatch.setenv("OTARI_WEB_SEARCH_MAX_RESULTS", "7")
     monkeypatch.setenv("OTARI_WEB_SEARCH_EXTRACT", "false")
@@ -226,7 +227,7 @@ def test_load_config_promotes_service_level_fields_from_otari_prefix(
     config = load_config(str(config_file))
 
     assert config.sandbox_url == "http://sandbox:9000"
-    assert config.guardrails_url == "http://guardrails:8000"
+    assert not hasattr(config, "guardrails_url")
     assert config.web_search_max_results == 7
     assert config.web_search_extract is False
     assert config.mcp_allow_loopback is False

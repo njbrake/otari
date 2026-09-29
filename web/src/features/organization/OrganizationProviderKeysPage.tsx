@@ -286,8 +286,8 @@ export function OrganizationProviderKeysPage() {
   // One predicate for the whole page now that the list read is
   // organization-management-gated on the server too (otari-ai#1944): a member
   // cannot see these rows, not only leave them alone. Withheld rather than
-  // fired and refused, the way `OrganizationGuardrailsCard` gates its own read
-  // and WorkspacesPage withholds the operator-only budget ones.
+  // fired and refused, the way WorkspacesPage withholds the operator-only
+  // budget ones.
   //
   // Deliberately not widened to `isDeploymentOperator`: the server also admits
   // a superuser whatever their organization role, and `roles.ts` records that

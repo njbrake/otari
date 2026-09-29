@@ -42,7 +42,6 @@ from gateway.api.routes._tools import _strip_gateway_fields
 from gateway.core.config import GatewayConfig
 from gateway.core.usage import GatewayUsage
 from gateway.log_config import logger
-from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import ToolBackend
@@ -74,8 +73,8 @@ class ResponsesRequest(derive_request_base(ResponsesParams)):  # type: ignore[mi
     The wire fields are derived from any-llm's ``ResponsesParams`` (see
     ``_schema_derive``) so the schema cannot silently drop a param any-llm
     forwards. Gateway-internal fields (``mcp_servers``, ``mcp_server_ids``,
-    ``guardrails``, ``tools_header``, ``max_tool_iterations``) opt the request
-    into gateway-managed MCP / sandbox / web_search / guardrails without
+    ``tools_header``, ``max_tool_iterations``) opt the request
+    into gateway-managed MCP / sandbox / web_search without
     changing the upstream wire shape. They're stripped before the request is
     forwarded.
     """
@@ -97,14 +96,13 @@ class ResponsesRequest(derive_request_base(ResponsesParams)):  # type: ignore[mi
     # Bounded on the list arm, not the union, so the ceiling caps the number of
     # ids rather than the length of any one value (see `core/sql.MAX_FILTER_VALUES`).
     mcp_server_ids: Annotated[list[uuid.UUID], Field(max_length=MAX_MCP_SERVER_IDS)] | None = None
-    guardrails: list[GuardrailConfig] | None = Field(default=None, max_length=8)
     tools_header: str | None = None
     max_tool_iterations: int | None = Field(default=None, ge=1, le=MAX_TOOL_ITERATIONS_CAP)
     session_label: str | None = Field(default=None, max_length=SESSION_LABEL_MAX_LENGTH, description=SESSION_LABEL_DESC)
 
 
 def _responses_input_text(value: Any) -> str:
-    """Flatten the Responses ``input`` field to plain text for guardrail checks.
+    """Flatten the Responses ``input`` field to plain text for routing.
 
     ``input`` may be a bare string or a list of input items sharing the
     ``role``/``content`` shape used by chat/messages (text parts look like
@@ -123,9 +121,8 @@ def _routing_text(body: Any) -> str:
     ``instructions`` is part of the task, not decoration: the same ``input`` under
     "answer in one word" and "write a proof" are different jobs with different
     quality bars. Embedding only ``input`` gave both the same routing decision and,
-    under trace-sticky granularity, the same conversation identity. Guardrails read
-    ``input`` alone because they screen what the user sent; routing has to read what
-    the model was actually asked to do.
+    under trace-sticky granularity, the same conversation identity. Routing has to
+    read what the model was actually asked to do, not only what the user sent.
     """
     instructions = getattr(body, "instructions", None)
     parts = [
@@ -574,9 +571,6 @@ async def create_response(
     tool_ctx = await prepare_gateway_tools(
         adapter=_ADAPTER,
         ctx=ctx,
-        response=response,
-        guardrails=request_body.guardrails,
-        guardrail_text=_responses_input_text(request_body.input),
         tools=request_body.tools,
         mcp_servers=request_body.mcp_servers,
         mcp_server_ids=request_body.mcp_server_ids,

@@ -159,7 +159,7 @@ async def release_session(session: AsyncSession | None) -> bool:
     """End *session*'s transaction so its connection goes back to the pool.
 
     The gateway's request path reads the API key, the billed user and its
-    budget, the organization's guardrails and the workspace's tool rows on the
+    budget and the workspace's tool rows on the
     request-scoped session from :func:`get_db`. That session opens a
     transaction on its first statement and holds its connection until something
     ends it, and ``get_db`` only closes it when the request is over. Called

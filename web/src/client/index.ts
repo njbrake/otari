@@ -384,7 +384,7 @@ export type RankCandidatesRequest = Schemas["RankRequest"]
 export type RankCandidatesResponse = Schemas["RankResponse"]
 
 // ---------------------------------------------------------------------------
-// Settings, tools and guardrails
+// Settings and tools
 // ---------------------------------------------------------------------------
 export type GatewaySettings = Schemas["GatewaySettings"]
 export type UpdateSettingsRequest = Schemas["UpdateSettingsRequest"]
@@ -404,14 +404,6 @@ export type ToolSettingType = ToolSettingField["type"]
 export type ToolSettingsResponse = Schemas["ToolSettingsResponse"]
 export type UpdateToolSettingsRequest = Schemas["UpdateToolSettingsRequest"]
 export type TestServiceResponse = Schemas["TestServiceResponse"]
-
-// The guardrail catalog behind the mandate form: which profiles the operator's
-// guardrails service has built, and the `validate_kwargs` each one accepts. See
-// `src/gateway/services/guardrail_catalog.py`.
-export type GuardrailCatalog = Schemas["GuardrailCatalog"]
-export type GuardrailProfileSpec = Schemas["GuardrailProfileSpec"]
-export type GuardrailParameterSpec = Schemas["GuardrailParameterSpec"]
-export type GuardrailParameterType = GuardrailParameterSpec["type"]
 
 // ---------------------------------------------------------------------------
 // Search tools
@@ -581,18 +573,6 @@ export type UpdateWorkspaceCodeExecutionPolicyRequest =
 export type WorkspaceWebSearchConfig = Schemas["WorkspaceWebSearchConfigPublic"]
 export type UpdateWorkspaceWebSearchConfigRequest =
   Schemas["WorkspaceWebSearchConfigUpdate"]
-// The organization-level guardrail plane above the deployment-wide guardrail
-// settings; see `src/gateway/services/tenancy/organization_guardrail_service.py`.
-export type OrganizationGuardrail = Schemas["OrganizationGuardrailPublic"]
-// `enabled`, `on_unavailable`, `mode` and `applies_to_all_workspaces` all carry
-// schema defaults, which the generator emits as required; the add form omits the
-// two the operator has no control for, so `Defaulted` puts them back.
-export type CreateOrganizationGuardrailRequest = Defaulted<
-  Schemas["OrganizationGuardrailCreate"],
-  "enabled" | "on_unavailable" | "mode" | "applies_to_all_workspaces"
->
-export type UpdateOrganizationGuardrailRequest =
-  Schemas["OrganizationGuardrailUpdate"]
 
 // The MCP servers a workspace has registered, which a request names by id in
 // `mcp_server_ids`; see

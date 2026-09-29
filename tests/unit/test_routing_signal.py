@@ -132,8 +132,8 @@ def test_the_responses_signal_includes_instructions() -> None:
     The same `input` under "answer in one word" and "write a proof" are different
     jobs with different quality bars. Embedding only `input` gave both the same
     routing decision and, under trace-sticky granularity, the same conversation
-    identity. Guardrails read `input` alone because they screen what the user sent;
-    routing reads what the model was asked to do.
+    identity. Routing reads what the model was asked to do, not only what the user
+    sent.
     """
     from types import SimpleNamespace
 

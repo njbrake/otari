@@ -118,7 +118,6 @@ OTARI_CONFIG_B64_ENV = "OTARI_CONFIG_B64"
 # name maps onto its OTARI_<FIELD> environment variable.
 ENV_BRIDGED_FIELDS = (
     "sandbox_url",
-    "guardrails_url",
     "tools_header",
     "sandbox_purpose_hint",
     "sandbox_session_image",
@@ -766,8 +765,8 @@ class GatewayConfig(BaseSettings):
         default_factory=RoutingConfig,
         description=(
             "Named routing policies. A policy is a model name callers use like any other, which "
-            "decides which real model serves the request ('select'), what is tried after a retryable "
-            "failure ('on_failure'), and which guardrails always run. A one-target policy is an alias, "
+            "decides which real model serves the request ('select') and what is tried after a retryable "
+            "failure ('on_failure'). A one-target policy is an alias, "
             "so 'aliases:' remains its shorthand. Standalone-mode only: in hybrid mode the platform "
             "resolves the model, so a policy name would be sent upstream and rejected there."
         ),
@@ -1148,13 +1147,6 @@ class GatewayConfig(BaseSettings):
         description=(
             "Base URL of the code-execution sandbox backend for otari_code_execution tools. "
             "When unset, otari_code_execution requests are rejected with 400."
-        ),
-    )
-    guardrails_url: str | None = Field(
-        default=None,
-        description=(
-            "Default URL of the input-guardrails service used when a request does not pass its "
-            "own guardrail `url`. docker-compose sets this to the bundled guardrails container."
         ),
     )
     tools_header: str | None = Field(

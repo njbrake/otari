@@ -227,7 +227,6 @@ def test_settings_includes_full_config_view(tmp_path: Path) -> None:
         "web_search_allow_private_hosts",
         "provider_allow_private_hosts",
         "sandbox_url",
-        "guardrails_url",
     ):
         assert by_key[name]["settable"] is False, name
 
@@ -247,7 +246,7 @@ def test_settings_includes_full_config_view(tmp_path: Path) -> None:
 
 
 def test_config_view_redacts_url_credentials() -> None:
-    # A production database_url (or sandbox/guardrails url) can embed a secret;
+    # A production database_url (or sandbox url) can embed a secret;
     # the config view must show the host/db but never echo the secret back, even
     # to the master-key holder. Built directly (no app), so no live DB is needed.
     config = GatewayConfig(
@@ -269,14 +268,14 @@ def test_config_view_redacts_token_in_username_and_query() -> None:
     # param, not just the password slot. All must be masked. Query values are
     # masked regardless of the param name (a denylist of key names cannot be
     # complete), while the keys stay visible.
-    config = GatewayConfig(
-        guardrails_url="https://s3cr3t-token@guardrails.internal/scan",
-        sandbox_url="https://sandbox.internal/run?client_secret=leaked&mode=fast",
-    )
-    by_key = {field.key: str(field.value) for field in _config_fields(config)}
+    username = GatewayConfig(sandbox_url="https://s3cr3t-token@sandbox.internal/scan")
+    by_key = {field.key: str(field.value) for field in _config_fields(username)}
 
-    assert "s3cr3t-token" not in by_key["guardrails_url"]
-    assert by_key["guardrails_url"] == "https://***@guardrails.internal/scan"
+    assert "s3cr3t-token" not in by_key["sandbox_url"]
+    assert by_key["sandbox_url"] == "https://***@sandbox.internal/scan"
+
+    config = GatewayConfig(sandbox_url="https://sandbox.internal/run?client_secret=leaked&mode=fast")
+    by_key = {field.key: str(field.value) for field in _config_fields(config)}
     # A param name not on any keyword list is still masked; keys stay visible.
     assert "leaked" not in by_key["sandbox_url"]
     assert by_key["sandbox_url"] == "https://sandbox.internal/run?client_secret=***&mode=***"

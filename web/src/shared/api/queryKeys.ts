@@ -34,11 +34,6 @@ export const TOOL_SETTINGS = "tool-settings"
 export const TOOLS = "tools"
 export const SEARCH_TOOLS = "search-tools"
 export const SEARCH_PROVIDERS = "search-providers"
-// The guardrails service's own profile list, keyed apart from TOOL_SETTINGS
-// even though `guardrails_url` is where it is read from: the catalog is the
-// remote service's answer, so a settings save that changes that URL invalidates
-// it, while every other tool-settings write must not re-dial the sidecar.
-export const GUARDRAIL_PROFILES = "guardrail-profiles"
 // Both carry the surface they were read from and the workspace they were scoped
 // to as trailing key segments, so the deployment-wide list and its tenant-scoped
 // sibling share a head that one invalidation covers. See `useRoutingScope`.
@@ -76,7 +71,6 @@ export const ORGANIZATION_PRICING = "organization-pricing"
 // admin and invalidate reads neither caller can make.
 export const ORGANIZATION_BUDGETS = "organization-budgets"
 export const ORGANIZATION_SPEND_CEILINGS = "organization-spend-ceilings"
-export const ORGANIZATION_GUARDRAILS = "organization-guardrails"
 // The organization's own upstream provider credentials. Its own key for the
 // reason the two above have one: this is read by one page, and a credential
 // edit has no business refetching the organization context every page reads.

@@ -120,9 +120,9 @@ export interface NavChild {
    * The surface this destination needs, when it is not the parent's.
    *
    * Grouping is an editorial choice and gating is a fact about the deployment,
-   * so the two can disagree: Guardrails is grouped under Routing, where the
-   * navigation prototype puts it, but the page is served by the tools surface.
-   * Omitted, the child inherits the parent's, which is the ordinary case.
+   * so the two can disagree: a page grouped under one parent may be served by
+   * another surface. Omitted, the child inherits the parent's, which is the
+   * ordinary case.
    */
   surface?: string
 }

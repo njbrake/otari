@@ -2,7 +2,7 @@
 
 The three completion-style endpoints speak different wire formats but run the
 same pipeline: authenticate (platform resolve or local key + budget pre-debit),
-apply input guardrails, extract gateway-managed tools, dispatch to the provider
+extract gateway-managed tools, dispatch to the provider
 (directly or through a tool-loop backend), and settle the budget reservation
 when the request finishes. This module owns that pipeline once; each route
 supplies a small :class:`FormatAdapter` for the format-specific edges (request
@@ -40,7 +40,7 @@ import re
 import time
 import uuid
 from collections import Counter
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -66,7 +66,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import verify_api_key_or_master_key
 from gateway.api.routes._attempts import walk_attempts
-from gateway.api.routes._helpers import apply_input_guardrails, resolve_user_id
+from gateway.api.routes._helpers import resolve_user_id
 from gateway.api.routes._platform import (
     _DEFAULT_STREAM_FINAL_ATTEMPT_EXTRA_FIRST_CHUNK_TIMEOUT_MS,
     _DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT_MS,
@@ -120,7 +120,6 @@ from gateway.log_config import logger
 from gateway.metrics import record_abandoned_attempt, record_cost, record_inline_cost_settlement, record_tokens
 from gateway.model_labeling import relabel_model, served_model_headers
 from gateway.models.entities import APIKey, ModelPricing, UsageLog
-from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import McpServerConfig
 from gateway.models.money import to_usd
 from gateway.ports.model_provider_port import HostedAccessDeniedError, ModelProviderPort
@@ -182,10 +181,6 @@ from gateway.services.tenancy.errors import (
     WorkspaceWebSearchDomainsExcludedError,
 )
 from gateway.services.tenancy.org_provider_key_service import cached_org_model_restriction
-from gateway.services.tenancy.organization_guardrail_service import (
-    ResolvedOrganizationGuardrail,
-    resolve_organization_guardrails,
-)
 from gateway.services.tenancy.workspace_code_execution_policy_service import (
     SERVED_TOOL_NAMES,
     resolve_workspace_code_execution_policy,
@@ -292,10 +287,6 @@ SANDBOX_IMAGE_NOT_ALLOWED_DETAIL = "this workspace's code-execution policy pins 
 MALFORMED_CODE_EXEC_POLICY_DETAIL = "Authorization service returned a malformed code-execution policy"
 CODE_EXEC_POLICY_UNRESOLVABLE_DETAIL = "Code execution policy could not be resolved for this request"
 WEB_SEARCH_CONFIG_UNRESOLVABLE_DETAIL = "Web search configuration could not be resolved for this request"
-ORGANIZATION_GUARDRAILS_UNRESOLVABLE_DETAIL = "Organization guardrails could not be resolved for this request"
-ORGANIZATION_GUARDRAIL_CREDENTIAL_UNREADABLE_DETAIL = (
-    "A configured organization guardrail's credential could not be read"
-)
 # The bound ``ModelProviderPort`` adapter answered with an upstream any-llm has
 # no implementation for, so there is nothing to dispatch against. Deliberately
 # says nothing about hosted inference or about which adapter answered: that is a
@@ -313,7 +304,7 @@ UNPRICED_TOOL_DETAIL_TEMPLATE = (
     "The gateway tool '{tool}' has no pricing, and this gateway runs with "
     "require_pricing enabled, so it will not run work it cannot bill. Set a "
     "per-request price for model_key '{key}' (POST /api/v1/pricing, or the dashboard's "
-    "Tools & Guardrails screen), or set require_pricing to false to serve it unpriced."
+    "Tools screen), or set require_pricing to false to serve it unpriced."
 )
 
 
@@ -2022,9 +2013,9 @@ async def resolve_request_context(
     # can show it as such. Registered after the budget, access and model-resolution
     # gates rather than at the top of the preamble: a request refused by one of
     # those was never in progress, and it already leaves a usage row of its own. The
-    # caller-facing checks that run after this (`prepare_gateway_tools`: input
-    # guardrails, MCP id resolution, tool opt-ins) do list the request while they
-    # run, which is honest, since each of them can make a network call of its own.
+    # caller-facing checks that run after this (`prepare_gateway_tools`: MCP id
+    # resolution, tool opt-ins) do list the request while they run, which is
+    # honest, since each of them can make a network call of its own.
     # `model` and `provider` are the pair the
     # usage row will carry (the resolved target, not the caller's selector and not
     # the display alias), so a request does not appear to change model at the moment
@@ -2062,7 +2053,7 @@ async def resolve_request_context(
 
 
 # ---------------------------------------------------------------------------
-# Gateway-managed tools (guardrails, MCP, sandbox, web_search)
+# Gateway-managed tools (MCP, sandbox, web_search)
 # ---------------------------------------------------------------------------
 
 
@@ -2251,8 +2242,8 @@ async def _validate_mcp_server_urls(
     ``validate_mcp_url`` has no side effects beyond a DNS lookup.
 
     This used to run synchronously inside a Pydantic ``model_validator`` at
-    request-body-parse time (see ``McpServerConfig``/``GuardrailConfig``
-    docstrings). It moved here because the DNS lookup must be awaited, and
+    request-body-parse time (see the ``McpServerConfig``
+    docstring). It moved here because the DNS lookup must be awaited, and
     Pydantic validators can't await. One observable side effect: a rejected
     URL now surfaces as ``400`` (via ``adapter.error``) instead of Pydantic's
     ``422``.
@@ -2269,144 +2260,6 @@ async def _validate_mcp_server_urls(
             raise adapter.error(400, str(exc), ErrorKind.INVALID_REQUEST) from exc
         logger.error("Configured MCP server URL failed its safety check for workspace %s: %s", workspace_id, exc)
         raise adapter.error(500, MCP_SERVER_URL_UNSAFE_DETAIL, ErrorKind.API) from exc
-
-
-def _overlay_mandate(merged: dict[str, GuardrailConfig], mandated: Iterable[GuardrailConfig]) -> None:
-    """Fold one mandated layer over the effective guardrail set, in place.
-
-    Union by profile, with the stricter setting winning on every axis: a layer
-    below may *add* guardrails and may tighten one, but can never weaken what a
-    layer above mandated. `block` beats `monitor` for both `mode` and
-    `on_unavailable`, since each is a choice between enforcing and observing.
-
-    The mandating entry also owns the URL and the validate kwargs for a profile
-    it names, so a caller cannot point a mandated check at a service of their
-    choosing.
-    """
-    for guardrail in mandated:
-        below = merged.get(guardrail.profile)
-        if below is None:
-            merged[guardrail.profile] = guardrail
-            continue
-        merged[guardrail.profile] = guardrail.model_copy(
-            update={
-                "mode": "block" if "block" in (guardrail.mode, below.mode) else "monitor",
-                "on_unavailable": (
-                    "block" if "block" in (guardrail.on_unavailable, below.on_unavailable) else "monitor"
-                ),
-            }
-        )
-
-
-@dataclass(frozen=True)
-class EffectiveGuardrails:
-    """The guardrails a request runs, and what the runner needs to know about them.
-
-    Three fields rather than a list, because two of the three answer questions
-    the list cannot: which entries carry a credential, and which came from a
-    layer the caller does not control. The second decides how a URL that fails
-    its safety check is reported, so it has to survive the merge rather than be
-    re-derived from a config the merge has already flattened.
-    """
-
-    configs: list[GuardrailConfig] | None
-    credentials: dict[str, str]
-    mandated: frozenset[str]
-
-
-def merge_guardrail_layers(
-    ctx: RequestContext,
-    requested: list[GuardrailConfig] | None,
-    organization: Sequence[ResolvedOrganizationGuardrail],
-) -> EffectiveGuardrails:
-    """The effective guardrails for this request, and the credentials they need.
-
-    Three layers fold in one order, each able to add a check or tighten one and
-    none able to weaken what is already there: the caller's own request, then
-    what the caller's organization mandates for this workspace (otari#654), then
-    what the deployment's routing policy mandates. The operator's layer is last
-    because it is the outermost one: where a policy and an organization name the
-    same profile, the operator's entry owns the endpoint the check is sent to.
-
-    That last point is also why a profile the policy layer claims loses its
-    organization credential here. The credential was stored for the endpoint the
-    organization named; once the policy's URL has replaced it, sending the
-    secret on would be sending it somewhere it was never meant for.
-
-    Returns the caller's own list unchanged, `None` included, when no layer
-    mandated anything, alongside an empty credential map and an empty mandated
-    set: that is the shape `apply_input_guardrails` treats as "no guardrails
-    ran", and it is what keeps a deployment that configures nothing behaving
-    exactly as it did.
-    """
-    policy = ctx.plan.guardrails if ctx.plan is not None else []
-    if not organization and not policy:
-        return EffectiveGuardrails(requested, {}, frozenset())
-
-    # Caller entries first, so a mandating layer of the same profile overwrites them.
-    merged: dict[str, GuardrailConfig] = {guardrail.profile: guardrail for guardrail in requested or []}
-    credentials: dict[str, str] = {}
-    mandated: set[str] = set()
-    for entry in organization:
-        _overlay_mandate(merged, (entry.config,))
-        mandated.add(entry.config.profile)
-        if entry.credential:
-            credentials[entry.config.profile] = entry.credential
-    if policy:
-        _overlay_mandate(merged, policy)
-        for guardrail in policy:
-            mandated.add(guardrail.profile)
-            credentials.pop(guardrail.profile, None)
-    return EffectiveGuardrails(list(merged.values()), credentials, frozenset(mandated))
-
-
-async def _resolve_organization_guardrails(
-    adapter: FormatAdapter[Any, Any], ctx: RequestContext
-) -> list[ResolvedOrganizationGuardrail]:
-    """The guardrails the request's organization mandates for its workspace.
-
-    Standalone only. Hybrid mode's tenancy lives on the platform, which has no
-    guardrail resolve endpoint of its own (its guardrail enforcement was
-    reachable only through its own completion route), so a hybrid request is
-    checked exactly as it was before this plane existed.
-
-    One read per request rather than a cached overlay, per the seam #655 settled
-    and #678 wrote down. Unlike the MCP and code-execution resolves beside it,
-    this one is unconditional: those run only when a request opts into the
-    feature, and a mandate that only ran when the caller asked for it would not
-    be a mandate. The cost is one indexed query on a table an organization edits
-    by hand.
-
-    All three of the standalone preconditions fail closed together, and
-    ``organization_id`` belongs with the other two rather than beside them.
-    ``workspace.organization_id`` is not nullable, so
-    ``organization_for_workspace_id`` answers ``None`` only when the workspace
-    row itself is missing; such a request still carries a non-``None``
-    ``ctx.workspace_id``, so treating that case as "no organization plane to
-    consult" would skip every mandate silently on the one input that proves the
-    tenancy could not be resolved. All three are invariants today, which is why
-    they refuse rather than fall through: what this guards is an *enforcement*
-    decision, and the day one of them stops holding is the day a request its
-    organization requires a blocking guardrail on would otherwise be served
-    unchecked.
-    """
-    if ctx.hybrid_mode:
-        return []
-    if ctx.db is None or ctx.workspace_id is None or ctx.organization_id is None:
-        raise adapter.error(500, ORGANIZATION_GUARDRAILS_UNRESOLVABLE_DETAIL, ErrorKind.API)
-    try:
-        return await resolve_organization_guardrails(
-            ctx.db, organization_id=ctx.organization_id, workspace_id=ctx.workspace_id
-        )
-    except (SecretBoxUnavailableError, SecretDecryptionError) as exc:
-        # The operator's problem, not the caller's, and the underlying message
-        # names the environment variable, so it stays in the log.
-        logger.error(
-            "Organization guardrail credential could not be decrypted for organization %s: %s",
-            ctx.organization_id,
-            exc,
-        )
-        raise adapter.error(500, ORGANIZATION_GUARDRAIL_CREDENTIAL_UNREADABLE_DETAIL, ErrorKind.API) from exc
 
 
 async def _resolve_mcp_server_ids(
@@ -2454,20 +2307,13 @@ async def prepare_gateway_tools(
     *,
     adapter: FormatAdapter[Any, Any],
     ctx: RequestContext,
-    response: Response,
-    guardrails: list[GuardrailConfig] | None,
-    guardrail_text: str,
     tools: list[dict[str, Any]] | None,
     mcp_servers: list[McpServerConfig] | None,
     mcp_server_ids: list[uuid.UUID] | None,
     max_tool_iterations: int | None,
     tools_header: str | None,
 ) -> ToolContext:
-    """Guardrails, MCP server-id resolution, and gateway-tool extraction.
-
-    Caller-requested input guardrails run before any provider/tool dispatch.
-    ``block``-mode flags raise 403 here (provider never called);
-    ``monitor``-mode flags annotate the response header and fall through.
+    """MCP server-id resolution and gateway-tool extraction.
 
     ``mcp_server_ids`` resolves against the platform in hybrid mode and against
     the request's own workspace in standalone; see
@@ -2476,25 +2322,11 @@ async def prepare_gateway_tools(
     controlled (no per-request URL override, which would be an SSRF surface).
     The three backends are mutually exclusive for now.
 
-    Any rejection raised here (guardrail block, unresolvable MCP ids,
+    Any rejection raised here (unresolvable MCP ids,
     misconfigured or conflicting tool opt-ins) releases the budget
     reservation taken by :func:`resolve_request_context` before propagating.
     """
     try:
-        # The organization's and the policy's guardrails are merged in here
-        # rather than at each route, so every completion endpoint enforces a
-        # mandate identically and none can forget to. `guardrails` as passed is
-        # the caller's own list.
-        effective = merge_guardrail_layers(ctx, guardrails, await _resolve_organization_guardrails(adapter, ctx))
-        await apply_input_guardrails(
-            effective.configs,
-            guardrail_text,
-            response=response,
-            config=ctx.config,
-            credentials=effective.credentials,
-            mandated=effective.mandated,
-        )
-
         # Checked per source, not over the merged list: see
         # `_validate_mcp_server_urls` for why a stored server's rejection cannot
         # carry the same body a caller's own does. `MCPClientPool` keys sessions by
@@ -2711,7 +2543,7 @@ async def prepare_gateway_tools(
             # Standalone reads the row from this deployment's own database and
             # *narrows* with it instead, per the seam settled in #655/#678: the
             # ceiling is floored, the block-list is added to, and the allow-list
-            # is intersected, so no request can shed a guardrail its workspace
+            # is intersected, so no request can shed a restriction its workspace
             # set. `workspace_web_search_service` says why the two differ.
             if ctx.hybrid_mode:
                 assert ctx.user_token is not None  # guaranteed by the hybrid-mode preamble
@@ -2791,9 +2623,9 @@ async def prepare_gateway_tools(
         await release_reservation(ctx)
         raise
     except DATABASE_ERRORS:
-        # Five reads in this block touch the database (the organization's
-        # guardrails, the workspace MCP servers, the workspace code-execution
-        # policy and the workspace web-search configuration above, and
+        # Four reads in this block touch the database (the workspace MCP
+        # servers, the workspace code-execution policy and the workspace
+        # web-search configuration above, and
         # `_require_tool_pricing`), and a failure in any of them is not an
         # `HTTPException`, so without this arm it would leave `users.reserved`
         # holding the estimate until the reservation sweep reclaims it. That sweep

@@ -20,7 +20,7 @@
 //     so the policy form can bind each error to its input. Annotating the body
 //     as `PolicySpec` would hand that to FastAPI's generic 422 and lose it.
 //   * On the response, `PolicySpec` carries defaults, so serializing through it
-//     would add `spec_version`, `guardrails: []` and six null keys per select
+//     would add `spec_version` and six null keys per select
 //     entry to every policy. Suppressing that means a serializer on `PolicySpec`
 //     itself, which is also what the two write paths dump before storing, so it
 //     would change what is written to the database, not just what is read back.
@@ -60,20 +60,10 @@ export interface PolicySelectEntry {
   weights?: Record<string, number>
 }
 
-export interface PolicyGuardrail {
-  profile: string
-  /** Required: the per-request field defaults to "monitor", so an omitted mode
-   *  here would look like a mandate and behave as shadow mode. */
-  mode: "block" | "monitor"
-  on_unavailable?: "block" | "monitor"
-  url?: string | null
-}
-
 export interface PolicySpec {
   spec_version?: number
   select: PolicySelectEntry[]
   on_failure?: string[]
-  guardrails?: PolicyGuardrail[]
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +130,6 @@ export interface UsageFilters {
   counts_toward_budget?: boolean
 }
 
-/** Which tool/guardrail service a settings test targets. A path parameter in the
+/** Which tool service a settings test targets. A path parameter in the
  *  spec rather than a named schema, so it is restated here. */
-export type ToolServiceName = "web_search" | "sandbox" | "guardrails"
+export type ToolServiceName = "web_search" | "sandbox"

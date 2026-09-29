@@ -1,4 +1,4 @@
-"""Runtime-editable built-in tool & guardrail settings for the admin dashboard.
+"""Runtime-editable built-in tool settings for the admin dashboard.
 
 The service-endpoint and web-search fields that :mod:`runtime_settings_service`
 deliberately keeps display-only (the ``*_url`` fields and the web-search knobs)
@@ -18,8 +18,8 @@ Security posture: these settings are master-key-gated and standalone-only. The
 operator is already fully trusted (they can point the running gateway at any URL
 via config/env), so URL validation is deliberately **structural** (scheme must be
 http/https, a host must be present) rather than an SSRF deny-list. A deny-private
-gate here would reject the bundled docker-compose sidecars (``http://searxng:8080``,
-``http://guardrails:8000``), which is the primary thing this page configures. The
+gate here would reject the bundled docker-compose sidecars (``http://searxng:8080``),
+which is the primary thing this page configures. The
 SSRF gates (``mcp_allow_*``, ``web_search_allow_private_hosts``) stay display-only
 and are not widened from the dashboard.
 """
@@ -45,12 +45,11 @@ WEB_SEARCH_INTERCEPT = "web_search_intercept"
 SANDBOX_URL = "sandbox_url"
 SANDBOX_PURPOSE_HINT = "sandbox_purpose_hint"
 SANDBOX_SESSION_IMAGE = "sandbox_session_image"
-GUARDRAILS_URL = "guardrails_url"
 
 
 @dataclass(frozen=True)
 class _ToolSpec:
-    """How one editable tool/guardrail field is typed and validated.
+    """How one editable tool field is typed and validated.
 
     ``type`` is one of ``"url" | "str" | "int" | "bool"``. Every field is
     nullable (an empty value clears the override); ``ge`` is an inclusive lower
@@ -61,14 +60,13 @@ class _ToolSpec:
     ge: int | None = None
 
 
-# The tool/guardrail config fields the dashboard may edit. These are the ``*_url``
+# The tool config fields the dashboard may edit. These are the ``*_url``
 # and web-search fields that runtime_settings_service excludes on purpose; keeping
 # them in a separate registry guarantees they can never be reached through the
 # generic ``/v1/settings`` PATCH.
 _TOOL_SPECS: dict[str, _ToolSpec] = {
     WEB_SEARCH_URL: _ToolSpec("url"),
     SANDBOX_URL: _ToolSpec("url"),
-    GUARDRAILS_URL: _ToolSpec("url"),
     WEB_SEARCH_ENGINES: _ToolSpec("str"),
     WEB_SEARCH_PURPOSE_HINT: _ToolSpec("str"),
     SANDBOX_PURPOSE_HINT: _ToolSpec("str"),
@@ -91,14 +89,12 @@ _FIELD_SERVICE: dict[str, str] = {
     SANDBOX_URL: "sandbox",
     SANDBOX_PURPOSE_HINT: "sandbox",
     SANDBOX_SESSION_IMAGE: "sandbox",
-    GUARDRAILS_URL: "guardrails",
 }
 
 # The URL field each service is tested/probed against.
 SERVICE_URL_FIELD: dict[str, str] = {
     "web_search": WEB_SEARCH_URL,
     "sandbox": SANDBOX_URL,
-    "guardrails": GUARDRAILS_URL,
 }
 
 
@@ -276,7 +272,7 @@ def effective_values(config: GatewayConfig) -> dict[str, SettingValue]:
 
 
 def field_service(key: str) -> str:
-    """Which service ('web_search' | 'sandbox' | 'guardrails') a field belongs to."""
+    """Which service ('web_search' | 'sandbox') a field belongs to."""
     return _FIELD_SERVICE[key]
 
 

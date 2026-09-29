@@ -314,8 +314,8 @@ test.describe("fallback routing", () => {
     const fallbackTwo = page.getByRole("combobox", { name: /Fallback 2/ })
     await expect(fallbackTwo).toBeVisible()
     // Scoped to the row holding Fallback 2 rather than taken by index off the
-    // page: the form grows a Remove control per condition, per candidate in a
-    // pool and per guardrail, so an index would start removing the wrong thing
+    // page: the form grows a Remove control per condition and per candidate in
+    // a pool, so an index would start removing the wrong thing
     // the moment this policy grew one of those.
     // Innermost element holding both the box and its Remove: the combobox sits in
     // a wrapper of its own, so filtering on the box alone lands inside that

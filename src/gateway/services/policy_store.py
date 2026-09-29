@@ -10,9 +10,8 @@ Consequences worth stating plainly, because one of them is a security property:
 * A newly written policy takes up to :data:`POLICY_CACHE_TTL_SECONDS` to reach
   other workers and replicas. The worker that served the write refreshes
   immediately, so a single-process gateway is consistent at once.
-* That window also applies to *removing* a candidate and to *attaching a
-  mandatory guardrail*. For up to the TTL, other replicas keep serving the old
-  plan. An operator tightening a policy for security reasons needs to know the
+* That window also applies to *removing* a candidate. For up to the TTL, other
+  replicas keep serving the old plan. An operator tightening a policy for security reasons needs to know the
   change is eventually consistent, not immediate.
 
 Layering: this sits alongside ``alias_service`` rather than inside

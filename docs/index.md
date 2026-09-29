@@ -34,7 +34,7 @@ Running and managing a gateway.
 - [Admin dashboard](dashboard.md): sign-in, setup, and management surfaces.
 - [Access control](access-control.md): identities, organizations, workspaces, keys, and budgets.
 - [Models](models.md): selectors, providers, discovery, aliases, and capabilities.
-- [Routing policies](routing.md): failover, conditions, weighted and learned routing, and mandatory guardrails.
+- [Routing policies](routing.md): failover, conditions, weighted and learned routing.
 - [OpenAI provider guide](providers/openai.md): configure OpenAI and route your first request through Otari.
 
 ### For integrators
@@ -46,7 +46,6 @@ Calling the gateway from your own code.
 - [MCP](mcp.md): connect MCP servers to chat, messages, and responses requests,
   or drive them from your own application through the caller-orchestrated endpoints.
 - [Files](files.md): file uploads and document understanding for local models.
-- [Guardrails](guardrails.md): request-level checks like prompt-injection detection.
 - [Use with Claude Code](use-with-claude-code.md): point the Claude Code CLI at Otari.
 - [Use with Codex](use-with-codex.md): route the Codex CLI through Otari over the Responses API, or import its usage without routing.
 - [Use with opencode](use-with-opencode.md): point the opencode CLI at Otari.

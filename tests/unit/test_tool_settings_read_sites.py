@@ -1,19 +1,15 @@
-"""The tool/guardrail read sites resolve from config (so a dashboard override
+"""The tool read sites resolve from config (so a dashboard override
 hot-applies), not only from the environment. Guards against a normalization that
 mutates config but never reaches the request path (eng T3)."""
 
-from typing import Any
-
 import pytest
 
-from gateway.api.routes._helpers import apply_input_guardrails
 from gateway.api.routes._tools import (
     _build_web_search_backend,
     _resolve_sandbox_purpose_hint,
     _resolve_web_search_purpose_hint,
 )
 from gateway.core.config import GatewayConfig
-from gateway.models.guardrails import GuardrailConfig
 
 
 def test_build_web_search_backend_reads_config_knobs() -> None:
@@ -65,36 +61,3 @@ def test_sandbox_image_falls_back_to_env_when_the_override_is_cleared(monkeypatc
     # And the cleared value is still what a workspace may pin.
     assert config.pinnable_sandbox_images() == ("mzdotai/otari-sandbox-container:latest",)
 
-
-@pytest.mark.asyncio
-async def test_apply_input_guardrails_uses_config_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fastapi import Response
-
-    seen: dict[str, Any] = {}
-
-    async def fake_run(
-        guardrails: Any,
-        input_text: str,
-        *,
-        default_url: str | None,
-        credentials: Any = None,
-        mandated: Any = None,
-    ) -> Any:
-        seen["default_url"] = default_url
-
-        class _V:
-            blocked = False
-            flagged = False
-            results: list[Any] = []
-
-        return _V()
-
-    monkeypatch.setattr("gateway.api.routes._helpers.run_input_guardrails", fake_run)
-    config = GatewayConfig(guardrails_url="http://guardrails:8000")
-    await apply_input_guardrails(
-        [GuardrailConfig(profile="prompt-injection", mode="monitor")],
-        "hello",
-        response=Response(),
-        config=config,
-    )
-    assert seen["default_url"] == "http://guardrails:8000"

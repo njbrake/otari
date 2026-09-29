@@ -42,7 +42,7 @@ const MAX_DOMAINS = 100
 
 // Anything that means the entry is not a bare host. The server compares each
 // entry against a result URL's hostname, so a scheme, port or path matches
-// nothing at all: on a block-list that is a guardrail that reads as configured
+// nothing at all: on a block-list that is a restriction that reads as configured
 // and blocks nothing. Refused here as well as server-side so the message lands
 // on the field rather than arriving as a 422 banner.
 const NOT_IN_A_HOSTNAME = /[/:@?#*\\\s]/

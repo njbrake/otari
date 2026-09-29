@@ -161,7 +161,6 @@ def has_provider_code_execution_tool(tools: list[dict[str, Any]] | None) -> bool
 _GATEWAY_INTERNAL_FIELDS = (
     "mcp_servers",
     "mcp_server_ids",
-    "guardrails",
     "tools_header",
     "max_tool_iterations",
     "session_label",

@@ -15,7 +15,7 @@ from pydantic import Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import ModelProviderPortDep, get_config, get_db_if_needed, get_log_writer
-from gateway.api.routes._helpers import latest_user_text, routing_signal_from_messages
+from gateway.api.routes._helpers import routing_signal_from_messages
 from gateway.api.routes._normalize import normalize_request_messages
 from gateway.api.routes._pipeline import (
     NO_RESOLVABLE_PROVIDER_DETAIL,
@@ -43,7 +43,6 @@ from gateway.core.config import GatewayConfig
 from gateway.core.usage import GatewayUsage
 from gateway.core.usage_source import PLAYGROUND_USAGE_ENDPOINT
 from gateway.log_config import logger
-from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.services.log_writer import LogWriter
@@ -88,7 +87,7 @@ class ChatCompletionRequest(derive_request_base(CompletionParams)):  # type: ign
     ``response_format``), declare an OpenAI wire param ``CompletionParams`` does
     not model (``service_tier``, forwarded as an any-llm ``**kwargs`` param), add
     gateway-internal behavior (``mcp_servers``, ``mcp_server_ids``,
-    ``guardrails``, ``tools_header``, ``max_tool_iterations``) that is stripped
+    ``tools_header``, ``max_tool_iterations``) that is stripped
     before the request is forwarded upstream, or restate a derived field
     unchanged to document it (``max_completion_tokens``), which is only worth
     doing where the wire contract is not guessable from the field itself.
@@ -140,7 +139,6 @@ class ChatCompletionRequest(derive_request_base(CompletionParams)):  # type: ign
     # Bounded on the list arm, not the union, so the ceiling caps the number of
     # ids rather than the length of any one value (see `core/sql.MAX_FILTER_VALUES`).
     mcp_server_ids: Annotated[list[uuid.UUID], Field(max_length=MAX_MCP_SERVER_IDS)] | None = None
-    guardrails: list[GuardrailConfig] | None = Field(default=None, max_length=8)
     tools_header: str | None = Field(
         default=None,
         max_length=4000,
@@ -491,9 +489,6 @@ async def run_chat_completion(
     tool_ctx = await prepare_gateway_tools(
         adapter=adapter,
         ctx=ctx,
-        response=response,
-        guardrails=request.guardrails,
-        guardrail_text=latest_user_text(request.messages),
         tools=request.tools,
         mcp_servers=request.mcp_servers,
         mcp_server_ids=request.mcp_server_ids,

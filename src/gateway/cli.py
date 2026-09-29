@@ -373,12 +373,6 @@ def routing_explain(
             f"The plan above is what serves when it declines (cold pool, low confidence, tools present, "
             f"or Otari-Router: off)."
         )
-    if plan.guardrails:
-        click.echo("  guardrails (always enforced):")
-        for guardrail in plan.guardrails:
-            click.echo(
-                f"    {guardrail.profile}  mode={guardrail.mode}  on_unavailable={guardrail.on_unavailable}"
-            )
     if spec.is_dynamic:
         click.echo(
             "  note: this policy selects per request, so it has no single target or price. It works on "

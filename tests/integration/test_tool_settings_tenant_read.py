@@ -29,7 +29,7 @@ from gateway.models.tenancy import Organization, OrganizationMember, User
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
 _PATH = f"{API_ROOT}/tool-settings"
-_URL_KEYS = {"web_search_url", "sandbox_url", "guardrails_url"}
+_URL_KEYS = {"web_search_url", "sandbox_url"}
 
 
 def _identity(session: Session, *, email: str, organization_id: uuid.UUID, is_superuser: bool = False) -> str:

@@ -33,14 +33,12 @@ import { Route as ModelsIndexRouteImport } from './routes/models.index'
 import { Route as ModelsSplatRouteImport } from './routes/models.$'
 import { Route as OrganizationIndexRouteImport } from './routes/organization.index'
 import { Route as OrganizationDomainsRouteImport } from './routes/organization.domains'
-import { Route as OrganizationGuardrailsRouteImport } from './routes/organization.guardrails'
 import { Route as OrganizationMembersRouteImport } from './routes/organization.members'
 import { Route as OrganizationPricingRouteImport } from './routes/organization.pricing'
 import { Route as OrganizationProviderKeysRouteImport } from './routes/organization.provider-keys'
 import { Route as OrganizationUsageRouteImport } from './routes/organization.usage'
 import { Route as ToolsIndexRouteImport } from './routes/tools.index'
 import { Route as ToolsCodeExecutionRouteImport } from './routes/tools.code-execution'
-import { Route as ToolsGuardrailsRouteImport } from './routes/tools.guardrails'
 import { Route as ToolsMcpServersRouteImport } from './routes/tools.mcp-servers'
 import { Route as ToolsWebSearchRouteImport } from './routes/tools.web-search'
 
@@ -164,11 +162,6 @@ const OrganizationDomainsRoute = OrganizationDomainsRouteImport.update({
   path: '/domains',
   getParentRoute: () => OrganizationRoute,
 } as any)
-const OrganizationGuardrailsRoute = OrganizationGuardrailsRouteImport.update({
-  id: '/guardrails',
-  path: '/guardrails',
-  getParentRoute: () => OrganizationRoute,
-} as any)
 const OrganizationMembersRoute = OrganizationMembersRouteImport.update({
   id: '/members',
   path: '/members',
@@ -198,11 +191,6 @@ const ToolsIndexRoute = ToolsIndexRouteImport.update({
 const ToolsCodeExecutionRoute = ToolsCodeExecutionRouteImport.update({
   id: '/code-execution',
   path: '/code-execution',
-  getParentRoute: () => ToolsRoute,
-} as any)
-const ToolsGuardrailsRoute = ToolsGuardrailsRouteImport.update({
-  id: '/guardrails',
-  path: '/guardrails',
   getParentRoute: () => ToolsRoute,
 } as any)
 const ToolsMcpServersRoute = ToolsMcpServersRouteImport.update({
@@ -239,13 +227,11 @@ export interface FileRoutesByFullPath {
   '/admin/accounts': typeof AdminAccountsRoute
   '/models/$': typeof ModelsSplatRoute
   '/organization/domains': typeof OrganizationDomainsRoute
-  '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
   '/organization/pricing': typeof OrganizationPricingRoute
   '/organization/provider-keys': typeof OrganizationProviderKeysRoute
   '/organization/usage': typeof OrganizationUsageRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
-  '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/mcp-servers': typeof ToolsMcpServersRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
   '/models/': typeof ModelsIndexRoute
@@ -272,13 +258,11 @@ export interface FileRoutesByTo {
   '/admin/accounts': typeof AdminAccountsRoute
   '/models/$': typeof ModelsSplatRoute
   '/organization/domains': typeof OrganizationDomainsRoute
-  '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
   '/organization/pricing': typeof OrganizationPricingRoute
   '/organization/provider-keys': typeof OrganizationProviderKeysRoute
   '/organization/usage': typeof OrganizationUsageRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
-  '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/mcp-servers': typeof ToolsMcpServersRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
   '/models': typeof ModelsIndexRoute
@@ -309,13 +293,11 @@ export interface FileRoutesById {
   '/admin/accounts': typeof AdminAccountsRoute
   '/models/$': typeof ModelsSplatRoute
   '/organization/domains': typeof OrganizationDomainsRoute
-  '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
   '/organization/pricing': typeof OrganizationPricingRoute
   '/organization/provider-keys': typeof OrganizationProviderKeysRoute
   '/organization/usage': typeof OrganizationUsageRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
-  '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/mcp-servers': typeof ToolsMcpServersRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
   '/models/': typeof ModelsIndexRoute
@@ -347,13 +329,11 @@ export interface FileRouteTypes {
     | '/admin/accounts'
     | '/models/$'
     | '/organization/domains'
-    | '/organization/guardrails'
     | '/organization/members'
     | '/organization/pricing'
     | '/organization/provider-keys'
     | '/organization/usage'
     | '/tools/code-execution'
-    | '/tools/guardrails'
     | '/tools/mcp-servers'
     | '/tools/web-search'
     | '/models/'
@@ -380,13 +360,11 @@ export interface FileRouteTypes {
     | '/admin/accounts'
     | '/models/$'
     | '/organization/domains'
-    | '/organization/guardrails'
     | '/organization/members'
     | '/organization/pricing'
     | '/organization/provider-keys'
     | '/organization/usage'
     | '/tools/code-execution'
-    | '/tools/guardrails'
     | '/tools/mcp-servers'
     | '/tools/web-search'
     | '/models'
@@ -416,13 +394,11 @@ export interface FileRouteTypes {
     | '/admin/accounts'
     | '/models/$'
     | '/organization/domains'
-    | '/organization/guardrails'
     | '/organization/members'
     | '/organization/pricing'
     | '/organization/provider-keys'
     | '/organization/usage'
     | '/tools/code-execution'
-    | '/tools/guardrails'
     | '/tools/mcp-servers'
     | '/tools/web-search'
     | '/models/'
@@ -623,13 +599,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrganizationDomainsRouteImport
       parentRoute: typeof OrganizationRoute
     }
-    '/organization/guardrails': {
-      id: '/organization/guardrails'
-      path: '/guardrails'
-      fullPath: '/organization/guardrails'
-      preLoaderRoute: typeof OrganizationGuardrailsRouteImport
-      parentRoute: typeof OrganizationRoute
-    }
     '/organization/members': {
       id: '/organization/members'
       path: '/members'
@@ -672,13 +641,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ToolsCodeExecutionRouteImport
       parentRoute: typeof ToolsRoute
     }
-    '/tools/guardrails': {
-      id: '/tools/guardrails'
-      path: '/guardrails'
-      fullPath: '/tools/guardrails'
-      preLoaderRoute: typeof ToolsGuardrailsRouteImport
-      parentRoute: typeof ToolsRoute
-    }
     '/tools/mcp-servers': {
       id: '/tools/mcp-servers'
       path: '/mcp-servers'
@@ -711,7 +673,6 @@ const ModelsRouteWithChildren =
 
 interface OrganizationRouteChildren {
   OrganizationDomainsRoute: typeof OrganizationDomainsRoute
-  OrganizationGuardrailsRoute: typeof OrganizationGuardrailsRoute
   OrganizationMembersRoute: typeof OrganizationMembersRoute
   OrganizationPricingRoute: typeof OrganizationPricingRoute
   OrganizationProviderKeysRoute: typeof OrganizationProviderKeysRoute
@@ -721,7 +682,6 @@ interface OrganizationRouteChildren {
 
 const OrganizationRouteChildren: OrganizationRouteChildren = {
   OrganizationDomainsRoute: OrganizationDomainsRoute,
-  OrganizationGuardrailsRoute: OrganizationGuardrailsRoute,
   OrganizationMembersRoute: OrganizationMembersRoute,
   OrganizationPricingRoute: OrganizationPricingRoute,
   OrganizationProviderKeysRoute: OrganizationProviderKeysRoute,
@@ -735,7 +695,6 @@ const OrganizationRouteWithChildren = OrganizationRoute._addFileChildren(
 
 interface ToolsRouteChildren {
   ToolsCodeExecutionRoute: typeof ToolsCodeExecutionRoute
-  ToolsGuardrailsRoute: typeof ToolsGuardrailsRoute
   ToolsMcpServersRoute: typeof ToolsMcpServersRoute
   ToolsWebSearchRoute: typeof ToolsWebSearchRoute
   ToolsIndexRoute: typeof ToolsIndexRoute
@@ -743,7 +702,6 @@ interface ToolsRouteChildren {
 
 const ToolsRouteChildren: ToolsRouteChildren = {
   ToolsCodeExecutionRoute: ToolsCodeExecutionRoute,
-  ToolsGuardrailsRoute: ToolsGuardrailsRoute,
   ToolsMcpServersRoute: ToolsMcpServersRoute,
   ToolsWebSearchRoute: ToolsWebSearchRoute,
   ToolsIndexRoute: ToolsIndexRoute,
