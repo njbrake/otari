@@ -419,3 +419,10 @@ def test_a_nonsensical_max_uses_is_refused_by_the_reader() -> None:
         entry = {"type": "web_search_20250305", "max_uses": value}
         with pytest.raises(ValueError, match="non-negative integer"):
             _read_web_search_max_uses(entry)
+
+
+def test_strip_gateway_fields_drops_the_retired_guardrails_field() -> None:
+    # The Responses request accepts extra fields, so an old client's value would
+    # otherwise reach the provider.
+    fields = _strip_gateway_fields({"model": "openai:gpt-5", "guardrails": [{"name": "x"}]})
+    assert "guardrails" not in fields

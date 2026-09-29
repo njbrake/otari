@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest"
 import {
   DeploymentProvider,
   useDeployment,
-  useOfferPasskeySignIn,
   useRetireMasterKeySignIn,
   useSurfaces,
 } from "@/shared/hooks/useDeployment"
@@ -60,68 +59,18 @@ describe("useSurfaces", () => {
   })
 })
 
-describe("the two corrections this app may make to sign_in_methods", () => {
-  it("keeps a registered passkey when claiming retires the master key", () => {
-    // The interaction worth pinning: both corrections touch the same field, and
-    // replacing the list on a claim rather than swapping the one member would
-    // make an operator who registered a passkey first watch its sign-in button
-    // vanish the moment they set a password.
+describe("claiming the deployment", () => {
+  it("retires master-key sign-in for the rest of the tab", () => {
     const { result } = renderHook(
       () => ({
         deployment: useDeployment(),
         retire: useRetireMasterKeySignIn(),
       }),
-      {
-        wrapper: wrapper(
-          bootstrap({ sign_in_methods: ["master_key", "passkey"] }),
-        ),
-      },
+      { wrapper: wrapper(bootstrap({ sign_in_methods: ["master_key"] })) },
     )
 
     act(() => result.current.retire())
 
-    expect(result.current.deployment.sign_in_methods).toEqual([
-      "passkey",
-      "password",
-    ])
-  })
-
-  it("adds and removes passkey without disturbing the typed credential", () => {
-    const { result } = renderHook(
-      () => ({
-        deployment: useDeployment(),
-        offer: useOfferPasskeySignIn(),
-      }),
-      { wrapper: wrapper(bootstrap({ sign_in_methods: ["password"] })) },
-    )
-
-    // Registering the first one.
-    act(() => result.current.offer(true))
-    expect(result.current.deployment.sign_in_methods).toEqual([
-      "passkey",
-      "password",
-    ])
-
-    // Deleting the last one. Reversible, unlike the claim.
-    act(() => result.current.offer(false))
     expect(result.current.deployment.sign_in_methods).toEqual(["password"])
-  })
-
-  it("sorts a corrected list, so it is indistinguishable from a fetched one", () => {
-    const { result } = renderHook(
-      () => ({
-        deployment: useDeployment(),
-        offer: useOfferPasskeySignIn(),
-      }),
-      { wrapper: wrapper(bootstrap({ sign_in_methods: ["master_key"] })) },
-    )
-
-    act(() => result.current.offer(true))
-    // The gateway sorts this field, so a consumer comparing the array rather
-    // than probing it with includes() must not be able to tell the difference.
-    expect(result.current.deployment.sign_in_methods).toEqual([
-      "master_key",
-      "passkey",
-    ])
   })
 })

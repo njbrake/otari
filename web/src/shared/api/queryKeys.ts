@@ -98,11 +98,6 @@ export const ACTIVATION = "workspace-activation"
 // whole history.
 export const PLAYGROUND = "playground"
 
-// The signed-in identity's own passkeys. Its own key and not a child of any
-// organization key: a passkey belongs to a person, not to the organization they
-// happen to be acting in, and switching organizations does not change the list.
-export const PASSKEYS = "passkeys"
-
 // How often an open tab asks whether the app it is running is still the one the
 // gateway serves. Cheap (a hash of one small file) and only while the tab is
 // open, so a minute keeps a deploy from going unnoticed for long.

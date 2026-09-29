@@ -1,7 +1,7 @@
 """Auto-join over the sign-in routes themselves, not the service beneath them.
 
 `test_organization_domains.py` calls ``auto_join_for_user`` directly, which
-proves the rule and nothing about the wiring: delete any one of the three call
+proves the rule and nothing about the wiring: delete either of the two call
 sites and that suite stays green while the feature dies on that route. These
 tests sign in over HTTP instead, once per credential, so a missing call is a
 failure rather than a silence.
@@ -32,10 +32,7 @@ from gateway.models.tenancy import DOMAIN_VERIFICATION_TXT_PREFIX, OrganizationM
 from gateway.services.dashboard_session_service import create_dashboard_session
 from gateway.services.tenancy import organization_domain_service as domain_service
 
-from .webauthn_helpers import SoftwareAuthenticator, challenge_of
-
 ORIGIN = "http://testserver"
-RP_ID = "testserver"
 PASSWORD = "a-real-password"  # pragma: allowlist secret
 ADDRESS = "ada@acme.example"
 DOMAIN = "acme.example"
@@ -49,9 +46,7 @@ def mail_configured(test_config: GatewayConfig, monkeypatch: pytest.MonkeyPatch)
 
     Both settings, because the route refuses on either alone: the transport
     decides whether mail can go out and ``public_base_url`` is what the verify
-    link is built from. ORIGIN rather than any old URL, so the same fixture
-    serves the passkey test, whose relying party has to be the host TestClient
-    answers on.
+    link is built from.
     """
     monkeypatch.setattr(test_config, "mail_transport", "console")
     monkeypatch.setattr(test_config, "public_base_url", ORIGIN)
@@ -216,41 +211,6 @@ def test_an_oauth_sign_in_joins_the_organization_that_proved_the_domain(
     client.cookies.clear()
 
     signed_in = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "the-code", "state": "s"})
-
-    _assert_joined(client, signed_in, beta=claiming_organization, home=home)
-
-
-def test_a_passkey_sign_in_joins_the_organization_that_proved_the_domain(
-    client: TestClient,
-    master_key_header: dict[str, str],
-    caplog: pytest.LogCaptureFixture,
-    mail_configured: None,
-    claiming_organization: str,
-) -> None:
-    home = _active_organization(client, master_key_header)
-    _rostered_identity(client, master_key_header, not_in=claiming_organization)
-    _claim_password(client, caplog)
-    client.cookies.clear()
-
-    # Ada registers a passkey against her own session, then signs in with it
-    # alone: the passkey route is the one under test, not the password.
-    assert client.post(f"{API_ROOT}/auth/session", json={"email": ADDRESS, "password": PASSWORD}).status_code == 200
-    authenticator = SoftwareAuthenticator(rp_id=RP_ID, origin=ORIGIN)
-    options = client.post(f"{API_ROOT}/auth/webauthn/register/options")
-    assert options.status_code == 200, options.text
-    registered = client.post(
-        f"{API_ROOT}/auth/webauthn/register",
-        json={"credential": authenticator.register(challenge_of(options.json()))},
-    )
-    assert registered.status_code == 201, registered.text
-    client.cookies.clear()
-
-    challenge = client.post(f"{API_ROOT}/auth/webauthn/authenticate/options")
-    assert challenge.status_code == 200, challenge.text
-    signed_in = client.post(
-        f"{API_ROOT}/auth/webauthn/authenticate",
-        json={"credential": authenticator.authenticate(challenge_of(challenge.json()))},
-    )
 
     _assert_joined(client, signed_in, beta=claiming_organization, home=home)
 

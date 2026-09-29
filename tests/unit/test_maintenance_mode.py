@@ -217,8 +217,7 @@ def test_the_switch_refuses_a_body_that_names_no_state(tmp_path: Path) -> None:
 # check the freeze, and the test below is what says so: it enumerates the call
 # sites rather than naming the ones that exist today, because "every way in is
 # frozen" is a cross-cutting rule and a new sign-in path is exactly the change
-# that forgets one. WebAuthn and OAuth (#651, #652) each end by minting a
-# session, so each will land here.
+# that forgets one.
 SESSION_MINTING_EXEMPT = {
     "settings.py": (
         "Master-key rotation re-mints the caller's own session so the tab that rotated stays "

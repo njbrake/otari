@@ -42,7 +42,6 @@ describe("normalizeBootstrap", () => {
     const completed = normalizeBootstrap(
       omitting(
         "mail_ready",
-        "passkeys_ready",
         "maintenance_mode",
         "docs_url",
         "management_url",
@@ -53,7 +52,6 @@ describe("normalizeBootstrap", () => {
     )
 
     expect(completed.mail_ready).toBe(false)
-    expect(completed.passkeys_ready).toBe(false)
     expect(completed.maintenance_mode).toBe(false)
     expect(completed.docs_url).toBeNull()
     expect(completed.management_url).toBeNull()

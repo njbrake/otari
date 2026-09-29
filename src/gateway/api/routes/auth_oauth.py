@@ -49,9 +49,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.api.deps import IdentityProviderPortDep, get_config, get_db
 from gateway.api.routes._public_auth import throttle_public_auth
 
-# The same refusal the password and passkey sign-ins carry, imported rather than
-# restated: the freeze is one deployment-wide state, and three sign-in routes
-# wording it differently would tell a person the doors closed for three reasons.
+# The same refusal the password sign-in carries, imported rather than restated:
+# the freeze is one deployment-wide state, and two sign-in routes wording it
+# differently would tell a person the doors closed for two reasons.
 from gateway.api.routes.auth_session import MAINTENANCE_MODE_REFUSAL
 from gateway.core.config import OAUTH_PROVIDERS, GatewayConfig
 from gateway.log_config import logger
@@ -179,11 +179,11 @@ def require_oauth_provider(
     offer" one decision rather than a property of whichever call happened to
     look first, which is what let a stubbed exchange hide it.
 
-    Rendered here rather than left to the tenancy error handler, for the reason
-    ``auth_webauthn.require_passkey_support`` gives: that handler blanks the
-    message of every error carrying a status of 500 or above, which is right for
-    an operator problem the caller cannot act on and wrong for this one, where
-    the missing settings are exactly what the operator needs to read.
+    Rendered here rather than left to the tenancy error handler, because that
+    handler blanks the message of every error carrying a status of 500 or
+    above, which is right for an operator problem the caller cannot act on and
+    wrong for this one, where the missing settings are exactly what the
+    operator needs to read.
     """
     try:
         require_configured(config, provider)
@@ -256,14 +256,14 @@ async def callback(
     so every request it later authenticates resolves the same caller.
 
     A refusal is counted like the other sign-in failures
-    (``record_auth_failure``) and rendered by the tenancy error handler. Like
-    the passkey route there is no separate post-failure throttle: this route is
-    throttled unconditionally on the way in, because there is no legitimate
-    caller here whose correct credential must never be blocked. An authorization
+    (``record_auth_failure``) and rendered by the tenancy error handler. There
+    is no separate post-failure throttle: this route is throttled
+    unconditionally on the way in, because there is no legitimate caller here
+    whose correct credential must never be blocked. An authorization
     code is single-use and minted by a redirect, not something a person retries
     by hand.
 
-    **Maintenance mode freezes this the way it freezes the other two sign-ins.**
+    **Maintenance mode freezes this the way it freezes the typed sign-in.**
     The freeze is on starting a session, not on a credential, so an OAuth sign-in
     has to answer to it or the switch is bypassable by anybody holding a Google
     account. Refused before the exchange, so a frozen deployment makes no

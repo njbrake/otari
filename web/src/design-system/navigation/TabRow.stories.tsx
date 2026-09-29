@@ -56,10 +56,10 @@ export const TwoTabs: Story = {
           Keys
         </Tab>
         <Tab
-          isActive={active === "passkeys"}
-          onPress={() => setActive("passkeys")}
+          isActive={active === "budgets"}
+          onPress={() => setActive("budgets")}
         >
-          Passkeys
+          Budgets
         </Tab>
       </TabRow>
     )

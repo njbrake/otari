@@ -4,9 +4,9 @@
 no id, and an operator changing somebody else's name belongs to the deployment
 administration surface rather than here.
 
-It sits beside the password and passkey routes because it answers the same
-question they do, "what may the signed-in identity change about itself", and it
-is what the account page was missing. ``full_name`` is published on the
+It sits beside the password routes because it answers the same question they
+do, "what may the signed-in identity change about itself", and it is what the
+account page was missing. ``full_name`` is published on the
 membership context so the sidebar can draw a person rather than a role
 (mozilla-ai/otari#832), and an identity added to a roster by address carries
 none until somebody supplies one; without this there was nowhere to.

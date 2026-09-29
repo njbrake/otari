@@ -33,10 +33,9 @@ every credential here is refused with 503 so nobody starts a session during a
 redeploy, but a session already minted keeps working and the management API and
 the data plane are untouched. See ``services/maintenance_mode_service.py``.
 
-#651 and #652 add further credentials (OAuth, WebAuthn). Both are redirect or
-ceremony flows with more than one round trip, so they get their own endpoints
-rather than another field here; what they share with this one is the session
-those flows end by minting, not the request that starts them.
+OAuth sign-in (#651) is a redirect flow with more than one round trip, so it
+gets its own endpoints rather than another field here; what it shares with this
+one is the session it ends by minting, not the request that starts it.
 """
 
 import uuid

@@ -322,7 +322,7 @@ beside the input, and let the message sit under both.
   <Label className="text-body">Name</Label>
   <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
     <Input className="w-full max-w-md" />
-    <Button type="submit" variant="primary">Add a passkey</Button>
+    <Button type="submit" variant="primary">Add a key</Button>
   </div>
   <FieldMessages>
     <Description className="text-muted">Optional, and only a label.</Description>

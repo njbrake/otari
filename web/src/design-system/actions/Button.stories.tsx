@@ -99,7 +99,7 @@ export const FullWidth: Story = {
       <Button variant="primary" fullWidth>
         Sign in
       </Button>
-      <Button fullWidth>Use a passkey instead</Button>
+      <Button fullWidth>Use your master key</Button>
     </div>
   ),
 }

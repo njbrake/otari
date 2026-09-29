@@ -1,5 +1,4 @@
 import { PageIntro } from "@/design-system/layout/PageIntro"
-import { PasskeysCard } from "@/features/account/PasskeysCard"
 import { PasswordCard } from "@/features/account/PasswordCard"
 import { ProfileCard } from "@/features/account/ProfileCard"
 import { useDeployment } from "@/shared/hooks/useDeployment"
@@ -13,8 +12,8 @@ import { useDeployment } from "@/shared/hooks/useDeployment"
  * on behalf of the process, while these are the credentials that identify the
  * person changing them. It is also the destination the account menu has always
  * named and could not open, and the surface the rest of #653's auth affordances
- * land on as their backends arrive: passkeys (otari#652) have landed, and
- * connected sign-in providers (otari#651) are still to come.
+ * land on as their backends arrive: connected sign-in providers (otari#651)
+ * are still to come.
  */
 export function AccountPage() {
   const { session_type } = useDeployment()
@@ -30,7 +29,6 @@ export function AccountPage() {
         <>
           <ProfileCard />
           <PasswordCard />
-          <PasskeysCard />
         </>
       ) : (
         // A hosted session is minted by otari.ai and its credential is managed

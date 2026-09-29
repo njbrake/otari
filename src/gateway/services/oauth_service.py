@@ -227,12 +227,10 @@ class _DatabaseStateStore:
     async def consume(self, state_key: str) -> PendingState | None:
         """Claim one pending authorization, or answer ``None``.
 
-        **One conditional DELETE, not a SELECT and then a delete**, the rule
-        ``webauthn_service.consume_challenge`` states at length and for the same
-        reason: single use is the property, and a read-then-write cannot provide
-        it. Two callbacks replaying one state would both find the row; deleting
-        by primary key and reading what came back means exactly one of them
-        does.
+        **One conditional DELETE, not a SELECT and then a delete**: single use
+        is the property, and a read-then-write cannot provide it. Two callbacks
+        replaying one state would both find the row; deleting by primary key
+        and reading what came back means exactly one of them does.
 
         ``provider`` and the flow secret are compared after the row is claimed
         rather than added to the WHERE clause, so a state minted for one

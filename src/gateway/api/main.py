@@ -12,7 +12,6 @@ from gateway.api.routes import (
     auth_profile,
     auth_session,
     auth_signup,
-    auth_webauthn,
     batches,
     bootstrap,
     budgets,
@@ -157,7 +156,6 @@ def _register_core_routers(api: APIRouter, config: GatewayConfig) -> None:
     api.include_router(auth_profile.router)
     api.include_router(auth_signup.router)
     api.include_router(auth_password_reset.router)
-    api.include_router(auth_webauthn.router)
     api.include_router(auth_oauth.router)
     if serves_data_plane:
         # The rest of the data plane. ``files`` sits here because an upload

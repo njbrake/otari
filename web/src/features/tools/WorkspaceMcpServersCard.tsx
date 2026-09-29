@@ -118,7 +118,7 @@ export function WorkspaceMcpServersCard({
 
   // Each opener clears the mutation it will render the error of. Without this a
   // refused write leaves its banner up, so reopening the form shows the last
-  // 409 over a blank one. Same reset `PasskeysCard` does for the same reason.
+  // 409 over a blank one.
   const openAdd = () => {
     setEditing(undefined)
     create.reset()

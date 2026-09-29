@@ -296,7 +296,7 @@ hides.
 | --- | --- | --- |
 | `RowAction` | `icon` + `label`, or children; `onPress`, `isDanger?`, `isDisabled?`, `ariaLabel?` | An action in a table row. A glyph by default, not a `Button` |
 | `RowActionRow` | children | The trailing lane those sit in. **Use this one** |
-| `RowActions` | children | A near-duplicate with a tighter gap, on 2 call sites. Do not reach for it in new code |
+| `RowActions` | children | A near-duplicate with a tighter gap, with no call sites left. Do not reach for it in new code |
 | `ConfirmButton` | `confirmLabel`, `onConfirm`, `isPending?`, children | The page-level two-step confirm, for a destructive action that deletes nothing |
 | `ConfirmRowAction` | `confirmLabel`, `onConfirm`, `isPending?`, and `icon` + `label` or children | The same two-step inside a row. Its trigger takes a glyph; its armed half stays words. It supplies its own `isDanger` and its own Cancel. Not for a delete |
 | `RefreshButton` | `onRefresh`, `isFetching?`, `updatedAt?`, `label?` | A refetch, with its own freshness caption. Pass `updatedAt` or the caption reads nothing |

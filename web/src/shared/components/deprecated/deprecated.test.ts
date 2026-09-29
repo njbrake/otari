@@ -39,9 +39,7 @@ const REPLACEMENT: Record<string, string> = {
  * Usage had stopped using it, and buttons.md put `RowActions` on two call sites
  * when it was on one.
  */
-const KNOWN: Record<string, readonly string[]> = {
-  "features/account/PasskeysCard.tsx": ["RowActions"],
-}
+const KNOWN: Record<string, readonly string[]> = {}
 
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir)) {

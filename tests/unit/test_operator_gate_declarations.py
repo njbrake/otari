@@ -117,7 +117,6 @@ _UNGATED_ROUTERS: dict[str, str] = {
     "auth_password_reset.router": _PUBLIC_AUTH,
     "auth_session.router": _PUBLIC_AUTH,
     "auth_signup.router": _PUBLIC_AUTH,
-    "auth_webauthn.router": _PUBLIC_AUTH,
     "invitations.router": "the invitation token is the credential, and the invitee has no account yet",
     "bootstrap.router": "unauthenticated on purpose: how a browser learns which mode it reached",
     "health.router": "unauthenticated liveness and readiness",

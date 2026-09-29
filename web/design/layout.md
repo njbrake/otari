@@ -156,7 +156,7 @@ lines.
 ```tsx
 // Correct: three children, three rows, separators supplied
 <SettingsGroup title="Access" description="Who can reach this gateway.">
-  <SettingsRow label="Allow passkeys">…</SettingsRow>
+  <SettingsRow label="Public catalog">…</SettingsRow>
   <SettingsRow label="Open signup">…</SettingsRow>
   <div className="flex justify-end"><Button variant="primary">Save access</Button></div>
 </SettingsGroup>

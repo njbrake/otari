@@ -165,6 +165,10 @@ _GATEWAY_INTERNAL_FIELDS = (
     "max_tool_iterations",
     "session_label",
     "user",
+    # Retired with gateway guardrails. Still stripped: the Responses request
+    # accepts extra fields, so a client that sends it would otherwise have it
+    # forwarded to a provider that rejects it.
+    "guardrails",
 )
 
 

@@ -34,13 +34,13 @@ The bootstrap selects standalone, hosted, or hybrid presentation and publishes:
 - sign-in methods and configured OAuth providers
 - management surfaces hosted by this process
 - the control-plane or data-plane URL
-- documentation, mail, passkey, and maintenance state
+- documentation, mail, and maintenance state
 
 Features read this through `useDeployment()` and `useSurfaces()`. Page
 components do not branch directly on the mode. A surface gate controls
 discoverability; backend authorization remains mandatory.
 
-Local sign-in exchanges a master key, password, passkey, or OAuth assertion for
+Local sign-in exchanges a master key, password, or OAuth assertion for
 an HttpOnly session cookie. Do not store credentials or copy the cookie into
 JavaScript state.
 

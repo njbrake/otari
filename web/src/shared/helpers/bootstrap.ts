@@ -75,7 +75,6 @@ export function normalizeBootstrap(wire: WireBootstrap): DeploymentBootstrap {
     terms_url: wire.terms_url ?? null,
     privacy_url: wire.privacy_url ?? null,
     maintenance_mode: wire.maintenance_mode ?? false,
-    passkeys_ready: wire.passkeys_ready ?? false,
     mail_ready: wire.mail_ready ?? false,
     // Closed by default: a gateway old enough to omit this served no catalog to
     // a visitor, and guessing open would render pages that then 401.
