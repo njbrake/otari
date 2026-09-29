@@ -410,7 +410,7 @@ class _ResponsesAdapter:
             "model": attempt.model,
             "provider": LLMProvider(attempt.provider),
         }
-        # client_args (built from extra_params, e.g. Bedrock's region_name) is
+        # client_args (built from extra_params, e.g. a region_name) is
         # platform-trusted, so it's merged in last: it can never be shadowed
         # by a same-named field in the caller's own request body. It must be
         # nested under client_args, not merged flat, or any-llm forwards it

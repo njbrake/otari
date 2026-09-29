@@ -44,18 +44,9 @@ import { useSettings, useUpdateSettings } from "@/shared/api/settings"
 import { formatRelative } from "@/shared/helpers/format"
 
 import {
-  type CredentialFieldValues,
-  credentialFieldsFor,
-  credentialSpecFor,
-  mergeCredentialFields,
-  splitClientArgs,
-  validateCredentialFields,
-} from "./providerCredentialFields"
-import {
   ClientArgsField,
   formatClientArgs,
   ProviderComboBox,
-  ProviderCredentialFields,
   parseClientArgs,
   SessionAffinityField,
   supportsSessionAffinity,
@@ -162,18 +153,11 @@ function KnownProviderForm({
   const [apiBase, setApiBase] = useState("")
   const [name, setName] = useState("")
   const [clientArgsText, setClientArgsText] = useState("")
-  const [credentials, setCredentials] = useState<CredentialFieldValues>({})
   const [sessionAffinity, setSessionAffinity] = useState(false)
   // A renamed instance records the provider as its provider_type, so the
   // provider picked decides support either way.
   const affinitySupported = supportsSessionAffinity(providerId, null)
   const clientArgs = parseClientArgs(clientArgsText)
-  const credentialFields = credentialFieldsFor(providerId)
-  const credentialErrors = validateCredentialFields(
-    credentialFields,
-    credentials,
-  )
-  const credentialSpec = credentialSpecFor(providerId)
 
   // Autofill hints are fetched lazily for just the selected provider, so the
   // picker itself never imports every provider SDK (issue #365).
@@ -194,9 +178,9 @@ function KnownProviderForm({
   // Require the key when the chosen provider says it needs one; keyless local
   // backends (Ollama, llama.cpp) can submit without it.
   // One snapshot of everything the form owns, seeded on mount, rather than a
-  // list of fields: the list was two of six, so Advanced's rename, API base,
-  // client options and every typed credential (a Bedrock region) were invisible
-  // to the guard and went on Escape with nothing asked. `key={addOpenCount}`
+  // list of fields: the list was two of six, so Advanced's rename, API base
+  // and client options were invisible to the guard and went on Escape with
+  // nothing asked. `key={addOpenCount}`
   // reseeds it per open. See feedback.md.
   const { isDirty } = useDirtySnapshot({
     providerId,
@@ -204,27 +188,21 @@ function KnownProviderForm({
     name,
     apiBase,
     clientArgsText,
-    credentials,
     sessionAffinity,
   })
   const canSubmit =
     providerId !== "" &&
     !nameHasDelimiter &&
     (!needsKey || apiKey.trim() !== "") &&
-    clientArgs.ok &&
-    Object.keys(credentialErrors).length === 0
+    clientArgs.ok
   // Hold the section open while something inside it is what's blocking submit,
   // so collapsing it can't leave a disabled button with its reason off screen.
   // A hide requested meanwhile is remembered and applies once the field is fixed.
   const advancedOpen = showAdvanced || !clientArgs.ok || nameHasDelimiter
 
-  // The typed fields and the JSON textarea are two views of one `client_args`
-  // object, so the request body is built in one place for both the save and the
-  // connection test.
+  // Built in one place for both the save and the connection test.
   const buildPayload = (): CreateStoredProviderRequest | null =>
-    providerId === "" ||
-    !clientArgs.ok ||
-    Object.keys(credentialErrors).length > 0
+    providerId === "" || !clientArgs.ok
       ? null
       : {
           instance: renamed ? name.trim() : providerId,
@@ -233,7 +211,7 @@ function KnownProviderForm({
           provider_type: renamed ? providerId : null,
           api_base: apiBase.trim() || null,
           api_key: apiKey.trim() || null,
-          client_args: mergeCredentialFields(credentials, clientArgs.value),
+          client_args: clientArgs.value,
           session_affinity: affinitySupported && sessionAffinity,
         }
 
@@ -275,43 +253,22 @@ function KnownProviderForm({
           // Clear the API base; the effect above refills it from the provider's
           // built-in default once this provider's detail loads.
           setApiBase("")
-          // The typed fields belong to the provider, so a change to it drops
-          // values that no longer have a field to sit in.
-          setCredentials({})
         }}
         description="Its endpoint is built in."
       />
       <SecretField
         value={apiKey}
         onChange={setApiKey}
-        // The registry names the credential where the provider does not call it
-        // an API key; the optional suffix still tracks whether one is needed.
-        label={
-          selected && !needsKey
-            ? `${credentialSpec?.apiKeyLabel ?? "API key"} (optional)`
-            : (credentialSpec?.apiKeyLabel ?? "API key")
-        }
-        description={[
+        label={selected && !needsKey ? "API key (optional)" : "API key"}
+        description={
           selected
             ? needsKey
               ? `${selected.name}'s endpoint is built in — just add your key.`
               : envKeyPresent
                 ? `${selected.env_key} is set on the server, so a key is optional here. Paste one to override it.`
                 : `${selected.name} needs no API key.`
-            : "Stored encrypted. Requires OTARI_SECRET_KEY on the server.",
-          credentialSpec?.apiKeyHelpText,
-        ]
-          .filter(Boolean)
-          .join(" ")}
-      />
-      {/* Outside the Advanced disclosure below: a required field hidden behind
-          a collapsed section is a submit button disabled for a reason off
-          screen. */}
-      <ProviderCredentialFields
-        provider={providerId}
-        values={credentials}
-        onChange={setCredentials}
-        errors={credentialErrors}
+            : "Stored encrypted. Requires OTARI_SECRET_KEY on the server."
+        }
       />
       <button
         type="button"
@@ -588,30 +545,10 @@ function EditProviderForm({
   )
   const [replacingKey, setReplacingKey] = useState(false)
   const [apiKey, setApiKey] = useState("")
-  // An instance keeps its provider's name unless it was renamed, so the
-  // instance is what says which provider this is when provider_type is unset.
-  // Read the same way below, so the fields rendered are the ones the stored
-  // options were split against.
-  const providerId = providerType.trim() || provider.instance
-  const [stored] = useState(() =>
-    splitClientArgs(
-      credentialFieldsFor(provider.provider_type?.trim() || provider.instance),
-      provider.client_args,
-    ),
-  )
   const [clientArgsText, setClientArgsText] = useState(() =>
-    formatClientArgs(stored.rest),
-  )
-  const [credentials, setCredentials] = useState<CredentialFieldValues>(
-    () => stored.typed,
+    formatClientArgs(provider.client_args),
   )
   const clientArgs = parseClientArgs(clientArgsText)
-  const credentialFields = credentialFieldsFor(providerId)
-  const credentialErrors = validateCredentialFields(
-    credentialFields,
-    credentials,
-    stored.redacted,
-  )
   // `replacingKey` is in the snapshot with the secret it reveals: arming the
   // replacement and then closing without typing one loses nothing, but a typed
   // key is work, and the flag is what says the field was ever on screen.
@@ -621,10 +558,9 @@ function EditProviderForm({
     replacingKey,
     apiKey,
     clientArgsText,
-    credentials,
     sessionAffinity,
   })
-  const blocked = !clientArgs.ok || Object.keys(credentialErrors).length > 0
+  const blocked = !clientArgs.ok
 
   const submit = () => {
     if (update.isPending || blocked) return
@@ -632,11 +568,7 @@ function EditProviderForm({
       provider_type: providerType.trim() || null,
       api_base: apiBase.trim() || null,
       // Sent on every save, so emptying the field clears the stored options.
-      client_args: mergeCredentialFields(
-        credentials,
-        clientArgs.value,
-        stored.redacted,
-      ),
+      client_args: clientArgs.value,
       // Off whenever the type cannot carry it, so switching type clears it.
       session_affinity: affinitySupported && sessionAffinity,
       // Guard against clobbering a concurrent edit; a 412 tells the operator to reload.
@@ -662,8 +594,7 @@ function EditProviderForm({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      // `lg` as on the add form: the same five fields, plus whatever typed
-      // credentials this provider declares.
+      // `lg` as on the add form: the same five fields.
       size="lg"
       title="Edit provider"
       description={<code>{provider.instance}</code>}
@@ -729,13 +660,6 @@ function EditProviderForm({
           </div>
         )}
       </div>
-      <ProviderCredentialFields
-        provider={providerId}
-        values={credentials}
-        onChange={setCredentials}
-        errors={credentialErrors}
-        redacted={stored.redacted}
-      />
       <ClientArgsField
         value={clientArgsText}
         onChange={setClientArgsText}

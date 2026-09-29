@@ -245,7 +245,7 @@ class S3FileStore:
 
     Uses the synchronous ``boto3`` client via :func:`asyncio.to_thread` rather
     than ``aioboto3``: the latter pins an older ``botocore`` range that
-    conflicts with the version already required elsewhere for Bedrock support
+    conflicts with the version any-llm-sdk's Bedrock provider already requires
     (see #156). Credentials resolve through boto3's standard chain
     (environment variables, ``~/.aws/credentials``, IAM role); this class
     never handles them directly.

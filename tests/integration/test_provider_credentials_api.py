@@ -9,14 +9,15 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from gateway.api.routes import providers as providers_route
-from gateway.core.config import API_ROOT
+from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.models.entities import ProviderCredential
 from gateway.services.model_discovery_service import ProviderDiscovery
-from gateway.services.provider_store_service import reset_provider_cache
-from gateway.services.secret_box import decrypt_secret, generate_secret_key
+from gateway.services.provider_store_service import refresh_provider_cache, reset_provider_cache
+from gateway.services.secret_box import decrypt_secret, encrypt_secret, generate_secret_key
 
 
 @pytest.fixture(autouse=True)
@@ -489,11 +490,11 @@ def test_test_endpoint_maps_discovery_result(
 def test_client_args_never_echo_a_credential_shaped_entry(
     client: TestClient, master_key_header: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A standalone Bedrock instance keeps a live AWS secret here, in clear.
+    """A credential kept in ``client_args`` is stored in clear and never echoed.
 
-    ``client_args`` is arbitrary JSON handed to the provider SDK, and any-llm's
-    BedrockProvider never forwards ``api_key`` into the boto3 client it builds,
-    so classic IAM credentials genuinely belong in this field. They are as much a
+    ``client_args`` is arbitrary JSON handed to the provider SDK, and an SDK can
+    take a secret as a client constructor kwarg, so credentials can genuinely
+    belong in this field. They are as much a
     credential as ``encrypted_api_key``, and were the one part of this row the API
     returned unmasked. ``OrgProviderKey`` has masked its own since it shipped.
     """
@@ -534,7 +535,7 @@ def test_saving_the_masked_client_args_back_keeps_the_stored_credential(
 
     The dashboard's provider form renders the stored ``client_args`` into its
     textarea and sends the whole object back on save, so a naive mask would have
-    it overwrite the AWS secret with ``***`` the first time anyone edited the
+    it overwrite a stored secret with ``***`` the first time anyone edited the
     region. An entry submitted as the mask keeps whatever is stored under that
     name.
     """
@@ -608,6 +609,70 @@ def test_a_credential_shaped_client_arg_can_still_be_replaced_and_removed(
     )
     assert cleared.status_code == 200, cleared.text
     assert _stored_client_args(db_session) == {}
+
+
+def _legacy_bedrock_row() -> ProviderCredential:
+    """A row saved while the dashboard still had a typed Bedrock form."""
+    return ProviderCredential(
+        instance="aws-prod",
+        provider_type="bedrock",
+        encrypted_api_key=encrypt_secret("secret-access-key"),
+        last4="-key",
+        client_args={
+            "region_name": "us-east-1",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMIsecret",
+        },
+    )
+
+
+def test_a_stored_bedrock_row_still_lists(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    """Bedrock is an ordinary any-llm provider type here, so a row the removed
+    Bedrock form wrote lists like any other, its credentials still masked."""
+    _with_key(monkeypatch)
+    db_session.add(_legacy_bedrock_row())
+    db_session.commit()
+
+    listed = client.get(f"{API_ROOT}/provider-credentials", headers=master_key_header)
+
+    assert listed.status_code == 200, listed.text
+    assert "wJalrXUtnFEMIsecret" not in listed.text
+    row = next(entry for entry in listed.json() if entry["instance"] == "aws-prod")
+    assert row["provider_type"] == "bedrock"
+    assert row["decryptable"] is True
+    assert row["client_args"] == {
+        "region_name": "us-east-1",
+        "aws_access_key_id": "***",
+        "aws_secret_access_key": "***",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_stored_bedrock_row_still_loads_into_config(
+    async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Loading the overlay (what startup runs) passes the row through untouched."""
+    _with_key(monkeypatch)
+    async_db.add(_legacy_bedrock_row())
+    await async_db.commit()
+    config = GatewayConfig()
+
+    await refresh_provider_cache(async_db, config)
+
+    assert config.providers["aws-prod"] == {
+        "provider_type": "bedrock",
+        "api_key": "secret-access-key",
+        "client_args": {
+            "region_name": "us-east-1",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMIsecret",
+        },
+    }
 
 
 def _baseten(**overrides: object) -> dict[str, object]:

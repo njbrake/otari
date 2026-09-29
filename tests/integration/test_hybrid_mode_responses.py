@@ -187,8 +187,7 @@ def test_hybrid_mode_forwards_extra_params(
     delegate to ``default_attempt_kwargs``) must forward an attempt's
     ``extra_params`` too, nested under ``client_args`` (not merged flat: any-llm
     only routes a ``client_args`` mapping to the provider's client
-    constructor). Exercised generically here via ``openai`` since Bedrock
-    itself doesn't support the Responses API."""
+    constructor)."""
 
     async def fake_post_platform(
         url: str,
@@ -239,8 +238,8 @@ def test_hybrid_mode_rejects_caller_supplied_client_args(
 ) -> None:
     """The Responses request schema allows extra fields (``extra="allow"``),
     so a caller could smuggle a ``client_args`` field into the request body.
-    An attempt with no extra_params of its own (the common case for every
-    provider except Bedrock) never sets client_args itself, so without
+    An attempt with no extra_params of its own (the common case) never sets
+    client_args itself, so without
     stripping it first, a caller-supplied client_args would reach the
     provider call unfiltered — e.g. overriding client-constructor kwargs the
     platform never authorized. client_args must be stripped the same way

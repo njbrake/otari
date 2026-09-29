@@ -77,9 +77,8 @@ _KEYLESS_PLACEHOLDER_API_KEY = "otari-no-key-required"
 _KEYLESS_SELF_HOSTED_PROVIDERS = frozenset({"vllm", "lmstudio", "cascadia", "otari"})
 # Providers authenticating from cloud SDK credentials this gateway cannot see:
 # an EC2 instance profile, an SSO session, or an ambient boto3 chain. They are
-# the same category as Vertex AI's application default credentials, which
-# ``docs/configuration.md`` already groups with Bedrock, and they only reach here
-# with nothing configured, which is precisely the ambient case. Splitting the
+# the same category as Vertex AI's application default credentials, and they
+# only reach here with nothing configured, which is precisely the ambient case. Splitting the
 # category on whether any-llm happens to declare a variable name would be an
 # accident of upstream spelling rather than a difference in kind.
 #

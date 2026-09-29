@@ -222,9 +222,9 @@ async def test_superuser_member_may_still_list_keys(async_db: AsyncSession) -> N
 async def test_credential_shaped_client_args_are_redacted_even_for_the_admin_who_set_them(
     async_db: AsyncSession,
 ) -> None:
-    """A credential-shaped field placed in `client_args` (this gateway's own
-    Bedrock support genuinely needs `aws_access_key_id`/`aws_secret_access_key`
-    there, so the field cannot simply be rejected outright) never round-trips,
+    """A credential-shaped field placed in `client_args` (an SDK that takes a
+    secret as a client kwarg needs it there, so the field cannot simply be
+    rejected outright) never round-trips,
     the same treatment `encrypted_api_key` itself already gets: only `last4`
     comes back, never the plaintext. The admin who set it is the only reader
     this surface has left, so the masking has to hold for them: there is no

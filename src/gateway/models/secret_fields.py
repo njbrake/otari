@@ -3,9 +3,8 @@
 Three tables carry arbitrary operator-supplied JSON that a provider SDK is
 handed as keyword arguments: ``org_provider_keys.client_args``,
 ``provider_credentials.client_args`` and ``search_tool_credentials.options``.
-All three are places a real credential legitimately lives (standalone Bedrock
-needs ``aws_secret_access_key`` in ``client_args``,
-``services/bedrock_gateway_auth.py`` explains why), and none of them may echo one
+All three are places a real credential legitimately lives (a provider SDK can
+take a secret as a client constructor kwarg), and none of them may echo one
 back over the API. A leaf module rather than a helper on one of the models, so
 the later serializers share the first's rules instead of carrying a copy that
 drifts.
@@ -23,7 +22,7 @@ def redact_secret_like_values(values: dict[str, Any] | None) -> dict[str, Any] |
     """Mask values whose key name looks credential-shaped; pass the rest through.
 
     Substring match, not an exact-name allow-list: an operator can name a
-    Bedrock/vertex/custom client kwarg however any-llm expects it, so a fixed
+    vertex/custom client kwarg however any-llm expects it, so a fixed
     set of exact names would miss a variant spelling and silently leak it.
     """
     if values is None:

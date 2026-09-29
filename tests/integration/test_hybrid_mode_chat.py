@@ -212,16 +212,14 @@ def _fake_bedrock_chat_completion() -> ChatCompletion:
     )
 
 
-def test_hybrid_mode_forwards_bedrock_classic_key_pair_via_client_args(
+def test_hybrid_mode_forwards_bedrock_extra_params_unchanged(
     platform_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A Bedrock attempt using the classic IAM access-key/secret-key shape
-    reaches the ``acompletion()`` call under ``client_args`` (not flat), with
-    the secret aliased to ``aws_secret_access_key``: the shape any-llm's
-    Bedrock provider actually reads when building its boto3 client. Without
-    this, boto3 raises ``NoRegionError`` ("You must specify a region.") even
-    though the gateway received the right values."""
+    """A Bedrock attempt the platform still resolves gets the generic
+    treatment: its ``extra_params`` reach ``acompletion()`` under
+    ``client_args`` (not flat) as sent, with no secret aliased in and no
+    client built for it."""
 
     async def fake_post_platform(
         url: str,
@@ -248,54 +246,7 @@ def test_hybrid_mode_forwards_bedrock_classic_key_pair_via_client_args(
         assert kwargs["client_args"] == {
             "region_name": "us-east-1",
             "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
-            "aws_secret_access_key": "secret-access-key",
         }
-        return _fake_bedrock_chat_completion()
-
-    monkeypatch.setattr("gateway.api.routes._platform._post_platform", fake_post_platform)
-    monkeypatch.setattr("gateway.api.routes.chat.acompletion", fake_acompletion)
-
-    response = platform_client.post(
-        f"{API_ROOT}/chat/completions",
-        json=_bedrock_chat_request(),
-        headers={"Authorization": "Bearer user_test_token"},
-    )
-
-    assert response.status_code == 200
-
-
-def test_hybrid_mode_forwards_bedrock_bearer_token_via_client_args(
-    platform_client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A Bedrock attempt using the bearer-token ("Bedrock API key") shape (no
-    aws_access_key_id in extra_params) gets a pre-built, unsigned boto3
-    client under client_args["client"] instead of plain credential kwargs,
-    since this boto3 version has no native bearer-token support."""
-
-    async def fake_post_platform(
-        url: str,
-        headers: dict[str, str],
-        body: dict[str, Any],
-        timeout_seconds: float,
-    ) -> httpx.Response:
-        if url.endswith("/gateway/provider-keys/resolve"):
-            return httpx.Response(
-                200,
-                json=_bedrock_resolve_response(
-                    "bedrock-bearer-req",
-                    "bearer-token-value",
-                    {"region_name": "us-west-2"},
-                ),
-            )
-        return httpx.Response(204)
-
-    async def fake_acompletion(**kwargs: Any) -> ChatCompletion:
-        assert kwargs["model"] == "bedrock:anthropic.claude-3-5-sonnet-20241022-v2:0"
-        assert kwargs["api_key"] == "bearer-token-value"
-        client_args = kwargs["client_args"]
-        assert client_args["region_name"] == "us-west-2"
-        assert client_args["client"].meta.region_name == "us-west-2"
         return _fake_bedrock_chat_completion()
 
     monkeypatch.setattr("gateway.api.routes._platform._post_platform", fake_post_platform)
@@ -823,8 +774,8 @@ def test_hybrid_mode_forwards_resolve_400_detail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A 400 from the platform resolve endpoint (a deliberate, caller-safe
-    rejection such as a Bedrock BYO key using an auth shape that can't be
-    forwarded through a gateway) is forwarded verbatim, not collapsed into
+    rejection such as a BYO key using an auth shape that can't be forwarded
+    through a gateway) is forwarded verbatim, not collapsed into
     the generic 502 "Authorization service unavailable" that 422/5xx get."""
 
     async def fake_post_platform(
@@ -835,19 +786,19 @@ def test_hybrid_mode_forwards_resolve_400_detail(
     ) -> httpx.Response:
         return httpx.Response(
             400,
-            json={"detail": "This Bedrock provider key uses a bearer-token credential."},
+            json={"detail": "This provider key uses a credential shape a gateway cannot forward."},
         )
 
     monkeypatch.setattr("gateway.api.routes._platform._post_platform", fake_post_platform)
 
     response = platform_client.post(
         f"{API_ROOT}/chat/completions",
-        json={"model": "bedrock:anthropic.claude-haiku-4-5", "messages": [{"role": "user", "content": "hi"}]},
+        json={"model": "anthropic:claude-haiku-4-5", "messages": [{"role": "user", "content": "hi"}]},
         headers={"Authorization": "Bearer user_test_token"},
     )
 
     assert response.status_code == 400
-    assert response.json() == {"detail": "This Bedrock provider key uses a bearer-token credential."}
+    assert response.json() == {"detail": "This provider key uses a credential shape a gateway cannot forward."}
 
 
 # ---------------------------------------------------------------------------
