@@ -6,7 +6,6 @@
 // the sign-in form's state until the request goes out and is gone on reload.
 
 import type { OAuthAuthorizeResponse, OAuthCallbackRequest } from "@/client"
-import { getPasskeyAssertion } from "@/shared/helpers/webauthn"
 
 export class ApiError extends Error {
   status: number
@@ -157,31 +156,6 @@ export async function createSession(
     throw new ApiError(response.status, await extractErrorMessage(response))
   }
   return { ok: true }
-}
-
-// Sign in with a passkey: two calls with a browser ceremony between them.
-//
-// Hand-written here beside `createSession`, and for the same reason: `apiFetch`
-// treats a 401 as an expired session and bounces to the sign-in screen, which
-// is exactly wrong on the screen somebody is signing in *from*. A refused
-// passkey comes back as `ok: false` carrying the gateway's own message.
-//
-// A dismissed prompt is not a refusal and is not reported as one: the ceremony
-// throws `PasskeyCancelledError`, which the caller distinguishes.
-export async function signInWithPasskey(): Promise<SignInResult> {
-  const options = await publicPost("/auth/webauthn/authenticate/options")
-  if (!options.ok) {
-    return { ok: false, message: options.message, status: options.status }
-  }
-  const assertion = await getPasskeyAssertion(
-    options.body as Parameters<typeof getPasskeyAssertion>[0],
-  )
-  const verified = await publicPost("/auth/webauthn/authenticate", {
-    credential: assertion,
-  })
-  return verified.ok
-    ? { ok: true }
-    : { ok: false, message: verified.message, status: verified.status }
 }
 
 // Where to send the browser, or why the gateway would not say.

@@ -4,16 +4,7 @@ import { FiAlertCircle, FiChevronRight, FiEye, FiEyeOff } from "react-icons/fi"
 import { errorMessage } from "@/design-system/feedback/errorMessage"
 import { useAuth } from "@/features/auth/AuthContext"
 import type { SignInCredential } from "@/shared/api/client"
-import {
-  ApiError,
-  createSession,
-  signInWithPasskey,
-  startOAuthSignIn,
-} from "@/shared/api/client"
-import {
-  PasskeyCancelledError,
-  supportsPasskeys,
-} from "@/shared/helpers/webauthn"
+import { ApiError, createSession, startOAuthSignIn } from "@/shared/api/client"
 import { useDeployment } from "@/shared/hooks/useDeployment"
 import {
   analyticsErrorCode,
@@ -168,9 +159,7 @@ function LabelRow({
  * recovers through the master key against `PUT /v1/auth/password` instead (see
  * docs/access-control.md) rather than through a mailed link.
  *
- * A passkey signs in beside the form rather than instead of it (otari#652),
- * offered only when the gateway publishes `passkey` *and* this browser can run
- * the ceremony. OAuth sits beside both (otari#651), one button per provider in
+ * OAuth sits beside the form (otari#651), one button per provider in
  * the bootstrap's `oauth_providers`, which lists only the providers an operator
  * configured: a provider nobody set up is absent rather than rendered disabled,
  * and a deployment that configured none carries no OAuth affordance at all.
@@ -221,11 +210,6 @@ export function Login() {
   // and it does not stop being true while somebody is looking at the master-key
   // box.
   const offersRecovery = mail_ready && offersPasswordForm
-  // Two independent conditions, and both have to hold. The gateway publishes
-  // `passkey` only while some credential could actually answer, and a browser
-  // that cannot run the ceremony would turn the button into a dead end.
-  const offersPasskey =
-    sign_in_methods.includes("passkey") && supportsPasskeys()
   // Narrowed rather than rendered straight from the bootstrap: the gateway's
   // provider vocabulary is open (an overlay may bind an adapter for a
   // connection this build never named), and a provider with no label here would
@@ -239,11 +223,6 @@ export function Login() {
   const [error, setError] = useState<unknown>(null)
   const [errorField, setErrorField] = useState<CredentialField | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  // Separate from `isSubmitting` because the two say different things while
-  // they are true: the form's button reads "Signing in…", and this one has to
-  // say the browser is waiting on an authenticator, which is a wait the person
-  // has to act on rather than one they watch.
-  const [isPasskeyPending, setIsPasskeyPending] = useState(false)
   // Which provider button was pressed, so only that one reads "Redirecting…".
   // The navigation that follows leaves this page, so this is never cleared on
   // success; it clears on the refusal path, where the person stays here.
@@ -292,19 +271,13 @@ export function Login() {
    * Which credential an attempt actually presented, read off the credential
    * itself rather than off what the deployment offers.
    *
-   * `sign_in_methods.includes("password")` answers the same question only while
-   * that list has exactly two values. #652 adds `passkey`, and on a deployment
-   * publishing `["password", "passkey"]` a passkey sign-in would report itself
-   * as a password one with nothing failing. The platform's own vocabulary for
-   * this property, minus the OAuth values whose buttons are still #651's.
+   * `sign_in_methods` publishes both typed credentials together on an
+   * unclaimed deployment with members, so it cannot say which one was used.
+   * The platform's own vocabulary for this property, minus the OAuth values
+   * whose buttons are still #651's.
    */
   const authenticationMethod = (credential: SignInCredential) =>
     "masterKey" in credential ? "master_key" : "password"
-
-  // The third value the other two are drawn from `SignInCredential` for. A
-  // passkey sign-in carries no credential object to derive it from: the whole
-  // point is that nothing is typed, so the method is named rather than read.
-  const PASSKEY_METHOD = "passkey"
 
   const readCredential = (): SignInCredential | null => {
     if (usesPassword) {
@@ -342,16 +315,12 @@ export function Login() {
     // revocation has finished (or timed out): otherwise its expiring cookie
     // could land after this one mints a fresh session and clobber it (#557).
     //
-    // isPasskeyPending is the same hazard from the other direction. A ceremony
-    // in flight has the system sheet open over this page, but the form is still
-    // live behind it and Enter still submits, so without this a passkey and a
-    // password sign-in race and whichever cookie lands second wins.
-    // `pendingProvider` blocks this for the same reason `isPasskeyPending`
-    // does, and it matters more: an OAuth attempt ends in a navigation away
-    // from this page, so a credential submitted while one is in flight can
-    // mint a session that the provider's callback then replaces with a
-    // session for whichever identity that account resolves to.
-    if (isSubmitting || isSigningOut || isPasskeyPending || pendingProvider) {
+    // `pendingProvider` is the same hazard from the other direction: an OAuth
+    // attempt ends in a navigation away from this page, so a credential
+    // submitted while one is in flight can mint a session that the provider's
+    // callback then replaces with a session for whichever identity that
+    // account resolves to.
+    if (isSubmitting || isSigningOut || pendingProvider) {
       return
     }
     setError(null)
@@ -407,65 +376,6 @@ export function Login() {
   }
 
   /**
-   * Sign in with a passkey: options, the browser ceremony, then the assertion.
-   *
-   * A dismissed prompt clears back to the resting state and says nothing. It is
-   * not a refused credential, and the person who pressed Escape does not need
-   * the screen to tell them what they just did.
-   *
-   * A refusal lands on the credential row above the button, where the form's
-   * own refusals land, for the same reason: it is about the credential rather
-   * than about one box.
-   */
-  const submitPasskey = async () => {
-    if (isSubmitting || isSigningOut || isPasskeyPending || pendingProvider) {
-      return
-    }
-    setError(null)
-    setErrorField(null)
-    setIsPasskeyPending(true)
-    try {
-      const result = await signInWithPasskey()
-      if (result.ok) {
-        recordEvent(TELEMETRY_EVENTS.LOGIN_SUCCESS, {
-          authentication_method: PASSKEY_METHOD,
-        })
-        login()
-      } else {
-        recordEvent(TELEMETRY_EVENTS.LOGIN_FAILED, {
-          authentication_method: PASSKEY_METHOD,
-          error_code: analyticsStatusCode(result.status),
-        })
-        fail(
-          usesPassword ? "password" : "masterKey",
-          result.message ?? "That passkey did not sign you in.",
-        )
-      }
-    } catch (caught) {
-      // A dismissed prompt is recorded as its own outcome rather than as a
-      // failure or not at all: it is the most common way this button ends, and
-      // counting it as a failure would make the passkey path look broken while
-      // dropping it would hide how often people back out of the sheet.
-      if (caught instanceof PasskeyCancelledError) {
-        recordEvent(TELEMETRY_EVENTS.LOGIN_FAILED, {
-          authentication_method: PASSKEY_METHOD,
-          error_code: "passkey_cancelled",
-        })
-        return
-      }
-      recordEvent(TELEMETRY_EVENTS.LOGIN_FAILED, {
-        authentication_method: PASSKEY_METHOD,
-        error_code: analyticsErrorCode(caught),
-        status: caught instanceof ApiError ? caught.status : undefined,
-      })
-      setErrorField(usesPassword ? "password" : "masterKey")
-      setError(caught)
-    } finally {
-      setIsPasskeyPending(false)
-    }
-  }
-
-  /**
    * Start an OAuth sign-in: ask the gateway for a consent URL, then leave.
    *
    * The `state` the gateway mints is stored before the navigation and compared
@@ -479,7 +389,7 @@ export function Login() {
    * callback page records the outcome once there is one.
    */
   const submitOAuth = async (provider: string) => {
-    if (isSubmitting || isSigningOut || isPasskeyPending || pendingProvider) {
+    if (isSubmitting || isSigningOut || pendingProvider) {
       return
     }
     setError(null)
@@ -729,10 +639,7 @@ export function Login() {
             variant="primary"
             fullWidth
             isDisabled={
-              isSubmitting ||
-              isSigningOut ||
-              isPasskeyPending ||
-              pendingProvider !== null
+              isSubmitting || isSigningOut || pendingProvider !== null
             }
             className="h-11"
           >
@@ -744,9 +651,7 @@ export function Login() {
           </Button>
         </form>
 
-        {offersCredentialSwitch ||
-        offersPasskey ||
-        oauthProviders.length > 0 ? (
+        {offersCredentialSwitch || oauthProviders.length > 0 ? (
           <div className="flex flex-col gap-3">
             {/* A rule with the word on it, rather than a bare divider: these
                   are alternatives to the form above, not a second step of it,
@@ -761,8 +666,8 @@ export function Login() {
               or
               <span className="h-px flex-1 bg-border" />
             </div>
-            {/* The other typed credential, under the same rule as the passkey
-                and the provider buttons because it is the same kind of thing:
+            {/* The other typed credential, under the same rule as the provider
+                buttons because it is the same kind of thing:
                 another way to prove who you are, not a second step of the form
                 above. Swapping the box clears whatever was typed into the one
                 being put away, so a refusal from the credential nobody is
@@ -773,10 +678,7 @@ export function Login() {
                 variant="ghost"
                 fullWidth
                 isDisabled={
-                  isSubmitting ||
-                  isSigningOut ||
-                  isPasskeyPending ||
-                  pendingProvider !== null
+                  isSubmitting || isSigningOut || pendingProvider !== null
                 }
                 onPress={() => {
                   setTypedCredential(usesPassword ? "masterKey" : "password")
@@ -793,22 +695,6 @@ export function Login() {
                   : "Use your email and password"}
               </Button>
             ) : null}
-            {offersPasskey ? (
-              <Button
-                type="button"
-                variant="ghost"
-                fullWidth
-                isDisabled={
-                  isSubmitting || isSigningOut || pendingProvider !== null
-                }
-                onPress={() => void submitPasskey()}
-                className="h-11"
-              >
-                {isPasskeyPending
-                  ? "Waiting for your passkey…"
-                  : "Use a passkey"}
-              </Button>
-            ) : null}
             {oauthProviders.map((provider) => {
               const Mark = OAUTH_PROVIDER_ICONS[provider]
               const isRedirecting = pendingProvider === provider
@@ -819,10 +705,7 @@ export function Login() {
                   variant="ghost"
                   fullWidth
                   isDisabled={
-                    isSubmitting ||
-                    isSigningOut ||
-                    isPasskeyPending ||
-                    pendingProvider !== null
+                    isSubmitting || isSigningOut || pendingProvider !== null
                   }
                   onPress={() => void submitOAuth(provider)}
                   className="h-11"

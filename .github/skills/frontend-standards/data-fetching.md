@@ -17,7 +17,7 @@ authenticated management requests, and never mirror server state into `useState`
 The query client (`web/src/app/provider.tsx`) does not retry an `ApiError` with status 401 or
 403, because neither will fix itself, and retries other failures twice.
 
-Pre-authentication helpers such as `createSession`, `signInWithPasskey`, and the OAuth helpers
+Pre-authentication helpers such as `createSession` and the OAuth helpers
 use public requests. They cannot use `apiFetch`, because a 401 while somebody is signing in
 must report a refused credential rather than bounce them back to the page they are already on.
 Every authenticated management request after sign-in goes through `apiFetch`.

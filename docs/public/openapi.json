@@ -1388,22 +1388,6 @@
         "title": "AudioSpeechRequest",
         "type": "object"
       },
-      "AuthenticatePasskeyRequest": {
-        "description": "A completed sign-in ceremony.",
-        "properties": {
-          "credential": {
-            "additionalProperties": true,
-            "description": "The browser's PublicKeyCredential assertion, serialized.",
-            "title": "Credential",
-            "type": "object"
-          }
-        },
-        "required": [
-          "credential"
-        ],
-        "title": "AuthenticatePasskeyRequest",
-        "type": "object"
-      },
       "AuthorizeResponse": {
         "description": "Where to send the browser, and the state to check when it comes back.",
         "properties": {
@@ -2927,13 +2911,6 @@
           "models"
         ],
         "title": "CatalogResponse",
-        "type": "object"
-      },
-      "CeremonyOptions": {
-        "additionalProperties": true,
-        "description": "The `PublicKeyCredentialCreationOptions`/`RequestOptions` a browser needs.\n\nPassed through as an opaque object rather than modeled field by field. The\nshape is the W3C's, the browser is the only consumer, and it is what\n``navigator.credentials`` is handed verbatim after the two base64url fields\nare decoded. Restating it here would produce a second, slightly wrong copy\nof a spec this deployment does not own, and every field the library adds\nlater would have to be added again to keep the client from dropping it.",
-        "properties": {},
-        "title": "CeremonyOptions",
         "type": "object"
       },
       "ChatCompletionRequest": {
@@ -4496,7 +4473,7 @@
             "title": "Management Url"
           },
           "oauth_providers": {
-            "description": "OAuth providers this deployment can sign somebody in with, sorted, one entry per provider with a client ID, a client secret and a public_base_url to build a redirect URI from. The sign-in screen renders a button per entry and none at all when the list is empty, so a provider nobody configured is absent rather than offered and then refused. Additive to sign_in_methods rather than part of it: an OAuth sign-in coexists with whichever typed credential is current, the way a passkey does. Empty for a hybrid gateway, which issues no session.",
+            "description": "OAuth providers this deployment can sign somebody in with, sorted, one entry per provider with a client ID, a client secret and a public_base_url to build a redirect URI from. The sign-in screen renders a button per entry and none at all when the list is empty, so a provider nobody configured is absent rather than offered and then refused. Additive to sign_in_methods rather than part of it: an OAuth sign-in coexists with whichever typed credential is current. Empty for a hybrid gateway, which issues no session.",
             "items": {
               "type": "string"
             },
@@ -4506,11 +4483,6 @@
           "open_signup": {
             "description": "Whether POST /api/v1/auth/signup creates an account for an address nobody has added yet, each with an organization of its own, or only lets an address an admin already put on the roster set its password. The signup page reads as registration or as claiming an invitation accordingly, and the sign-in screen links to it with the wording that matches. False for a hybrid gateway, which holds no identities.",
             "title": "Open Signup",
-            "type": "boolean"
-          },
-          "passkeys_ready": {
-            "description": "Whether this deployment can run a passkey ceremony at all: it has a relying-party ID (webauthn_rp_id, or derived from public_base_url) and an origin to serve one from. Distinct from 'passkey' in sign_in_methods, which is narrower and answers whether a registered passkey could sign somebody in *right now*: an operator with none yet needs this one, or the page that registers the first would be hidden from them. False for a hybrid gateway, which issues no session of its own.",
-            "title": "Passkeys Ready",
             "type": "boolean"
           },
           "privacy_url": {
@@ -4542,12 +4514,11 @@
             "type": "string"
           },
           "sign_in_methods": {
-            "description": "How POST /api/v1/auth/session may be authenticated right now, sorted. 'master_key' is the first-boot credential and is offered until the operator identity has a password, which is what claiming the deployment means; past that it stays the credential for the management API but is no longer a dashboard login. 'password' is offered while any active identity holds one, which is not the same question and not always the later half of it: a member can hold a password on a deployment whose operator never claimed it, so both typed credentials can appear together. 'passkey' appears alongside either when this deployment is configured for WebAuthn and holds at least one passkey that its current relying-party ID can assert. Empty for a hybrid gateway, which issues no session. The login page renders from this rather than trying a credential to find out.",
+            "description": "How POST /api/v1/auth/session may be authenticated right now, sorted. 'master_key' is the first-boot credential and is offered until the operator identity has a password, which is what claiming the deployment means; past that it stays the credential for the management API but is no longer a dashboard login. 'password' is offered while any active identity holds one, which is not the same question and not always the later half of it: a member can hold a password on a deployment whose operator never claimed it, so both typed credentials can appear together. Empty for a hybrid gateway, which issues no session. The login page renders from this rather than trying a credential to find out.",
             "items": {
               "enum": [
                 "master_key",
-                "password",
-                "passkey"
+                "password"
               ],
               "type": "string"
             },
@@ -4586,7 +4557,6 @@
           "privacy_url",
           "sign_in_methods",
           "maintenance_mode",
-          "passkeys_ready",
           "oauth_providers",
           "open_signup",
           "mail_ready"
@@ -9611,36 +9581,6 @@
         "title": "OutputShape",
         "type": "string"
       },
-      "PasskeySessionResponse": {
-        "description": "A dashboard session minted by a passkey (the token travels only in the cookie).\n\nThe same three fields ``POST /api/v1/auth/session`` answers, deliberately: the\ndashboard's sign-in path does not care which credential got it here.",
-        "properties": {
-          "active_organization_id": {
-            "description": "The organization that identity is acting in, which scopes every tenancy surface.",
-            "format": "uuid",
-            "title": "Active Organization Id",
-            "type": "string"
-          },
-          "expires_at": {
-            "description": "When the session cookie stops being accepted.",
-            "format": "date-time",
-            "title": "Expires At",
-            "type": "string"
-          },
-          "user_id": {
-            "description": "The identity this session speaks for.",
-            "format": "uuid",
-            "title": "User Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "expires_at",
-          "user_id",
-          "active_organization_id"
-        ],
-        "title": "PasskeySessionResponse",
-        "type": "object"
-      },
       "PasswordResponse": {
         "description": "What the identity signs in with now.",
         "properties": {
@@ -11119,35 +11059,6 @@
           "unreadable"
         ],
         "title": "ReencryptSearchToolsResponse",
-        "type": "object"
-      },
-      "RegisterPasskeyRequest": {
-        "description": "A completed registration ceremony, with the label to file it under.",
-        "properties": {
-          "credential": {
-            "additionalProperties": true,
-            "description": "The browser's PublicKeyCredential, serialized.",
-            "title": "Credential",
-            "type": "object"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "maxLength": 255,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "What to call this passkey in the credential list. Optional: an unnamed one is numbered rather than refused, so a browser that offers no prompt still works.",
-            "title": "Name"
-          }
-        },
-        "required": [
-          "credential"
-        ],
-        "title": "RegisterPasskeyRequest",
         "type": "object"
       },
       "RequestPasswordResetRequest": {
@@ -15946,110 +15857,6 @@
         "title": "VerifyEmailResponse",
         "type": "object"
       },
-      "WebAuthnCredentialPublic": {
-        "description": "A passkey as the settings page lists it.\n\nCarries no key material. ``credential_id`` is here because the browser needs\nit to tell the passkey it just used from the others in the list, and it is\na public identifier the authenticator hands to any site that asks: it is\nwhat ``allowCredentials`` publishes to an unauthenticated caller during a\nceremony.",
-        "properties": {
-          "backed_up": {
-            "title": "Backed Up",
-            "type": "boolean"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "credential_id": {
-            "title": "Credential Id",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "is_usable": {
-            "title": "Is Usable",
-            "type": "boolean"
-          },
-          "last_used_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Used At"
-          },
-          "name": {
-            "maxLength": 255,
-            "title": "Name",
-            "type": "string"
-          },
-          "rp_id": {
-            "title": "Rp Id",
-            "type": "string"
-          },
-          "transports": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Transports",
-            "type": "array"
-          }
-        },
-        "required": [
-          "name",
-          "id",
-          "credential_id",
-          "rp_id",
-          "is_usable",
-          "transports",
-          "backed_up",
-          "created_at",
-          "last_used_at"
-        ],
-        "title": "WebAuthnCredentialPublic",
-        "type": "object"
-      },
-      "WebAuthnCredentialUpdate": {
-        "description": "Renaming a passkey, which is the only thing about one that is editable.\n\nEverything else on the row is what the authenticator asserted, so there is\nnothing else a person could correct.",
-        "properties": {
-          "name": {
-            "maxLength": 255,
-            "title": "Name",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "WebAuthnCredentialUpdate",
-        "type": "object"
-      },
-      "WebAuthnCredentialsPublic": {
-        "properties": {
-          "count": {
-            "title": "Count",
-            "type": "integer"
-          },
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/WebAuthnCredentialPublic"
-            },
-            "title": "Data",
-            "type": "array"
-          }
-        },
-        "required": [
-          "data",
-          "count"
-        ],
-        "title": "WebAuthnCredentialsPublic",
-        "type": "object"
-      },
       "WebSearchBackendResponse": {
         "description": "A SearXNG-compatible ``/search`` body.",
         "properties": {
@@ -18527,7 +18334,7 @@
     },
     "/api/v1/auth/oauth/{provider}/callback": {
       "post": {
-        "description": "Exchange an authorization code and set the HttpOnly session cookie.\n\nThe session is bound to the identity the provider's account resolves to,\nexactly as a password sign-in binds one to the identity that authenticated,\nso every request it later authenticates resolves the same caller.\n\nA refusal is counted like the other sign-in failures\n(``record_auth_failure``) and rendered by the tenancy error handler. Like\nthe passkey route there is no separate post-failure throttle: this route is\nthrottled unconditionally on the way in, because there is no legitimate\ncaller here whose correct credential must never be blocked. An authorization\ncode is single-use and minted by a redirect, not something a person retries\nby hand.\n\n**Maintenance mode freezes this the way it freezes the other two sign-ins.**\nThe freeze is on starting a session, not on a credential, so an OAuth sign-in\nhas to answer to it or the switch is bypassable by anybody holding a Google\naccount. Refused before the exchange, so a frozen deployment makes no\noutbound call, spends nobody's authorization code, and counts no auth\nfailure: nobody failed to authenticate, the gateway declined to try.",
+        "description": "Exchange an authorization code and set the HttpOnly session cookie.\n\nThe session is bound to the identity the provider's account resolves to,\nexactly as a password sign-in binds one to the identity that authenticated,\nso every request it later authenticates resolves the same caller.\n\nA refusal is counted like the other sign-in failures\n(``record_auth_failure``) and rendered by the tenancy error handler. There\nis no separate post-failure throttle: this route is throttled\nunconditionally on the way in, because there is no legitimate caller here\nwhose correct credential must never be blocked. An authorization\ncode is single-use and minted by a redirect, not something a person retries\nby hand.\n\n**Maintenance mode freezes this the way it freezes the typed sign-in.**\nThe freeze is on starting a session, not on a credential, so an OAuth sign-in\nhas to answer to it or the switch is bypassable by anybody holding a Google\naccount. Refused before the exchange, so a frozen deployment makes no\noutbound call, spends nobody's authorization code, and counts no auth\nfailure: nobody failed to authenticate, the gateway declined to try.",
         "operationId": "auth-callback",
         "parameters": [
           {
@@ -18934,285 +18741,6 @@
           }
         },
         "summary": "Verify Email Route",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/api/v1/auth/webauthn/authenticate": {
-      "post": {
-        "description": "Verify an assertion and set the HttpOnly session cookie.\n\nThe session is bound to the identity whose passkey signed, exactly as a\npassword sign-in binds one to the identity that authenticated, so every\nrequest it later authenticates resolves the same caller.\n\nA refusal is counted like the other sign-in failures\n(``record_auth_failure``) and answered as a 401 by the tenancy error\nhandler. Unlike the password path there is no separate post-failure\nthrottle: this route is throttled unconditionally on the way in, because\nunlike a password there is no legitimate caller here whose correct\ncredential must never be blocked (a passkey ceremony is one round trip a\nbrowser drives, not something a person retries by hand).\n\n**Maintenance mode freezes this the way it freezes the password sign-in.**\nThe freeze is on starting a session, not on a credential, so a passkey has\nto answer to it or the switch is bypassable by anybody holding one, which is\nthe whole population it exists to hold off during a redeploy. Refused before\nthe assertion is verified, so a frozen deployment does no crypto and counts\nno auth failure: nobody failed to authenticate, the gateway declined to try.",
-        "operationId": "auth-authenticate_passkey",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AuthenticatePasskeyRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PasskeySessionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Authenticate Passkey",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/api/v1/auth/webauthn/authenticate/options": {
-      "post": {
-        "description": "Start a passkey sign-in. Public, throttled, and names no credentials.\n\nThe options carry no ``allowCredentials``, so this publishes nothing about\nwho holds a passkey here; see ``webauthn_service.begin_authentication``.",
-        "operationId": "auth-authentication_options",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CeremonyOptions"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Authentication Options",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/api/v1/auth/webauthn/credentials": {
-      "get": {
-        "description": "The caller's own passkeys. Never anybody else's, and never key material.\n\nDeliberately *not* behind ``require_passkey_support``, and not filtered to\nthe current relying-party ID. A deployment that has changed or lost that ID\nstill holds the rows registered under the old one, and refusing to list them\nwould leave somebody looking at an empty page with no way to clean up and no\nhint as to why. Each row carries ``is_usable`` instead, so an orphan is\nvisible, explained, and deletable.",
-        "operationId": "auth-list_passkeys",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WebAuthnCredentialsPublic"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "List Passkeys",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/api/v1/auth/webauthn/credentials/{credential_id}": {
-      "delete": {
-        "description": "Remove one of the caller's passkeys.\n\nRemoving the last one is allowed: an email and password is still this\ndeployment's login, so this is not a lockout, and refusing would strand\nwhoever lost the authenticator.",
-        "operationId": "auth-delete_passkey",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "credential_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Credential Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "Delete Passkey",
-        "tags": [
-          "auth"
-        ]
-      },
-      "patch": {
-        "description": "Relabel one of the caller's passkeys, which is all that is editable.\n\nUngated like the list, and for the same reason: naming an orphan before\ndeleting it is not something a lost relying-party ID should prevent.",
-        "operationId": "auth-rename_passkey",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "credential_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Credential Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WebAuthnCredentialUpdate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WebAuthnCredentialPublic"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "Rename Passkey",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/api/v1/auth/webauthn/register": {
-      "post": {
-        "description": "Verify a registration ceremony and store the passkey it produced.",
-        "operationId": "auth-register_passkey",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RegisterPasskeyRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WebAuthnCredentialPublic"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "Register Passkey",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/api/v1/auth/webauthn/register/options": {
-      "post": {
-        "description": "Start registering a passkey for the signed-in identity.\n\nA POST rather than a GET even though it reads like one: it issues a\nserver-side challenge and writes it, so it is not safe to repeat, cache, or\nprefetch.",
-        "operationId": "auth-registration_options",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CeremonyOptions"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          },
-          {
-            "XApiKeyAuth": []
-          }
-        ],
-        "summary": "Registration Options",
         "tags": [
           "auth"
         ]

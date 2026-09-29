@@ -25,8 +25,7 @@ so the table holds one vocabulary rather than two.
 only as good as its least-remembered sign-in path, so
 ``tests/unit/test_maintenance_mode.py`` enumerates the routes that call
 ``create_dashboard_session`` and fails on one that neither checks this flag nor
-declares why it closes no door. WebAuthn and OAuth (#651, #652) each end by
-minting a session, so each will answer to it.
+declares why it closes no door.
 
 Nothing here touches the data plane. A frozen deployment still serves
 ``/v1/chat/completions`` and the rest of the management API to a caller

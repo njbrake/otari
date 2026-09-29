@@ -244,9 +244,6 @@ _DELIBERATELY_OMITTED: tuple[str, ...] = (
     "router_k",
     "router_max_records_per_user",
     "router_seed_count",
-    "webauthn_allowed_origins",
-    "webauthn_rp_id",
-    "webauthn_rp_name",
 )
 
 

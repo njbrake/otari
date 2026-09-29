@@ -174,7 +174,7 @@ This is the open-core line: for each capability, what Otari's core ships and wha
 |---|---|---|
 | Users, orgs, workspaces, teams, invitations, budgets, usage, BYO provider keys | **Core** (plain, no port) | The management plane: plain CRUD, one implementation each. Routing and telemetry storage have their own rows below because, unlike these, they sit behind a port. Usage rows stay here in every build: they are the money path, not analytics. |
 | RBAC | **Core base + overlay adapter** *(provisional)* | Base roles and org scoping in the core; deeper roles, fine-grained permissions, and audit from an overlay adapter. Split pending an open decision. |
-| SSO | **Core base + overlay adapter** *(provisional)* | Social sign-in and passkeys in the core; enterprise SSO (for example SAML, enterprise OIDC, directory provisioning) from an overlay adapter. Split pending an open decision. |
+| SSO | **Core base + overlay adapter** *(provisional)* | Social sign-in in the core; enterprise SSO (for example SAML, enterprise OIDC, directory provisioning) from an overlay adapter. Split pending an open decision. |
 | Routing | **Core base + overlay adapter** *(provisional)* | Ordered fallback and policies in the core; a richer model-selection strategy from an overlay adapter. Split pending an open decision. |
 | Model inference | **Core port + hosted adapter** | Self-hosting your own backends is a first-class path in the core; a hosted, metered inference backend comes from an overlay. See the managed-models section of [docs/modes.md](docs/modes.md). |
 | Code execution | **Core port + hardened adapter** *(provisional)* | A basic local sandbox in the core; a hardened, managed sandbox from an overlay. Interface still provisional. |

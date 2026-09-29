@@ -215,7 +215,7 @@ not already in its list, naming what to use instead.
 | Do not use | Use instead | Still in |
 | --- | --- | --- |
 | `deprecated/StatCard` | `metrics/KpiStrip` + `KpiCell` | **nothing. Dead code** |
-| `deprecated/RowActions` | `actions/RowActionRow` | 1 use, in `PasskeysCard` |
+| `deprecated/RowActions` | `actions/RowActionRow` | **nothing. Dead code** |
 | `deprecated/SettingsSection` | `layout/SettingsGroup` | **nothing. Dead code** |
 | HeroUI `Card` | `Section`, or a bare band | 6 components |
 
@@ -226,9 +226,9 @@ was listed on Usage after Usage stopped using it, and `RowActions` on two call
 sites when it had one). Check them against the tree rather than against this
 table.
 
-`SettingsSection` and `StatCard` are the rows to act on: neither has a call
-site anywhere. `SettingsSection` also shadowed `layout/SettingsGroup` while
-diverging from this tree's `export function` convention. Both are deletions
+`SettingsSection`, `StatCard` and `RowActions` are the rows to act on: none has
+a call site anywhere. `SettingsSection` also shadowed `layout/SettingsGroup` while
+diverging from this tree's `export function` convention. All three are deletions
 waiting for a maintainer rather than migrations.
 
 HeroUI `Card` is the one row with no module of ours behind it, so it stays a

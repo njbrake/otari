@@ -156,21 +156,6 @@ is held there. The usage row it writes carries no `api_key_id` and its own
 endpoint label, which is what keeps in-product traffic separable from a
 customer's integration.
 
-### Passkeys
-
-Passkeys are optional and additive to password sign-in. Set
-`public_base_url` to establish the origin and relying-party ID. Use
-`webauthn_rp_id` only when passkeys must be bound to a parent domain.
-
-Where an edge serves the dashboard on a different host to the gateway, set
-`webauthn_rp_id` to a domain that is a parent of both and list the dashboard
-origin in `webauthn_allowed_origins`. The ID is not derived from `ui_base_url`,
-so without this the ceremony fails in the browser and nothing is logged here
-([#1134](https://github.com/mozilla-ai/otari/issues/1134)).
-
-Changing the relying-party ID makes existing passkeys unusable. The dashboard
-continues listing unusable credentials so the owner can remove them.
-
 ### OAuth sign-in (Google and GitHub)
 
 OAuth sign-in requires `public_base_url` and the provider's client ID and

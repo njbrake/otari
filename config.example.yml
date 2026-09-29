@@ -62,7 +62,7 @@ providers:
 # Provider and search credentials stored through the dashboard require
 # OTARI_SECRET_KEY in the process environment.
 
-# Optional email delivery. public_base_url is also used by passkeys and OAuth.
+# Optional email delivery. public_base_url is also used by OAuth.
 # public_base_url: "https://otari.example.com"
 
 # Where a browser reaches the dashboard, when an edge serves it somewhere this
@@ -76,12 +76,6 @@ providers:
 # smtp_tls: true
 # mail_from_email: "otari@example.com"
 # mail_from_name: "Otari"
-
-# Passkeys default to the host of public_base_url. Set these only for a parent
-# relying-party domain or multiple permitted dashboard origins.
-# webauthn_rp_id: "example.com"
-# webauthn_allowed_origins:
-#   - "https://otari.example.com"
 
 # File and image normalization. See docs/files.md.
 # files_enabled: true

@@ -208,8 +208,8 @@ def test_a_rostered_member_signs_in_and_gets_the_same_session_a_password_would(
     body = response.json()
     assert body["user_id"] == user_id
     assert body["active_organization_id"]
-    # The token travels only in the cookie, exactly as the password and passkey
-    # sign-ins do.
+    # The token travels only in the cookie, exactly as the password sign-in
+    # does.
     assert SESSION_COOKIE_NAME in response.cookies
     assert "token" not in body
     assert spent == ["the-code"]
@@ -574,8 +574,7 @@ def test_a_refused_exchange_leaves_the_state_spendable_for_the_retry(
 ) -> None:
     """The claim is staged on the request's transaction, so a rollback restores it.
 
-    Same rule ``webauthn_service.consume_challenge`` documents: only a flow that
-    completes retires a nonce. The code is spent at the provider either way, so
+    Only a flow that completes retires a nonce. The code is spent at the provider either way, so
     what survives is a state the person's own retry can use, not a replayable
     one.
     """

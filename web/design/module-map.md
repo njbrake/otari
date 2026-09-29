@@ -357,7 +357,7 @@ and is the remaining check.
   component is a maintainer's call, not a side effect of moving files, so it is
   pinned at zero by a test instead.
 - **Convert the remaining deprecated call sites.** `StatCard` on 4 uses in
-  `OverviewPage`, `RowActions` on 1 in `PasskeysCard`. A
+  `OverviewPage`. A
   taxonomy change that also rewrote six pages would stop being reviewable by
   shape. One page at a time, which is what DESIGN.md already invites.
 - **Split `tabs.test.tsx`** if its header docstring is ever separable per

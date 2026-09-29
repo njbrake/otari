@@ -32,7 +32,6 @@ from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.log_config import logger
 from gateway.services.maintenance_mode_service import is_maintenance_mode
 from gateway.services.tenancy.user_service import operator_has_password, password_sign_in_possible
-from gateway.services.tenancy.webauthn_service import has_any_credential
 
 router = APIRouter(prefix="/bootstrap", tags=["bootstrap"])
 
@@ -42,17 +41,14 @@ SessionType = Literal["local_operator", "hosted_user", "none"]
 # credential and ``password`` the steady-state one, and a standalone gateway
 # offers exactly one of them: the master key until the operator claims the
 # deployment with a password, and the password from then on
-# (mozilla-ai/otari-ai#1716). A list rather than a single value because #651 and
-# #652 add methods that coexist with the password rather than replacing it, and
-# because a hybrid gateway offers none. "passkey" is the first of those to land,
-# and it is genuinely additive: it appears beside whichever of the two
-# credentials is current, never instead of one.
+# (mozilla-ai/otari-ai#1716). A list rather than a single value because a hybrid
+# gateway offers none.
 #
-# #651's OAuth sign-in is deliberately *not* a fourth value here. A method name
+# #651's OAuth sign-in is deliberately *not* a third value here. A method name
 # cannot say which provider, and "oauth" plus a separate list of providers would
 # be one fact published twice, so it travels as ``oauth_providers`` below and
 # this list stays the set of methods that need no further qualification.
-SignInMethod = Literal["master_key", "password", "passkey"]
+SignInMethod = Literal["master_key", "password"]
 
 # The management API groups a standalone gateway serves, one name per ``/api/v1/``
 # router the dashboard's surfaces are built on. Naming the groups rather than the
@@ -230,9 +226,7 @@ class DeploymentBootstrap(BaseModel):
             "the management API but is no longer a dashboard login. 'password' is offered while "
             "any active identity holds one, which is not the same question and not always the "
             "later half of it: a member can hold a password on a deployment whose operator never "
-            "claimed it, so both typed credentials can appear together. 'passkey' appears "
-            "alongside either when this deployment is configured for WebAuthn and holds at least "
-            "one passkey that its current relying-party ID can assert. Empty for a hybrid gateway, "
+            "claimed it, so both typed credentials can appear together. Empty for a hybrid gateway, "
             "which issues no session. The login page renders from this rather than trying a "
             "credential to find out."
         )
@@ -245,16 +239,6 @@ class DeploymentBootstrap(BaseModel):
             "the data plane are unaffected. False for a hybrid gateway, which issues no session."
         )
     )
-    passkeys_ready: bool = Field(
-        description=(
-            "Whether this deployment can run a passkey ceremony at all: it has a relying-party ID "
-            "(webauthn_rp_id, or derived from public_base_url) and an origin to serve one from. "
-            "Distinct from 'passkey' in sign_in_methods, which is narrower and answers whether a "
-            "registered passkey could sign somebody in *right now*: an operator with none yet needs "
-            "this one, or the page that registers the first would be hidden from them. False for a "
-            "hybrid gateway, which issues no session of its own."
-        )
-    )
     oauth_providers: list[str] = Field(
         description=(
             "OAuth providers this deployment can sign somebody in with, sorted, one entry per "
@@ -262,8 +246,8 @@ class DeploymentBootstrap(BaseModel):
             "URI from. The sign-in screen renders a button per entry and none at all when the list "
             "is empty, so a provider nobody configured is absent rather than offered and then "
             "refused. Additive to sign_in_methods rather than part of it: an OAuth sign-in coexists "
-            "with whichever typed credential is current, the way a passkey does. Empty for a hybrid "
-            "gateway, which issues no session."
+            "with whichever typed credential is current. Empty for a hybrid gateway, which issues "
+            "no session."
         )
     )
     public_catalog: bool = Field(
@@ -328,7 +312,6 @@ async def get_bootstrap(
             terms_url=config.terms_url,
             privacy_url=config.privacy_url,
             maintenance_mode=False,
-            passkeys_ready=False,
             oauth_providers=[],
             mail_ready=False,
             open_signup=False,
@@ -345,7 +328,7 @@ async def get_bootstrap(
         deployment_type="hosted" if hosted else "standalone",
         session_type="local_operator",
         surfaces=sorted(HOSTED_SURFACES if hosted else STANDALONE_SURFACES),
-        sign_in_methods=await _sign_in_methods(db, config),
+        sign_in_methods=await _sign_in_methods(db),
         management_url=None,
         # Standalone is its own data plane and answers null; a hosted control
         # plane is not, and publishes wherever its operator says the gateway is.
@@ -355,7 +338,6 @@ async def get_bootstrap(
         privacy_url=config.privacy_url,
         maintenance_mode=await _maintenance_mode(db),
         public_catalog=bool(config.public_catalog) and not config.is_hybrid_mode,
-        passkeys_ready=config.webauthn_enabled,
         oauth_providers=list(config.oauth_providers),
         mail_ready=config.mail_ready,
         # Gated on mail as well as on the setting, and not only because the
@@ -366,10 +348,10 @@ async def get_bootstrap(
     )
 
 
-async def _sign_in_methods(db: AsyncSession, config: GatewayConfig) -> list[SignInMethod]:
+async def _sign_in_methods(db: AsyncSession) -> list[SignInMethod]:
     """How this deployment may be signed in to right now, sorted.
 
-    Three independent questions, and every method here is published only when it
+    Two independent questions, and every method here is published only when it
     could actually answer.
 
     ``master_key`` is the first-boot credential, and it is offered until the
@@ -386,12 +368,6 @@ async def _sign_in_methods(db: AsyncSession, config: GatewayConfig) -> list[Sign
     additive rather than exclusive, and an unclaimed deployment with members on
     it publishes both.
 
-    ``passkey`` is the third, additive for a different reason:
-    ``POST /api/v1/auth/webauthn/authenticate`` is a separate endpoint that
-    displaces neither. It needs the deployment to have a relying-party ID *and*
-    to hold at least one credential registered under it, or the button's only
-    outcome is the browser reporting that it found nothing.
-
     A database failure answers "none" rather than propagating. This route is the
     first thing the dashboard shell fetches, so a 500 here is a blank page
     instead of a login screen, and it would be a blank page for the one outage
@@ -402,7 +378,6 @@ async def _sign_in_methods(db: AsyncSession, config: GatewayConfig) -> list[Sign
     try:
         claimed = await operator_has_password(db)
         passwords = await password_sign_in_possible(db)
-        passkeys = await has_any_credential(db, config)
     except SQLAlchemyError:
         logger.warning("Could not read which sign-in methods this deployment offers", exc_info=True)
         return []
@@ -411,8 +386,6 @@ async def _sign_in_methods(db: AsyncSession, config: GatewayConfig) -> list[Sign
         methods.append("master_key")
     if passwords:
         methods.append("password")
-    if passkeys:
-        methods.append("passkey")
     return sorted(methods)
 
 

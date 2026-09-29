@@ -61,7 +61,7 @@ function takeOAuthState(): string | null {
  * - There is no code. A callback without one has nothing to spend.
  * - Otherwise the code is posted to the gateway, which exchanges it and sets
  *   the session cookie. On success this signs in exactly the way the password
- *   and passkey screens do, through `useAuth().login()`.
+ *   screen does, through `useAuth().login()`.
  *
  * Not a form and not retryable: an authorization code is single-use, so a
  * failure sends the person back to the sign-in screen to start again rather

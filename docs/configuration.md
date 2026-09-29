@@ -427,8 +427,7 @@ in a redirect and into outgoing mail.
 
 Left unset on a split deployment, an OAuth callback lands the browser on an
 origin holding none of the sign-in state it started with, and the sign-in fails
-with the authorization code unspent. Passkeys need their own settings there; see
-[Access control](access-control.md#passkeys).
+with the authorization code unspent.
 
 ## The data-plane address
 

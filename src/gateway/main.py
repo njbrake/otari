@@ -120,20 +120,12 @@ _UNAUTHENTICATED_PATHS = frozenset(
         f"{API_ROOT}/auth/resend-verification",
         f"{API_ROOT}/auth/password/reset",
         f"{API_ROOT}/auth/password/reset/confirm",
-        # The passkey sign-in ceremony, both halves. Unauthenticated for the
-        # reason the sign-in endpoint is: they are how a caller who holds no
-        # credential obtains a session. The signed assertion in the second call
-        # is the credential, and it is not one of the header schemes below.
-        # Registering, listing, renaming and deleting a passkey are *not* here:
-        # those are done from inside a session and are stamped like the rest of
-        # the management surface.
-        f"{API_ROOT}/auth/webauthn/authenticate/options",
-        f"{API_ROOT}/auth/webauthn/authenticate",
-        # The OAuth sign-in, both halves, unauthenticated for the same reason:
-        # they are how a caller who holds no credential obtains a session. The
-        # authorization code in the second call is the credential, and it is not
-        # one of the header schemes below. Spelled with the path parameter
-        # because that is how the generated document keys them.
+        # The OAuth sign-in, both halves, unauthenticated for the reason the
+        # sign-in endpoint is: they are how a caller who holds no credential
+        # obtains a session. The authorization code in the second call is the
+        # credential, and it is not one of the header schemes below. Spelled
+        # with the path parameter because that is how the generated document
+        # keys them.
         f"{API_ROOT}/auth/oauth/{{provider}}/authorize",
         f"{API_ROOT}/auth/oauth/{{provider}}/callback",
     }

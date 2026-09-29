@@ -32,7 +32,7 @@ function Mounted({
   openSignup = false,
 }: {
   children: React.ReactNode
-  signInMethods?: ("master_key" | "password" | "passkey")[]
+  signInMethods?: ("master_key" | "password")[]
   mailReady?: boolean
   maintenanceMode?: boolean
   oauthProviders?: string[]
@@ -906,7 +906,7 @@ describe("the telemetry the sign-in screen records", () => {
     })
   })
 })
-describe("Login with a passkey", () => {
+describe("Login with OAuth", () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
@@ -914,274 +914,6 @@ describe("Login with a passkey", () => {
     // next test in this block mounts already authenticated and renders no form
     // at all. The block above clears it for the same reason.
     window.localStorage.clear()
-  })
-
-  // A browser that can run the ceremony. `supportsPasskeys` is read on render,
-  // so this has to be stubbed before one.
-  function stubAuthenticator(get: ReturnType<typeof vi.fn>) {
-    // A secure context as well as the API: `supportsPasskeys` gates on both, and
-    // jsdom reports `isSecureContext` false by default.
-    vi.stubGlobal("isSecureContext", true)
-    vi.stubGlobal("PublicKeyCredential", function PublicKeyCredential() {})
-    vi.stubGlobal("navigator", {
-      ...globalThis.navigator,
-      credentials: { get },
-    })
-  }
-
-  function assertion() {
-    return {
-      id: "Y3JlZA",
-      rawId: new Uint8Array([1, 2, 3]).buffer,
-      type: "public-key",
-      response: {
-        clientDataJSON: new Uint8Array([4, 5]).buffer,
-        authenticatorData: new Uint8Array([6, 7]).buffer,
-        signature: new Uint8Array([8, 9]).buffer,
-        userHandle: null,
-      },
-      getClientExtensionResults: () => ({}),
-    }
-  }
-
-  function mockCeremony(verify: () => Response) {
-    return vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation((input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url === `${API_ROOT}/auth/webauthn/authenticate/options`) {
-          return Promise.resolve(jsonResponse({ challenge: "Y2hhbGxlbmdl" }))
-        }
-        if (url === `${API_ROOT}/auth/webauthn/authenticate`) {
-          return Promise.resolve(verify())
-        }
-        // Anything else the shell asks for (the build poll, say) answers
-        // benignly rather than throwing: a throw here surfaces as an unhandled
-        // rejection that fails whichever test happens to run next, which is a
-        // failure with nothing to do with the one being written.
-        return Promise.resolve(jsonResponse({}))
-      })
-  }
-
-  it("blocks a password sign-in while a ceremony is still open", async () => {
-    // The system sheet covers the page but the form behind it is still live and
-    // Enter still submits, so without a guard a passkey and a password sign-in
-    // race and whichever cookie lands second wins. The same hazard the
-    // sign-out guard exists for (#557), arriving from the other direction.
-    let releaseCeremony: (value: unknown) => void = () => {}
-    const get = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          releaseCeremony = resolve
-        }),
-    )
-    stubAuthenticator(get)
-    const fetchMock = mockCeremony(() =>
-      jsonResponse({ expires_at: "2026-09-01T00:00:00Z" }),
-    )
-    const user = userEvent.setup()
-
-    render(
-      <Mounted signInMethods={["passkey", "password"]}>
-        <Harness />
-      </Mounted>,
-    )
-    await user.click(screen.getByRole("button", { name: "Use a passkey" }))
-    await waitFor(() => expect(get).toHaveBeenCalled())
-
-    // The ceremony is open. Fill the form and submit it anyway.
-    await user.type(screen.getByLabelText("Email"), "operator@example.com")
-    await user.type(screen.getByLabelText("Password"), "a-real-password")
-    expect(screen.getByRole("button", { name: /Sign in/ })).toBeDisabled()
-    await user.keyboard("{Enter}")
-
-    expect(
-      fetchMock.mock.calls.some(
-        ([url]) => String(url) === `${API_ROOT}/auth/session`,
-      ),
-    ).toBe(false)
-
-    releaseCeremony(assertion())
-  })
-
-  it("is not offered when the gateway does not publish the method", () => {
-    stubAuthenticator(vi.fn())
-    render(
-      <Mounted signInMethods={["password"]}>
-        <Harness />
-      </Mounted>,
-    )
-    expect(
-      screen.queryByRole("button", { name: "Use a passkey" }),
-    ).not.toBeInTheDocument()
-  })
-
-  it("is not offered in a browser that cannot run the ceremony", () => {
-    vi.stubGlobal("PublicKeyCredential", undefined)
-    render(
-      <Mounted signInMethods={["password", "passkey"]}>
-        <Harness />
-      </Mounted>,
-    )
-    // Published by the gateway, but the button would be a dead end here.
-    expect(
-      screen.queryByRole("button", { name: "Use a passkey" }),
-    ).not.toBeInTheDocument()
-    // The form it sits beside is unaffected.
-    expect(screen.getByLabelText("Email")).toBeInTheDocument()
-  })
-
-  it("signs in and leaves the password form in place beside it", async () => {
-    const get = vi.fn().mockResolvedValue(assertion())
-    stubAuthenticator(get)
-    mockCeremony(() =>
-      jsonResponse({
-        expires_at: "2026-08-25T10:00:00Z",
-        user_id: "11111111-1111-1111-1111-111111111111",
-        active_organization_id: "22222222-2222-2222-2222-222222222222",
-      }),
-    )
-    const user = userEvent.setup()
-    render(
-      <Mounted signInMethods={["password", "passkey"]}>
-        <Harness />
-      </Mounted>,
-    )
-
-    // Additive: the passkey never replaces the credential form.
-    expect(screen.getByLabelText("Email")).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Use a passkey" }))
-
-    expect(await screen.findByText("SIGNED IN")).toBeInTheDocument()
-    expect(get).toHaveBeenCalled()
-  })
-
-  it("reports the gateway's refusal without signing in", async () => {
-    stubAuthenticator(vi.fn().mockResolvedValue(assertion()))
-    mockCeremony(() =>
-      jsonResponse({ detail: "That passkey did not sign you in" }, 401),
-    )
-    const user = userEvent.setup()
-    render(
-      <Mounted signInMethods={["password", "passkey"]}>
-        <Harness />
-      </Mounted>,
-    )
-
-    await user.click(screen.getByRole("button", { name: "Use a passkey" }))
-
-    expect(
-      await screen.findByText("That passkey did not sign you in"),
-    ).toBeInTheDocument()
-    expect(screen.queryByText("SIGNED IN")).not.toBeInTheDocument()
-  })
-
-  it("says nothing when the prompt is dismissed", async () => {
-    const get = vi
-      .fn()
-      .mockRejectedValue(new DOMException("denied", "NotAllowedError"))
-    stubAuthenticator(get)
-    mockCeremony(() => jsonResponse({}, 200))
-    const user = userEvent.setup()
-    render(
-      <Mounted signInMethods={["password", "passkey"]}>
-        <Harness />
-      </Mounted>,
-    )
-
-    await user.click(screen.getByRole("button", { name: "Use a passkey" }))
-
-    await waitFor(() => expect(get).toHaveBeenCalled())
-    // Pressing Escape is a decision, not a refused credential, so the screen
-    // returns to its resting state with nothing said.
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Use a passkey" }),
-      ).toBeInTheDocument(),
-    )
-    expect(screen.queryByText(/did not sign you in/)).not.toBeInTheDocument()
-  })
-
-  // The sign-in funnel landed while this branch was in flight, so the passkey
-  // path has to report into it too or a whole authentication method is missing
-  // from the one place sign-in success is measurable.
-  describe("the telemetry it records", () => {
-    beforeEach(() => {
-      resetTelemetrySpy()
-    })
-
-    it("names the method on a success", async () => {
-      const get = vi.fn().mockResolvedValue(assertion())
-      stubAuthenticator(get)
-      mockCeremony(() => jsonResponse({ expires_at: "2026-09-01T00:00:00Z" }))
-      const user = userEvent.setup()
-
-      render(
-        <Mounted signInMethods={["passkey", "password"]}>
-          <Harness />
-        </Mounted>,
-      )
-      await user.click(screen.getByRole("button", { name: "Use a passkey" }))
-
-      expect(await screen.findByText("SIGNED IN")).toBeInTheDocument()
-      expect(recordEvent).toHaveBeenCalledWith(TELEMETRY_EVENTS.LOGIN_SUCCESS, {
-        authentication_method: "passkey",
-      })
-    })
-
-    it("records a refusal with the gateway's status and none of its wording", async () => {
-      const get = vi.fn().mockResolvedValue(assertion())
-      stubAuthenticator(get)
-      mockCeremony(() =>
-        jsonResponse({ detail: "That passkey did not sign you in" }, 401),
-      )
-      const user = userEvent.setup()
-
-      render(
-        <Mounted signInMethods={["passkey", "password"]}>
-          <Harness />
-        </Mounted>,
-      )
-      await user.click(screen.getByRole("button", { name: "Use a passkey" }))
-
-      await waitFor(() =>
-        expect(recordEvent).toHaveBeenCalledWith(
-          TELEMETRY_EVENTS.LOGIN_FAILED,
-          {
-            authentication_method: "passkey",
-            error_code: "http_401",
-          },
-        ),
-      )
-    })
-
-    it("counts a dismissed prompt as its own outcome", async () => {
-      // Neither silence nor a generic failure: it is the most common way this
-      // button ends, and both alternatives misreport it.
-      const get = vi
-        .fn()
-        .mockRejectedValue(new DOMException("dismissed", "NotAllowedError"))
-      stubAuthenticator(get)
-      mockCeremony(() => jsonResponse({}))
-      const user = userEvent.setup()
-
-      render(
-        <Mounted signInMethods={["passkey", "password"]}>
-          <Harness />
-        </Mounted>,
-      )
-      await user.click(screen.getByRole("button", { name: "Use a passkey" }))
-
-      await waitFor(() =>
-        expect(recordEvent).toHaveBeenCalledWith(
-          TELEMETRY_EVENTS.LOGIN_FAILED,
-          {
-            authentication_method: "passkey",
-            error_code: "passkey_cancelled",
-          },
-        ),
-      )
-    })
   })
 
   describe("OAuth sign-in", () => {
@@ -1283,7 +1015,7 @@ describe("Login with a passkey", () => {
     })
 
     it("does not let a password submit while an OAuth redirect is still in flight", async () => {
-      // The same hazard the passkey guard exists for (#557, from the other
+      // The same hazard the sign-out guard exists for (#557, from the other
       // direction), and worse here: an OAuth attempt ends by leaving the page,
       // so a password accepted meanwhile mints a session the provider's
       // callback then replaces with a session for whichever identity that

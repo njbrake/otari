@@ -10,8 +10,8 @@
 
 master_key: __MASTER_KEY__
 database_url: sqlite:///__DB__
-# Where the links in mail point, and what passkeys bind to. The script fills
-# in the LAN address it found at first run; change it if the host moves.
+# Where the links in mail point. The script fills in the LAN address it found
+# at first run; change it if the host moves.
 public_base_url: __PUBLIC_BASE_URL__
 
 model_discovery: true

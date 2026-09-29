@@ -13,19 +13,18 @@ test("sign-in screen", async ({ page }) => {
   await captureScreenshot(page, "sign-in")
 })
 
-test("sign-in screen offering a passkey and OAuth", async ({ page }) => {
+test("sign-in screen offering OAuth", async ({ page }) => {
   // The one sign-in state this fixture cannot reach on its own: `e2e/otari.yml`
-  // configures no passkey relying party and no OAuth client, so the buttons
-  // below never render against it, and they are the two controls on this screen
-  // that carry a variant rather than being the primary. Stubbed on the one
+  // configures no OAuth client, so the provider buttons never render against
+  // it, and they carry a variant rather than being the primary. Stubbed on the one
   // response the shell reads before it mounts, the way the OAuth callback
   // captures below already do it, rather than changing the fixture underneath
   // `parity.bootstrap.spec.ts`, which asserts the empty lists as part of what
   // this deployment IS.
-  await withPasskeyAndOauth(page)
+  await withOauth(page)
   await page.goto("/")
   await expect(
-    page.getByRole("button", { name: "Use a passkey" }),
+    page.getByRole("button", { name: "Sign in with Google" }),
   ).toBeVisible()
   await captureScreenshot(page, "sign-in-alternatives")
 })
@@ -70,21 +69,15 @@ async function withMailReady(page: Page): Promise<void> {
   })
 }
 
-// The sign-in screen's alternatives: a passkey needs `passkeys_ready` and a
-// relying party, and each OAuth button needs its provider configured. Same
-// treatment and same reason as the two stubs below it.
-async function withPasskeyAndOauth(page: Page): Promise<void> {
+// The sign-in screen's alternatives: each OAuth button needs its provider
+// configured. Same treatment and same reason as the two stubs below it.
+async function withOauth(page: Page): Promise<void> {
   await page.route("**/v1/bootstrap", async (route) => {
     const response = await route.fetch()
     const bootstrap = await response.json()
     await route.fulfill({
       response,
-      json: {
-        ...bootstrap,
-        sign_in_methods: [...bootstrap.sign_in_methods, "passkey"],
-        passkeys_ready: true,
-        oauth_providers: ["google", "github"],
-      },
+      json: { ...bootstrap, oauth_providers: ["google", "github"] },
     })
   })
 }

@@ -184,16 +184,14 @@ workspace roles. Deployment-wide operations require an operator. See
 
 Password sign-in is tied to an existing identity, unless the deployment sets
 `open_signup: true`, which lets an unknown address register itself with an
-organization of its own. Optional passkeys, Google OAuth, and GitHub OAuth add
-ways for an existing identity to sign in; they do not make an unknown account a
-member. OAuth requires `public_base_url` plus the
-provider's client ID and secret. Passkeys can instead use `public_base_url`, or
-an explicit `webauthn_rp_id` and `webauthn_allowed_origins` pair.
+organization of its own. Optional Google OAuth and GitHub OAuth add ways for an
+existing identity to sign in; they do not make an unknown account a member.
+OAuth requires `public_base_url` plus the provider's client ID and secret.
 
 Signing in *can* add a membership in one case. If an organization has claimed and
 proven the email domain that the identity's verified address belongs to, the
-sign-in joins them to that organization at the role the claim names, whichever of
-the three credentials they used. It is the only path that grants membership
+sign-in joins them to that organization at the role the claim names, whether
+they used a password or OAuth. It is the only path that grants membership
 without somebody deciding about the person, and it is fenced accordingly: see
 [Email-domain auto-join](access-control.md#email-domain-auto-join).
 

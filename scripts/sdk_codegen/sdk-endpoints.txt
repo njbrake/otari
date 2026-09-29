@@ -158,17 +158,6 @@ POST /api/v1/auth/verify-email                      # dashboard-only
 POST /api/v1/auth/resend-verification               # dashboard-only
 POST /api/v1/auth/password/reset                    # dashboard-only
 POST /api/v1/auth/password/reset/confirm            # dashboard-only
-# Passkeys (otari#652): both ceremonies need a WebAuthn authenticator, which is
-# a browser API. An SDK cannot produce an attestation or an assertion, so there
-# is nothing here for one to wrap, including the credential list: it exists to
-# render the account page's passkey rows.
-POST /api/v1/auth/webauthn/register/options         # dashboard-only
-POST /api/v1/auth/webauthn/register                 # dashboard-only
-POST /api/v1/auth/webauthn/authenticate/options     # dashboard-only
-POST /api/v1/auth/webauthn/authenticate             # dashboard-only
-GET /api/v1/auth/webauthn/credentials               # dashboard-only
-PATCH /api/v1/auth/webauthn/credentials/{credential_id}    # dashboard-only
-DELETE /api/v1/auth/webauthn/credentials/{credential_id}   # dashboard-only
 # OAuth sign-in (otari#651): the flow is a browser redirect through a third
 # party. The authorization URL has to be navigated to, the consent screen
 # completed by a person, and the CSRF state kept by the browser that started it
