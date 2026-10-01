@@ -32,8 +32,13 @@ export const REQUEST_VIEW_ID = "activity-request"
  */
 export function useActivityActions(url: ActivityUrl, log: ActivityLog) {
   const refine = (changes: Patch) => url.patch({ ...changes, page: "0" })
+  // Opening from the list adds a history entry, so the back gesture closes the
+  // request rather than leaving the page; stepping to another rewrites it, and
+  // closing steps back over it.
   const openRequest = (entry: UsageEntry | undefined) =>
-    url.patch({ request: entry?.id ?? "" })
+    entry
+      ? url.patch({ request: entry.id }, { push: !url.get("request") })
+      : url.back({ request: "" })
   const step = (delta: number) => {
     if (!log.navList.length) return
     const index =

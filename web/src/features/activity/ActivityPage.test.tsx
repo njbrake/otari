@@ -1,4 +1,5 @@
-import { screen, waitFor, within } from "@testing-library/react"
+import { useRouter } from "@tanstack/react-router"
+import { act, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -273,6 +274,51 @@ describe("ActivityPage", () => {
           screen.queryByRole("complementary", { name: "Request details" }),
         ).not.toBeInTheDocument(),
       )
+    })
+
+    it("closes on the back gesture and steps back on close, never leaving the log", async () => {
+      const user = userEvent.setup()
+      mockApi({
+        rows: [
+          entry({ id: "a", model: "first-model" }),
+          entry({ id: "b", model: "second-model" }),
+        ],
+      })
+      const held: { router?: ReturnType<typeof useRouter> } = {}
+      function RouterProbe() {
+        held.router = useRouter()
+        return null
+      }
+      renderPage(
+        <>
+          <ActivityPage />
+          <RouterProbe />
+        </>,
+        "/activity?status=error",
+        ["/keys"],
+      )
+      const panel = () =>
+        screen.queryByRole("complementary", { name: "Request details" })
+      const location = () => held.router?.state.location
+
+      // The browser's back, as a phone's gesture sends it.
+      await user.click(await rowOf("first-model"))
+      expect(await screen.findByRole("heading", { name: "first-model" }))
+      await act(async () => held.router?.history.back())
+      await waitFor(() => expect(panel()).not.toBeInTheDocument())
+      expect(location()?.href).toBe("/activity?status=error")
+
+      // The panel's own close, after stepping to the next request, leaves no
+      // entry behind it: going back from the log leaves the page.
+      await user.click(await rowOf("first-model"))
+      await screen.findByRole("heading", { name: "first-model" })
+      await user.keyboard("{ArrowDown}")
+      await screen.findByRole("heading", { name: "second-model" })
+      await user.keyboard("{Escape}")
+      await waitFor(() => expect(panel()).not.toBeInTheDocument())
+      expect(location()?.href).toBe("/activity?status=error")
+      await act(async () => held.router?.history.back())
+      await waitFor(() => expect(location()?.pathname).toBe("/keys"))
     })
 
     it("opens a linked request that is not on the page", async () => {

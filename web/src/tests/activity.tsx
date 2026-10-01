@@ -335,7 +335,12 @@ export function mockApi(
   return { mock, calls }
 }
 
-export function renderPage(ui: ReactElement, route = "/activity") {
+export function renderPage(
+  ui: ReactElement,
+  route = "/activity",
+  /** Entries behind `route`, for where going back lands. */
+  previous: string[] = [],
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -346,7 +351,7 @@ export function renderPage(ui: ReactElement, route = "/activity") {
       </QueryClientProvider>
     </DeploymentProvider>,
     {
-      wrapper: withRouter({ url: route }),
+      wrapper: withRouter({ url: route, previous }),
     },
   )
 }
@@ -384,6 +389,7 @@ export function urlOf(query: string): ActivityUrl {
     getNumber: (key) =>
       Number.parseInt(params.get(key) ?? ACTIVITY_URL_DEFAULTS[key], 10) || 0,
     patch: () => undefined,
+    back: () => undefined,
   }
 }
 
