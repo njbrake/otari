@@ -13214,6 +13214,12 @@ export interface components {
             requested_model?: string | string[] | null;
             /** Routed */
             routed?: boolean | null;
+            /**
+             * Sort
+             * @default timestamp
+             * @enum {string}
+             */
+            sort: "timestamp" | "tokens" | "cost" | "latency" | "model" | "source" | "member" | "policy" | "status";
             /** Source */
             source?: string | null;
             /** Source Label */
@@ -13573,6 +13579,12 @@ export interface components {
             requested_model?: string | string[] | null;
             /** Routed */
             routed?: boolean | null;
+            /**
+             * Sort
+             * @default timestamp
+             * @enum {string}
+             */
+            sort: "timestamp" | "tokens" | "cost" | "latency" | "model" | "source" | "member" | "policy" | "status";
             /** Source */
             source?: string | null;
             /** Source Label */

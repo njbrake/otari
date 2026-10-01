@@ -25,6 +25,9 @@ class UsageActivityGroup(BaseModel):
     requests: int
     errors: int
     absorbed: int
+    # Every row's cost, imported usage's included. ``imported_cost`` is the part
+    # from rows this deployment did not serve, so the gateway's own spend is
+    # ``cost - imported_cost``, as on the summary's totals.
     cost: float
     imported_cost: float
     input_tokens: int

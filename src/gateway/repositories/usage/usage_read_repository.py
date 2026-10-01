@@ -79,12 +79,14 @@ _GROUP_COLUMNS: dict[ActivityGroupBy, tuple[Any, LabelJoin | None]] = {
     "policy": (UsageLog.policy_name, None),
     "alias": (UsageLog.requested_model, None),
 }
-# An alias is a requested name that is not the model which served, in either of
-# the forms a caller may send it, nor the policy that routed it.
+# An alias is a requested name that is not the model which served, in any of the
+# forms a caller may send it (``provider/model`` is deprecated but still accepted),
+# nor the policy that routed it.
 _ALIASED = (
     UsageLog.requested_model.is_not(None),
     UsageLog.requested_model != UsageLog.model,
     UsageLog.requested_model.is_distinct_from(UsageLog.provider + ":" + UsageLog.model),
+    UsageLog.requested_model.is_distinct_from(UsageLog.provider + "/" + UsageLog.model),
     UsageLog.requested_model.is_distinct_from(UsageLog.policy_name),
 )
 # How many models a group names; the row shows these and "+N" for the rest.

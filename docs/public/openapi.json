@@ -16212,6 +16212,7 @@
           "cost_gt": {
             "anyOf": [
               {
+                "maximum": 999999999999.0,
                 "minimum": 0.0,
                 "type": "number"
               },
@@ -16534,6 +16535,22 @@
               }
             ],
             "title": "Routed"
+          },
+          "sort": {
+            "default": "timestamp",
+            "enum": [
+              "timestamp",
+              "tokens",
+              "cost",
+              "latency",
+              "model",
+              "source",
+              "member",
+              "policy",
+              "status"
+            ],
+            "title": "Sort",
+            "type": "string"
           },
           "source": {
             "anyOf": [
@@ -17465,6 +17482,7 @@
           "cost_gt": {
             "anyOf": [
               {
+                "maximum": 999999999999.0,
                 "minimum": 0.0,
                 "type": "number"
               },
@@ -17797,6 +17815,22 @@
               }
             ],
             "title": "Routed"
+          },
+          "sort": {
+            "default": "timestamp",
+            "enum": [
+              "timestamp",
+              "tokens",
+              "cost",
+              "latency",
+              "model",
+              "source",
+              "member",
+              "policy",
+              "status"
+            ],
+            "title": "Sort",
+            "type": "string"
           },
           "source": {
             "anyOf": [
@@ -29050,6 +29084,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 999999999999.0,
                   "minimum": 0,
                   "type": "number"
                 },
@@ -29792,6 +29827,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 999999999999.0,
                   "minimum": 0,
                   "type": "number"
                 },
@@ -30506,6 +30542,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 999999999999.0,
                   "minimum": 0,
                   "type": "number"
                 },
@@ -31176,6 +31213,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 999999999999.0,
                   "minimum": 0,
                   "type": "number"
                 },
@@ -31875,6 +31913,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 999999999999.0,
                   "minimum": 0,
                   "type": "number"
                 },
@@ -36163,6 +36202,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 999999999999.0,
                   "minimum": 0,
                   "type": "number"
                 },
@@ -36905,6 +36945,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 999999999999.0,
                   "minimum": 0,
                   "type": "number"
                 },
@@ -37669,6 +37710,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 999999999999.0,
                   "minimum": 0,
                   "type": "number"
                 },
@@ -38369,6 +38411,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 999999999999.0,
                   "minimum": 0,
                   "type": "number"
                 },
@@ -39118,6 +39161,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 999999999999.0,
                   "minimum": 0,
                   "type": "number"
                 },

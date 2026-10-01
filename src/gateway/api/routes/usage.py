@@ -40,6 +40,7 @@ from gateway.core.sql import (
 from gateway.core.surface import Surface
 from gateway.core.usage_filters import (
     API_KEY_LABEL,
+    MAX_COST_THRESHOLD,
     MAX_INT32,
     MAX_NULLABLE_FIELDS,
     MAX_SEARCH_LENGTH,
@@ -508,7 +509,15 @@ def _usage_refinements(
         int | None,
         Query(ge=0, le=MAX_INT32, description="Only rows billed for more than this many tokens (input plus output)."),
     ] = None,
-    cost_gt: Annotated[float | None, Query(ge=0, description="Only rows that cost more than this many USD.")] = None,
+    cost_gt: Annotated[
+        float | None,
+        Query(
+            ge=0,
+            le=MAX_COST_THRESHOLD,
+            allow_inf_nan=False,
+            description="Only rows that cost more than this many USD.",
+        ),
+    ] = None,
     latency_ms_gt: Annotated[
         int | None,
         Query(ge=0, le=MAX_INT32, description="Only rows whose total latency exceeded this many milliseconds."),
@@ -1943,11 +1952,6 @@ async def usage_series(
         group_by=group_by,
     )
 
-
-# ---------------------------------------------------------------------------
-# Activity groups: the log collapsed to one row per key, session, model, user,
-# policy or alias.
-# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Activity groups: the log collapsed to one row per key, session, model, user,

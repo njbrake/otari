@@ -34,6 +34,7 @@ from gateway.core.usage_filters import (
     MAX_SEARCH_LENGTH,
     CappedValues,
     UsageRefinements,
+    UsageSort,
     list_window,
     refinement_conditions,
     usage_search_condition,
@@ -102,6 +103,9 @@ class UsageSelection(UsageRefinements):
     request_id: str | CappedValues | None = None
     requested_model: str | CappedValues | None = None
     q: str | None = Field(default=None, max_length=MAX_SEARCH_LENGTH)
+    # The order the count beside this selection was read in. It changes no row's
+    # match, only the window: any order but time bounds it as the count does.
+    sort: UsageSort = "timestamp"
 
     @model_validator(mode="after")
     def _require_exactly_one_mode(self) -> "UsageSelection":
@@ -151,7 +155,7 @@ def _bounded[S: UsageSelection](selection: S) -> S:
     """A selection by filter, read over the window its count was taken over."""
     if selection.ids:
         return selection
-    start_date, end_date = list_window(selection.start_date, selection.end_date, q=selection.q)
+    start_date, end_date = list_window(selection.start_date, selection.end_date, q=selection.q, sort=selection.sort)
     return selection.model_copy(update={"start_date": start_date, "end_date": end_date})
 
 

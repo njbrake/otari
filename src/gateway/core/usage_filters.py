@@ -17,6 +17,7 @@ from sqlalchemy import ColumnElement, case, func, or_, select
 
 from gateway.core.sql import MAX_FILTER_VALUES, match_any
 from gateway.models.api_keys import APIKey
+from gateway.models.money import MAX_USD_LIMIT
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
 
@@ -162,6 +163,9 @@ _NULLABLE: dict[str, Any] = {
 }
 MAX_STATUSES = len(get_args(UsageStatus))
 MAX_INT32 = 2**31 - 1
+# The largest cost threshold a filter takes. The cost column's own ceiling rounds up
+# to a float the column cannot hold, so this is the bound a budget limit takes.
+MAX_COST_THRESHOLD = MAX_USD_LIMIT
 MAX_NULLABLE_FIELDS = len(get_args(NullableUsageField))
 
 
@@ -192,9 +196,10 @@ class UsageRefinements(BaseModel):
         None
     )
     # The token and latency columns are 32-bit, so a larger threshold is refused
-    # here rather than overflowing the parameter in the database.
+    # here rather than overflowing the parameter in the database; a cost past the
+    # cost column's range, or not finite, cannot be bound to it.
     tokens_gt: int | None = Field(default=None, ge=0, le=MAX_INT32)
-    cost_gt: float | None = Field(default=None, ge=0)
+    cost_gt: float | None = Field(default=None, ge=0, le=MAX_COST_THRESHOLD, allow_inf_nan=False)
     latency_ms_gt: int | None = Field(default=None, ge=0, le=MAX_INT32)
 
 
