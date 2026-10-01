@@ -3,11 +3,12 @@
 import uuid
 from datetime import datetime
 
+from gateway.core.sql import utc_bound
 from gateway.models.budgets import SCOPE_WORKSPACE, Budget, ScopedBudget
 from gateway.models.tenancy import User
 from gateway.repositories.budgets import BudgetRepositories
 from gateway.schemas.budgets import WorkspaceSpendPublic
-from gateway.services.budgets._periods import as_utc, rolled_window
+from gateway.services.budgets._periods import effective_period
 from gateway.services.tenancy import WorkspaceService
 
 
@@ -19,17 +20,18 @@ def _window_and_settled(
     A period rolls only when a request next reaches the gate, so a ceiling nobody
     has spent against since its window closed still holds the last window's
     counters. Read it the way that roll would leave it, through the same
-    :func:`rolled_window`: nothing settled yet. An alignment the roll cannot read
+    :func:`effective_period`: nothing settled yet. An alignment the roll cannot read
     keeps the stored window, as the roll does.
     """
-    period_end = as_utc(ceiling.period_end)
-    if period_end is None or period_end > now:
-        return ceiling.period_start, ceiling.period_end, float(ceiling.current_spend)
     try:
-        start, end = rolled_window(now, duration=budget.budget_duration_sec, alignment=budget.reset_alignment)
+        rolled = effective_period(
+            ceiling.period_end, now, duration=budget.budget_duration_sec, alignment=budget.reset_alignment
+        )
     except ValueError:
+        rolled = None
+    if rolled is None:
         return ceiling.period_start, ceiling.period_end, float(ceiling.current_spend)
-    return start, end, 0.0
+    return rolled[0], rolled[1], 0.0
 
 
 class _WorkspaceSurface:
@@ -53,6 +55,6 @@ class _WorkspaceSurface:
             budget,
             # Holds survive a roll, so they count in either window.
             spent=settled + float(ceiling.reserved_spend),
-            period_start=as_utc(start),
-            period_end=as_utc(end),
+            period_start=utc_bound(start),
+            period_end=utc_bound(end),
         )

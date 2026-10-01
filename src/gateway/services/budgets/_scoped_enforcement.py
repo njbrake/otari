@@ -32,7 +32,7 @@ from gateway.models.budgets import (
     ScopedBudget,
 )
 from gateway.models.tenancy import OrganizationMember, Workspace, WorkspaceMember
-from gateway.services.budgets._periods import as_utc, rolled_window
+from gateway.services.budgets._periods import period_has_ended, rolled_window
 from gateway.services.workspace_scope import resolve_workspace_id
 
 if TYPE_CHECKING:
@@ -281,7 +281,7 @@ async def applicable_budgets(
     expired = [
         (budget_id, duration, alignment)
         for budget_id, _scope_type, _provider, duration, alignment, period_end, _tokens, _requests in rows
-        if (parsed := as_utc(period_end)) is not None and now >= parsed
+        if period_has_ended(period_end, now)
     ]
     if expired:
         await _roll_expired_periods(db, expired, now)

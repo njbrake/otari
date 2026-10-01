@@ -458,7 +458,6 @@ ROUTE_DATABASE_IMPORT_BASELINE = (
     "gateway/api/routes/workspace_mcp_servers.py",
     "gateway/api/routes/workspace_member_budget_policies.py",
     "gateway/api/routes/workspace_web_search.py",
-    "gateway/api/routes/workspaces.py",
 )
 
 
