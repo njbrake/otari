@@ -1,11 +1,14 @@
 """Saved views: who may see, share, change and delete a workspace's views."""
 
+import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+import pytest_asyncio
 from fastapi import status
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.core.config import API_ROOT
 from gateway.core.unit_of_work import UnitOfWork
@@ -123,6 +126,9 @@ async def test_a_name_is_trimmed_and_one_view_per_person(async_db: AsyncSession)
 
     with pytest.raises(SavedViewNameTakenError):
         await service.create_view(user=team.people["member"], workspace_id=team.workspace.id, request=_view("Slow "))
+    # The menu sorts names ignoring case, so they are unique ignoring case.
+    with pytest.raises(SavedViewNameTakenError):
+        await service.create_view(user=team.people["member"], workspace_id=team.workspace.id, request=_view("slow"))
     # Two people may each keep a view of the same name.
     await service.create_view(user=team.people["colleague"], workspace_id=team.workspace.id, request=_view("Slow"))
     with pytest.raises(ValueError, match="at least 1 character"):
@@ -319,6 +325,45 @@ async def test_a_person_keeps_a_bounded_number_of_views_per_page(async_db: Async
 
     with pytest.raises(SavedViewLimitReachedError):
         await service.create_view(user=team.people["member"], workspace_id=team.workspace.id, request=_view("One more"))
+
+
+@pytest_asyncio.fixture
+async def sessions(postgres_url: str) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    url = postgres_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://").replace(
+        "postgresql://", "postgresql+asyncpg://"
+    )
+    engine = create_async_engine(url)
+    yield async_sessionmaker(engine, expire_on_commit=False)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_saves_cannot_pass_the_limit(
+    async_db: AsyncSession, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    """Each save counts the owner's views and then writes, so the count is serialized per owner and page."""
+    team = await _team(async_db, slug="views-race")
+    member = team.people["member"]
+    service = _service(async_db)
+    for index in range(MAX_VIEWS_PER_PAGE - 1):
+        await service.create_view(user=member, workspace_id=team.workspace.id, request=_view(f"View {index}"))
+    racers = 4
+
+    async def save(index: int) -> object:
+        async with sessions() as session:
+            try:
+                return await _service(session).create_view(
+                    user=member, workspace_id=team.workspace.id, request=_view(f"Racer {index}")
+                )
+            except SavedViewLimitReachedError as exc:
+                return exc
+
+    outcomes = await asyncio.gather(*(save(index) for index in range(racers)))
+
+    refused = [outcome for outcome in outcomes if isinstance(outcome, SavedViewLimitReachedError)]
+    assert len(refused) == racers - 1, outcomes
+    listed = await _service(async_db).list_views(user=member, workspace_id=team.workspace.id, page="activity")
+    assert listed.count == MAX_VIEWS_PER_PAGE
 
 
 @pytest.mark.asyncio

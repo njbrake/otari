@@ -14372,16 +14372,15 @@ export interface components {
          * WorkspaceSpendPublic
          * @description A workspace's own spend ceiling as any member of the workspace may read it.
          *
-         *     Dollars only, and only the workspace-wide ceiling: no member's personal cap and
-         *     no other workspace's. ``spent`` is what the gate enforces against, settled
+         *     Dollars only, and only the workspace-wide ceiling: no member's personal cap,
+         *     no other workspace's, and not the ceiling's name, which is an administrator's
+         *     label. ``spent`` is what the gate enforces against, settled
          *     spend plus holds still in flight. ``max_budget`` is null when the ceiling's
          *     budget caps only tokens or requests.
          */
         WorkspaceSpendPublic: {
             /** Max Budget */
             max_budget: number | null;
-            /** Name */
-            name: string | null;
             /** Period End */
             period_end: string | null;
             /** Period Start */

@@ -50,7 +50,6 @@ class _WorkspaceSurface:
         start, end, settled = _window_and_settled(ceiling, budget, now)
         return WorkspaceSpendPublic.from_ceiling(
             workspace.id,
-            ceiling,
             budget,
             # Holds survive a roll, so they count in either window.
             spent=settled + float(ceiling.reserved_spend),

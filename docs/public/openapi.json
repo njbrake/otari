@@ -19653,7 +19653,7 @@
         "type": "object"
       },
       "WorkspaceSpendPublic": {
-        "description": "A workspace's own spend ceiling as any member of the workspace may read it.\n\nDollars only, and only the workspace-wide ceiling: no member's personal cap and\nno other workspace's. ``spent`` is what the gate enforces against, settled\nspend plus holds still in flight. ``max_budget`` is null when the ceiling's\nbudget caps only tokens or requests.",
+        "description": "A workspace's own spend ceiling as any member of the workspace may read it.\n\nDollars only, and only the workspace-wide ceiling: no member's personal cap,\nno other workspace's, and not the ceiling's name, which is an administrator's\nlabel. ``spent`` is what the gate enforces against, settled\nspend plus holds still in flight. ``max_budget`` is null when the ceiling's\nbudget caps only tokens or requests.",
         "properties": {
           "max_budget": {
             "anyOf": [
@@ -19665,17 +19665,6 @@
               }
             ],
             "title": "Max Budget"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
           },
           "period_end": {
             "anyOf": [
@@ -19711,7 +19700,6 @@
         },
         "required": [
           "workspace_id",
-          "name",
           "max_budget",
           "spent",
           "period_start",
