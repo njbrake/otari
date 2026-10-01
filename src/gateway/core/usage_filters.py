@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, and_, case, func, or_, select
 
 from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
+from gateway.core.usage_source import not_served_here
 from gateway.models.api_keys import APIKey
 from gateway.models.money import MAX_USD_LIMIT
 from gateway.models.usage import UsageLog
@@ -189,6 +190,30 @@ def billed_input_sum() -> Any:
 def billed_output_sum() -> Any:
     """The billed output tokens of the rows in scope."""
     return func.coalesce(func.sum(billed_meter("completion_tokens", UsageLog.completion_tokens)), 0)
+
+
+def billed_cache_read_sum() -> Any:
+    """The billed cache-read tokens of the rows in scope.
+
+    Not the raw ``cache_read_tokens`` column sum the summary totals report beside the
+    other raw provider counts; this is the meter the billed composition is built from.
+    """
+    return func.coalesce(func.sum(billed_meter("cache_read_tokens", UsageLog.cache_read_tokens)), 0)
+
+
+def billed_cache_write_sum() -> Any:
+    """The billed cache-write tokens of the rows in scope."""
+    return func.coalesce(func.sum(billed_meter("cache_write_tokens", UsageLog.cache_write_tokens)), 0)
+
+
+def status_count(status: str) -> Any:
+    """How many rows in scope have this status: rows, not requests (see :func:`request_count`)."""
+    return func.coalesce(func.sum(case((UsageLog.status == status, 1), else_=0)), 0)
+
+
+def imported_cost_sum() -> Any:
+    """The cost of the rows in scope this deployment did not serve: imported usage, never charged to a budget."""
+    return func.coalesce(func.sum(case((not_served_here(UsageLog.source), UsageLog.cost), else_=0)), 0.0)
 
 
 # The orders a page of usage rows can be read in, and which way.

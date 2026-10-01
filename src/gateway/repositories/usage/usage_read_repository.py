@@ -20,13 +20,14 @@ from gateway.core.usage_filters import (
     LabelJoin,
     SortOrder,
     UsageSort,
+    billed_cache_read_sum,
     billed_input_sum,
-    billed_meter,
     billed_output_sum,
     billed_tokens,
+    imported_cost_sum,
     request_count,
+    status_count,
 )
-from gateway.core.usage_source import not_served_here
 from gateway.models.api_keys import APIKey
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
@@ -274,13 +275,13 @@ class UsageReadRepository(BaseRepository[UsageLog, Never, Never]):
             column,
             label,
             requests,
-            func.coalesce(func.sum(case((UsageLog.status == "error", 1), else_=0)), 0),
-            func.coalesce(func.sum(case((UsageLog.status == "absorbed", 1), else_=0)), 0),
+            status_count("error"),
+            status_count("absorbed"),
             func.coalesce(func.sum(UsageLog.cost), 0.0),
-            func.coalesce(func.sum(case((not_served_here(UsageLog.source), UsageLog.cost), else_=0)), 0.0),
+            imported_cost_sum(),
             billed_input_sum(),
             billed_output_sum(),
-            func.coalesce(func.sum(billed_meter("cache_read_tokens", UsageLog.cache_read_tokens)), 0),
+            billed_cache_read_sum(),
             func.coalesce(func.sum(counted), 0),
             func.min(UsageLog.timestamp),
             last_at,

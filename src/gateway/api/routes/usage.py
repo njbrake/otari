@@ -47,6 +47,7 @@ from gateway.core.sql import (
     bucket_expr,
     canonical_bucket,
     dialect_name,
+    utc_bound,
 )
 from gateway.core.surface import Surface
 from gateway.core.usage_filters import (
@@ -57,13 +58,16 @@ from gateway.core.usage_filters import (
     LabelJoin,
     SortOrder,
     UsageSort,
+    billed_cache_read_sum,
+    billed_cache_write_sum,
     billed_input_sum,
-    billed_meter,
     billed_output_sum,
+    imported_cost_sum,
     list_window,
     needs_pricing_condition,
     request_count,
     resolve_window,
+    status_count,
     tool_calls_expr,
 )
 from gateway.core.usage_source import is_served_here, not_served_here
@@ -178,9 +182,7 @@ def _utc_iso(value: datetime) -> str:
     reads it in its own local zone and a recent UTC event can land in the future,
     showing as "0s ago". Treat a naive value as the UTC it was stored as.
     """
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    return value.isoformat()
+    return utc_bound(value).isoformat()
 
 
 class UsageEntry(BaseModel):
@@ -768,7 +770,7 @@ async def _totals(
                 func.coalesce(func.sum(UsageLog.cache_write_tokens), 0),
                 func.coalesce(func.sum(UsageLog.cache_write_1h_tokens), 0),
                 request_count(status_filter),
-                func.coalesce(func.sum(case((UsageLog.status == "error", 1), else_=0)), 0),
+                status_count("error"),
                 # Averaged over requests, not attempts: an absorbed row carries the
                 # time spent on a candidate that did not serve, and folding it in
                 # would make a policy that recovers quickly look slower than one
@@ -783,8 +785,8 @@ async def _totals(
                 ),
                 billed_input_sum(),
                 billed_output_sum(),
-                func.coalesce(func.sum(case((UsageLog.status == "absorbed", 1), else_=0)), 0),
-                func.coalesce(func.sum(case((not_served_here(UsageLog.source), UsageLog.cost), else_=0)), 0.0),
+                status_count("absorbed"),
+                imported_cost_sum(),
             ).where(*conditions)
         )
     ).one()
@@ -1132,10 +1134,10 @@ async def _summary_response(
                 func.coalesce(func.sum(UsageLog.cost), 0.0),
                 func.coalesce(func.sum(UsageLog.total_tokens), 0),
                 request_count(status),
-                func.coalesce(func.sum(case((UsageLog.status == "error", 1), else_=0)), 0),
+                status_count("error"),
                 billed_input_sum(),
-                func.coalesce(func.sum(billed_meter("cache_read_tokens", UsageLog.cache_read_tokens)), 0),
-                func.coalesce(func.sum(billed_meter("cache_write_tokens", UsageLog.cache_write_tokens)), 0),
+                billed_cache_read_sum(),
+                billed_cache_write_sum(),
                 billed_output_sum(),
             )
             .where(*conditions)
@@ -1372,26 +1374,7 @@ async def _activity_groups_response(
         end_date=end.isoformat(),
         group_by=group_by,
         total=total,
-        groups=[
-            UsageActivityGroup(
-                key=row.key,
-                label=row.label,
-                requests=row.requests,
-                errors=row.errors,
-                absorbed=row.absorbed,
-                cost=row.cost,
-                imported_cost=row.imported_cost,
-                input_tokens=row.input_tokens,
-                output_tokens=row.output_tokens,
-                cache_read_tokens=row.cache_read_tokens,
-                latency_ms=row.latency_ms,
-                first_at=_utc_iso(row.first_at),
-                last_at=_utc_iso(row.last_at),
-                models=row.models,
-                model_count=row.model_count,
-            )
-            for row in rows
-        ],
+        groups=[UsageActivityGroup.model_validate(row) for row in rows],
     )
 
 
