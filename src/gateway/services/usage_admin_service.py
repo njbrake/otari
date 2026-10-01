@@ -34,6 +34,7 @@ from gateway.core.usage_filters import (
     MAX_SEARCH_LENGTH,
     CappedValues,
     UsageRefinements,
+    list_window,
     refinement_conditions,
     usage_search_condition,
 )
@@ -146,6 +147,14 @@ class UsageSetPriceResult(BaseModel):
     unchanged: int = 0
 
 
+def _bounded[S: UsageSelection](selection: S) -> S:
+    """A selection by filter, read over the window its count was taken over."""
+    if selection.ids:
+        return selection
+    start_date, end_date = list_window(selection.start_date, selection.end_date, q=selection.q)
+    return selection.model_copy(update={"start_date": start_date, "end_date": end_date})
+
+
 def _selection_conditions(selection: UsageSelection) -> list[ColumnElement[bool]]:
     """WHERE conditions for a selection, always scoped to imported rows.
 
@@ -232,7 +241,7 @@ async def delete_usage(db: AsyncSession, request: UsageDeleteRequest) -> UsageDe
     ledger is untouched. Nothing references ``usage_logs``, so a plain bulk delete
     leaves no orphans.
     """
-    conditions = _selection_conditions(request)
+    conditions = _selection_conditions(_bounded(request))
     try:
         result = cast("CursorResult[Any]", await db.execute(delete(UsageLog).where(*conditions)))
         await db.commit()
@@ -314,7 +323,7 @@ async def set_usage_price(db: AsyncSession, request: UsageSetPriceRequest) -> Us
         cache_write_1h_price_per_million=None,
         pricing_tiers=[],
     )
-    conditions = _selection_conditions(request)
+    conditions = _selection_conditions(_bounded(request))
     result = UsageSetPriceResult()
 
     try:

@@ -16,7 +16,13 @@ from pydantic import BaseModel
 from sqlalchemy import ColumnElement, and_, case, func, null, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import get_config, get_db, require_deployment_operator, verify_api_key_or_master_key
+from gateway.api.deps import (
+    UsageReadServiceDep,
+    get_config,
+    get_db,
+    require_deployment_operator,
+    verify_api_key_or_master_key,
+)
 from gateway.api.routes._billing_schemas import ChargeLine, MeterMap
 from gateway.core.config import GatewayConfig
 from gateway.core.database import get_ingest_db
@@ -33,10 +39,13 @@ from gateway.core.sql import (
 )
 from gateway.core.surface import Surface
 from gateway.core.usage_filters import (
+    API_KEY_LABEL,
     MAX_INT32,
     MAX_NULLABLE_FIELDS,
     MAX_SEARCH_LENGTH,
     MAX_STATUSES,
+    USER_LABEL,
+    LabelJoin,
     NullableUsageField,
     SortOrder,
     UsageRefinements,
@@ -45,9 +54,10 @@ from gateway.core.usage_filters import (
     billed_input_sum,
     billed_meter,
     billed_output_sum,
-    is_substring_search,
+    list_window,
     refinement_conditions,
     request_count,
+    resolve_window,
     usage_search_condition,
 )
 from gateway.core.usage_source import is_served_here, not_served_here
@@ -55,8 +65,6 @@ from gateway.inflight import get_registry
 from gateway.models.api_keys import APIKey
 from gateway.models.money import as_float
 from gateway.models.usage import UsageLog
-from gateway.repositories.usage import usage_read_repository
-from gateway.repositories.usage.usage_read_repository import API_KEY_LABEL, USER_LABEL, LabelJoin
 from gateway.schemas.usage import ActivityGroupBy, ActivityGroupOrder, UsageActivityGroup, UsageActivityGroups
 from gateway.services.external_usage_service import (
     ExternalEventsRequest,
@@ -65,10 +73,10 @@ from gateway.services.external_usage_service import (
 )
 from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME
 from gateway.services.tool_usage import TOOL_METER_NAMESPACE
+from gateway.services.usage import UsageReadService
 from gateway.services.usage_admin_service import (
     UsageDeleteRequest,
     UsageDeleteResult,
-    UsageSelection,
     UsageSetPriceRequest,
     UsageSetPriceResult,
     delete_usage,
@@ -96,12 +104,6 @@ ingest_router = APIRouter(
 )
 
 SURFACE = Surface("usage")
-
-# The analytics summary is range-bounded, unlike the raw list. Absent a start_date
-# it looks back this far; a wider explicit window is clamped to the hard cap so a
-# single request can never turn into an unbounded full-table scan on a growing log.
-_DEFAULT_SUMMARY_LOOKBACK = timedelta(days=30)
-_MAX_SUMMARY_SPAN = timedelta(days=366)
 
 # How many rows each breakdown returns before the remainder is folded into a
 # single synthesized "other" row (so the tables still reconcile with the totals).
@@ -580,7 +582,7 @@ def _usage_filters(
     cross-tenant read in production, which is the difference between the
     docstring asserting the property and the signature enforcing it.
 
-    Bounds are pinned to UTC here rather than only in ``_resolve_window``, which
+    Bounds are pinned to UTC here rather than only in ``resolve_window``, which
     the summary endpoints route through but the list and count endpoints do not:
     an offset-less bound would otherwise resolve against the process's local
     timezone, so the same query would size a different set of rows per deployment.
@@ -651,34 +653,6 @@ def _usage_filters(
     return conditions
 
 
-def _list_window(
-    start_date: datetime | None,
-    end_date: datetime | None,
-    *,
-    q: str | None,
-    sort: UsageSort = "timestamp",
-) -> tuple[datetime | None, datetime | None]:
-    """The window a list, its count and a bulk selection by filter read.
-
-    As asked, unless the read would otherwise visit every row in the log: a
-    substring search, which no index serves, or any order but newest first, which
-    sorts every row before it can return one. Those read the window ``/summary``
-    does. The count applies the same bound as the list, so a paginator's total is
-    the total of the pages.
-    """
-    if sort == "timestamp" and not is_substring_search(q):
-        return start_date, end_date
-    return _resolve_window(start_date, end_date)
-
-
-def _bounded[S: UsageSelection](selection: S) -> S:
-    """A bulk selection by filter, read over the window its count was taken over."""
-    if selection.ids:
-        return selection
-    start_date, end_date = _list_window(selection.start_date, selection.end_date, q=selection.q)
-    return selection.model_copy(update={"start_date": start_date, "end_date": end_date})
-
-
 _SORT_DESC = (
     "Order rows by this column; ties fall back to newest first. 'source' is the API key's name (or the "
     "provenance source when there is no key), 'member' the billed user's alias, 'status' ranks failures, "
@@ -695,7 +669,7 @@ _COUNT_SORT_DESC = (
 
 
 async def _list_usage_entries(
-    db: AsyncSession,
+    reads: UsageReadService,
     conditions: list[ColumnElement[bool]],
     *,
     scope: ColumnElement[bool] | None,
@@ -710,25 +684,21 @@ async def _list_usage_entries(
     drift. ``scope`` is the predicate already in ``conditions``, needed again to
     count the attempts.
     """
-    rows = await usage_read_repository.usage_rows(db, conditions, sort=sort, order=order, skip=skip, limit=limit)
-    groups = {log.request_group_id for log, _, _ in rows if log.request_group_id and log.status != "absorbed"}
-    absorbed = await usage_read_repository.absorbed_attempts(db, groups, scope)
+    rows = await reads.page(conditions, scope=scope, sort=sort, order=order, skip=skip, limit=limit)
     return [
         UsageEntry.from_model(
-            log,
-            user_alias=alias,
-            api_key_name=key_name,
-            absorbed_attempts=0
-            if log.status == "absorbed" or log.request_group_id is None
-            else absorbed.get(log.request_group_id, 0),
+            row.log,
+            user_alias=row.user_alias,
+            api_key_name=row.api_key_name,
+            absorbed_attempts=row.absorbed_attempts,
         )
-        for log, alias, key_name in rows
+        for row in rows
     ]
 
 
 @operator_router.get("")
 async def list_usage(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
     refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
@@ -779,7 +749,7 @@ async def list_usage(
     wrapped in an envelope here. Timestamps accept either ISO 8601 strings or
     Unix epoch seconds (numeric).
     """
-    start_date, end_date = _list_window(start_date, end_date, q=q, sort=sort)
+    start_date, end_date = list_window(start_date, end_date, q=q, sort=sort)
     conditions = _usage_filters(
         start_date=start_date,
         end_date=end_date,
@@ -805,7 +775,7 @@ async def list_usage(
         refine=refine,
         scope=None,
     )
-    return await _list_usage_entries(db, conditions, scope=None, skip=skip, limit=limit, sort=sort, order=order)
+    return await _list_usage_entries(reads, conditions, scope=None, skip=skip, limit=limit, sort=sort, order=order)
 
 
 @ingest_router.post("/external-events")
@@ -885,7 +855,7 @@ async def count_usage(
     confirms is the number the mutation can reach. The list still pages the
     budget-exempt gateway rows it omits.
     """
-    start_date, end_date = _list_window(start_date, end_date, q=q, sort=sort)
+    start_date, end_date = list_window(start_date, end_date, q=q, sort=sort)
     conditions = _usage_filters(
         start_date=start_date,
         end_date=end_date,
@@ -975,7 +945,7 @@ async def delete_usage_rows(
     the spend ledger (``users.spend``) are untouched, so a delete can never desync a
     budget. Master-key only.
     """
-    return await delete_usage(db, _bounded(request))
+    return await delete_usage(db, request)
 
 
 @operator_router.post("/set-price")
@@ -992,7 +962,7 @@ async def set_usage_price_rows(
     configured pricing). Only imported rows (``counts_toward_budget = false``) are
     touched, so ``users.spend`` is never affected. Master-key only.
     """
-    return await set_usage_price(db, _bounded(request))
+    return await set_usage_price(db, request)
 
 
 # ---------------------------------------------------------------------------
@@ -1192,30 +1162,6 @@ class UsageGroupedSeries(BaseModel):
     group_by: SeriesGroupBy
     groups: list[UsageGroupRow]
     points: list[UsageGroupedSeriesPoint]
-
-
-def _resolve_window(start_date: datetime | None, end_date: datetime | None) -> tuple[datetime, datetime]:
-    """Clamp the requested window to a bounded, forward-ordered range.
-
-    A summary must never scan an unbounded log: absent a start we look back
-    ``_DEFAULT_SUMMARY_LOOKBACK``; a span wider than ``_MAX_SUMMARY_SPAN`` has its
-    start pulled forward so the aggregates stay bounded by the timestamp index.
-
-    An offset-less ISO datetime (which the query params advertise as valid) parses
-    to a naive value; ``now(UTC)`` is aware. Comparing or subtracting the two would
-    raise, so naive bounds are assumed UTC and made aware first.
-    """
-    if start_date is not None and start_date.tzinfo is None:
-        start_date = start_date.replace(tzinfo=UTC)
-    if end_date is not None and end_date.tzinfo is None:
-        end_date = end_date.replace(tzinfo=UTC)
-    end = end_date or datetime.now(UTC)
-    start = start_date if start_date is not None else end - _DEFAULT_SUMMARY_LOOKBACK
-    if start > end:
-        start = end
-    if end - start > _MAX_SUMMARY_SPAN:
-        start = end - _MAX_SUMMARY_SPAN
-    return start, end
 
 
 def _bucket_expr(dialect: str, bucket: UsageBucketGrain, column: Any = None) -> Any:
@@ -1563,10 +1509,10 @@ async def _summary_context(
 ) -> tuple[datetime, datetime, list[ColumnElement[bool]], UsageTotals]:
     """Resolve the bounded window, the shared WHERE conditions, and the grand
     totals: the common preamble both summary endpoints run, kept in one place so a
-    fix (like the naive-datetime handling in ``_resolve_window``) lands once.
+    fix (like the naive-datetime handling in ``resolve_window``) lands once.
     ``grid`` refuses a window too wide for that bucket before anything is queried.
     """
-    start, end = _resolve_window(start_date, end_date)
+    start, end = resolve_window(start_date, end_date)
     if grid is not None:
         _refuse_wide_grid(start, end, grid)
     conditions = _usage_filters(
@@ -1667,6 +1613,7 @@ def _dense_series(
 
 async def _summary_response(
     db: AsyncSession,
+    reads: UsageReadService,
     *,
     start: datetime,
     end: datetime,
@@ -1700,7 +1647,7 @@ async def _summary_response(
     )
     by_tool = await _tool_breakdown(db, conditions) if _TOOL_DIMENSION in requested else []
     if include_p95:
-        p95 = await usage_read_repository.p95_latency_ms(db, conditions)
+        p95 = await reads.p95_latency_ms(conditions)
         totals = totals.model_copy(update={"p95_latency_ms": p95})
 
     expr = _bucket_expr(dialect_name(db), bucket)
@@ -1759,6 +1706,7 @@ async def _summary_response(
 @operator_router.get("/summary")
 async def usage_summary(
     db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
     refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
@@ -1829,6 +1777,7 @@ async def usage_summary(
     )
     return await _summary_response(
         db,
+        reads,
         start=start,
         end=end,
         conditions=conditions,
@@ -2013,7 +1962,7 @@ _GROUP_ORDER_DESC = "'recent' lists the most recently active group first; 'reque
 
 
 async def _activity_groups_response(
-    db: AsyncSession,
+    reads: UsageReadService,
     *,
     group_by: ActivityGroupBy,
     start: datetime,
@@ -2030,8 +1979,7 @@ async def _activity_groups_response(
     Shared by the deployment-wide and the organization-scoped route, like
     :func:`_summary_response`, so the two run one aggregation.
     """
-    rows, total = await usage_read_repository.activity_groups(
-        db,
+    rows, total = await reads.activity_groups(
         group_by=group_by,
         conditions=conditions,
         status=status,
@@ -2070,7 +2018,7 @@ async def _activity_groups_response(
 
 @operator_router.get("/groups")
 async def usage_activity_groups(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
     refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
     group_by: ActivityGroupBy = Query(description=_GROUP_BY_DESC),
     start_date: datetime | None = Query(default=None, description=_START_DESC),
@@ -2109,7 +2057,7 @@ async def usage_activity_groups(
     over the ``start_date``/``end_date`` returned here, with
     ``include_absorbed=false`` to match ``requests``.
     """
-    start, end = _resolve_window(start_date, end_date)
+    start, end = resolve_window(start_date, end_date)
     conditions = _usage_filters(
         start_date=start,
         end_date=end,
@@ -2132,7 +2080,7 @@ async def usage_activity_groups(
         scope=None,
     )
     return await _activity_groups_response(
-        db,
+        reads,
         group_by=group_by,
         start=start,
         end=end,

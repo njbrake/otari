@@ -36,6 +36,7 @@ from gateway.repositories.overview.overview_repository import OverviewRepository
 from gateway.repositories.providers import OrgProviderKeyModelRepository
 from gateway.repositories.saved_views import SavedViewRepository
 from gateway.repositories.tenancy import OrganizationGuardrailDefinitionRepository, OrgProviderKeyRepository
+from gateway.repositories.usage import UsageReadRepository
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets import BudgetService, WorkspaceBudgetDefaultService
 from gateway.services.code_execution import SandboxContainerRegistry
@@ -56,6 +57,7 @@ from gateway.services.tenancy.organization_guardrail_definition_service import (
 )
 from gateway.services.tenancy.provisioning_service import ensure_bootstrap_identity
 from gateway.services.tenancy.workspace_service import WorkspaceService
+from gateway.services.usage import UsageReadService
 from gateway.services.workspace_scope import default_workspace_id
 
 # Legacy module-level fallback. Config now lives on ``app.state.config`` (set in
@@ -988,6 +990,14 @@ def get_saved_view_service(
 
 
 SavedViewServiceDep = Annotated[SavedViewService, Depends(get_saved_view_service)]
+
+
+def get_usage_read_service(uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> UsageReadService:
+    """Build the request's usage-log read service on the request's Unit of Work."""
+    return UsageReadService(uow, UsageReadRepository(uow))
+
+
+UsageReadServiceDep = Annotated[UsageReadService, Depends(get_usage_read_service)]
 
 
 def get_organization_guardrail_definition_service(

@@ -52,7 +52,7 @@ from sqlalchemy import ColumnElement, and_, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
-from gateway.api.deps import CurrentIdentity, get_db, verify_master_key
+from gateway.api.deps import CurrentIdentity, UsageReadServiceDep, get_db, verify_master_key
 from gateway.api.routes.usage import (
     _API_KEY_MULTI_DESC,
     _COUNT_SORT_DESC,
@@ -96,8 +96,6 @@ from gateway.api.routes.usage import (
     _activity_groups_response,
     _grouped_series_response,
     _list_usage_entries,
-    _list_window,
-    _resolve_window,
     _summary_context,
     _summary_response,
     _usage_filters,
@@ -105,7 +103,14 @@ from gateway.api.routes.usage import (
 )
 from gateway.core.sql import MAX_FILTER_VALUES, UsageBucketGrain
 from gateway.core.surface import Surface
-from gateway.core.usage_filters import MAX_SEARCH_LENGTH, SortOrder, UsageRefinements, UsageSort
+from gateway.core.usage_filters import (
+    MAX_SEARCH_LENGTH,
+    SortOrder,
+    UsageRefinements,
+    UsageSort,
+    list_window,
+    resolve_window,
+)
 from gateway.models.tenancy import MANAGEMENT_ROLES, Workspace
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.usage import UsageLog
@@ -209,6 +214,7 @@ async def _scope_condition(
 async def list_organization_usage(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
     refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
@@ -251,7 +257,7 @@ async def list_organization_usage(
     what the caller's membership lets them see. Scope is never a parameter here.
     """
     scope = await _scope_condition(db, user=identity, workspace_id=workspace_id)
-    start_date, end_date = _list_window(start_date, end_date, q=q, sort=sort)
+    start_date, end_date = list_window(start_date, end_date, q=q, sort=sort)
     conditions = _usage_filters(
         start_date=start_date,
         end_date=end_date,
@@ -277,7 +283,7 @@ async def list_organization_usage(
         refine=refine,
         scope=scope,
     )
-    return await _list_usage_entries(db, conditions, scope=scope, skip=skip, limit=limit, sort=sort, order=order)
+    return await _list_usage_entries(reads, conditions, scope=scope, skip=skip, limit=limit, sort=sort, order=order)
 
 
 @router.get("/count")
@@ -325,7 +331,7 @@ async def count_organization_usage(
     is not narrowed to imported rows here: that narrowing sizes the bulk mutations, and
     this surface has none. So this total keeps matching the list beside it.
     """
-    start_date, end_date = _list_window(start_date, end_date, q=q, sort=sort)
+    start_date, end_date = list_window(start_date, end_date, q=q, sort=sort)
     conditions = _usage_filters(
         start_date=start_date,
         end_date=end_date,
@@ -359,6 +365,7 @@ async def count_organization_usage(
 async def organization_usage_summary(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
     refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
@@ -418,6 +425,7 @@ async def organization_usage_summary(
     )
     return await _summary_response(
         db,
+        reads,
         start=start,
         end=end,
         conditions=conditions,
@@ -504,6 +512,7 @@ async def organization_usage_series(
 async def organization_usage_activity_groups(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
     refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
     group_by: ActivityGroupBy = Query(description=_GROUP_BY_DESC),
     start_date: datetime | None = Query(default=None, description=_START_DESC),
@@ -537,7 +546,7 @@ async def organization_usage_activity_groups(
     The tenant-scoped counterpart of ``GET /api/v1/usage/groups``: the same
     aggregation over the rows this caller may read.
     """
-    start, end = _resolve_window(start_date, end_date)
+    start, end = resolve_window(start_date, end_date)
     conditions = _usage_filters(
         start_date=start,
         end_date=end,
@@ -560,7 +569,7 @@ async def organization_usage_activity_groups(
         scope=await _scope_condition(db, user=identity, workspace_id=workspace_id),
     )
     return await _activity_groups_response(
-        db,
+        reads,
         group_by=group_by,
         start=start,
         end=end,

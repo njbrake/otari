@@ -9,7 +9,8 @@ delete rows no count ever promised.
 
 import uuid
 from collections.abc import Sequence
-from typing import Annotated, Any, Literal, get_args
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any, Literal, NamedTuple, get_args
 
 from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, case, func, or_, select
@@ -18,6 +19,9 @@ from gateway.core.sql import MAX_FILTER_VALUES, match_any
 from gateway.models.api_keys import APIKey
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
+
+# One WHERE condition over ``usage_logs``, as the reads pass them through the usage service.
+UsageCondition = ColumnElement[bool]
 
 # Longest search a caller may send. Far past a request id or a model name; it keeps a
 # caller from posting a megabyte pattern into a LIKE over the window searched.
@@ -230,3 +234,71 @@ def refinement_conditions(refine: UsageRefinements) -> list[ColumnElement[bool]]
     if refine.latency_ms_gt is not None:
         conditions.append(UsageLog.latency_ms > refine.latency_ms_gt)
     return conditions
+
+
+class LabelJoin(NamedTuple):
+    """How to resolve a breakdown key's display name in the same GROUP BY.
+
+    Only the two dimensions whose key is an opaque id need this: a model, source
+    or endpoint already reads as its own name. Resolving it here is what lets a
+    client offer a user or key filter without holding those whole tables.
+    """
+
+    entity: Any
+    on: Any
+    label: Any
+
+
+USER_LABEL = LabelJoin(entity=User, on=User.user_id == UsageLog.user_id, label=User.alias)
+API_KEY_LABEL = LabelJoin(entity=APIKey, on=APIKey.id == UsageLog.api_key_id, label=APIKey.key_name)
+
+
+# The aggregate reads are range-bounded, unlike the raw list. Absent a start_date
+# they look back this far; a wider explicit window is clamped to the hard cap so a
+# single request can never turn into an unbounded full-table scan on a growing log.
+DEFAULT_SUMMARY_LOOKBACK = timedelta(days=30)
+MAX_SUMMARY_SPAN = timedelta(days=366)
+
+
+def resolve_window(start_date: datetime | None, end_date: datetime | None) -> tuple[datetime, datetime]:
+    """Clamp the requested window to a bounded, forward-ordered range.
+
+    A summary must never scan an unbounded log: absent a start we look back
+    ``DEFAULT_SUMMARY_LOOKBACK``; a span wider than ``MAX_SUMMARY_SPAN`` has its
+    start pulled forward so the aggregates stay bounded by the timestamp index.
+
+    An offset-less ISO datetime (which the query params advertise as valid) parses
+    to a naive value; ``now(UTC)`` is aware. Comparing or subtracting the two would
+    raise, so naive bounds are assumed UTC and made aware first.
+    """
+    if start_date is not None and start_date.tzinfo is None:
+        start_date = start_date.replace(tzinfo=UTC)
+    if end_date is not None and end_date.tzinfo is None:
+        end_date = end_date.replace(tzinfo=UTC)
+    end = end_date or datetime.now(UTC)
+    start = start_date if start_date is not None else end - DEFAULT_SUMMARY_LOOKBACK
+    if start > end:
+        start = end
+    if end - start > MAX_SUMMARY_SPAN:
+        start = end - MAX_SUMMARY_SPAN
+    return start, end
+
+
+def list_window(
+    start_date: datetime | None,
+    end_date: datetime | None,
+    *,
+    q: str | None,
+    sort: UsageSort = "timestamp",
+) -> tuple[datetime | None, datetime | None]:
+    """The window a list, its count and a bulk selection by filter read.
+
+    As asked, unless the read would otherwise visit every row in the log: a
+    substring search, which no index serves, or any order but newest first, which
+    sorts every row before it can return one. Those read the window ``/summary``
+    does. The count applies the same bound as the list, so a paginator's total is
+    the total of the pages.
+    """
+    if sort == "timestamp" and not is_substring_search(q):
+        return start_date, end_date
+    return resolve_window(start_date, end_date)
