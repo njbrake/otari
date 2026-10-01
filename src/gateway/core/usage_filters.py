@@ -10,12 +10,12 @@ delete rows no count ever promised.
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal, NamedTuple, cast, get_args
+from typing import Annotated, Any, Literal, NamedTuple, Protocol, cast, get_args
 
 from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, and_, case, func, or_, select
 
-from gateway.core.sql import MAX_FILTER_VALUES, match_any
+from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
 from gateway.models.api_keys import APIKey
 from gateway.models.money import MAX_USD_LIMIT
 from gateway.models.usage import UsageLog
@@ -287,6 +287,86 @@ def refinement_conditions(refine: UsageRefinements) -> list[ColumnElement[bool]]
         conditions.append(UsageLog.cost > refine.cost_gt)
     if refine.latency_ms_gt is not None:
         conditions.append(UsageLog.latency_ms > refine.latency_ms_gt)
+    return conditions
+
+
+class UsageEntityFilters(Protocol):
+    """The filters the usage reads and the bulk selection both take, read by :func:`entity_conditions`."""
+
+    @property
+    def workspace_id(self) -> uuid.UUID | None: ...
+    @property
+    def user_id(self) -> str | list[str] | None: ...
+    @property
+    def status(self) -> str | None: ...
+    @property
+    def model(self) -> str | list[str] | None: ...
+    @property
+    def endpoint(self) -> str | None: ...
+    @property
+    def provider(self) -> str | None: ...
+    @property
+    def source(self) -> str | None: ...
+    @property
+    def source_label(self) -> str | None: ...
+    @property
+    def api_key_id(self) -> str | list[str] | None: ...
+    @property
+    def priced(self) -> bool | None: ...
+    @property
+    def tool(self) -> str | None: ...
+    @property
+    def requested_model(self) -> str | list[str] | None: ...
+    @property
+    def q(self) -> str | None: ...
+
+
+def entity_conditions(
+    filters: UsageEntityFilters,
+    *,
+    start_date: datetime | None,
+    end_date: datetime | None,
+) -> list[ColumnElement[bool]]:
+    """The WHERE conditions of the filters a read and a bulk selection share, over a resolved window.
+
+    One builder for both, because a bulk mutation re-derives its rows from the
+    filters the operator was shown counted: a filter the two read differently would
+    delete or reprice rows no count promised. An empty list is no filter, and bounds
+    are pinned to UTC (see :func:`~gateway.core.sql.utc_bound`).
+    """
+    conditions: list[ColumnElement[bool]] = []
+    if filters.workspace_id is not None:
+        conditions.append(UsageLog.workspace_id == filters.workspace_id)
+    if start_date is not None:
+        conditions.append(UsageLog.timestamp >= utc_bound(start_date))
+    if end_date is not None:
+        conditions.append(UsageLog.timestamp < utc_bound(end_date))
+    if filters.user_id is not None and filters.user_id != []:
+        conditions.append(match_any(UsageLog.user_id, filters.user_id))
+    if filters.status is not None:
+        conditions.append(UsageLog.status == filters.status)
+    if filters.model is not None and filters.model != []:
+        conditions.append(match_any(UsageLog.model, filters.model))
+    if filters.endpoint is not None:
+        conditions.append(UsageLog.endpoint == filters.endpoint)
+    if filters.provider is not None:
+        conditions.append(UsageLog.provider == filters.provider)
+    if filters.source is not None:
+        conditions.append(UsageLog.source == filters.source)
+    if filters.source_label is not None:
+        conditions.append(UsageLog.source_label == filters.source_label)
+    if filters.api_key_id is not None and filters.api_key_id != []:
+        conditions.append(match_any(UsageLog.api_key_id, filters.api_key_id))
+    if filters.priced is True:
+        conditions.append(~needs_pricing_condition())
+    elif filters.priced is False:
+        conditions.append(needs_pricing_condition())
+    if filters.tool is not None:
+        conditions.append(tool_used_condition(filters.tool))
+    if filters.requested_model is not None and filters.requested_model != []:
+        conditions.append(match_any(UsageLog.requested_model, filters.requested_model))
+    if filters.q is not None and (search := usage_search_condition(filters.q)) is not None:
+        conditions.append(search)
     return conditions
 
 

@@ -13,7 +13,7 @@ from typing import Annotated, Literal
 
 from fastapi import Depends, Query
 
-from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
+from gateway.core.sql import MAX_FILTER_VALUES, match_any
 from gateway.core.usage_filters import (
     MAX_COST_THRESHOLD,
     MAX_INT32,
@@ -24,10 +24,8 @@ from gateway.core.usage_filters import (
     UsageCondition,
     UsageRefinements,
     UsageStatus,
-    needs_pricing_condition,
+    entity_conditions,
     refinement_conditions,
-    tool_used_condition,
-    usage_search_condition,
 )
 from gateway.models.usage import UsageLog
 from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME
@@ -318,24 +316,12 @@ class UsageReadFilters:
         nothing. Required, a new scoped route that omits it is a ``TypeError`` rather
         than a cross-tenant read in production.
 
-        Bounds are pinned to UTC here rather than only in ``resolve_window``, which
-        the summary endpoints route through but the list and count endpoints do not:
-        an offset-less bound would otherwise resolve against the process's local
-        timezone, so the same query would size a different set of rows per deployment.
+        The filters the bulk selection also takes go through
+        :func:`~gateway.core.usage_filters.entity_conditions`, so a count and the
+        mutation it sizes read them one way.
         """
-        conditions: list[UsageCondition] = []
-        if scope is not None:
-            conditions.append(scope)
-        if self.workspace_id is not None:
-            conditions.append(UsageLog.workspace_id == self.workspace_id)
-        if start_date is not None:
-            conditions.append(UsageLog.timestamp >= utc_bound(start_date))
-        if end_date is not None:
-            conditions.append(UsageLog.timestamp < utc_bound(end_date))
-        if self.user_id is not None and self.user_id != []:
-            conditions.append(match_any(UsageLog.user_id, self.user_id))
-        if self.status is not None:
-            conditions.append(UsageLog.status == self.status)
+        conditions: list[UsageCondition] = [] if scope is None else [scope]
+        conditions.extend(entity_conditions(self, start_date=start_date, end_date=end_date))
         if self.status_code is not None:
             conditions.append(UsageLog.status_code == self.status_code)
             if self.status is None:
@@ -347,30 +333,8 @@ class UsageReadFilters:
                 # window. An explicit ``status`` wins, so the combination stays a
                 # literal query rather than a silently contradictory one.
                 conditions.append(UsageLog.status == "error")
-        if self.model is not None and self.model != []:
-            conditions.append(match_any(UsageLog.model, self.model))
-        if self.endpoint is not None:
-            conditions.append(UsageLog.endpoint == self.endpoint)
-        if self.provider is not None:
-            conditions.append(UsageLog.provider == self.provider)
-        if self.source is not None:
-            conditions.append(UsageLog.source == self.source)
-        if self.source_label is not None:
-            conditions.append(UsageLog.source_label == self.source_label)
-        if self.api_key_id is not None and self.api_key_id != []:
-            conditions.append(match_any(UsageLog.api_key_id, self.api_key_id))
-        if self.priced is True:
-            conditions.append(~needs_pricing_condition())
-        elif self.priced is False:
-            conditions.append(needs_pricing_condition())
-        if self.tool is not None:
-            conditions.append(tool_used_condition(self.tool))
         if self.counts_toward_budget is not None:
             conditions.append(UsageLog.counts_toward_budget.is_(self.counts_toward_budget))
-        if self.requested_model:
-            conditions.append(match_any(UsageLog.requested_model, self.requested_model))
-        if self.q is not None and (search := usage_search_condition(self.q)) is not None:
-            conditions.append(search)
         conditions.extend(refinement_conditions(self.refine))
         return conditions
 
