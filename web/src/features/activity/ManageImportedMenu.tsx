@@ -1,9 +1,7 @@
-import { useState } from "react"
 import { FiChevronDown, FiDollarSign, FiTrash2 } from "react-icons/fi"
 import { Button } from "@/design-system/actions/Button"
-import { Popover } from "@/design-system/overlays/Popover"
+import { MenuButton, MenuItem } from "@/design-system/overlays/Menu"
 import { formatNumber } from "@/shared/helpers/format"
-import { MenuRow } from "./MenuRow"
 
 /**
  * The operator's bulk actions on imported rows. They act on the filter rather
@@ -19,37 +17,30 @@ export function ManageImportedMenu({
   onRecost: () => void
   onDelete: () => void
 }) {
-  const [isOpen, setIsOpen] = useState(false)
-  const run = (action: () => void) => () => {
-    setIsOpen(false)
-    action()
-  }
   return (
-    <Popover
+    <MenuButton
       label="Manage imported rows"
-      placement="bottom end"
-      padding="none"
-      isOpen={isOpen}
-      onOpenChange={setIsOpen}
+      width="md"
+      onAction={(key) => (key === "recost" ? onRecost() : onDelete())}
       trigger={
         <Button size="sm">
           Manage {formatNumber(count)} imported {count === 1 ? "row" : "rows"}
           <FiChevronDown aria-hidden className="size-3.5" />
         </Button>
       }
-    >
-      <div className="flex w-[18.75rem] flex-col py-1">
+      header={
         <p className="px-3 pt-2 pb-1.5 text-caption text-subtle">
           Applies to every imported row matching the current filters. Gateway
           rows aren't touched.
         </p>
-        <MenuRow icon={FiDollarSign} onPress={run(onRecost)}>
-          Recost imported rows…
-        </MenuRow>
-        <MenuRow icon={FiTrash2} onPress={run(onDelete)}>
-          Delete imported rows…
-        </MenuRow>
-      </div>
-    </Popover>
+      }
+    >
+      <MenuItem id="recost" icon={FiDollarSign}>
+        Recost imported rows…
+      </MenuItem>
+      <MenuItem id="delete" icon={FiTrash2}>
+        Delete imported rows…
+      </MenuItem>
+    </MenuButton>
   )
 }

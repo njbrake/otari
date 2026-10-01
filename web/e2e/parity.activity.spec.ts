@@ -270,7 +270,7 @@ test.describe("activity log", () => {
         name: `Manage ${COUNTS.scratch} imported rows`,
       })
       .click()
-    await page.getByRole("button", { name: "Delete imported rows…" }).click()
+    await page.getByRole("menuitem", { name: "Delete imported rows…" }).click()
     const confirm = page.getByRole("alertdialog")
     await expect(confirm).toContainText(
       `Delete ${COUNTS.scratch} imported rows?`,

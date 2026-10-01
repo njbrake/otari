@@ -204,7 +204,9 @@ describe("ActivityPage", () => {
 
       await user.click(screen.getByRole("button", { name: "Filter Status" }))
       await user.click(
-        screen.getByRole("button", { name: "Show recovered attempts as rows" }),
+        screen.getByRole("menuitemcheckbox", {
+          name: "Show recovered attempts as rows",
+        }),
       )
       await listCarries(calls, "include_absorbed", "true")
       // Nested under the row that served, and marked as the attempt it was.
@@ -456,7 +458,7 @@ describe("ActivityPage", () => {
       await user.click(
         within(row).getByRole("button", { name: "Filter by gpt-4o" }),
       )
-      await user.click(screen.getByRole("button", { name: "Exclude gpt-4o" }))
+      await user.click(screen.getByRole("menuitem", { name: "Exclude gpt-4o" }))
       await waitFor(() =>
         expect(lastList(calls).getAll("exclude_model")).toEqual(["gpt-4o"]),
       )
@@ -497,7 +499,7 @@ describe("ActivityPage", () => {
       await rowOf("gpt-4o")
 
       await user.click(screen.getByRole("button", { name: "Filter Cost" }))
-      await user.click(screen.getByRole("button", { name: "> $0.40" }))
+      await user.click(screen.getByRole("menuitemradio", { name: "> $0.40" }))
       await listCarries(calls, "cost_gt", "0.4")
     })
 
@@ -891,7 +893,7 @@ describe("ActivityPage", () => {
         await screen.findByRole("button", { name: /Manage 7 imported rows/ }),
       )
       await user.click(
-        screen.getByRole("button", { name: "Recost imported rows…" }),
+        screen.getByRole("menuitem", { name: "Recost imported rows…" }),
       )
       const dialog = await screen.findByRole("dialog", {
         name: "Recost imported rows",
@@ -935,7 +937,7 @@ describe("ActivityPage", () => {
         await screen.findByRole("button", { name: /Manage 58 imported rows/ }),
       )
       await user.click(
-        screen.getByRole("button", { name: "Delete imported rows…" }),
+        screen.getByRole("menuitem", { name: "Delete imported rows…" }),
       )
       const dialog = await screen.findByRole("alertdialog")
       await user.click(
@@ -974,7 +976,7 @@ describe("ActivityPage", () => {
           await screen.findByRole("button", { name: /Manage 4 imported rows/ }),
         )
         await user.click(
-          screen.getByRole("button", { name: "Delete imported rows…" }),
+          screen.getByRole("menuitem", { name: "Delete imported rows…" }),
         )
         const dialog = await screen.findByRole("alertdialog")
         const counted = new URL(
@@ -1568,11 +1570,32 @@ describe("ActivityPage", () => {
         name: "Filter and sort",
       })
       await user.click(
-        within(sheet).getByRole("button", { name: "Highest cost" }),
+        within(sheet).getByRole("radio", { name: "Highest cost" }),
       )
       await listCarries(calls, "sort", "cost")
       await user.click(within(sheet).getByRole("checkbox", { name: "Failed" }))
       await listCarries(calls, "status", "error")
+    })
+
+    it("picks a cost threshold from the sheet, and a second press clears it", async () => {
+      const user = userEvent.setup()
+      asPhone()
+      const { calls } = mockApi({ rows: [entry()], viewer: "member" })
+      renderPage(<ActivityPage />)
+      await screen.findByRole("button", { name: /gpt-4o/ })
+
+      await user.click(screen.getByRole("button", { name: "Filter and sort" }))
+      const sheet = await screen.findByRole("dialog", {
+        name: "Filter and sort",
+      })
+      const step = within(sheet).getByRole("radio", { name: "> $0.10" })
+      await user.click(step)
+      await listCarries(calls, "cost_gt", "0.1")
+      expect(step).toBeChecked()
+      // The unfiltered list is still cached, so no request says the threshold
+      // is gone; the chip, which reads it back from the URL, does.
+      await user.click(step)
+      await waitFor(() => expect(step).not.toBeChecked())
     })
   })
 
@@ -1591,7 +1614,7 @@ describe("ActivityPage", () => {
 
       await user.click(screen.getByRole("button", { name: /Saved views/ }))
       await user.click(
-        await screen.findByRole("button", { name: "Slow calls" }),
+        await screen.findByRole("menuitemradio", { name: "Slow calls" }),
       )
       await listCarries(calls, "latency_ms_gt", "5000")
       expect(
@@ -1607,7 +1630,7 @@ describe("ActivityPage", () => {
 
       await user.click(screen.getByRole("button", { name: "Filter Cost" }))
       // Not the $0.40 threshold, which is the built-in "Expensive calls".
-      await user.click(screen.getByRole("button", { name: "> $0.10" }))
+      await user.click(screen.getByRole("menuitemradio", { name: "> $0.10" }))
       expect(
         await screen.findByRole("button", {
           name: "Saved views: All requests, changed since saved",
@@ -1615,8 +1638,12 @@ describe("ActivityPage", () => {
       ).toBeInTheDocument()
 
       await user.click(screen.getByRole("button", { name: /Saved views/ }))
+      await user.click(screen.getByRole("menuitem", { name: "Delete a view" }))
       await user.click(
-        screen.getByRole("button", { name: "Delete Slow calls" }),
+        within(screen.getByRole("menu", { name: "Delete a view" })).getByRole(
+          "menuitem",
+          { name: "Slow calls" },
+        ),
       )
       await waitFor(() =>
         expect(
@@ -1639,7 +1666,7 @@ describe("ActivityPage", () => {
 
       await user.click(screen.getByRole("button", { name: /Saved views/ }))
       await user.click(
-        screen.getByRole("button", { name: "Save current view…" }),
+        screen.getByRole("menuitem", { name: "Save current view…" }),
       )
       await user.type(screen.getByLabelText("View name"), "Weekly failures")
       await user.click(screen.getByRole("button", { name: "Save" }))

@@ -9,7 +9,6 @@ import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { userDisplay } from "@/features/users/userDisplay"
 import { formatNumber } from "@/shared/helpers/format"
 import { InFlightWait } from "./InFlightWait"
-import { MenuHeading } from "./MenuRow"
 
 function LiveDot({ isLive }: { isLive: boolean }) {
   return <Dot className={isLive ? "bg-success" : "bg-text-subtle"} />
@@ -102,7 +101,9 @@ export function LiveControl({
           <Toggle isSelected={isLive} onChange={onLive} label="Live updates" />
         </div>
         <Divider weight="subtle" className="my-1" />
-        <MenuHeading>In flight across the gateway</MenuHeading>
+        <div className="px-3 pt-2 pb-1 text-overline">
+          In flight across the gateway
+        </div>
         {isInFlightFailed ? (
           <p className="px-3 py-1.5 text-caption text-danger">
             The requests in flight could not be loaded.

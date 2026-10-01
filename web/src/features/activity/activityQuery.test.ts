@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import { entry } from "@/tests/activity"
+import { entry, urlOf } from "@/tests/activity"
 import {
-  ACTIVITY_URL_DEFAULTS,
-  type ActivityUrl,
-  type ActivityUrlKey,
   activityChips,
   BUILT_IN_VIEWS,
   cellFilterPatch,
@@ -22,24 +19,6 @@ import {
   viewPatch,
   viewQuery,
 } from "./activityQuery"
-
-/** `useUrlState` over a query string, with the page's defaults. */
-function urlOf(query: string): ActivityUrl {
-  const params = new URLSearchParams(query)
-  const all = (key: ActivityUrlKey) => {
-    if (!params.has(key)) {
-      return ACTIVITY_URL_DEFAULTS[key] ? [ACTIVITY_URL_DEFAULTS[key]] : []
-    }
-    return params.getAll(key).filter((value) => value.trim() !== "")
-  }
-  return {
-    get: (key) => params.get(key) ?? ACTIVITY_URL_DEFAULTS[key],
-    getAll: all,
-    getNumber: (key) =>
-      Number.parseInt(params.get(key) ?? ACTIVITY_URL_DEFAULTS[key], 10) || 0,
-    patch: () => undefined,
-  }
-}
 
 const WINDOW = { start: "2026-01-15T00:00:00.000Z" }
 

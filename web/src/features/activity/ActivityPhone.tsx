@@ -9,14 +9,9 @@ import { Segmented } from "@/design-system/navigation/Segmented"
 import { isSameSort, NEWEST_FIRST } from "@/shared/api/usage"
 import { formatNumber, formatUsd } from "@/shared/helpers/format"
 import { ActivitySearch } from "./ActivitySearch"
-import { shortId, splitCost } from "./activityModel"
-import {
-  type ActivityUrl,
-  groupOptions,
-  readNumber,
-  statusOptions,
-  togglePatch,
-} from "./activityQuery"
+import { valueFilterModel } from "./activityFilters"
+import { splitCost } from "./activityModel"
+import { type ActivityUrl, readNumber } from "./activityQuery"
 import { PHONE_BATCH } from "./activityRows"
 import { barSpanMs, describeSpan, PHONE_BARS, phoneBars } from "./chartBars"
 import { FilterSheet, PHONE_SORTS, type SheetSection } from "./FilterSheet"
@@ -70,72 +65,25 @@ export function ActivityPhone({
   const bars = phoneBars(log.series, log.time.range, log.time.now)
   const barMs = barSpanMs(bars)
   const { sort, open, chips } = log
-  const toggle =
-    (column: "status" | "member" | "source" | "model" | "policy") =>
-    (value: string) =>
-      act.refine(togglePatch(url, column, value))
-  const listed = (list: GroupList) => ({
-    more: list.more,
-    isError: list.isError,
+  // The columns a phone filters by value: the desk's, less what it cannot fit.
+  const section = (
+    column: "status" | "member" | "source" | "model" | "policy",
+    list?: GroupList,
+  ): SheetSection => ({
+    ...valueFilterModel(url, column, {
+      groups: list?.groups,
+      totals: log.totals,
+      memberName: log.memberName,
+    }),
+    more: list?.more,
+    isError: list?.isError,
   })
   const sections: SheetSection[] = [
-    {
-      title: "Status",
-      options: statusOptions(url, log.totals),
-      picked: url.getAll("status"),
-      excluded: url.getAll("exclude_status"),
-      onToggle: toggle("status"),
-    },
-    ...(log.isMulti
-      ? [
-          {
-            title: "Member",
-            options: groupOptions(log.sheet.member.groups, (group) =>
-              log.memberName(group.key, group.label),
-            ),
-            picked: url.getAll("user_id"),
-            excluded: url.getAll("exclude_user_id"),
-            onToggle: toggle("member"),
-            ...listed(log.sheet.member),
-          },
-        ]
-      : []),
-    {
-      title: "Source",
-      options: groupOptions(
-        log.sheet.source.groups,
-        (group) => group.label ?? shortId(group.key),
-      ),
-      picked: url.getAll("api_key_id"),
-      excluded: url.getAll("exclude_api_key_id"),
-      onToggle: toggle("source"),
-      ...listed(log.sheet.source),
-    },
-    {
-      title: "Model",
-      options: groupOptions(log.sheet.model.groups, (group) => group.key),
-      picked: url.getAll("model"),
-      excluded: url.getAll("exclude_model"),
-      onToggle: toggle("model"),
-      isMono: true,
-      ...listed(log.sheet.model),
-    },
-    ...(log.isMulti
-      ? [
-          {
-            title: "Policy",
-            options: groupOptions(
-              log.sheet.policy.groups,
-              (group) => group.key,
-            ),
-            picked: url.getAll("policy_name"),
-            excluded: url.getAll("exclude_policy_name"),
-            onToggle: toggle("policy"),
-            isMono: true,
-            ...listed(log.sheet.policy),
-          },
-        ]
-      : []),
+    section("status"),
+    ...(log.isMulti ? [section("member", log.sheet.member)] : []),
+    section("source", log.sheet.source),
+    section("model", log.sheet.model),
+    ...(log.isMulti ? [section("policy", log.sheet.policy)] : []),
   ]
   const cost = readNumber(url, "cost_gt")
   const isSorted = !isSameSort(sort, NEWEST_FIRST)
@@ -345,6 +293,7 @@ export function ActivityPhone({
           sort={sort}
           onSort={act.sort}
           sections={sections}
+          onRefine={act.refine}
           cost={cost}
           onCost={(value) =>
             act.refine({ cost_gt: value === undefined ? "" : String(value) })

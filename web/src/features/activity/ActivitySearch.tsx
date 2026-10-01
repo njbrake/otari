@@ -3,8 +3,9 @@ import { SearchField } from "@/design-system/forms/SearchField"
 import { useDebounced } from "@/shared/hooks/useDebounced"
 
 /**
- * The log's search box: typed freely, committed once typing settles, so the
- * query runs per term rather than per keystroke.
+ * A search box typed freely and committed once typing settles, so the query
+ * runs per term rather than per keystroke: the log's, and a column menu's over
+ * its values.
  *
  * `value` is the committed term (the URL's). When it changes from outside, a
  * view applied or the filters cleared, the box follows; its own commits leave
@@ -14,11 +15,13 @@ export function ActivitySearch({
   value,
   onCommit,
   placeholder,
+  label = "Search requests",
   className,
 }: {
   value: string
   onCommit: (term: string) => void
   placeholder: string
+  label?: string
   className?: string
 }) {
   const [text, setText] = useState(value)
@@ -35,7 +38,7 @@ export function ActivitySearch({
   }, [settled, text, value, onCommit])
   return (
     <SearchField
-      label="Search requests"
+      label={label}
       value={text}
       onChange={setText}
       placeholder={placeholder}

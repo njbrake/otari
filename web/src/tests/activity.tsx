@@ -13,6 +13,11 @@ import type {
   UsageTotals,
   WorkspaceSpend,
 } from "@/client"
+import {
+  ACTIVITY_URL_DEFAULTS,
+  type ActivityUrl,
+  type ActivityUrlKey,
+} from "@/features/activity/activityQuery"
 import { API_ROOT } from "@/shared/api/client"
 import { SelectedWorkspaceProvider } from "@/shared/hooks/SelectedWorkspace"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
@@ -362,4 +367,22 @@ export function listCalls(calls: FetchCall[]): string[] {
 export function lastList(calls: FetchCall[]): URLSearchParams {
   const url = listCalls(calls).at(-1) ?? ""
   return new URL(url, "http://localhost").searchParams
+}
+
+/** `useUrlState` over a query string, with the page's defaults. */
+export function urlOf(query: string): ActivityUrl {
+  const params = new URLSearchParams(query)
+  const all = (key: ActivityUrlKey) => {
+    if (!params.has(key)) {
+      return ACTIVITY_URL_DEFAULTS[key] ? [ACTIVITY_URL_DEFAULTS[key]] : []
+    }
+    return params.getAll(key).filter((value) => value.trim() !== "")
+  }
+  return {
+    get: (key) => params.get(key) ?? ACTIVITY_URL_DEFAULTS[key],
+    getAll: all,
+    getNumber: (key) =>
+      Number.parseInt(params.get(key) ?? ACTIVITY_URL_DEFAULTS[key], 10) || 0,
+    patch: () => undefined,
+  }
 }

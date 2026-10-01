@@ -1,13 +1,11 @@
-import { useEffect, useState } from "react"
-import { FiSlash, FiX } from "react-icons/fi"
-import { IconButton } from "@/design-system/actions/IconButton"
-import { Checkbox } from "@/design-system/forms/Checkbox"
-import { SearchField } from "@/design-system/forms/SearchField"
+import { FiX } from "react-icons/fi"
 import { Divider } from "@/design-system/layout/Divider"
+import { Menu, MenuItem, MenuSection } from "@/design-system/overlays/Menu"
 import { formatNumber } from "@/shared/helpers/format"
-import { useDebounced } from "@/shared/hooks/useDebounced"
-import type { ValueOption } from "./activityQuery"
-import { MenuHeading, MenuRow } from "./MenuRow"
+import { ActivitySearch } from "./ActivitySearch"
+import type { ValueFilterModel } from "./activityFilters"
+import type { Patch, ValueOption } from "./activityQuery"
+import { ValueChecklist } from "./ValueChecklist"
 
 // Past this many values the list gets a box to narrow it.
 const SEARCHABLE_AFTER = 5
@@ -25,38 +23,28 @@ const SEARCHABLE_AFTER = 5
  */
 export function ColumnFilterMenu({
   title,
-  options,
-  picked,
-  excluded,
-  onToggle,
-  onExclude,
+  values,
+  onRefine,
   isLoading,
   isError = false,
   more = 0,
   search = "",
   onSearch,
-  isMono,
   thresholds,
   aliases,
   extras,
   onClear,
 }: {
   title: string
-  options?: ValueOption[]
-  picked?: string[]
-  /** Values left out; unchecked, and marked so, since pressing one lifts that. */
-  excluded?: string[]
-  onToggle?: (value: string) => void
-  /** Leave a value out: every row but those carrying it. */
-  onExclude?: (value: string) => void
+  /** The column's checklist, for a column filtered by its values. */
+  values?: ValueFilterModel
+  onRefine: (patch: Patch) => void
   isLoading?: boolean
   isError?: boolean
   more?: number
   /** The term the values were searched for; set with `onSearch`. */
   search?: string
   onSearch?: (term: string) => void
-  /** Values that are identifiers (models, policies), set in mono. */
-  isMono?: boolean
   thresholds?: {
     presets: { value: number; label: string }[]
     current: number | undefined
@@ -77,73 +65,38 @@ export function ColumnFilterMenu({
   /** Set while the column is filtered. */
   onClear?: () => void
 }) {
-  const [text, setText] = useState(search)
-  const settled = useDebounced(text)
-  useEffect(() => {
-    if (onSearch && settled === text && settled !== search) onSearch(settled)
-  }, [settled, text, search, onSearch])
+  const options = values?.options
   const isSearchable =
     onSearch !== undefined &&
     ((options?.length ?? 0) > SEARCHABLE_AFTER || Boolean(search) || more > 0)
-  const checkRow = (
-    option: ValueOption,
-    isPicked: boolean,
-    isExcluded: boolean,
-    toggle: (value: string) => void,
-    exclude?: (value: string) => void,
-  ) => (
-    <div
-      key={option.value}
-      className="flex min-h-11 items-center gap-2 px-3 py-1.5 hover:bg-surface-alt md:min-h-8"
-    >
-      <Checkbox isSelected={isPicked} onChange={() => toggle(option.value)}>
-        <span
-          className={`text-sm break-all ${isMono ? "text-mono-caption" : ""}`}
-        >
-          {option.label}
-        </span>
-      </Checkbox>
-      <span className="ml-auto flex gap-2 text-mono-micro text-subtle">
-        {isExcluded ? <span className="text-danger">excluded</span> : null}
-        {option.count !== undefined ? formatNumber(option.count) : null}
-      </span>
-      {exclude && !isExcluded ? (
-        <IconButton
-          label={`Exclude ${option.label}`}
-          size="sm"
-          onPress={() => exclude(option.value)}
-          className="-my-1 shrink-0 md:size-6 md:min-h-6 md:min-w-6"
-        >
-          <FiSlash aria-hidden className="size-3" />
-        </IconButton>
-      ) : null}
-    </div>
+  const heading = (text: string) => (
+    <div className="px-3 pt-2 pb-1 text-overline">{text}</div>
   )
   return (
     <div className="flex w-[16.5rem] flex-col py-1">
-      {options ? (
+      {values && options ? (
         <>
-          <MenuHeading>Filter {title.toLowerCase()}</MenuHeading>
-          {isSearchable ? (
+          {heading(`Filter ${title.toLowerCase()}`)}
+          {isSearchable && onSearch ? (
             <div className="px-3 pb-1.5">
-              <SearchField
+              <ActivitySearch
                 label={`Search ${title.toLowerCase()} values`}
                 placeholder="Search values"
-                value={text}
-                onChange={setText}
+                value={search}
+                onCommit={onSearch}
               />
             </div>
           ) : null}
           <div className="max-h-72 overflow-y-auto">
-            {options.map((option) =>
-              checkRow(
-                option,
-                picked?.includes(option.value) ?? false,
-                excluded?.includes(option.value) ?? false,
-                (value) => onToggle?.(value),
-                onExclude,
-              ),
-            )}
+            <ValueChecklist
+              density="menu"
+              options={options}
+              picked={values.picked}
+              excluded={values.excluded}
+              isMono={values.isMono}
+              onToggle={(value) => onRefine(values.toggle(value))}
+              onExclude={(value) => onRefine(values.exclude(value))}
+            />
             {isError ? (
               <p className="px-3 py-1.5 text-caption text-danger">
                 These values could not be loaded.
@@ -167,60 +120,76 @@ export function ColumnFilterMenu({
       ) : null}
       {aliases?.options.length ? (
         <>
-          <MenuHeading>Requested as alias</MenuHeading>
-          {aliases.options.map((option) =>
-            checkRow(
-              option,
-              aliases.picked.includes(option.value),
-              false,
-              aliases.onToggle,
-            ),
-          )}
+          {heading("Requested as alias")}
+          <ValueChecklist
+            density="menu"
+            options={aliases.options}
+            picked={aliases.picked}
+            isMono={values?.isMono}
+            onToggle={aliases.onToggle}
+          />
         </>
       ) : null}
       {thresholds ? (
-        <>
-          <MenuHeading>Show only</MenuHeading>
-          {thresholds.presets.map((preset) => (
-            <MenuRow
-              key={preset.value}
-              kind="check"
-              isChecked={thresholds.current === preset.value}
-              onPress={() => thresholds.onPick(preset.value)}
-            >
-              {preset.label}
-            </MenuRow>
-          ))}
-        </>
+        <Menu
+          label={`Show only ${title.toLowerCase()} above`}
+          selectionMode="single"
+          selectedKeys={
+            thresholds.current === undefined ? [] : [String(thresholds.current)]
+          }
+          onAction={(key) => thresholds.onPick(Number(key))}
+        >
+          <MenuSection title="Show only">
+            {thresholds.presets.map((preset) => (
+              <MenuItem key={preset.value} id={String(preset.value)}>
+                {preset.label}
+              </MenuItem>
+            ))}
+          </MenuSection>
+        </Menu>
       ) : null}
       {extras?.length ? (
         <>
           <Divider weight="subtle" className="my-1" />
-          {extras.map((extra) => (
-            <MenuRow
-              key={extra.label}
-              kind="check"
-              isChecked={extra.isChecked}
-              onPress={extra.onPress}
-              trailing={
-                extra.trailing ? (
-                  <span className="text-mono-micro text-subtle">
-                    {extra.trailing}
-                  </span>
-                ) : undefined
-              }
-            >
-              {extra.label}
-            </MenuRow>
-          ))}
+          <Menu
+            label={`More ${title.toLowerCase()} filters`}
+            selectionMode="multiple"
+            selectedKeys={extras
+              .filter((extra) => extra.isChecked)
+              .map((extra) => extra.label)}
+            onAction={(key) =>
+              extras.find((extra) => extra.label === key)?.onPress()
+            }
+          >
+            {extras.map((extra) => (
+              <MenuItem
+                key={extra.label}
+                id={extra.label}
+                trailing={
+                  extra.trailing ? (
+                    <span className="text-mono-micro text-subtle">
+                      {extra.trailing}
+                    </span>
+                  ) : undefined
+                }
+              >
+                {extra.label}
+              </MenuItem>
+            ))}
+          </Menu>
         </>
       ) : null}
       {onClear ? (
         <>
           <Divider weight="subtle" className="my-1" />
-          <MenuRow icon={FiX} onPress={onClear}>
-            Clear {title.toLowerCase()} filters
-          </MenuRow>
+          <Menu
+            label={`Clear ${title.toLowerCase()} filters`}
+            onAction={onClear}
+          >
+            <MenuItem id="clear" icon={FiX}>
+              Clear {title.toLowerCase()} filters
+            </MenuItem>
+          </Menu>
         </>
       ) : null}
     </div>

@@ -11,7 +11,7 @@ import { ACTIVITY_GROUP_LIMIT, NEWEST_FIRST } from "@/shared/api/usage"
 import { formatNumber } from "@/shared/helpers/format"
 import { useMediaQuery } from "@/shared/hooks/useMediaQuery"
 import { ActivityChartBand } from "./ActivityChartBand"
-import { ActivityHeaderCells, COLUMN_LABELS } from "./ActivityHeaderCells"
+import { ActivityHeaderCells } from "./ActivityHeaderCells"
 import { ActivityScopeBar } from "./ActivityScopeBar"
 import { ActivitySearch } from "./ActivitySearch"
 import { ActivityTable } from "./ActivityTable"
@@ -20,6 +20,7 @@ import { ActivityTotals } from "./ActivityTotals"
 import { activityColumns, tableMinWidthRem } from "./activityColumns"
 import {
   type ActivityUrl,
+  COLUMN_LABELS,
   type ColumnKey,
   columnForSort,
   GROUP_KEYS,

@@ -2,40 +2,23 @@ import type { UsageActivityGroup, UsageTotals } from "@/client"
 import type { UsageSort } from "@/shared/api/usage"
 import { formatNumber } from "@/shared/helpers/format"
 import { laneWidthRem } from "./activityColumns"
-import { shortId } from "./activityModel"
+import { valueFilterModel } from "./activityFilters"
 import {
   type ActivityUrl,
   COLUMN_FILTER_KEYS,
+  COLUMN_LABELS,
   type ColumnKey,
   groupOptions,
   isColumnFiltered,
   nextSort,
   type Patch,
   readNumber,
-  statusOptions,
   THRESHOLD_FILTERS,
-  togglePatch,
   unpricedPatch,
-  VALUE_FILTERS,
-  type ValueColumn,
-  type ValueOption,
-  valuePatch,
 } from "./activityQuery"
 import { ColumnFilterMenu } from "./ColumnFilterMenu"
 import { ColumnHeader } from "./ColumnHeader"
 import type { GroupList } from "./useActivityLog"
-
-export const COLUMN_LABELS: Record<ColumnKey, string> = {
-  time: "Time",
-  member: "Member",
-  model: "Model",
-  policy: "Policy",
-  source: "Source",
-  tokens: "Tokens",
-  cost: "Cost",
-  latency: "Latency",
-  status: "Status",
-}
 
 /**
  * The log's header row: each column's sort and its filter menu.
@@ -93,24 +76,6 @@ export function ActivityHeaderCells({
         }
       : undefined
 
-  const optionsFor = (column: ValueColumn): ValueOption[] => {
-    switch (column) {
-      case "status":
-        return statusOptions(url, totals)
-      case "member":
-        return groupOptions(options.groups, (group) =>
-          memberName(group.key, group.label),
-        )
-      case "source":
-        return groupOptions(
-          options.groups,
-          (group) => group.label ?? shortId(group.key),
-        )
-      default:
-        return groupOptions(options.groups, (group) => group.label ?? group.key)
-    }
-  }
-
   const menuFor = (column: ColumnKey) => {
     if (column === "time") return undefined
     if (column === "tokens" || column === "cost" || column === "latency") {
@@ -120,6 +85,7 @@ export function ActivityHeaderCells({
       return (
         <ColumnFilterMenu
           title={COLUMN_LABELS[column]}
+          onRefine={onRefine}
           thresholds={{
             presets: spec.presets.map((value) => ({
               value,
@@ -185,7 +151,12 @@ export function ActivityHeaderCells({
     return (
       <ColumnFilterMenu
         title={COLUMN_LABELS[column]}
-        options={optionsFor(column)}
+        values={valueFilterModel(url, column, {
+          groups: options.groups,
+          totals,
+          memberName,
+        })}
+        onRefine={onRefine}
         {...(column === "status"
           ? {}
           : {
@@ -195,13 +166,6 @@ export function ActivityHeaderCells({
               search: menuSearch,
               onSearch: onMenuSearch,
             })}
-        isMono={column === "model" || column === "policy"}
-        picked={url.getAll(VALUE_FILTERS[column].include)}
-        excluded={url.getAll(VALUE_FILTERS[column].exclude)}
-        onToggle={(value) => onRefine(togglePatch(url, column, value))}
-        onExclude={(value) =>
-          onRefine(valuePatch(url, column, value, "exclude"))
-        }
         aliases={
           column === "model"
             ? {

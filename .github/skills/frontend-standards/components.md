@@ -181,6 +181,7 @@ than duplicating their markup. See [design-tokens.md](./design-tokens.md).
 | Filter over a small fixed option set | `FilterSelect` (`navigation/`; a HeroUI `Select`, so the list is a popover anchored under the trigger) |
 | Filter over a large or open option set | `FilterMultiComboBox` (`navigation/`; type-to-filter, holds a set of values; `allowsCustom` when the value space is not enumerable) |
 | Applied filters, each removable | `FilterChips` (`navigation/`); one chip per value, and pass `clearLabel` so several chips of one dimension stay distinguishable |
+| A list of actions or choices a button opens | `MenuButton` (`overlays/Menu`), or `Menu` laid inside a `Popover` that holds more than the list. Never a `Popover` of hand-rolled `<button>` rows |
 | Form field wrapper | `Field` (`forms/`), or `SecretField` for a credential |
 | Tabular data | `DataTable` (`data/`), with `TablePagination` and `BulkActionBar` beside it |
 | What stands where a request snippet would be, when the deployment named no gateway | `MissingGatewayAddressNotice` (`access/`); pairs with `resolveSnippetBaseUrl` answering `undefined` |

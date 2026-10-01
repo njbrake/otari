@@ -96,6 +96,18 @@ export type ColumnKey =
   | "latency"
   | "status"
 
+export const COLUMN_LABELS: Record<ColumnKey, string> = {
+  time: "Time",
+  member: "Member",
+  model: "Model",
+  policy: "Policy",
+  source: "Source",
+  tokens: "Tokens",
+  cost: "Cost",
+  latency: "Latency",
+  status: "Status",
+}
+
 export const SORT_KEYS: Record<ColumnKey, UsageSortKey> = {
   time: "timestamp",
   member: "member",

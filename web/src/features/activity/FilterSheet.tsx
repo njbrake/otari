@@ -1,12 +1,13 @@
-import { Drawer } from "@heroui/react"
+import { Drawer, ToggleButton, ToggleButtonGroup } from "@heroui/react"
 import type { ReactNode } from "react"
 import { FiX } from "react-icons/fi"
 import { Button } from "@/design-system/actions/Button"
 import { IconButton } from "@/design-system/actions/IconButton"
-import { Checkbox } from "@/design-system/forms/Checkbox"
 import { isSameSort, type UsageSort } from "@/shared/api/usage"
 import { formatNumber, formatUsd } from "@/shared/helpers/format"
-import { THRESHOLD_FILTERS, type ValueOption } from "./activityQuery"
+import type { ValueFilterModel } from "./activityFilters"
+import { type Patch, THRESHOLD_FILTERS } from "./activityQuery"
+import { ValueChecklist } from "./ValueChecklist"
 
 // The orders a phone offers, as whole phrases: there is no header to press.
 export const PHONE_SORTS: { label: string; sort: UsageSort }[] = [
@@ -21,14 +22,7 @@ export const PHONE_SORTS: { label: string; sort: UsageSort }[] = [
 // The Cost column's thresholds, smallest first as a row of chips reads.
 const COST_STEPS = [...THRESHOLD_FILTERS.cost.presets].reverse()
 
-export interface SheetSection {
-  title: string
-  options: ValueOption[]
-  picked: string[]
-  /** Values left out; unchecked, and marked so, since tapping one lifts that. */
-  excluded: string[]
-  onToggle: (value: string) => void
-  isMono?: boolean
+export interface SheetSection extends ValueFilterModel {
   /** How many values the window holds past those listed, busiest first. */
   more?: number
   isError?: boolean
@@ -43,30 +37,49 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function Choice({
-  isOn,
-  onPress,
-  isMono,
-  children,
+/**
+ * One choice out of a few, as a wrapping row of chips a thumb can hit: the
+ * sort, or a cost threshold. `isRequired` keeps one chosen at all times;
+ * without it, pressing the chosen chip again clears it.
+ */
+function ChoiceGroup({
+  label,
+  options,
+  selected,
+  onChange,
+  isRequired = false,
+  isMono = false,
 }: {
-  isOn: boolean
-  onPress: () => void
+  label: string
+  options: { id: string; label: string }[]
+  selected: string | undefined
+  onChange: (id: string | undefined) => void
+  isRequired?: boolean
   isMono?: boolean
-  children: ReactNode
 }) {
   return (
-    <button
-      type="button"
-      aria-pressed={isOn}
-      onClick={onPress}
-      className={`min-h-11 border px-3 focus-visible:otari-focus-ring ${isMono ? "text-mono-caption" : "text-sm"} ${
-        isOn
-          ? "border-foreground bg-foreground text-background"
-          : "border-control-border bg-surface text-foreground"
-      }`}
+    <ToggleButtonGroup
+      aria-label={label}
+      selectionMode="single"
+      disallowEmptySelection={isRequired}
+      selectedKeys={selected === undefined ? [] : [selected]}
+      onSelectionChange={(keys) => {
+        const [next] = [...keys]
+        onChange(next === undefined ? undefined : String(next))
+      }}
+      isDetached
+      className="flex-wrap gap-2 pb-2"
     >
-      {children}
-    </button>
+      {options.map((option) => (
+        <ToggleButton
+          key={option.id}
+          id={option.id}
+          className={`h-auto min-h-11 border border-control-border bg-surface px-3 font-normal text-foreground data-[selected=true]:border-foreground data-[selected=true]:bg-foreground data-[selected=true]:text-background ${isMono ? "text-mono-caption" : "text-sm"}`}
+        >
+          {option.label}
+        </ToggleButton>
+      ))}
+    </ToggleButtonGroup>
   )
 }
 
@@ -81,6 +94,7 @@ export function FilterSheet({
   sort,
   onSort,
   sections,
+  onRefine,
   cost,
   onCost,
   count,
@@ -91,6 +105,7 @@ export function FilterSheet({
   sort: UsageSort
   onSort: (sort: UsageSort) => void
   sections: SheetSection[]
+  onRefine: (patch: Patch) => void
   cost: number | undefined
   onCost: (cost: number | undefined) => void
   count: number | undefined
@@ -120,50 +135,36 @@ export function FilterSheet({
             </Drawer.Header>
             <Drawer.Body className="m-0 flex-1 overflow-y-auto p-0 pb-2 text-foreground">
               <Section title="Sort">
-                <div className="flex flex-wrap gap-2 pb-2">
-                  {PHONE_SORTS.map((option) => (
-                    <Choice
-                      key={option.label}
-                      isOn={isSameSort(option.sort, sort)}
-                      onPress={() => onSort(option.sort)}
-                    >
-                      {option.label}
-                    </Choice>
-                  ))}
-                </div>
+                <ChoiceGroup
+                  label="Sort"
+                  isRequired
+                  options={PHONE_SORTS.map((option) => ({
+                    id: option.label,
+                    label: option.label,
+                  }))}
+                  selected={
+                    PHONE_SORTS.find((option) => isSameSort(option.sort, sort))
+                      ?.label
+                  }
+                  onChange={(id) => {
+                    const picked = PHONE_SORTS.find(
+                      (option) => option.label === id,
+                    )
+                    if (picked) onSort(picked.sort)
+                  }}
+                />
               </Section>
               {sections.map((section) =>
                 section.options.length || section.isError ? (
                   <Section key={section.title} title={section.title}>
-                    {section.options.map((option) => {
-                      const isOn = section.picked.includes(option.value)
-                      return (
-                        <div
-                          key={option.value}
-                          className="flex min-h-11 items-center gap-3"
-                        >
-                          <Checkbox
-                            isSelected={isOn}
-                            onChange={() => section.onToggle(option.value)}
-                            hasTouchTarget
-                          >
-                            <span
-                              className={`break-all ${section.isMono ? "text-mono-caption" : ""}`}
-                            >
-                              {option.label}
-                            </span>
-                          </Checkbox>
-                          <span className="ml-auto flex gap-2 text-mono-micro text-subtle">
-                            {section.excluded.includes(option.value) ? (
-                              <span className="text-danger">excluded</span>
-                            ) : null}
-                            {option.count !== undefined
-                              ? formatNumber(option.count)
-                              : null}
-                          </span>
-                        </div>
-                      )
-                    })}
+                    <ValueChecklist
+                      density="sheet"
+                      options={section.options}
+                      picked={section.picked}
+                      excluded={section.excluded}
+                      isMono={section.isMono}
+                      onToggle={(value) => onRefine(section.toggle(value))}
+                    />
                     {section.isError ? (
                       <p className="pb-2 text-caption text-danger">
                         These values could not be loaded.
@@ -177,18 +178,18 @@ export function FilterSheet({
                 ) : null,
               )}
               <Section title="Cost">
-                <div className="flex flex-wrap gap-2 pb-2">
-                  {COST_STEPS.map((step) => (
-                    <Choice
-                      key={step}
-                      isMono
-                      isOn={cost === step}
-                      onPress={() => onCost(cost === step ? undefined : step)}
-                    >
-                      &gt; {formatUsd(step)}
-                    </Choice>
-                  ))}
-                </div>
+                <ChoiceGroup
+                  label="Cost above"
+                  isMono
+                  options={COST_STEPS.map((step) => ({
+                    id: String(step),
+                    label: `> ${formatUsd(step)}`,
+                  }))}
+                  selected={cost === undefined ? undefined : String(cost)}
+                  onChange={(id) =>
+                    onCost(id === undefined ? undefined : Number(id))
+                  }
+                />
               </Section>
             </Drawer.Body>
             <Drawer.Footer className="border-t border-border px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">

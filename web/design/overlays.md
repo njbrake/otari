@@ -10,6 +10,7 @@ Does the operator need to interact with what appears?
  └── Yes
       ├── Is it about the control that opened it?
       │    └── Yes -> Popover      (anchored, takes focus, not modal)
+      │         or MenuButton      (when all it holds is actions or choices)
       └── Does it want the whole screen's attention?
            └── Yes -> FormDialog   (a place to work: creating or editing)
                 or ConfirmDialog   (one question: are you sure)
@@ -120,6 +121,33 @@ rather than leaving it to a call site.
 **Dismiss it before reaching for the page behind it.** It holds focus while
 open, which is also the thing that trips the Playwright suite; web/AGENTS.md
 says the same about React Aria popovers under "Checks".
+
+## Menu
+
+A popover whose whole content is a list of actions or choices is a menu, and
+it is `MenuButton` rather than a `Popover` of hand-rolled rows: react-aria's
+menu brings the arrow keys, type-ahead, and the roles a screen reader
+announces (`menuitem`, or `menuitemradio` and `menuitemcheckbox` for a menu
+that selects), none of which a row of `<button>`s has. It closes as an item is
+pressed and hands focus back to its trigger, which, like `Popover`'s, is
+rendered as-is and has to be our `Button` or `IconButton`.
+
+`selectionMode` says what an item is. With none, each runs `onAction`; with
+`single` or `multiple`, each is a choice, its check is `selectedKeys`, and the
+caller owns the state. A choice of one out of a small fixed set that filters a
+page is still `FilterSelect` (see [forms.md](forms.md)); a menu that selects is
+for a choice that rearranges rather than filters, such as "Group by".
+
+A panel that holds more than a menu (a filter popover with a search box, a
+views panel with a save form) stays a `Popover` and lays `Menu` inside it,
+one per run of items. An inline menu does not close the panel by itself: the
+caller closes it when an action is done. `MenuSubmenu` moves a run that would
+double the menu's length (one item per saved view) one level down.
+
+An item holds text, a leading glyph and a trailing detail, never a second
+control: a button inside a `menuitem` is a nested interactive element no
+assistive technology reads well. Where a row seems to need one, the action is
+an item of its own or a submenu.
 
 ## The three dialogs
 
