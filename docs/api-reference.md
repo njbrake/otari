@@ -83,6 +83,59 @@ rate that priced the model: `organization` (an organization's override),
 genai-prices dataset). Hybrid mode attaches the platform's settlement instead;
 see [Hybrid mode protocol](hybrid-mode-protocol.md#inline-response-fields).
 
+### Retrying safely
+
+A request the provider or the gateway refused (a 429, a 529, any other error) is
+not billed: its budget hold is refunded, so a client can retry it as it is. So is
+a stream the client disconnected from. The case that does bill twice is a
+non-streaming request that succeeded while its response was lost on the way
+back, through a dropped connection or a client timeout, because the retry calls
+the provider again.
+
+Send an `Idempotency-Key` header on a non-streaming Chat, Messages, or Responses
+request to make that retry safe. The value is any unique string of 1 to 255
+printable ASCII characters; a UUID is the usual choice. A retry with the same key
+and the same body then gets the original response, with its original
+`Otari-Request-ID` and `usage.cost_usd`, and an `Otari-Idempotent-Replayed: true`
+header, without calling the provider or billing again. While the original is
+still running, a retry is answered 409 with `Retry-After`, and if the original
+fails the next retry runs in its place.
+
+- A key belongs to the API key that sent it (or, for the master key, to the
+  billed user), so two callers never see each other's responses.
+- A retry has to be the same request: the same body, and the same
+  `Otari-Code-Execution`, `Otari-Web-Search`, `Otari-Router`,
+  `Otari-Router-Task`, `Otari-Conversation-Id` and `anthropic-beta` headers,
+  since those change what the request does. The same key with a different body
+  or different values for those headers is refused with 422, so send a new key
+  for a new request. Key order and whitespace in the JSON body do not count as a
+  difference.
+- A retry that arrives while the original is still running is answered 409
+  with `Retry-After` at once, as the IETF `Idempotency-Key` draft and Stripe's
+  API do. Retry again later with the same key, backing off exponentially.
+- The request holding a key renews its claim while it runs, so a retry does not
+  run it a second time however long it takes. If the worker running it dies, its
+  key frees up within `idempotency_lease_sec` (a minute by default).
+- A response is kept for `idempotency_retention_sec` (a day by default),
+  generated content included, and then deleted. It is stored encrypted with
+  `OTARI_SECRET_KEY`, so a deployment without that key ignores the header, and
+  a response no configured key can decrypt (after the key was rotated away)
+  runs again. Responses larger than 8 MiB are not kept, so a retry of one runs
+  again. Expired responses are still deleted after the header is turned off.
+- Only a successful response is kept. On a retry the request is still
+  authenticated and checked against the key's model access, and a user who has
+  since been blocked is refused rather than given the stored response.
+- Streaming requests ignore the header, and so does hybrid mode, which has no
+  local database to keep the response in.
+
+A retry runs again, and is billed again, whenever the original's response was
+not stored or can no longer be read. The cases above are the ones a deployment
+chooses: the response was larger than 8 MiB, its retention passed, the header was
+turned off, or `OTARI_SECRET_KEY` was rotated away. Two more come from failures:
+the gateway stops after the provider answers and before the response is stored,
+or the database stays unreachable for about `idempotency_lease_sec` while the
+original runs, so its claim lapses and a retry takes it over.
+
 ## Search
 
 `POST /api/v1/search` and `POST /api/v1/search/{search_tool_name}` run a configured

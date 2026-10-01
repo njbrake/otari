@@ -1,9 +1,10 @@
 import json
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Callable, Generator
 from pathlib import Path
 from typing import Any
 
 import httpx
+import httpx2
 import pytest
 from any_llm.types.completion import (
     ChatCompletion,
@@ -14,8 +15,9 @@ from any_llm.types.completion import (
     PromptTokensDetails,
 )
 from fastapi.testclient import TestClient
+from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
 
-from conftest import InstallControlPlane
+from conftest import InstallControlPlane, TaskGroupMcpTransport
 from gateway.api.deps import reset_config
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.database import reset_db
@@ -1865,6 +1867,148 @@ def test_hybrid_mode_tool_loop_streaming_falls_through_pre_lock_in(
     assert "hello" in response.text
 
 
+class _FakeMcpSession:
+    """Enough of an MCP ``ClientSession`` to list one tool and run it."""
+
+    def __init__(self, *args: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> "_FakeMcpSession":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def initialize(self) -> None:
+        return None
+
+    async def list_tools(self) -> ListToolsResult:
+        return ListToolsResult(tools=[Tool(name="remote_search", inputSchema={"type": "object"})])
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> CallToolResult:
+        return CallToolResult(content=[TextContent(type="text", text="tool ran")])
+
+
+@pytest.mark.parametrize("close_error", [None, RuntimeError("the MCP server hung up")], ids=["closes", "close-fails"])
+def test_hybrid_mode_tool_loop_streaming_ends_the_stream_and_reports_usage(
+    platform_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    control_plane_transport: InstallControlPlane,
+    mcp_task_group_transport: TaskGroupMcpTransport,
+    close_error: Exception | None,
+) -> None:
+    """A streamed MCP tool loop ends with its usage and ``[DONE]``, and bills every round.
+
+    Each round ends as OpenAI streams it: a finish chunk, then a usage chunk with no choices.
+    A pool that fails to close must not change what the caller receives.
+    """
+    usage_reports: list[dict[str, Any]] = []
+
+    async def fake_post_platform(
+        url: str, headers: dict[str, str], body: dict[str, Any], timeout_seconds: float
+    ) -> httpx.Response:
+        if url.endswith("/gateway/provider-keys/resolve"):
+            return httpx.Response(
+                200,
+                json={
+                    "request_id": "tool-stream-usage-req",
+                    "fallback_enabled": False,
+                    "attempts": [
+                        {
+                            "attempt_id": "tool-stream-usage-att",
+                            "position": 0,
+                            "provider": "openai",
+                            "model": "gpt-4o-mini",
+                            "api_key": "sk-openai-real",
+                            "managed": False,
+                        }
+                    ],
+                },
+            )
+        usage_reports.append(body)
+        return httpx.Response(204)
+
+    def _chunk(payload: dict[str, Any]) -> ChatCompletionChunk:
+        return ChatCompletionChunk.model_validate(
+            {"id": "c", "object": "chat.completion.chunk", "created": 0, "model": "gpt-4o-mini", **payload}
+        )
+
+    def _delta(delta: dict[str, Any], finish: str | None = None) -> ChatCompletionChunk:
+        return _chunk({"choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
+
+    def _usage(prompt: int, completion: int) -> ChatCompletionChunk:
+        usage = {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}
+        return _chunk({"choices": [], "usage": usage})
+
+    rounds = 0
+
+    async def fake_loop_acompletion(**kwargs: Any) -> AsyncIterator[ChatCompletionChunk]:
+        nonlocal rounds
+        rounds += 1
+        first_round = rounds == 1
+
+        async def _stream() -> AsyncIterator[ChatCompletionChunk]:
+            yield _delta({"role": "assistant"})
+            if first_round:
+                yield _delta(
+                    {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "remote_search", "arguments": ""},
+                            }
+                        ]
+                    }
+                )
+                yield _delta({"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]})
+                yield _delta({}, "tool_calls")
+                yield _usage(10, 2)
+            else:
+                yield _delta({"content": "hybrid-"})
+                yield _delta({"content": "smoke-ok"})
+                yield _delta({}, "stop")
+                yield _usage(20, 3)
+
+        return _stream()
+
+    transport = mcp_task_group_transport
+    transport.close_error = close_error
+    control_plane_transport(fake_post_platform)
+    monkeypatch.setattr("gateway.services.mcp_client.ClientSession", _FakeMcpSession)
+    monkeypatch.setattr("gateway.services.mcp_loop.acompletion", fake_loop_acompletion)
+
+    response = platform_client.post(
+        f"{API_ROOT}/chat/completions",
+        json={
+            "model": "anything",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "mcp_servers": [{"name": "test", "url": "https://93.184.216.34/mcp"}],
+        },
+        headers={"Authorization": "Bearer user_test_token"},
+    )
+
+    assert response.status_code == 200
+    payloads = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
+    assert payloads[-1] == "[DONE]", response.text
+    frames = [json.loads(payload) for payload in payloads[:-1]]
+    assert not [frame for frame in frames if "error" in frame], response.text
+    choices = [choice for frame in frames for choice in frame["choices"]]
+    assert "".join(choice["delta"].get("content") or "" for choice in choices) == "hybrid-smoke-ok"
+    assert [choice["finish_reason"] for choice in choices if choice["finish_reason"]] == ["stop"]
+    assert not [choice for choice in choices if choice["delta"].get("tool_calls")]
+    usage_frames = [frame["usage"] for frame in frames if not frame["choices"]]
+    assert [(usage["prompt_tokens"], usage["completion_tokens"]) for usage in usage_frames] == [(30, 5)]
+    assert transport.exited_in == [transport.entered_in]
+    successes = [report for report in usage_reports if report.get("status") == "success"]
+    assert len(successes) == 1, usage_reports
+    assert successes[0]["correlation_id"] == "tool-stream-usage-att"
+    assert successes[0]["usage"]["prompt_tokens"] == 30
+    assert successes[0]["usage"]["completion_tokens"] == 5
+
+
 # ---------------------------------------------------------------------------
 # Web-search platform policy resolution
 # ---------------------------------------------------------------------------
@@ -2043,8 +2187,7 @@ def test_hybrid_mode_web_search_merges_workspace_config(
     monkeypatch: pytest.MonkeyPatch,
     control_plane_transport: InstallControlPlane,
 ) -> None:
-    """When enabled, the resolved workspace config is merged into the tool
-    entry with per-request values winning over workspace defaults."""
+    """A request value that narrows a workspace limit survives, and the workspace fills what the request left blank."""
     monkeypatch.setenv("OTARI_WEB_SEARCH_URL", "http://searxng:8080")
     _FakeWebSearchBackend.last_tool_entry = None
     _FakeWebSearchBackend.last_auth_token = None
@@ -2093,7 +2236,7 @@ def test_hybrid_mode_web_search_merges_workspace_config(
         json={
             "model": "anything",
             "messages": [{"role": "user", "content": "hi"}],
-            # Per-request max_results=3 must win over the workspace default 9.
+            # 3 is below the workspace's ceiling of 9, so it survives.
             "tools": [{"type": "otari_web_search", "max_results": 3}],
         },
         headers={"Authorization": "Bearer user_test_token"},
@@ -2102,15 +2245,141 @@ def test_hybrid_mode_web_search_merges_workspace_config(
     assert response.status_code == 200
     merged = _FakeWebSearchBackend.last_tool_entry
     assert merged is not None
-    # Per-request value wins.
     assert merged["max_results"] == 3
-    # Workspace defaults fill in the unset keys.
+    # The workspace fills what the request left blank.
     assert merged["allowed_domains"] == ["docs.python.org"]
     assert merged["purpose_hint"] == "workspace hint"
     assert merged["provider_options"] == {"search_depth": "advanced"}
     # The backend here is searxng (NOT the platform base URL), so the gateway
     # must NOT leak the platform token to it.
     assert _FakeWebSearchBackend.last_auth_token is None
+
+
+WebSearchCall = Callable[[dict[str, Any], dict[str, Any]], httpx2.Response]
+
+
+@pytest.fixture
+def post_web_search(
+    platform_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    control_plane_transport: InstallControlPlane,
+) -> WebSearchCall:
+    """Return a function that sends one hybrid completion declaring web search.
+
+    The control plane answers with the policy the call passes.
+    """
+    monkeypatch.setenv("OTARI_WEB_SEARCH_URL", "http://searxng:8080")
+    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_retrieval_backend", _FakeWebSearchBackend)
+    _FakeWebSearchBackend.last_tool_entry = None
+
+    async def fake_loop_acompletion(**kwargs: Any) -> ChatCompletion:
+        return ChatCompletion(
+            id="cmpl-ws-ceiling",
+            object="chat.completion",
+            created=0,
+            model="openai:gpt-4o-mini",
+            choices=[
+                Choice(
+                    finish_reason="stop",
+                    index=0,
+                    message=ChatCompletionMessage(role="assistant", content="answer"),
+                )
+            ],
+            usage=CompletionUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+        )
+
+    monkeypatch.setattr("gateway.services.mcp_loop.acompletion", fake_loop_acompletion)
+
+    def post(workspace: dict[str, Any], request_entry: dict[str, Any]) -> httpx2.Response:
+        async def fake_post_platform(
+            url: str, headers: dict[str, str], body: dict[str, Any], timeout_seconds: float
+        ) -> httpx.Response:
+            if url.endswith("/gateway/provider-keys/resolve"):
+                return _single_attempt_resolve_response(request_id="ws-req-ceiling")
+            if url.endswith("/gateway/web-search/resolve"):
+                return httpx.Response(200, json={"enabled": True, "authorized_tools": ["web_search"], **workspace})
+            return httpx.Response(204)
+
+        control_plane_transport(fake_post_platform)
+        return platform_client.post(
+            f"{API_ROOT}/chat/completions",
+            json={
+                "model": "anything",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "otari_web_search", **request_entry}],
+            },
+            headers={"Authorization": "Bearer user_test_token"},
+        )
+
+    return post
+
+
+@pytest.mark.parametrize(
+    ("workspace", "request_entry", "expected"),
+    [
+        pytest.param(
+            {"max_results": 9},
+            {"max_results": 50},
+            {"max_results": 9},
+            id="max-results",
+        ),
+        pytest.param(
+            {"blocked_domains": ["spam.example"]},
+            {"blocked_domains": ["other.example"]},
+            {"blocked_domains": ["other.example", "spam.example"]},
+            id="blocked-domains",
+        ),
+        pytest.param(
+            {"allowed_domains": ["example.com"]},
+            {"allowed_domains": ["docs.example.com"]},
+            {"allowed_domains": ["docs.example.com"]},
+            id="allowed-domains",
+        ),
+    ],
+)
+def test_hybrid_mode_web_search_workspace_limits_are_a_ceiling(
+    post_web_search: WebSearchCall,
+    workspace: dict[str, Any],
+    request_entry: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    """A request narrows the workspace's web search limits and never widens them."""
+    response = post_web_search(workspace, request_entry)
+
+    assert response.status_code == 200, response.text
+    merged = _FakeWebSearchBackend.last_tool_entry
+    assert merged is not None
+    for key, value in expected.items():
+        assert merged[key] == value
+
+
+@pytest.mark.parametrize(
+    ("workspace_max", "expected"),
+    [pytest.param(9, 5, id="above-the-deployment"), pytest.param(3, 3, id="below-the-deployment")],
+)
+def test_hybrid_mode_web_search_workspace_max_results_never_raises_the_deployment_default(
+    post_web_search: WebSearchCall,
+    monkeypatch: pytest.MonkeyPatch,
+    workspace_max: int,
+    expected: int,
+) -> None:
+    """With no request value, the lower of the workspace's ceiling and the deployment's default applies."""
+    monkeypatch.setenv("OTARI_WEB_SEARCH_MAX_RESULTS", "5")
+
+    response = post_web_search({"max_results": workspace_max}, {})
+
+    assert response.status_code == 200, response.text
+    merged = _FakeWebSearchBackend.last_tool_entry
+    assert merged is not None
+    assert merged["max_results"] == expected
+
+
+def test_hybrid_mode_web_search_refuses_an_allow_list_outside_the_workspace(post_web_search: WebSearchCall) -> None:
+    """A request allow-list that shares nothing with the workspace's is refused, not substituted."""
+    response = post_web_search({"allowed_domains": ["docs.python.org"]}, {"allowed_domains": ["evil.example"]})
+
+    assert response.status_code == 403, response.text
+    assert _FakeWebSearchBackend.last_tool_entry is None
 
 
 def test_hybrid_mode_web_search_forwards_token_to_platform_backend(
@@ -2378,6 +2647,7 @@ class _FakeSandboxBackend:
     last_purpose_hint: str | None = None
     last_image: str | None = None
     last_allowed_tools: frozenset[str] | None = None
+    last_timeout_s: float | None = None
 
     def __init__(
         self,
@@ -2399,6 +2669,7 @@ class _FakeSandboxBackend:
         type(self).last_purpose_hint = purpose_hint
         type(self).last_image = image
         type(self).last_allowed_tools = allowed_tools
+        type(self).last_timeout_s = timeout_s
         self._tally = tally
 
     async def __aenter__(self) -> "_FakeSandboxBackend":
@@ -2468,6 +2739,58 @@ def test_platform_mode_sandbox_403_when_disabled(
     assert response.json() == {"detail": "code execution is not enabled for this workspace"}
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"enabled": "yes"},
+        {"enabled": True, "max_iterations": "4"},
+        {"enabled": True, "exec_timeout_s": 0},
+        {"enabled": True, "tools": "code_execution"},
+        {"enabled": True, "executor": "sometimes"},
+    ],
+)
+def test_platform_mode_sandbox_502_when_the_policy_is_malformed(
+    platform_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    control_plane_transport: InstallControlPlane,
+    answer: dict[str, Any],
+) -> None:
+    """A malformed field is a contract break, so no code runs and nothing reaches the provider."""
+    monkeypatch.setenv("OTARI_SANDBOX_URL", "http://sandbox:8080")
+    provider_called = False
+
+    async def fake_post_platform(
+        url: str, headers: dict[str, str], body: dict[str, Any], timeout_seconds: float
+    ) -> httpx.Response:
+        if url.endswith("/gateway/provider-keys/resolve"):
+            return _single_attempt_resolve_response(request_id="sbx-malformed")
+        if url.endswith("/gateway/code-execution/resolve"):
+            return httpx.Response(200, json=answer)
+        return httpx.Response(204)
+
+    async def fake_acompletion(**kwargs: Any) -> Any:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("a request with a malformed policy reached the provider")
+
+    control_plane_transport(fake_post_platform)
+    monkeypatch.setattr("gateway.api.routes.chat.acompletion", fake_acompletion)
+
+    response = platform_client.post(
+        f"{API_ROOT}/chat/completions",
+        json={
+            "model": "anything",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "otari_code_execution"}],
+        },
+        headers={"Authorization": "Bearer user_test_token"},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Authorization service returned a malformed code-execution policy"}
+    assert provider_called is False
+
+
 def test_platform_mode_sandbox_applies_workspace_default_purpose_hint(
     platform_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -2508,23 +2831,20 @@ def test_platform_mode_sandbox_applies_workspace_default_purpose_hint(
     assert _FakeSandboxBackend.last_purpose_hint == "workspace hint"
 
 
-def test_platform_mode_sandbox_uses_the_deployments_own_image_and_no_tool_allow_list(
+def test_platform_mode_sandbox_applies_the_workspace_tools_and_timeout(
     platform_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     control_plane_transport: InstallControlPlane,
 ) -> None:
-    """Hybrid keeps its own arrangement for the two columns #740 added.
+    """The tool list and timeout are ceilings, as on a data plane with its own rows.
 
-    ``image`` still comes from this gateway's config, because a hybrid gateway
-    may be pointed at a sandbox of its own and the platform's resolve carries no
-    image. ``tools`` comes back on that resolve but is deliberately *not*
-    enforced here: the /v1/sandbox proxy re-enforces the allow-list, and
-    enforcing it twice would let this gateway refuse a tool the platform admits.
+    The image stays the deployment's, because the resolve carries no image.
     """
     monkeypatch.setenv("OTARI_SANDBOX_URL", "http://sandbox:8080")
     monkeypatch.setenv("OTARI_SANDBOX_SESSION_IMAGE", "mzdotai/otari-sandbox-container:latest")
     _FakeSandboxBackend.last_image = None
-    _FakeSandboxBackend.last_allowed_tools = frozenset()
+    _FakeSandboxBackend.last_allowed_tools = None
+    _FakeSandboxBackend.last_timeout_s = None
 
     async def fake_post_platform(
         url: str, headers: dict[str, str], body: dict[str, Any], timeout_seconds: float
@@ -2532,7 +2852,7 @@ def test_platform_mode_sandbox_uses_the_deployments_own_image_and_no_tool_allow_
         if url.endswith("/gateway/provider-keys/resolve"):
             return _single_attempt_resolve_response(request_id="sbx-image")
         if url.endswith("/gateway/code-execution/resolve"):
-            return httpx.Response(200, json={"enabled": True, "tools": ["code_execution"]})
+            return httpx.Response(200, json={"enabled": True, "tools": ["code_execution"], "exec_timeout_s": 7})
         return httpx.Response(204)
 
     async def fake_loop_acompletion(**kwargs: Any) -> ChatCompletion:
@@ -2554,7 +2874,40 @@ def test_platform_mode_sandbox_uses_the_deployments_own_image_and_no_tool_allow_
 
     assert response.status_code == 200
     assert _FakeSandboxBackend.last_image == "mzdotai/otari-sandbox-container:latest"
-    assert _FakeSandboxBackend.last_allowed_tools is None
+    assert _FakeSandboxBackend.last_allowed_tools == frozenset({"code_execution"})
+    assert _FakeSandboxBackend.last_timeout_s == 7
+
+
+def test_platform_mode_sandbox_403_when_the_workspace_tools_leave_nothing_to_run(
+    platform_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    control_plane_transport: InstallControlPlane,
+) -> None:
+    monkeypatch.setenv("OTARI_SANDBOX_URL", "http://sandbox:8080")
+
+    async def fake_post_platform(
+        url: str, headers: dict[str, str], body: dict[str, Any], timeout_seconds: float
+    ) -> httpx.Response:
+        if url.endswith("/gateway/provider-keys/resolve"):
+            return _single_attempt_resolve_response(request_id="sbx-no-tools")
+        if url.endswith("/gateway/code-execution/resolve"):
+            return httpx.Response(200, json={"enabled": True, "tools": ["bash_code_execution"]})
+        return httpx.Response(204)
+
+    control_plane_transport(fake_post_platform)
+
+    response = platform_client.post(
+        f"{API_ROOT}/chat/completions",
+        json={
+            "model": "anything",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "otari_code_execution"}],
+        },
+        headers={"Authorization": "Bearer user_test_token"},
+    )
+
+    assert response.status_code == 403
+    assert "excludes every tool kind" in response.json()["detail"]
 
 
 def test_platform_mode_streaming_sandbox_gets_the_same_image(

@@ -2,7 +2,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any
 
-from any_llm import LLMProvider, acompletion
+from any_llm import acompletion
 from any_llm.types.completion import (
     ChatCompletion,
     ChatCompletionChunk,
@@ -10,7 +10,6 @@ from any_llm.types.completion import (
     CompletionUsage,
 )
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
-from fastapi.responses import StreamingResponse
 from pydantic import Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +18,7 @@ from gateway.api.deps import (
     McpServerPortDep,
     ModelProviderPortDep,
     OptionalFileServiceDep,
+    WebSearchPolicyPortDep,
     build_sandbox_container_registry,
     build_sandbox_file_bridge,
     get_config,
@@ -27,11 +27,14 @@ from gateway.api.deps import (
     get_unit_of_work_if_needed,
 )
 from gateway.api.routes._helpers import latest_user_text, routing_signal_from_messages
+from gateway.api.routes._idempotency import IdempotencyGuard, IdempotencyGuardDep, IdempotentReplay
 from gateway.api.routes._normalize import normalize_request_messages, sandbox_requested
 from gateway.api.routes._pipeline import (
     NO_RESOLVABLE_PROVIDER_DETAIL,
     PROVIDER_ERROR_DETAIL,
+    DeclaredTools,
     ErrorKind,
+    ToolBackends,
     classify_provider_error,
     default_attempt_kwargs,
     log_usage,
@@ -52,15 +55,15 @@ from gateway.api.routes._schema_derive import SESSION_LABEL_DESC, SESSION_LABEL_
 from gateway.api.routes._tools import CODE_EXECUTION_HEADER, WEB_SEARCH_HEADER, _strip_gateway_fields
 from gateway.core.config import GatewayConfig
 from gateway.core.unit_of_work import UnitOfWork
-from gateway.core.usage import GatewayUsage
+from gateway.core.usage import GatewayUsage, reasoning_tokens_of
 from gateway.core.usage_source import PLAYGROUND_USAGE_ENDPOINT
 from gateway.log_config import logger
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
-from gateway.models.tools import CodeExecutor
 from gateway.ports.code_execution_port import CodeExecutionPort
 from gateway.ports.mcp_server_port import McpServerPort
 from gateway.ports.model_provider_port import ModelProviderPort
+from gateway.ports.web_search_policy_port import WebSearchPolicyPort
 from gateway.services.files import FileService, StagedFile
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import (
@@ -73,6 +76,7 @@ from gateway.services.mcp_loop import (
 from gateway.services.tools import Dialect, ToolUseBudget
 from gateway.streaming import OPENAI_STREAM_FORMAT, StreamFormat
 from gateway.types.attempt import Attempt
+from gateway.types.normalization_target import NormalizationTarget
 from gateway.types.session_principal import SessionPrincipal
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -224,6 +228,7 @@ class _ChatAdapter:
             total_tokens=chunk.usage.total_tokens or 0,
             prompt_tokens_details=details,
             cache_read_tokens=(details.cached_tokens or 0) if details is not None else 0,
+            reasoning_tokens=reasoning_tokens_of(chunk.usage),
         )
 
     def extract_usage(self, result: ChatCompletion) -> CompletionUsage | None:
@@ -403,7 +408,9 @@ async def chat_completions(
     model_provider: ModelProviderPortDep,
     code_execution_port: CodeExecutionPortDep,
     mcp_server_port: McpServerPortDep,
-) -> ChatCompletion | StreamingResponse:
+    web_search_policy_port: WebSearchPolicyPortDep,
+    idempotency: IdempotencyGuardDep,
+) -> ChatCompletion | Response:
     """OpenAI-compatible chat completions endpoint.
 
     Supports both streaming and non-streaming responses.
@@ -427,6 +434,8 @@ async def chat_completions(
         model_provider=model_provider,
         code_execution_port=code_execution_port,
         mcp_server_port=mcp_server_port,
+        web_search_policy_port=web_search_policy_port,
+        idempotency=idempotency,
     )
 
 
@@ -444,8 +453,10 @@ async def run_chat_completion(
     model_provider: ModelProviderPort,
     code_execution_port: CodeExecutionPort | None,
     mcp_server_port: McpServerPort,
+    web_search_policy_port: WebSearchPolicyPort,
     session_principal: SessionPrincipal | None = None,
-) -> ChatCompletion | StreamingResponse:
+    idempotency: IdempotencyGuard | None = None,
+) -> ChatCompletion | Response:
     """Serve one chat completion, from the resolved preamble to the response.
 
     The body of :func:`chat_completions`, as a plain function so a second route
@@ -474,14 +485,7 @@ async def run_chat_completion(
     # sandbox session once the billed user and workspace are resolved.
     sandbox_inputs: list[StagedFile] = []
 
-    async def _normalize(
-        user_id: str,
-        provider: LLMProvider | None,
-        model: str,
-        instance: str | None,
-        workspace_id: uuid.UUID | None,
-        workspace_executor: CodeExecutor | None,
-    ) -> tuple[int, CompletionUsage | None]:
+    async def _normalize(target: NormalizationTarget) -> tuple[int, CompletionUsage | None]:
         # Resolve uploaded file/image blocks into the wire payload (extract to
         # text for text-only models, inline for natively-capable ones) before
         # the cost estimate. Standalone only; no-op when the files feature is
@@ -490,19 +494,19 @@ async def run_chat_completion(
             request.messages,
             fmt="openai",
             config=config,
-            provider=provider,
-            model=model,
+            provider=target.provider,
+            model=target.model,
             files=files,
-            user_id=user_id,
-            instance=instance,
-            workspace_id=workspace_id,
+            user_id=target.user_id,
+            instance=target.instance,
+            workspace_id=target.file_workspace_id,
             sandbox_requested=sandbox_requested(
                 request.tools,
                 config=config,
-                provider=provider,
+                provider=target.provider,
                 dialect=adapter.name,
                 code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
-                workspace_executor=workspace_executor,
+                workspace_executor=target.workspace_executor,
             ),
         )
         sandbox_inputs.extend(stats.sandbox_inputs)
@@ -510,57 +514,66 @@ async def run_chat_completion(
 
     output_cap = _effective_output_cap(request.max_tokens, request.max_completion_tokens)
 
-    ctx = await resolve_request_context(
-        adapter=adapter,
-        raw_request=raw_request,
-        response=response,
-        db=db,
-        uow=uow,
-        config=config,
-        log_writer=log_writer,
-        model=request.model,
-        user_id_from_request=request.user,
-        estimate_prompt_chars=len(str(request.messages)),
-        estimate_max_output_tokens=output_cap,
-        master_key_user_required_detail=_MASTER_KEY_USER_REQUIRED,
-        user_forbidden_detail=_USER_FORBIDDEN,
-        session_principal=session_principal,
-        routing_signal=lambda: routing_signal_from_messages(
-            request.messages, raw_request, has_tools=bool(request.tools)
-        ),
-        normalize_messages=_normalize,
-        tools=request.tools,
-    )
+    try:
+        ctx = await resolve_request_context(
+            adapter=adapter,
+            raw_request=raw_request,
+            response=response,
+            db=db,
+            uow=uow,
+            config=config,
+            log_writer=log_writer,
+            model=request.model,
+            user_id_from_request=request.user,
+            estimate_prompt_chars=len(str(request.messages)),
+            estimate_max_output_tokens=output_cap,
+            master_key_user_required_detail=_MASTER_KEY_USER_REQUIRED,
+            user_forbidden_detail=_USER_FORBIDDEN,
+            session_principal=session_principal,
+            routing_signal=lambda: routing_signal_from_messages(
+                request.messages, raw_request, has_tools=bool(request.tools)
+            ),
+            normalize_messages=_normalize,
+            tools=request.tools,
+            idempotency=None if request.stream else idempotency,
+        )
+    except IdempotentReplay as replay:
+        return replay.response()
 
     tool_ctx = await prepare_gateway_tools(
         adapter=adapter,
         ctx=ctx,
         response=response,
-        guardrails=request.guardrails,
-        guardrail_text=latest_user_text(request.messages),
-        tools=request.tools,
-        mcp_servers=request.mcp_servers,
-        mcp_server_ids=request.mcp_server_ids,
-        max_tool_iterations=request.max_tool_iterations,
-        tools_header=request.tools_header,
-        code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
-        web_search_header=raw_request.headers.get(WEB_SEARCH_HEADER),
-        code_execution_port=code_execution_port,
-        mcp_server_port=mcp_server_port,
-        sandbox_containers=build_sandbox_container_registry(
-            config=config,
-            uow=ctx.uow,
-            user_id=ctx.user_id,
-            workspace_id=ctx.workspace_id,
-            port=code_execution_port,
+        declared=DeclaredTools(
+            guardrails=request.guardrails,
+            guardrail_text=latest_user_text(request.messages),
+            tools=request.tools,
+            mcp_servers=request.mcp_servers,
+            mcp_server_ids=request.mcp_server_ids,
+            max_tool_iterations=request.max_tool_iterations,
+            tools_header=request.tools_header,
+            code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
+            web_search_header=raw_request.headers.get(WEB_SEARCH_HEADER),
         ),
-        sandbox_files=build_sandbox_file_bridge(
-            raw_request=raw_request,
-            config=config,
-            uow=ctx.uow,
-            user_id=ctx.user_id,
-            workspace_id=ctx.workspace_id,
-            inputs=sandbox_inputs,
+        backends=ToolBackends(
+            code_execution_port=code_execution_port,
+            mcp_server_port=mcp_server_port,
+            web_search_policy_port=web_search_policy_port,
+            sandbox_containers=build_sandbox_container_registry(
+                config=config,
+                uow=ctx.uow,
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+                port=code_execution_port,
+            ),
+            sandbox_files=build_sandbox_file_bridge(
+                raw_request=raw_request,
+                config=config,
+                uow=ctx.uow,
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+                inputs=sandbox_inputs,
+            ),
         ),
     )
 
@@ -664,7 +677,7 @@ async def run_chat_completion(
         ctx, config, request.model, adapter=adapter, model_provider=model_provider
     )
     call_kwargs = {**resolved.kwargs, **request_fields, "model": resolved.dispatch_model}
-    return await run_standalone_non_stream(
+    result = await run_standalone_non_stream(
         adapter=adapter,
         ctx=ctx,
         tool_ctx=tool_ctx,
@@ -675,3 +688,6 @@ async def run_chat_completion(
         display_model=resolved.alias or request.model,
         base_request_fields=request_fields,
     )
+    if idempotency is not None:
+        await idempotency.complete(result, response)
+    return result
