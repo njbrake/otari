@@ -129,6 +129,7 @@ from gateway.core.usage import (
     cache_write_1h_tokens_of,
     cache_write_tokens_of,
 )
+from gateway.core.usage_filters import TOOL_METER_NAMESPACE
 from gateway.exceptions.tools_exceptions import (
     McpServerResolutionFailedError,
     WorkspaceMcpServerNotFoundError,
@@ -234,7 +235,6 @@ from gateway.services.tenancy.workspace_web_search_service import (
 from gateway.services.tool_usage import (
     MAX_TOOL_NAMES,
     OVERFLOW_TOOL_NAME,
-    TOOL_METER_NAMESPACE,
     ToolUsageTally,
 )
 from gateway.services.tools import Dialect, ToolUseBudget, native_rendering

@@ -65,14 +65,14 @@ since. A module "runs queries" when it imports a query builder (`select`,
 
 | Measure | Count |
 | --- | --- |
-| Service modules | 127, of which 64 sit flat at the top of `services/` |
+| Service modules | 129, of which 64 sit flat at the top of `services/` |
 | Service modules that run queries | 35, plus 2 that only call `session.get` |
 | Route modules | 76 |
 | Route modules that run queries | 16, plus 1 that only calls `session.get` |
 | Route modules that define Pydantic models inline | 40 |
 | Model modules | 21 |
 | Repository modules | 24: a base, `users_repository.py`, and the rest under `tenancy/`, `overview/`, `api_keys/`, `files/`, `budgets/`, `pricing/`, `providers/`, `code_execution/`, `saved_views/` and `usage/` |
-| Service packages per domain | 7: `services/tools/`, which holds the built-in tool registry and no service yet, `services/overview/`, `services/budgets/`, `services/api_keys/`, `services/files/`, `services/saved_views/` and `services/providers/`, which holds the organization-scoped half of providers. `services/mail/`, `services/routing/` and `services/tenancy/` are older subpackages |
+| Service packages per domain | 8: `services/tools/`, which holds the built-in tool registry and no service yet, `services/overview/`, `services/budgets/`, `services/api_keys/`, `services/files/`, `services/saved_views/`, `services/usage/`, which holds the usage log's reads, and `services/providers/`, which holds the organization-scoped half of providers. `services/mail/`, `services/routing/` and `services/tenancy/` are older subpackages |
 | Repository packages per domain | 8: `repositories/overview/`, `repositories/api_keys/`, `repositories/files/`, `repositories/budgets/`, `repositories/pricing/`, `repositories/providers/`, `repositories/saved_views/` and `repositories/usage/`. `repositories/tenancy/` is an older subpackage |
 | Modules in `schemas/` | Six domain modules so far, `budgets.py`, `files.py`, `overview.py`, `providers.py`, `saved_views.py` and `usage.py` |
 | Modules in `exceptions/` | The shared error bases in `_base.py`, which the package root re-exports, `shared_exceptions.py` for the errors no one domain owns, and nine domain modules: `budget_exceptions.py`, `files_exceptions.py`, `guardrails_exceptions.py`, `identity_exceptions.py`, `organizations_exceptions.py`, `pricing_exceptions.py`, `providers_exceptions.py`, `saved_views_exceptions.py` and `tools_exceptions.py` |
@@ -309,18 +309,19 @@ workspace.
 Usage rows, the usage log writer, OTLP ingest and coding-agent telemetry.
 
 - Routes: `usage.py`, `organization_usage.py`, `otlp.py`, `agent_telemetry.py`;
-  helper `_billing_schemas.py`
-- Services: `usage_admin_service.py`, `external_usage_service.py`,
-  `log_writer.py`, `agent_telemetry_service.py`,
-  `agent_telemetry_admin_service.py`; the Claude Code transcript parser is
+  helpers `_billing_schemas.py` and `_usage_common.py`, the read filters both usage
+  route modules take
+- Services: `usage/`, the log's reads over the repositories below;
+  `usage_admin_service.py`, `external_usage_service.py`, `log_writer.py`,
+  `agent_telemetry_service.py`, `agent_telemetry_admin_service.py`; the Claude Code transcript parser is
   `otari_agent.claude_code_import`, beside the CLI that uses it
 - Repositories: `usage/`, the queries behind the log's reads (a page of rows in
   any order, the attempts folded into them, latency percentiles, the activity
   groups); the routes' older queries have not moved here yet
 - Schemas: `usage.py`, the activity groups' response models; the routes' older
   models have not moved here yet
-- Core: `usage_filters.py`, the row filters, sort orders and request-count
-  expressions the reads and the bulk mutations share
+- Core: `usage_filters.py`, the row filters, sort orders, request-count
+  expressions and read windows the reads and the bulk mutations share
 - Models: `usage.py`
 
 ### inference

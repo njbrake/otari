@@ -51,6 +51,7 @@ describe("bucketForWindow / bucketDurationMs", () => {
   })
 
   it("reports the bucket duration", () => {
+    expect(bucketDurationMs("5min")).toBe(5 * 60 * 1000)
     expect(bucketDurationMs("hour")).toBe(HOUR_S * 1000)
     expect(bucketDurationMs("day")).toBe(DAY_S * 1000)
   })

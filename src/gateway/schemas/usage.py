@@ -1,8 +1,11 @@
 """Response models of the usage log's activity groups."""
 
+from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from gateway.core.sql import utc_bound
 
 # The columns the activity log can be collapsed on.
 ActivityGroupBy = Literal["api_key", "source_label", "model", "user", "policy", "alias"]
@@ -20,11 +23,17 @@ class UsageActivityGroup(BaseModel):
     requests counted, the model time the group took.
     """
 
+    # Built from the read repository's group rows by attribute.
+    model_config = ConfigDict(from_attributes=True)
+
     key: str | None
     label: str | None = None
     requests: int
     errors: int
     absorbed: int
+    # Every row's cost, imported usage's included. ``imported_cost`` is the part
+    # from rows this deployment did not serve, so the gateway's own spend is
+    # ``cost - imported_cost``, as on the summary's totals.
     cost: float
     imported_cost: float
     input_tokens: int
@@ -37,6 +46,11 @@ class UsageActivityGroup(BaseModel):
     # models its rows name in all, an absorbed attempt's included.
     models: list[str]
     model_count: int
+
+    @field_validator("first_at", "last_at", mode="before")
+    @classmethod
+    def _utc_iso(cls, value: object) -> object:
+        return utc_bound(value).isoformat() if isinstance(value, datetime) else value
 
 
 class UsageActivityGroups(BaseModel):

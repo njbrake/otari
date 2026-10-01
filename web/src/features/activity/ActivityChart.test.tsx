@@ -49,4 +49,51 @@ describe("ActivityChart", () => {
     fireEvent.keyDown(slider(), { key: "Escape" })
     expect(onSpan).toHaveBeenCalledWith(undefined)
   })
+
+  it("hangs the span's label leftward past the middle, so it stays inside the plot", () => {
+    render(
+      <ActivityChart
+        bars={BARS}
+        span={{ from: BARS[3].start, to: BARS[3].end }}
+        onSpan={vi.fn()}
+      />,
+    )
+    const label = screen.getByText("03:00–04:00")
+    expect(label).toHaveClass("-translate-x-full")
+    expect(label).toHaveStyle({ left: "100%" })
+  })
+
+  it("keeps an early span's label rightward from its start", () => {
+    render(
+      <ActivityChart
+        bars={BARS}
+        span={{ from: BARS[0].start, to: BARS[0].end }}
+        onSpan={vi.fn()}
+      />,
+    )
+    const label = screen.getByText("00:00–01:00")
+    expect(label).not.toHaveClass("-translate-x-full")
+    expect(label).toHaveStyle({ left: "0%" })
+  })
+
+  it("hangs the hover tooltip leftward over the later bars", () => {
+    render(<ActivityChart bars={BARS} span={undefined} onSpan={vi.fn()} />)
+    vi.spyOn(slider(), "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      width: 400,
+    } as DOMRect)
+    fireEvent.pointerEnter(slider())
+    fireEvent.pointerMove(slider(), { clientX: 390 })
+    const tooltip = screen.getByText("click to select · drag for a range")
+      .parentElement as HTMLElement
+    expect(tooltip).toHaveClass("-translate-x-full")
+
+    fireEvent.pointerMove(slider(), { clientX: 10 })
+    expect(
+      (
+        screen.getByText("click to select · drag for a range")
+          .parentElement as HTMLElement
+      ).className,
+    ).not.toContain("-translate-x-full")
+  })
 })

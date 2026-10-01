@@ -8,8 +8,8 @@ import pytest
 
 from gateway.adapters.code_execution_adapter import ProtocolCodeExecutionAdapter
 from gateway.api.routes._tools import Tool
+from gateway.api.routes._usage_common import GATEWAY_TOOL_NAMES
 from gateway.api.routes.tools import _managed_tools
-from gateway.api.routes.usage import GATEWAY_TOOL_NAMES
 from gateway.core.config import GatewayConfig
 from gateway.services._tool_loop import ToolBackend
 from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME, SandboxBackend

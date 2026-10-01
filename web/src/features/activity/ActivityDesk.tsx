@@ -6,10 +6,12 @@ import { TablePagination } from "@/design-system/data/TablePagination"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { PageIntro } from "@/design-system/layout/PageIntro"
+import { Sheet } from "@/design-system/overlays/Sheet"
 import { ACTIVITY_GROUP_LIMIT, NEWEST_FIRST } from "@/shared/api/usage"
 import { formatNumber } from "@/shared/helpers/format"
+import { useMediaQuery } from "@/shared/hooks/useMediaQuery"
 import { ActivityChartBand } from "./ActivityChartBand"
-import { ActivityHeaderCells, COLUMN_LABELS } from "./ActivityHeaderCells"
+import { ActivityHeaderCells } from "./ActivityHeaderCells"
 import { ActivityScopeBar } from "./ActivityScopeBar"
 import { ActivitySearch } from "./ActivitySearch"
 import { ActivityTable } from "./ActivityTable"
@@ -18,19 +20,20 @@ import { ActivityTotals } from "./ActivityTotals"
 import { activityColumns, tableMinWidthRem } from "./activityColumns"
 import {
   type ActivityUrl,
+  COLUMN_LABELS,
   type ColumnKey,
   columnForSort,
   GROUP_KEYS,
   GROUPS,
 } from "./activityQuery"
 import { describeGroup, showGroupPatch } from "./activityRows"
-import { describeSpan, windowBars } from "./chartBars"
+import { barSpanMs, describeSpan, windowBars } from "./chartBars"
 import { GroupMenu } from "./GroupMenu"
 import { LiveControl } from "./LiveControl"
 import { ManageImportedMenu } from "./ManageImportedMenu"
 import { MissingRequest } from "./MissingRequest"
 import { RequestPanel } from "./RequestPanel"
-import type { ActivityActions } from "./useActivityActions"
+import { type ActivityActions, REQUEST_VIEW_ID } from "./useActivityActions"
 import type { ActivityLog } from "./useActivityLog"
 import { useMainHeight } from "./useMainHeight"
 
@@ -42,9 +45,16 @@ const GROUP_COLUMNS = {
   member: "member",
 } as const
 
+// Below this the request panel beside the log leaves the log too narrow to
+// read: the panel and its gutter take 27.75rem, the compact table needs up to
+// 47rem, and the shell's sidebar and padding 19.5rem more. At 1280px the log
+// keeps about 33rem and scrolls its lanes; at 1024px it would keep 17.
+const BESIDE_QUERY = "(max-width: 1279px)"
+
 /**
  * Activity at a desk: the log as a table filtered from its own headers and
- * cells, with a request opened beside it rather than over it.
+ * cells, with a request opened beside it rather than over it where the screen
+ * is wide enough, and in a drawer over it where it is not.
  */
 export function ActivityDesk({
   url,
@@ -82,7 +92,8 @@ export function ActivityDesk({
   const { group, open } = log
   const { isManager, isOperator } = log.viewer
   const mainHeight = useMainHeight()
-  const isCompact = open !== undefined
+  const isNarrow = useMediaQuery(BESIDE_QUERY)
+  const isCompact = open !== undefined && !isNarrow
   const columns = activityColumns({
     isCompact,
     showsMembers: log.isMulti,
@@ -94,7 +105,21 @@ export function ActivityDesk({
     log.time.chartGrain,
     log.time.now,
   )
-  const barMs = bars.length ? bars[0].end - bars[0].start : 0
+  const barMs = barSpanMs(bars)
+  const panel = (entry: NonNullable<typeof open>) => (
+    <RequestPanel
+      entry={entry}
+      isOverlaid={isNarrow}
+      position={log.position}
+      memberName={log.memberName}
+      showsMember={log.isMulti}
+      onPrevious={() => act.step(-1)}
+      onNext={() => act.step(1)}
+      onClose={() => act.openRequest(undefined)}
+      onFilter={act.panelFilter}
+      onPriceModel={onPriceModel}
+    />
+  )
 
   return (
     <div className="flex items-start">
@@ -112,7 +137,9 @@ export function ActivityDesk({
               <LiveControl
                 isLive={isLive}
                 onLive={onLive}
+                isOperator={isOperator}
                 inFlight={log.inFlight}
+                isInFlightFailed={log.isInFlightFailed}
                 inFlightUpdatedAt={log.inFlightUpdatedAt}
               />
             </div>
@@ -302,23 +329,25 @@ export function ActivityDesk({
         )}
       </div>
 
-      {open ? (
+      {open && !isNarrow ? (
         <div
           className="sticky top-0 -my-6 -mr-6 ml-6"
           style={mainHeight ? { height: `${mainHeight}px` } : undefined}
         >
-          <RequestPanel
-            entry={open}
-            position={log.position}
-            memberName={log.memberName}
-            showsMember={log.isMulti}
-            onPrevious={() => act.step(-1)}
-            onNext={() => act.step(1)}
-            onClose={() => act.openRequest(undefined)}
-            onFilter={act.panelFilter}
-            onPriceModel={onPriceModel}
-          />
+          {panel(open)}
         </div>
+      ) : null}
+      {isNarrow ? (
+        <Sheet
+          isOpen={open !== undefined}
+          onOpenChange={(isOpen) => {
+            if (!isOpen) act.openRequest(undefined)
+          }}
+          label="Request"
+          id={REQUEST_VIEW_ID}
+        >
+          {open ? panel(open) : null}
+        </Sheet>
       ) : null}
     </div>
   )

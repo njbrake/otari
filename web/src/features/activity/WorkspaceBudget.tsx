@@ -1,5 +1,5 @@
 import type { WorkspaceSpend } from "@/client"
-import { Meter } from "@/design-system/metrics/Meter"
+import { SpendMeter, spendState } from "@/design-system/metrics/SpendMeter"
 import {
   formatUsd,
   formatUsdHeadline,
@@ -43,14 +43,20 @@ export function WorkspaceBudget({
       <span className="text-subtle">
         Workspace budget{period ? `, ${period}` : ""}
       </span>
-      <span className="text-mono-caption text-foreground">
+      <span
+        className={`text-mono-caption ${
+          spendState(spend.spent, spend.max_budget) === "over"
+            ? "text-danger"
+            : "text-foreground"
+        }`}
+      >
         {formatUsd(spend.spent)} / {formatUsdHeadline(spend.max_budget)}
       </span>
-      <span className={isFullWidth ? "flex-1" : undefined}>
-        <Meter
-          fraction={spend.spent / spend.max_budget}
+      <span className={isFullWidth ? "flex-1" : "w-16"}>
+        <SpendMeter
+          spent={spend.spent}
+          allocated={spend.max_budget}
           ariaLabel={`Workspace budget used: ${formatUsd(spend.spent)} of ${formatUsd(spend.max_budget)}`}
-          className={isFullWidth ? "w-full" : "w-16"}
         />
       </span>
     </span>

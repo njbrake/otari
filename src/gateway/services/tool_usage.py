@@ -29,17 +29,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from gateway.core.usage_filters import TOOL_METER_NAMESPACE
+
 # Every tool backend marks a recoverable failure by prefixing the string it hands
 # back to the model. The tool loop's own error path uses the same prefix, so this
 # is the single vocabulary for "the call ran but did not work".
 TOOL_ERROR_SENTINEL = "[tool error]"
-
-# The meter namespace inside ``UsageLog.billing_meters``. Tool meters are nested
-# under one reserved key rather than sitting flat next to the token meters:
-# MCP tool names come from a caller-supplied server, and a tool named
-# ``completion_tokens`` sitting flat would be picked up by the billed-token SQL
-# in ``routes/usage.py`` and corrupt the aggregates for the whole window.
-TOOL_METER_NAMESPACE = "tools"
 
 # Bounds on what a caller-influenced name can write into the row. An MCP server
 # can advertise any number of tools with any names; the row is JSON, not a

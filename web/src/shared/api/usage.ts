@@ -1,5 +1,6 @@
 import {
   keepPreviousData,
+  queryOptions,
   useInfiniteQuery,
   useMutation,
   useQueries,
@@ -155,6 +156,69 @@ export interface UsageSort {
 /** The server's own order, so a caller that does not sort sends nothing. */
 export const NEWEST_FIRST: UsageSort = { key: "timestamp", order: "desc" }
 
+export function isSameSort(a: UsageSort, b: UsageSort): boolean {
+  return a.key === b.key && a.order === b.order
+}
+
+/**
+ * The filters without `include_absorbed`, which only the list and its count
+ * read: a summary, a grouping or a bulk selection counts earlier failed
+ * attempts separately either way.
+ */
+export function withoutListOnly(
+  filters: UsageFilters,
+): Omit<UsageFilters, "include_absorbed"> {
+  const { include_absorbed: _listOnly, ...rest } = filters
+  return rest
+}
+
+// The log is a snapshot an operator reads, not a feed. On a busy gateway rows
+// arrive faster than anyone can inspect them, so a page that refetched on its
+// own reshuffled the table out from under whoever was reading it. It refetches
+// only when asked: a mount, the refresh button, or a change of filters, window,
+// or page (all of which are in the key). Nothing here opts back into the
+// provider's refetch-on-focus default, which is already off (`provider.tsx`).
+// `useLiveUsageCount` is how the page still says that newer rows exist.
+const LOG_STALE_MS = 10_000
+
+/** One read of log rows: `limit` of them after the first `skip`, in `sort` order. */
+function fetchUsageRows(
+  base: string,
+  filters: UsageFilters,
+  { skip, limit, sort }: { skip: number; limit: number; sort: UsageSort },
+): Promise<UsageEntry[]> {
+  const params = usageParams(filters)
+  params.set("skip", String(skip))
+  params.set("limit", String(limit))
+  if (!isSameSort(sort, NEWEST_FIRST)) {
+    params.set("sort", sort.key)
+    params.set("order", sort.order)
+  }
+  return apiFetch<UsageEntry[]>(`${base}?${params.toString()}`)
+}
+
+// One page of the log. Every reader of a page goes through this, so a key
+// has one fetcher: a grouped log's preview of a group and the same filter's
+// first page share an entry and must agree on what it holds.
+function usagePageQuery(
+  base: string,
+  filters: UsageFilters,
+  page: number,
+  pageSize: number,
+  sort: UsageSort,
+) {
+  return queryOptions({
+    queryKey: [USAGE, "list", base, filters, page, pageSize, sort],
+    queryFn: () =>
+      fetchUsageRows(base, filters, {
+        skip: page * pageSize,
+        limit: pageSize,
+        sort,
+      }),
+    staleTime: LOG_STALE_MS,
+  })
+}
+
 // `placeholderData: keepPreviousData` keeps the current page on screen while the
 // next loads, so paging does not flash empty.
 export function useUsageLogs(
@@ -168,27 +232,9 @@ export function useUsageLogs(
 ) {
   const scope = useUsageScope()
   return useQuery({
-    queryKey: [USAGE, "list", scope.base, filters, page, pageSize, sort],
-    queryFn: () => {
-      const params = usageParams(filters)
-      params.set("skip", String(page * pageSize))
-      params.set("limit", String(pageSize))
-      if (sort.key !== NEWEST_FIRST.key || sort.order !== NEWEST_FIRST.order) {
-        params.set("sort", sort.key)
-        params.set("order", sort.order)
-      }
-      return apiFetch<UsageEntry[]>(`${scope.base}?${params.toString()}`)
-    },
+    ...usagePageQuery(scope.base, filters, page, pageSize, sort),
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
-    // The log is a snapshot an operator reads, not a feed. On a busy gateway rows
-    // arrive faster than anyone can inspect them, so a page that refetched on its
-    // own reshuffled the table out from under whoever was reading it. It refetches
-    // only when asked: a mount, the refresh button, or a change of filters, window,
-    // or page (all of which are in the key). Nothing here opts back into the
-    // provider's refetch-on-focus default, which is already off (`provider.tsx`).
-    // `useLiveUsageCount` is how the page still says that newer rows exist.
-    staleTime: 10_000,
   })
 }
 
@@ -208,24 +254,20 @@ export function useUsageBatches(
   const scope = useUsageScope()
   return useInfiniteQuery({
     queryKey: [USAGE, "batches", scope.base, filters, batch, sort],
-    queryFn: ({ pageParam }) => {
-      const params = usageParams(filters)
-      params.set("skip", String(pageParam))
-      params.set("limit", String(batch))
-      if (sort.key !== NEWEST_FIRST.key || sort.order !== NEWEST_FIRST.order) {
-        params.set("sort", sort.key)
-        params.set("order", sort.order)
-      }
-      return apiFetch<UsageEntry[]>(`${scope.base}?${params.toString()}`)
-    },
+    queryFn: ({ pageParam }) =>
+      fetchUsageRows(scope.base, filters, {
+        skip: pageParam,
+        limit: batch,
+        sort,
+      }),
     initialPageParam: 0,
     getNextPageParam: (last, _pages, skip) =>
       last.length === batch && skip + batch < maxRows
         ? skip + batch
         : undefined,
     enabled: enabled && scope.isReady,
-    // A snapshot, as the paged log is (see `useUsageLogs`).
-    staleTime: 10_000,
+    // A snapshot, as the paged log is.
+    staleTime: LOG_STALE_MS,
   })
 }
 
@@ -247,19 +289,31 @@ export function useUsageRow(id: string | undefined) {
   })
 }
 
+// The count's query for the list it sits beside. Only the sort's column
+// matters: any but time bounds the window as the list's does, whichever way.
+function countParams(filters: UsageFilters, sortKey: UsageSortKey) {
+  const params = usageParams(filters)
+  if (sortKey !== NEWEST_FIRST.key) params.set("sort", sortKey)
+  return params.toString()
+}
+
 // Total rows matching the same filters, for the paginator's "N of M". A separate
-// request so /v1/usage stays a bare array; run alongside the list.
+// request so /v1/usage stays a bare array; run alongside the list, in its order.
 //
 // Deliberately as frozen as the log it counts (see `useUsageLogs`): the total
 // describes the page on screen, so a total that moved on its own would disagree
 // with the rows the operator can actually page through.
-export function useUsageCount(filters: UsageFilters, enabled = true) {
+export function useUsageCount(
+  filters: UsageFilters,
+  enabled = true,
+  sort: UsageSort = NEWEST_FIRST,
+) {
   const scope = useUsageScope()
   return useQuery({
-    queryKey: [USAGE, "count", scope.base, filters],
+    queryKey: [USAGE, "count", scope.base, filters, sort.key],
     queryFn: () =>
       apiFetch<UsageCount>(
-        `${scope.base}/count?${usageParams(filters).toString()}`,
+        `${scope.base}/count?${countParams(filters, sort.key)}`,
       ),
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
@@ -281,13 +335,17 @@ const NEW_ROW_POLL_MS = 15_000
 // other is deliberately ahead of it), and two observers of one query key cannot
 // disagree about how fresh their data is. The duplicate `COUNT(*)` at mount is
 // one indexed count, which is what makes polling it affordable in the first place.
-export function useLiveUsageCount(filters: UsageFilters, enabled = true) {
+export function useLiveUsageCount(
+  filters: UsageFilters,
+  enabled = true,
+  sort: UsageSort = NEWEST_FIRST,
+) {
   const scope = useUsageScope()
   return useQuery({
-    queryKey: [USAGE, "count", "live", scope.base, filters],
+    queryKey: [USAGE, "count", "live", scope.base, filters, sort.key],
     queryFn: () =>
       apiFetch<UsageCount>(
-        `${scope.base}/count?${usageParams(filters).toString()}`,
+        `${scope.base}/count?${countParams(filters, sort.key)}`,
       ),
     enabled: enabled && scope.isReady,
     refetchInterval: NEW_ROW_POLL_MS,
@@ -558,7 +616,7 @@ export function useActivityTotals(
   }: { enabled?: boolean; withP95?: boolean } = {},
 ) {
   const scope = useUsageScope()
-  const { include_absorbed: _listOnly, ...summaryFilters } = filters
+  const summaryFilters = withoutListOnly(filters)
   return useQuery({
     queryKey: [
       USAGE,
@@ -585,8 +643,7 @@ export function useActivityTotals(
 }
 
 // The first rows of each of several filtered sets, for the groups a grouped
-// log has open. Keyed as `useUsageLogs` keys a first page, so a group's rows and
-// the same filter's list share one cache entry.
+// log has open: each the first page of that filter's list, newest first.
 export function useUsagePreviews(
   filterSets: readonly UsageFilters[],
   limit: number,
@@ -594,14 +651,8 @@ export function useUsagePreviews(
   const scope = useUsageScope()
   return useQueries({
     queries: filterSets.map((filters) => ({
-      queryKey: [USAGE, "list", scope.base, filters, 0, limit, NEWEST_FIRST],
-      queryFn: () => {
-        const params = usageParams(filters)
-        params.set("limit", String(limit))
-        return apiFetch<UsageEntry[]>(`${scope.base}?${params.toString()}`)
-      },
+      ...usagePageQuery(scope.base, filters, 0, limit, NEWEST_FIRST),
       enabled: scope.isReady,
-      staleTime: 10_000,
     })),
   })
 }
@@ -628,7 +679,7 @@ export function useActivityGroups(
   }: GroupsQuery & { enabled?: boolean } = {},
 ) {
   const scope = useUsageScope()
-  const { include_absorbed: _listOnly, ...groupFilters } = filters
+  const groupFilters = withoutListOnly(filters)
   return useQuery({
     // The grouping ends the key, which is what the placeholder below compares.
     queryKey: [

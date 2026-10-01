@@ -1,31 +1,26 @@
-import { Modal } from "@heroui/react"
 import type { ReactNode } from "react"
-import { FiChevronLeft, FiSliders } from "react-icons/fi"
+import { FiSliders } from "react-icons/fi"
 import { Button } from "@/design-system/actions/Button"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
-import { DismissChip } from "@/design-system/indicators/DismissChip"
 import { Segmented } from "@/design-system/navigation/Segmented"
-import { NEWEST_FIRST } from "@/shared/api/usage"
-import { formatNumber, formatUsd } from "@/shared/helpers/format"
+import { Sheet } from "@/design-system/overlays/Sheet"
+import { isSameSort, NEWEST_FIRST } from "@/shared/api/usage"
+import { formatNumber } from "@/shared/helpers/format"
+import { ActivityChips } from "./ActivityChips"
 import { ActivitySearch } from "./ActivitySearch"
-import { shortId, splitCost } from "./activityModel"
-import {
-  type ActivityUrl,
-  groupOptions,
-  readNumber,
-  statusOptions,
-  togglePatch,
-} from "./activityQuery"
+import { ActivityTotals } from "./ActivityTotals"
+import { valueFilterModel } from "./activityFilters"
+import { type ActivityUrl, readNumber } from "./activityQuery"
 import { PHONE_BATCH } from "./activityRows"
-import { describeSpan, PHONE_BARS, phoneBars } from "./chartBars"
+import { barSpanMs, describeSpan, PHONE_BARS, phoneBars } from "./chartBars"
 import { FilterSheet, PHONE_SORTS, type SheetSection } from "./FilterSheet"
 import { MissingRequest } from "./MissingRequest"
 import { PhoneChart } from "./PhoneChart"
 import { PhoneRow } from "./PhoneRow"
 import { RequestPanel } from "./RequestPanel"
 import { ScopeSwitch } from "./ScopeSwitch"
-import type { ActivityActions } from "./useActivityActions"
+import { type ActivityActions, REQUEST_VIEW_ID } from "./useActivityActions"
 import type { ActivityLog, GroupList } from "./useActivityLog"
 import { WorkspaceBudget } from "./WorkspaceBudget"
 
@@ -68,81 +63,34 @@ export function ActivityPhone({
     (key) => key !== "30d" || !isManager,
   )
   const bars = phoneBars(log.series, log.time.range, log.time.now)
-  const barMs = bars.length ? bars[0].end - bars[0].start : 0
+  const barMs = barSpanMs(bars)
   const { sort, open, chips } = log
-  const toggle =
-    (column: "status" | "member" | "source" | "model" | "policy") =>
-    (value: string) =>
-      act.refine(togglePatch(url, column, value))
-  const listed = (list: GroupList) => ({
-    more: list.more,
-    isError: list.isError,
+  // The columns a phone filters by value: the desk's, less what it cannot fit.
+  const section = (
+    column: "status" | "member" | "source" | "model" | "policy",
+    list?: GroupList,
+  ): SheetSection => ({
+    ...valueFilterModel(url, column, {
+      groups: list?.groups,
+      totals: log.totals,
+      memberName: log.memberName,
+    }),
+    more: list?.more,
+    isError: list?.isError,
   })
   const sections: SheetSection[] = [
-    {
-      title: "Status",
-      options: statusOptions(url, log.totals),
-      picked: url.getAll("status"),
-      onToggle: toggle("status"),
-    },
-    ...(log.isMulti
-      ? [
-          {
-            title: "Member",
-            options: groupOptions(log.sheet.member.groups, (group) =>
-              log.memberName(group.key, group.label),
-            ),
-            picked: url.getAll("user_id"),
-            onToggle: toggle("member"),
-            ...listed(log.sheet.member),
-          },
-        ]
-      : []),
-    {
-      title: "Source",
-      options: groupOptions(
-        log.sheet.source.groups,
-        (group) => group.label ?? shortId(group.key),
-      ),
-      picked: url.getAll("api_key_id"),
-      onToggle: toggle("source"),
-      ...listed(log.sheet.source),
-    },
-    {
-      title: "Model",
-      options: groupOptions(log.sheet.model.groups, (group) => group.key),
-      picked: url.getAll("model"),
-      onToggle: toggle("model"),
-      isMono: true,
-      ...listed(log.sheet.model),
-    },
-    ...(log.isMulti
-      ? [
-          {
-            title: "Policy",
-            options: groupOptions(
-              log.sheet.policy.groups,
-              (group) => group.key,
-            ),
-            picked: url.getAll("policy_name"),
-            onToggle: toggle("policy"),
-            isMono: true,
-            ...listed(log.sheet.policy),
-          },
-        ]
-      : []),
+    section("status"),
+    ...(log.isMulti ? [section("member", log.sheet.member)] : []),
+    section("source", log.sheet.source),
+    section("model", log.sheet.model),
+    ...(log.isMulti ? [section("policy", log.sheet.policy)] : []),
   ]
   const cost = readNumber(url, "cost_gt")
-  const isSorted =
-    sort.key !== NEWEST_FIRST.key || sort.order !== NEWEST_FIRST.order
+  const isSorted = !isSameSort(sort, NEWEST_FIRST)
   const sortLabel =
-    PHONE_SORTS.find(
-      (option) =>
-        option.sort.key === sort.key && option.sort.order === sort.order,
-    )?.label ?? "Sorted"
+    PHONE_SORTS.find((option) => isSameSort(option.sort, sort))?.label ??
+    "Sorted"
   const filterCount = chips.length + (act.span ? 1 : 0)
-  const { billed, subscription } = splitCost(log.totals)
-  const failed = log.totals?.error_count ?? 0
 
   return (
     <>
@@ -213,40 +161,29 @@ export function ActivityPhone({
           </div>
           {filterCount || isSorted ? (
             <div className="flex gap-2 overflow-x-auto px-4 pb-2.5 [scrollbar-width:none]">
-              {isSorted ? (
-                <DismissChip
-                  label="Sort"
-                  value={sortLabel}
-                  onDismiss={() => act.sort(NEWEST_FIRST)}
-                />
-              ) : null}
-              {act.span ? (
-                <DismissChip
-                  label="Time"
-                  value={describeSpan(act.span.from, act.span.to, barMs)}
-                  onDismiss={() => act.setSpan(undefined)}
-                />
-              ) : null}
-              {chips.map((chip) => (
-                <DismissChip
-                  key={chip.key}
-                  label={chip.label}
-                  value={chip.value}
-                  onDismiss={() => act.refine(chip.clear)}
-                />
-              ))}
+              <ActivityChips
+                sort={
+                  isSorted
+                    ? {
+                        value: sortLabel,
+                        onDismiss: () => act.sort(NEWEST_FIRST),
+                      }
+                    : undefined
+                }
+                span={
+                  act.span
+                    ? {
+                        value: describeSpan(act.span.from, act.span.to, barMs),
+                        onDismiss: () => act.setSpan(undefined),
+                      }
+                    : undefined
+                }
+                chips={chips}
+                onClearChip={(chip) => act.refine(chip.clear)}
+              />
             </div>
           ) : null}
-          <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 border-t border-border-subtle bg-surface-subtle px-4 py-[0.4375rem] text-mono-micro whitespace-nowrap text-subtle">
-            <span className="text-foreground">
-              {formatNumber(log.totals?.request_count ?? 0)} requests
-            </span>
-            <span className={failed ? "text-danger" : undefined}>
-              {formatNumber(failed)} failed
-            </span>
-            <span className="text-foreground">{formatUsd(billed)} billed</span>
-            <span>{formatUsd(subscription)} subscription</span>
-          </div>
+          <ActivityTotals totals={log.totals} variant="phone" />
         </div>
 
         {log.isLoadingRows ? (
@@ -280,61 +217,38 @@ export function ActivityPhone({
         )}
       </div>
 
-      {/* Over the whole screen, shell included, as a pushed view is. A modal,
+      {/* Over the whole screen, shell included, as a pushed view is. Modal,
           so focus stays in it and the page underneath leaves the tab order. */}
-      <Modal
+      <Sheet
         isOpen={open !== undefined}
         onOpenChange={(isOpen) => {
           if (!isOpen) act.openRequest(undefined)
         }}
+        placement="full"
+        label="Request"
+        id={REQUEST_VIEW_ID}
+        back={{
+          label: "Activity",
+          onPress: () => act.openRequest(undefined),
+        }}
       >
-        {/* Driven from state; the trigger slot is filled and hidden, as the
-            design system's dialogs do. */}
-        <Modal.Trigger aria-hidden className="hidden">
-          Request
-        </Modal.Trigger>
-        <Modal.Backdrop>
-          <Modal.Container size="full" className="p-0">
-            <Modal.Dialog
-              aria-label="Request"
-              data-request-view
-              className="flex h-dvh flex-col rounded-none bg-surface p-0 pt-[env(safe-area-inset-top)]"
-              // HeroUI's full size still caps the width inside a margin, in an
-              // unlayered rule no utility can outrank, and a pushed view spans
-              // the screen.
-              style={{ width: "100%", maxWidth: "none" }}
-            >
-              <div className="flex h-11 shrink-0 items-center border-b border-border px-2">
-                {/* A pushed view's way back: a link's face at the touch floor. */}
-                <button
-                  type="button"
-                  onClick={() => act.openRequest(undefined)}
-                  className="flex h-11 items-center gap-0.5 px-2 text-link focus-visible:otari-focus-ring"
-                >
-                  <FiChevronLeft aria-hidden className="size-[1.125rem]" />
-                  Activity
-                </button>
-              </div>
-              {open ? (
-                <div className="flex min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
-                  <RequestPanel
-                    entry={open}
-                    isFullScreen
-                    position={log.position}
-                    memberName={log.memberName}
-                    showsMember={log.isMulti}
-                    onPrevious={() => act.step(-1)}
-                    onNext={() => act.step(1)}
-                    onClose={() => act.openRequest(undefined)}
-                    onFilter={act.panelFilter}
-                    onPriceModel={onPriceModel}
-                  />
-                </div>
-              ) : null}
-            </Modal.Dialog>
-          </Modal.Container>
-        </Modal.Backdrop>
-      </Modal>
+        {open ? (
+          <div className="flex min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
+            <RequestPanel
+              entry={open}
+              isOverlaid
+              position={log.position}
+              memberName={log.memberName}
+              showsMember={log.isMulti}
+              onPrevious={() => act.step(-1)}
+              onNext={() => act.step(1)}
+              onClose={() => act.openRequest(undefined)}
+              onFilter={act.panelFilter}
+              onPriceModel={onPriceModel}
+            />
+          </div>
+        ) : null}
+      </Sheet>
 
       {isSheetOpen ? (
         <FilterSheet
@@ -343,6 +257,7 @@ export function ActivityPhone({
           sort={sort}
           onSort={act.sort}
           sections={sections}
+          onRefine={act.refine}
           cost={cost}
           onCost={(value) =>
             act.refine({ cost_gt: value === undefined ? "" : String(value) })

@@ -31,6 +31,7 @@ export interface RangePreset {
   // reads an omitted start as a 30-day *default*, so its preset list carries no
   // null: an unbounded Usage window is neither representable nor meaningful.
   seconds: number | null
+  // The grain the window's chart reads at.
   bucket: UsageBucket
 }
 
@@ -51,11 +52,14 @@ export const USAGE_PRESETS: RangePreset[] = [
 export const USAGE_DEFAULT_KEY = "30d"
 
 // Activity keeps a truthful "All": the raw list endpoint applies no default and
-// no clamp, so an omitted start really is all-time there.
+// no clamp, so an omitted start really is all-time there. Its chart has a bar
+// per server bucket, so each window reads at the finest grain that keeps the
+// count sensible: 12 for an hour, 288 for a day, 168 for a week, 30 for a
+// month, a year of days for everything.
 export const ACTIVITY_PRESETS: RangePreset[] = [
-  { key: "1h", label: "1h", seconds: HOUR_S, bucket: "hour" },
-  { key: "24h", label: "24h", seconds: DAY_S, bucket: "hour" },
-  { key: "7d", label: "7d", seconds: 7 * DAY_S, bucket: "day" },
+  { key: "1h", label: "1h", seconds: HOUR_S, bucket: "5min" },
+  { key: "24h", label: "24h", seconds: DAY_S, bucket: "5min" },
+  { key: "7d", label: "7d", seconds: 7 * DAY_S, bucket: "hour" },
   { key: "30d", label: "30d", seconds: 30 * DAY_S, bucket: "day" },
   { key: "all", label: "All", seconds: null, bucket: "day" },
 ]
@@ -77,8 +81,14 @@ export function isoAgo(seconds: number, now: number = Date.now()): string {
   return new Date(now - seconds * 1000).toISOString()
 }
 
+const BUCKET_S: Record<UsageBucket, number> = {
+  "5min": 5 * 60,
+  hour: HOUR_S,
+  day: DAY_S,
+}
+
 export function bucketDurationMs(bucket: UsageBucket): number {
-  return (bucket === "hour" ? HOUR_S : DAY_S) * 1000
+  return BUCKET_S[bucket] * 1000
 }
 
 // Bucket granularity for a window, chosen from its length rather than from

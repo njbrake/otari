@@ -34,10 +34,9 @@ from gateway.api.routes.usage import (
     Bucket,
     _dense_series,
     _refuse_wide_grid,
-    _resolve_window,
 )
 from gateway.core.sql import BUCKET_FORMATS, MAX_FILTER_VALUES, bucket_expr, canonical_bucket, dialect_name, match_any
-from gateway.core.usage_filters import request_count
+from gateway.core.usage_filters import request_count, resolve_window
 from gateway.models.usage import UsageLog
 from gateway.ports.telemetry_storage_port import (
     BehaviorCounts,
@@ -405,7 +404,7 @@ async def agent_telemetry_summary(
     diffed per series generation: a re-exported total adds nothing, and a counter
     reset never reads as negative work. Master-key only.
     """
-    start, end = _resolve_window(start_date, end_date)
+    start, end = resolve_window(start_date, end_date)
     scope = _scope(start_date=start, end_date=end, user_id=user_id, api_key_id=api_key_id, session_label=session_label)
     usage_conditions = _usage_filters(
         start=start, end=end, user_id=user_id, api_key_id=api_key_id, session_label=session_label
@@ -551,7 +550,7 @@ async def agent_telemetry_series(
     ``other``, and sparse points (populated cells only). Counts rows, not spend,
     so it charts telemetry volume rather than cost. Master-key only.
     """
-    start, end = _resolve_window(start_date, end_date)
+    start, end = resolve_window(start_date, end_date)
     _refuse_wide_grid(start, end, bucket)
     scope = _scope(start_date=start, end_date=end, user_id=user_id, api_key_id=api_key_id, name=name)
     counts = await storage.grouped_row_counts(filters=scope, group_by=group_by, bucket=bucket, top_n=_SERIES_TOP_N)

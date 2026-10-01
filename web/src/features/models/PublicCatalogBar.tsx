@@ -1,7 +1,9 @@
-import { Button, buttonVariants, Drawer } from "@heroui/react"
+import { buttonVariants } from "@heroui/react"
 import { useState } from "react"
 import { FaGithub } from "react-icons/fa"
 import { FiMenu } from "react-icons/fi"
+import { IconButton } from "@/design-system/actions/IconButton"
+import { Sheet } from "@/design-system/overlays/Sheet"
 import {
   publicCatalogHref,
   siteHomeHref,
@@ -82,66 +84,54 @@ export function PublicCatalogBar({ onList }: { onList: boolean }) {
         >
           <FaGithub aria-hidden className="size-[1.125rem]" />
         </a>
-        <Drawer isOpen={menuOpen} onOpenChange={setMenuOpen}>
-          <Drawer.Trigger
-            aria-label="Open menu"
-            className={`${buttonVariants({ variant: "ghost", isIconOnly: true })} size-11 md:hidden`}
-          >
-            <FiMenu aria-hidden className="size-5" />
-          </Drawer.Trigger>
-          <Drawer.Backdrop className="bg-backdrop/30">
-            <Drawer.Content placement="right">
-              <Drawer.Dialog
-                aria-label="Menu"
-                className="flex h-full w-72 max-w-[85vw] flex-col"
-              >
-                <Drawer.Header className="border-b border-border px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <Drawer.Heading className="text-title">Menu</Drawer.Heading>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onPress={() => setMenuOpen(false)}
-                    >
-                      Close
-                    </Button>
-                  </div>
-                </Drawer.Header>
-                <Drawer.Body className="flex flex-col gap-1 px-2 py-3">
-                  <a
-                    href={publicCatalogHref()}
-                    aria-current={onList ? "page" : undefined}
-                    onClick={() => setMenuOpen(false)}
-                    className={DRAWER_LINK}
-                  >
-                    Models
-                  </a>
-                  <a
-                    href={docsHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={DRAWER_LINK}
-                  >
-                    Documentation
-                  </a>
-                  <a
-                    href={GITHUB_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={DRAWER_LINK}
-                  >
-                    <FaGithub aria-hidden className="size-4" />
-                    GitHub
-                  </a>
-                  <hr className="my-2 border-border" />
-                  <a href="#/" className={DRAWER_LINK}>
-                    Log in
-                  </a>
-                </Drawer.Body>
-              </Drawer.Dialog>
-            </Drawer.Content>
-          </Drawer.Backdrop>
-        </Drawer>
+        <Sheet
+          isOpen={menuOpen}
+          onOpenChange={setMenuOpen}
+          label="Menu"
+          size="sm"
+          title="Menu"
+          trigger={
+            <IconButton
+              label="Open menu"
+              isIconOnly
+              className="size-11 md:hidden"
+            >
+              <FiMenu aria-hidden className="size-5" />
+            </IconButton>
+          }
+        >
+          <div className="flex flex-col gap-1 px-2 py-3">
+            <a
+              href={publicCatalogHref()}
+              aria-current={onList ? "page" : undefined}
+              onClick={() => setMenuOpen(false)}
+              className={DRAWER_LINK}
+            >
+              Models
+            </a>
+            <a
+              href={docsHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={DRAWER_LINK}
+            >
+              Documentation
+            </a>
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={DRAWER_LINK}
+            >
+              <FaGithub aria-hidden className="size-4" />
+              GitHub
+            </a>
+            <hr className="my-2 border-border" />
+            <a href="#/" className={DRAWER_LINK}>
+              Log in
+            </a>
+          </div>
+        </Sheet>
       </nav>
     </header>
   )

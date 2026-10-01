@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
 
+from gateway.core.sql import dialect_name
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.saved_views_exceptions import SavedViewNameTakenError
 from gateway.models.saved_views import SavedView
@@ -51,6 +52,18 @@ class SavedViewRepository(BaseRepository[SavedView, Never, Never]):
             return await super().update(db_obj, obj_in)
         except IntegrityError:
             raise SavedViewNameTakenError(name) from None
+
+    async def lock_owned(self, *, workspace_id: uuid.UUID, page: str, user_id: uuid.UUID) -> None:
+        """Serialize this person's saves on this page until the block ends, so two cannot both take the last slot.
+
+        A transaction-scoped advisory lock on PostgreSQL, keyed on the owner and page
+        rather than a row, since what it guards is a count. SQLite runs one writer at
+        a time, so it takes none.
+        """
+        if dialect_name(self.db) == "sqlite":
+            return
+        key = f"saved_view:{workspace_id}:{page}:{user_id}"
+        await self.db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(key, 0))))
 
     async def count_owned(self, *, workspace_id: uuid.UUID, page: str, user_id: uuid.UUID) -> int:
         """Count the views this person saved on this page of this workspace."""

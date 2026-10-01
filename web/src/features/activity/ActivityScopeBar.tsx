@@ -40,16 +40,23 @@ export function ActivityScopeBar({
   spend: WorkspaceSpend | undefined
   trailing?: ReactNode
 }) {
+  // A manager whose own requests cannot be told apart has no switch, and so
+  // nothing for the rule to separate.
+  const hasScope = !isManager || canNarrowToOwn
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-border py-3">
-      <ScopeSwitch
-        isManager={isManager}
-        canNarrowToOwn={canNarrowToOwn}
-        scope={scope}
-        onScope={onScope}
-        ownLabel="Your requests"
-      />
-      <span aria-hidden className="h-5 w-px bg-border" />
+      {hasScope ? (
+        <>
+          <ScopeSwitch
+            isManager={isManager}
+            canNarrowToOwn={canNarrowToOwn}
+            scope={scope}
+            onScope={onScope}
+            ownLabel="Your requests"
+          />
+          <span aria-hidden className="h-5 w-px bg-border" />
+        </>
+      ) : null}
       <Segmented
         label="Window"
         value={range}

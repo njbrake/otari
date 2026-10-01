@@ -1255,6 +1255,7 @@ async def test_a_member_reads_the_workspace_ceiling_with_holds_in_flight(async_d
     assert spend is not None
     assert spend.workspace_id == workspace.id
     assert spend.max_budget == 100.0
+    assert "name" not in spend.model_dump(), "a ceiling's name is an administrator's label"
     # What the gate enforces against: settled spend plus holds in flight.
     assert spend.spent == pytest.approx(22.0)
     assert spend.period_start is not None

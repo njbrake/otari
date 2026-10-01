@@ -2128,7 +2128,7 @@ main {
  * decides the desktop height. `[data-slot="button"]` is only ever HeroUI's
  * Button, which is why the hook is narrow enough to be safe.
  *
- * 767px is the shell's own MOBILE_QUERY boundary (`AppShell`), so the rule
+ * 767px is the shell's own MOBILE_QUERY boundary (`useIsPhone`), so the rule
  * applies exactly where the sidebar has already become a drawer. */
 @media (max-width: 767px) {
   [data-slot="button"] {

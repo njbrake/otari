@@ -50,8 +50,7 @@ class SavedViewService:
             workspace = await self._workspaces.workspace_in_active_organization(user=user, workspace_id=workspace_id)
             if request.shared:
                 await self._require_sharing(user, workspace)
-            # Checked, then written: two saves racing past the last slot can both
-            # land, which a soft cap on a menu tolerates.
+            await self._views.lock_owned(workspace_id=workspace.id, page=request.page, user_id=user.id)
             owned = await self._views.count_owned(workspace_id=workspace.id, page=request.page, user_id=user.id)
             if owned >= MAX_VIEWS_PER_PAGE:
                 raise SavedViewLimitReachedError(MAX_VIEWS_PER_PAGE)

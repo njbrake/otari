@@ -20,12 +20,20 @@ from sqlmodel import SQLModel
 import gateway.models  # noqa: F401  (registers every table on the shared metadata)
 from gateway.api.routes.usage import _activity_groups_response
 from gateway.core.sql import bucket_expr, canonical_bucket
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import SortOrder, UsageRefinements, refinement_conditions, usage_search_condition
 from gateway.models.usage import UsageLog
-from gateway.repositories.usage.usage_read_repository import _group_models, _ordering, p95_latency_ms
+from gateway.repositories.usage import UsageReadRepository
+from gateway.repositories.usage.usage_read_repository import _ordering
+from gateway.services.usage import UsageReadService
 
 T0 = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
 WORKSPACE = uuid.uuid4()
+
+
+def _reads(db: AsyncSession) -> UsageReadService:
+    uow = UnitOfWork(db)
+    return UsageReadService(uow, UsageReadRepository(uow))
 
 
 def _run[T](body: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -84,14 +92,14 @@ def test_p95_is_the_nearest_rank_value_postgres_returns() -> None:
         db.add(_log(status="absorbed", latency_ms=99_999))
         db.add(_log(latency_ms=None))
         await db.commit()
-        return await p95_latency_ms(db, [])
+        return await _reads(db).p95_latency_ms([])
 
     assert _run(body) == 1900
 
 
 def test_p95_of_nothing_is_null() -> None:
     async def body(db: AsyncSession) -> int | None:
-        return await p95_latency_ms(db, [])
+        return await _reads(db).p95_latency_ms([])
 
     assert _run(body) is None
 
@@ -149,7 +157,7 @@ def test_activity_groups_aggregate_on_sqlite() -> None:
         )
         await db.commit()
         page = await _activity_groups_response(
-            db,
+            _reads(db),
             group_by="source_label",
             start=T0,
             end=T0 + timedelta(hours=1),
@@ -174,6 +182,8 @@ def test_a_page_with_no_groups_names_no_models() -> None:
     async def body(db: AsyncSession) -> dict[str | None, tuple[list[str], int]]:
         db.add(_log(model="a"))
         await db.commit()
-        return await _group_models(db, UsageLog.api_key_id, [], [], None)
+        uow = UnitOfWork(db)
+        async with uow:
+            return await UsageReadRepository(uow)._group_models(UsageLog.api_key_id, [], [], None)
 
     assert _run(body) == {}

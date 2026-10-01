@@ -13,10 +13,16 @@ import {
   formatUtcTime,
   formatUtcWeekdayHour,
 } from "@/shared/helpers/format"
+import {
+  bucketDurationMs,
+  DAY_S,
+  HOUR_S,
+  YEAR_SPAN_S,
+} from "@/shared/helpers/timeRange"
 
 const MINUTE_MS = 60_000
-const HOUR_MS = 60 * MINUTE_MS
-const DAY_MS = 24 * HOUR_MS
+const HOUR_MS = HOUR_S * 1000
+const DAY_MS = DAY_S * 1000
 
 export interface ChartBar {
   start: number
@@ -27,17 +33,6 @@ export interface ChartBar {
 
 /** A stretch of time picked on a chart, in epoch milliseconds. */
 export type Span = { from: number; to: number }
-
-// The desk has room for a bar per server bucket, so each window reads at the
-// finest grain that keeps its bar count sensible: 12 for an hour, 288 for a
-// day, 168 for a week, 30 for a month, a year of days for everything.
-export const DESKTOP_GRAIN: Record<string, UsageBucket> = {
-  "1h": "5min",
-  "24h": "5min",
-  "7d": "hour",
-  "30d": "day",
-  all: "day",
-}
 
 /** The finest grain that still lays out a window of this length within the server's bucket ceiling. */
 export function grainForSpan(spanMs: number): UsageBucket {
@@ -86,12 +81,6 @@ export function fillBars(
   return bars
 }
 
-const GRAIN_MS: Record<UsageBucket, number> = {
-  "5min": 5 * MINUTE_MS,
-  hour: HOUR_MS,
-  day: DAY_MS,
-}
-
 /**
  * The desk's bars: one per server bucket across the window, up to now when it
  * is open-ended. An unbounded window is drawn over the year its series covers.
@@ -102,9 +91,42 @@ export function windowBars(
   grain: UsageBucket,
   now: number,
 ): ChartBar[] {
-  const from = window.start ? Date.parse(window.start) : now - 365 * DAY_MS
+  const from = window.start
+    ? Date.parse(window.start)
+    : now - YEAR_SPAN_S * 1000
   const to = window.end ? Date.parse(window.end) : now
-  return fillBars(series, from, to, GRAIN_MS[grain])
+  return fillBars(series, from, to, bucketDurationMs(grain))
+}
+
+/** How long each of a chart's bars is; they are all one length. */
+export function barSpanMs(bars: readonly ChartBar[]): number {
+  return bars.length ? bars[0].end - bars[0].start : 0
+}
+
+/** The tallest bar's height, never below one, so an empty chart scales against something. */
+export function barMax(bars: readonly ChartBar[]): number {
+  return Math.max(1, ...bars.map((bar) => bar.ok + bar.failed))
+}
+
+/** The bar under a pointer at `clientX`, over a plot of `count` equal columns. */
+export function barIndexAt(
+  clientX: number,
+  box: { left: number; width: number } | undefined,
+  count: number,
+): number {
+  if (!box || box.width === 0) return 0
+  const at = Math.floor(((clientX - box.left) / box.width) * count)
+  return Math.max(0, Math.min(count - 1, at))
+}
+
+/** One bar further along, held inside the chart: an arrow key's step. */
+export function stepBar(index: number, delta: number, count: number): number {
+  return Math.max(0, Math.min(count - 1, index + delta))
+}
+
+/** The step an arrow key takes along the bars, or 0 for any other key. */
+export function arrowDelta(key: string): number {
+  return key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1 : 0
 }
 
 /**

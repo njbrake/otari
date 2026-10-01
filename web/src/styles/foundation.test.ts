@@ -1410,7 +1410,7 @@ describe("no font size is written at a call site", () => {
 describe("the phone viewport's touch-target floor", () => {
   it("raises every HeroUI button to 44px below the shell's mobile boundary", () => {
     // `[data-slot="button"]` is HeroUI's Button and nothing else, and 767px is
-    // AppShell's own MOBILE_QUERY, so the rule turns on exactly where the
+    // the shell's own MOBILE_QUERY (`useIsPhone`), so the rule turns on exactly where the
     // sidebar becomes a drawer.
     expect(CSS).toMatch(
       /@media \(max-width: 767px\) \{\s*\[data-slot="button"\] \{\s*min-height: 2\.75rem;\s*min-width: 2\.75rem;/,
@@ -1769,6 +1769,8 @@ describe("the catalog shows every prop", () => {
       "where focus lands after the frame is gone, which needs the trigger to unmount with it: a story could pass the prop and would demonstrate nothing",
     "feedback/FormDialog.target":
       "`RestoreFocus`'s, the helper behind `returnFocusRef`, exported for the feedback dialog; the same reason applies",
+    "overlays/Sheet.id":
+      "a handle for the page's own key handling to tell the sheet from another dialog; it changes nothing on screen",
   }
 
   // Not props: the first two are every component's, and a leading underscore is

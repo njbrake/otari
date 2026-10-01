@@ -125,11 +125,11 @@ export type UsageGroupedSeriesPoint = Schemas["UsageGroupedSeriesPoint"]
 export type UsageDeleteResult = Schemas["UsageDeleteResult"]
 export type UsageMutationSelection = Defaulted<
   Schemas["UsageDeleteRequest"],
-  "by_filter"
+  "by_filter" | "sort"
 >
 export type UsageSetPriceRequest = Defaulted<
   Schemas["UsageSetPriceRequest"],
-  "by_filter"
+  "by_filter" | "sort"
 >
 export type UsageSetPriceResult = Schemas["UsageSetPriceResult"]
 export type InFlightRequest = Schemas["InFlightEntry"]
