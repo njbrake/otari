@@ -19,13 +19,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import col
 
+from gateway.core.usage_filters import TOOL_METER_NAMESPACE
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
 from gateway.models.tenancy import Organization, Workspace
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
 from gateway.services.pricing_service import gateway_tool_pricing_key
-from gateway.services.tool_usage import TOOL_METER_NAMESPACE
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "sqlite:///./smoke.db"
 rng = random.Random(303)  # deterministic

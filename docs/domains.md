@@ -309,7 +309,8 @@ workspace.
 Usage rows, the usage log writer, OTLP ingest and coding-agent telemetry.
 
 - Routes: `usage.py`, `organization_usage.py`, `otlp.py`, `agent_telemetry.py`;
-  helper `_billing_schemas.py`
+  helpers `_billing_schemas.py` and `_usage_common.py`, the read filters both usage
+  route modules take
 - Services: `usage/`, the log's reads over the repositories below;
   `usage_admin_service.py`, `external_usage_service.py`, `log_writer.py`,
   `agent_telemetry_service.py`, `agent_telemetry_admin_service.py`; the Claude Code transcript parser is

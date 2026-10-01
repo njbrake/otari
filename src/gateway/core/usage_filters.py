@@ -10,10 +10,10 @@ delete rows no count ever promised.
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal, NamedTuple, get_args
+from typing import Annotated, Any, Literal, NamedTuple, cast, get_args
 
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, case, func, or_, select
+from sqlalchemy import ColumnElement, and_, case, func, or_, select
 
 from gateway.core.sql import MAX_FILTER_VALUES, match_any
 from gateway.models.api_keys import APIKey
@@ -23,6 +23,14 @@ from gateway.models.users import User
 
 # One WHERE condition over ``usage_logs``, as the reads pass them through the usage service.
 UsageCondition = ColumnElement[bool]
+
+# The key ``UsageLog.billing_meters`` nests every tool meter under. Tool meters sit
+# under one reserved key rather than flat beside the token meters: MCP tool names
+# come from a caller-supplied server, and a tool named ``completion_tokens`` sitting
+# flat would be read by the billed-token SQL here and corrupt every aggregate over it.
+TOOL_METER_NAMESPACE = "tools"
+# The tool filter value that matches any tool, an MCP one included.
+ANY_TOOL = "any"
 
 # Longest search a caller may send. Far past a request id or a model name; it keeps a
 # caller from posting a megabyte pattern into a LIKE over the window searched.
@@ -92,6 +100,47 @@ def billed_meter(meter: str, fallback: Any) -> Any:
     number cast on SQLite and PostgreSQL alike.
     """
     return func.coalesce(UsageLog.billing_meters[meter].as_integer(), fallback, 0)
+
+
+def needs_pricing_condition() -> ColumnElement[bool]:
+    """Rows that still need pricing.
+
+    Two ways to qualify. Either nothing was charged at all (``cost IS NULL``), or
+    the row carries a cost that came *only* from gateway-run tool calls while its
+    tokens were never metered: a request against an unpriced model can still owe
+    for the searches it ran, and that tool cost would otherwise hide it from the
+    view an operator uses to find what needs a rate.
+
+    The tool-namespace test keeps this narrow on purpose: a row with a cost and no
+    meters at all is a row priced before the meter columns existed, and it must keep
+    reading as priced.
+    """
+    token_metered = UsageLog.billing_meters["total_input_tokens"].as_integer().is_not(None)
+    tool_charged = UsageLog.billing_meters[TOOL_METER_NAMESPACE].as_string().is_not(None)
+    return or_(UsageLog.cost.is_(None), and_(tool_charged, ~token_metered))
+
+
+def tool_calls_expr(tool: str) -> Any:
+    """Billable call count for one gateway-run tool on a row, or NULL."""
+    return UsageLog.billing_meters[(TOOL_METER_NAMESPACE, tool, "billed")].as_integer()
+
+
+def tool_used_condition(tool: str) -> ColumnElement[bool]:
+    """Rows of requests that ran this gateway tool, or any tool for :data:`ANY_TOOL`.
+
+    ``any`` tests the namespace itself so an MCP tool (whose name is supplied by the
+    caller's server and cannot be enumerated) still matches. Neither form is
+    indexable, which is acceptable because every activity query is already bounded
+    by the indexed timestamp window.
+    """
+    if tool == ANY_TOOL:
+        # ``.as_string()`` is load-bearing: an uncoerced JSON index compares with JSON
+        # semantics, where SQL NULL and JSON null are not the same thing, and
+        # ``IS NOT NULL`` then matches every row. Coercing to text makes a missing key
+        # read as SQL NULL on both SQLite and PostgreSQL.
+        namespace = UsageLog.billing_meters[TOOL_METER_NAMESPACE].as_string()
+        return cast("ColumnElement[bool]", namespace.is_not(None))
+    return cast("ColumnElement[bool]", tool_calls_expr(tool).is_not(None))
 
 
 def billed_tokens() -> Any:
@@ -173,7 +222,7 @@ class UsageRefinements(BaseModel):
     """Filters that narrow the usage rows past the entity filters every endpoint takes.
 
     One model for two readers: the read endpoints build it from query parameters
-    (``routes/usage._usage_refinements``) and the bulk mutation body inherits it, so
+    (``routes/_usage_common.usage_refinements``) and the bulk mutation body inherits it, so
     a delete by filter re-derives exactly the rows the operator was shown.
 
     Every exclusion on a nullable column keeps its NULL rows: ``NOT IN`` alone

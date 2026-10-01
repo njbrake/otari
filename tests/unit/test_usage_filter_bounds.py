@@ -14,7 +14,8 @@ the same body have to mean the same instant, so both sides are asserted here.
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
-from gateway.api.routes.usage import _usage_filters
+from gateway.api.routes._usage_common import UsageReadFilters
+from gateway.core.usage_filters import UsageRefinements
 from gateway.services.usage_admin_service import UsageSelection, _selection_conditions
 
 _NAIVE_START = datetime(2026, 8, 12, 8, 0)
@@ -36,14 +37,8 @@ def _bound_values(conditions: list[Any]) -> list[datetime]:
 
 
 def test_list_and_count_filters_pin_a_naive_bound_to_utc() -> None:
-    conditions = _usage_filters(
-        start_date=_NAIVE_START,
-        end_date=_NAIVE_END,
-        user_id=None,
-        status=None,
-        model=None,
-        endpoint=None,
-        scope=None,
+    conditions = UsageReadFilters(refine=UsageRefinements()).conditions(
+        start_date=_NAIVE_START, end_date=_NAIVE_END, scope=None
     )
     assert _bound_values(conditions) == [
         _NAIVE_START.replace(tzinfo=UTC),
@@ -55,14 +50,8 @@ def test_list_and_count_filters_leave_an_offset_bound_alone() -> None:
     """A caller that sent an offset meant that instant, so it passes through."""
     offset = timezone(timedelta(hours=-4))
     aware_start = _NAIVE_START.replace(tzinfo=offset)
-    conditions = _usage_filters(
-        start_date=aware_start,
-        end_date=None,
-        user_id=None,
-        status=None,
-        model=None,
-        endpoint=None,
-        scope=None,
+    conditions = UsageReadFilters(refine=UsageRefinements()).conditions(
+        start_date=aware_start, end_date=None, scope=None
     )
     assert _bound_values(conditions) == [aware_start]
 

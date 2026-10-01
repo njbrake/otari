@@ -32,6 +32,7 @@ from gateway.core.metered_pricing import BillableUsage, billable_usage, price_bi
 from gateway.core.sql import match_any, utc_bound
 from gateway.core.usage_filters import (
     MAX_SEARCH_LENGTH,
+    TOOL_METER_NAMESPACE,
     CappedValues,
     UsageRefinements,
     UsageSort,
@@ -43,7 +44,6 @@ from gateway.core.usage_source import not_served_here
 from gateway.log_config import logger
 from gateway.models.pricing import ModelPricing
 from gateway.models.usage import UsageLog
-from gateway.services.tool_usage import TOOL_METER_NAMESPACE
 
 # Cap on an explicit id list. Page selections drive the id path and the largest
 # rows-per-page the UI offers is 500; 1000 leaves headroom without letting a single
@@ -222,7 +222,7 @@ def _selection_conditions(selection: UsageSelection) -> list[ColumnElement[bool]
     if selection.tool is not None:
         namespace = UsageLog.billing_meters[TOOL_METER_NAMESPACE]
         conditions.append(
-            # See routes/usage._tool_used_expr: the text coercion is what makes a
+            # See core/usage_filters.tool_used_condition: the text coercion is what makes a
             # missing key compare as SQL NULL rather than JSON null.
             namespace.as_string().is_not(None)
             if selection.tool == "any"

@@ -1,7 +1,7 @@
 """Queries behind the usage log's reads: a page of rows, the attempts folded into them, latency, and groups.
 
 Each takes the conditions the caller already built from the request's filters
-(``_usage_filters`` and its scope), so the filters are read one way however the
+(``UsageReadFilters.conditions`` and its scope), so the filters are read one way however the
 rows are asked for.
 """
 

@@ -19265,6 +19265,12 @@ export interface operations {
     "organization-usage-list_organization_usage": {
         parameters: {
             query?: {
+                /** @description Order rows by this column; ties fall back to newest first. 'source' is the API key's name (or the provenance source when there is no key), 'member' the billed user's alias, 'status' ranks failures, then earlier failed attempts and the requests served after one, then successes. Rows with no cost, latency, member or policy sort last in either direction. Any order but time sorts every row in the window, so it takes the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                sort?: "timestamp" | "tokens" | "cost" | "latency" | "model" | "source" | "member" | "policy" | "status";
+                /** @description Sort direction. */
+                order?: "asc" | "desc";
+                skip?: number;
+                limit?: number;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -19293,26 +19299,20 @@ export interface operations {
                 tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
                 /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
                 counts_toward_budget?: boolean | null;
-                /** @description Filter to the rows of one or more request groups; repeatable (request_group_id=a&request_group_id=b). A routed request writes one row per attempt, all sharing a request_group_id, so this returns a request's whole plan: its absorbed attempts and the attempt that served it. Ignore ordering by timestamp and read attempt_position to reconstruct the plan. At most 1000 ids per call. */
-                request_group_id?: string[] | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
                 /** @description Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a case-insensitive substring of the served model, the model name the caller sent, the session label, the API key's name, or the billed user's alias. At most 200 characters. A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
+                /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
+                requested_model?: string[] | null;
+                /** @description Filter to the rows of one or more request groups; repeatable (request_group_id=a&request_group_id=b). A routed request writes one row per attempt, all sharing a request_group_id, so this returns a request's whole plan: its absorbed attempts and the attempt that served it. Ignore ordering by timestamp and read attempt_position to reconstruct the plan. At most 1000 ids per call. */
+                request_group_id?: string[] | null;
                 /** @description Look up usage rows by row id; repeatable (id=a&id=b). At most 50 per call. */
                 id?: string[] | null;
                 /** @description Filter to the rows of one or more requests by the Otari-Request-ID their caller was sent; repeatable. A routed request's attempts share one. At most 50 per call. */
                 request_id?: string[] | null;
-                /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
-                requested_model?: string[] | null;
                 /** @description Whether the rows of a routed request's earlier failed attempts (status 'absorbed') are listed. Defaults to true. With false, each request appears once, as the row that settled it, and that row's 'absorbed_attempts' counts its earlier failed attempts. An explicit 'status' filter takes precedence. */
                 include_absorbed?: boolean;
-                /** @description Order rows by this column; ties fall back to newest first. 'source' is the API key's name (or the provenance source when there is no key), 'member' the billed user's alias, 'status' ranks failures, then earlier failed attempts and the requests served after one, then successes. Rows with no cost, latency, member or policy sort last in either direction. Any order but time sorts every row in the window, so it takes the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
-                sort?: "timestamp" | "tokens" | "cost" | "latency" | "model" | "source" | "member" | "policy" | "status";
-                /** @description Sort direction. */
-                order?: "asc" | "desc";
-                skip?: number;
-                limit?: number;
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -19367,6 +19367,8 @@ export interface operations {
     "organization-usage-count_organization_usage": {
         parameters: {
             query?: {
+                /** @description The order the list beside this count was read in. Any order but time bounds the window as the list's does, so the total is the total of its pages. */
+                sort?: "timestamp" | "tokens" | "cost" | "latency" | "model" | "source" | "member" | "policy" | "status";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -19395,20 +19397,18 @@ export interface operations {
                 tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
                 /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
                 counts_toward_budget?: boolean | null;
-                /** @description Filter to the rows of one or more request groups; repeatable (request_group_id=a&request_group_id=b). A routed request writes one row per attempt, all sharing a request_group_id, so this returns a request's whole plan: its absorbed attempts and the attempt that served it. Ignore ordering by timestamp and read attempt_position to reconstruct the plan. At most 1000 ids per call. */
-                request_group_id?: string[] | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
                 /** @description Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a case-insensitive substring of the served model, the model name the caller sent, the session label, the API key's name, or the billed user's alias. At most 200 characters. A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
+                /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
+                requested_model?: string[] | null;
+                /** @description Filter to the rows of one or more request groups; repeatable (request_group_id=a&request_group_id=b). A routed request writes one row per attempt, all sharing a request_group_id, so this returns a request's whole plan: its absorbed attempts and the attempt that served it. Ignore ordering by timestamp and read attempt_position to reconstruct the plan. At most 1000 ids per call. */
+                request_group_id?: string[] | null;
                 /** @description Look up usage rows by row id; repeatable (id=a&id=b). At most 50 per call. */
                 id?: string[] | null;
                 /** @description Filter to the rows of one or more requests by the Otari-Request-ID their caller was sent; repeatable. A routed request's attempts share one. At most 50 per call. */
                 request_id?: string[] | null;
-                /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
-                requested_model?: string[] | null;
-                /** @description The order the list beside this count was read in. Any order but time bounds the window as the list's does, so the total is the total of its pages. */
-                sort?: "timestamp" | "tokens" | "cost" | "latency" | "model" | "source" | "member" | "policy" | "status";
                 /** @description Whether the rows of a routed request's earlier failed attempts (status 'absorbed') are listed. Defaults to true. With false, each request appears once, as the row that settled it, and that row's 'absorbed_attempts' counts its earlier failed attempts. An explicit 'status' filter takes precedence. */
                 include_absorbed?: boolean;
                 /** @description Leave out rows served by these models. At most 50 per call. */
@@ -19467,6 +19467,12 @@ export interface operations {
             query: {
                 /** @description Collapse the log to one row per API key, session (source_label), model, billed user, routing policy, or alias: the name the caller sent (requested_model) where it named neither the model that served nor the policy. 'alias' leaves out the rows that used none. */
                 group_by: "api_key" | "source_label" | "model" | "user" | "policy" | "alias";
+                /** @description Keep the groups whose value, or the name it resolves to (a key's name, a member's alias), contains this, case-insensitive. What a column's filter menu searches. At most 200 characters. */
+                search?: string | null;
+                /** @description 'recent' lists the most recently active group first; 'requests' the busiest. */
+                order?: "recent" | "requests";
+                skip?: number;
+                limit?: number;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -19501,12 +19507,6 @@ export interface operations {
                 q?: string | null;
                 /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
                 requested_model?: string[] | null;
-                /** @description Keep the groups whose value, or the name it resolves to (a key's name, a member's alias), contains this, case-insensitive. What a column's filter menu searches. At most 200 characters. */
-                search?: string | null;
-                /** @description 'recent' lists the most recently active group first; 'requests' the busiest. */
-                order?: "recent" | "requests";
-                skip?: number;
-                limit?: number;
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -19563,6 +19563,8 @@ export interface operations {
             query: {
                 /** @description Dimension to split the series by */
                 group_by: "model" | "user_id" | "api_key_id" | "source";
+                /** @description Time-series granularity: 'hour' or 'day' */
+                bucket?: "hour" | "day";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -19597,8 +19599,6 @@ export interface operations {
                 q?: string | null;
                 /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
                 requested_model?: string[] | null;
-                /** @description Time-series granularity: 'hour' or 'day' */
-                bucket?: "hour" | "day";
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -19653,6 +19653,12 @@ export interface operations {
     "organization-usage-organization_usage_summary": {
         parameters: {
             query?: {
+                /** @description Time-series granularity: '5min', 'hour' or 'day'. '5min' needs an explicit window of at most 1000 buckets (about 83 hours); the default 30-day window is refused with a 422. */
+                bucket?: "5min" | "hour" | "day";
+                /** @description Which breakdowns to compute; repeatable (dimensions=model&dimensions=user). Each value names the 'by_<value>' response field it fills, except 'status_code', which fills the failure taxonomy in 'errors_by_status_code'. Omit for every breakdown (the default); pass 'none' for a totals-and-series-only response. Each dimension left out skips one GROUP BY scan, so a caller that reads only the tiles or the time series should say so. Fields that were not requested come back empty. */
+                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
+                /** @description Also compute 'totals.p95_latency_ms', which sorts the window's latencies. */
+                include_p95?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -19687,12 +19693,6 @@ export interface operations {
                 q?: string | null;
                 /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
                 requested_model?: string[] | null;
-                /** @description Time-series granularity: '5min', 'hour' or 'day'. '5min' needs an explicit window of at most 1000 buckets (about 83 hours); the default 30-day window is refused with a 422. */
-                bucket?: "5min" | "hour" | "day";
-                /** @description Which breakdowns to compute; repeatable (dimensions=model&dimensions=user). Each value names the 'by_<value>' response field it fills, except 'status_code', which fills the failure taxonomy in 'errors_by_status_code'. Omit for every breakdown (the default); pass 'none' for a totals-and-series-only response. Each dimension left out skips one GROUP BY scan, so a caller that reads only the tiles or the time series should say so. Fields that were not requested come back empty. */
-                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
-                /** @description Also compute 'totals.p95_latency_ms', which sorts the window's latencies. */
-                include_p95?: boolean;
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -21804,6 +21804,12 @@ export interface operations {
     "usage-list_usage": {
         parameters: {
             query?: {
+                /** @description Order rows by this column; ties fall back to newest first. 'source' is the API key's name (or the provenance source when there is no key), 'member' the billed user's alias, 'status' ranks failures, then earlier failed attempts and the requests served after one, then successes. Rows with no cost, latency, member or policy sort last in either direction. Any order but time sorts every row in the window, so it takes the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                sort?: "timestamp" | "tokens" | "cost" | "latency" | "model" | "source" | "member" | "policy" | "status";
+                /** @description Sort direction. */
+                order?: "asc" | "desc";
+                skip?: number;
+                limit?: number;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -21832,26 +21838,20 @@ export interface operations {
                 tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
                 /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
                 counts_toward_budget?: boolean | null;
-                /** @description Filter to the rows of one or more request groups; repeatable (request_group_id=a&request_group_id=b). A routed request writes one row per attempt, all sharing a request_group_id, so this returns a request's whole plan: its absorbed attempts and the attempt that served it. Ignore ordering by timestamp and read attempt_position to reconstruct the plan. At most 1000 ids per call. */
-                request_group_id?: string[] | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
                 /** @description Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a case-insensitive substring of the served model, the model name the caller sent, the session label, the API key's name, or the billed user's alias. At most 200 characters. A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
+                /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
+                requested_model?: string[] | null;
+                /** @description Filter to the rows of one or more request groups; repeatable (request_group_id=a&request_group_id=b). A routed request writes one row per attempt, all sharing a request_group_id, so this returns a request's whole plan: its absorbed attempts and the attempt that served it. Ignore ordering by timestamp and read attempt_position to reconstruct the plan. At most 1000 ids per call. */
+                request_group_id?: string[] | null;
                 /** @description Look up usage rows by row id; repeatable (id=a&id=b). At most 50 per call. */
                 id?: string[] | null;
                 /** @description Filter to the rows of one or more requests by the Otari-Request-ID their caller was sent; repeatable. A routed request's attempts share one. At most 50 per call. */
                 request_id?: string[] | null;
-                /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
-                requested_model?: string[] | null;
                 /** @description Whether the rows of a routed request's earlier failed attempts (status 'absorbed') are listed. Defaults to true. With false, each request appears once, as the row that settled it, and that row's 'absorbed_attempts' counts its earlier failed attempts. An explicit 'status' filter takes precedence. */
                 include_absorbed?: boolean;
-                /** @description Order rows by this column; ties fall back to newest first. 'source' is the API key's name (or the provenance source when there is no key), 'member' the billed user's alias, 'status' ranks failures, then earlier failed attempts and the requests served after one, then successes. Rows with no cost, latency, member or policy sort last in either direction. Any order but time sorts every row in the window, so it takes the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
-                sort?: "timestamp" | "tokens" | "cost" | "latency" | "model" | "source" | "member" | "policy" | "status";
-                /** @description Sort direction. */
-                order?: "asc" | "desc";
-                skip?: number;
-                limit?: number;
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -21939,6 +21939,8 @@ export interface operations {
     "usage-count_usage": {
         parameters: {
             query?: {
+                /** @description The order the list beside this count was read in. Any order but time bounds the window as the list's does, so the total is the total of its pages. */
+                sort?: "timestamp" | "tokens" | "cost" | "latency" | "model" | "source" | "member" | "policy" | "status";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -21967,20 +21969,18 @@ export interface operations {
                 tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
                 /** @description Filter by budget participation: true = only enforced gateway rows, false = only imported rows, narrowed past the filter of the same name on GET /api/v1/usage so the total matches what bulk delete and set-price can reach */
                 counts_toward_budget?: boolean | null;
-                /** @description Filter to the rows of one or more request groups; repeatable (request_group_id=a&request_group_id=b). A routed request writes one row per attempt, all sharing a request_group_id, so this returns a request's whole plan: its absorbed attempts and the attempt that served it. Ignore ordering by timestamp and read attempt_position to reconstruct the plan. At most 1000 ids per call. */
-                request_group_id?: string[] | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
                 /** @description Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a case-insensitive substring of the served model, the model name the caller sent, the session label, the API key's name, or the billed user's alias. At most 200 characters. A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
+                /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
+                requested_model?: string[] | null;
+                /** @description Filter to the rows of one or more request groups; repeatable (request_group_id=a&request_group_id=b). A routed request writes one row per attempt, all sharing a request_group_id, so this returns a request's whole plan: its absorbed attempts and the attempt that served it. Ignore ordering by timestamp and read attempt_position to reconstruct the plan. At most 1000 ids per call. */
+                request_group_id?: string[] | null;
                 /** @description Look up usage rows by row id; repeatable (id=a&id=b). At most 50 per call. */
                 id?: string[] | null;
                 /** @description Filter to the rows of one or more requests by the Otari-Request-ID their caller was sent; repeatable. A routed request's attempts share one. At most 50 per call. */
                 request_id?: string[] | null;
-                /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
-                requested_model?: string[] | null;
-                /** @description The order the list beside this count was read in. Any order but time bounds the window as the list's does, so the total is the total of its pages. */
-                sort?: "timestamp" | "tokens" | "cost" | "latency" | "model" | "source" | "member" | "policy" | "status";
                 /** @description Whether the rows of a routed request's earlier failed attempts (status 'absorbed') are listed. Defaults to true. With false, each request appears once, as the row that settled it, and that row's 'absorbed_attempts' counts its earlier failed attempts. An explicit 'status' filter takes precedence. */
                 include_absorbed?: boolean;
                 /** @description Leave out rows served by these models. At most 50 per call. */
@@ -22072,6 +22072,12 @@ export interface operations {
             query: {
                 /** @description Collapse the log to one row per API key, session (source_label), model, billed user, routing policy, or alias: the name the caller sent (requested_model) where it named neither the model that served nor the policy. 'alias' leaves out the rows that used none. */
                 group_by: "api_key" | "source_label" | "model" | "user" | "policy" | "alias";
+                /** @description Keep the groups whose value, or the name it resolves to (a key's name, a member's alias), contains this, case-insensitive. What a column's filter menu searches. At most 200 characters. */
+                search?: string | null;
+                /** @description 'recent' lists the most recently active group first; 'requests' the busiest. */
+                order?: "recent" | "requests";
+                skip?: number;
+                limit?: number;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22106,12 +22112,6 @@ export interface operations {
                 q?: string | null;
                 /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
                 requested_model?: string[] | null;
-                /** @description Keep the groups whose value, or the name it resolves to (a key's name, a member's alias), contains this, case-insensitive. What a column's filter menu searches. At most 200 characters. */
-                search?: string | null;
-                /** @description 'recent' lists the most recently active group first; 'requests' the busiest. */
-                order?: "recent" | "requests";
-                skip?: number;
-                limit?: number;
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -22188,6 +22188,8 @@ export interface operations {
             query: {
                 /** @description Dimension to split the series by */
                 group_by: "model" | "user_id" | "api_key_id" | "source";
+                /** @description Time-series granularity: 'hour' or 'day' */
+                bucket?: "hour" | "day";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22222,8 +22224,6 @@ export interface operations {
                 q?: string | null;
                 /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
                 requested_model?: string[] | null;
-                /** @description Time-series granularity: 'hour' or 'day' */
-                bucket?: "hour" | "day";
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -22311,6 +22311,12 @@ export interface operations {
     "usage-usage_summary": {
         parameters: {
             query?: {
+                /** @description Time-series granularity: '5min', 'hour' or 'day'. '5min' needs an explicit window of at most 1000 buckets (about 83 hours); the default 30-day window is refused with a 422. */
+                bucket?: "5min" | "hour" | "day";
+                /** @description Which breakdowns to compute; repeatable (dimensions=model&dimensions=user). Each value names the 'by_<value>' response field it fills, except 'status_code', which fills the failure taxonomy in 'errors_by_status_code'. Omit for every breakdown (the default); pass 'none' for a totals-and-series-only response. Each dimension left out skips one GROUP BY scan, so a caller that reads only the tiles or the time series should say so. Fields that were not requested come back empty. */
+                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
+                /** @description Also compute 'totals.p95_latency_ms', which sorts the window's latencies. */
+                include_p95?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22345,12 +22351,6 @@ export interface operations {
                 q?: string | null;
                 /** @description Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call. */
                 requested_model?: string[] | null;
-                /** @description Time-series granularity: '5min', 'hour' or 'day'. '5min' needs an explicit window of at most 1000 buckets (about 83 hours); the default 30-day window is refused with a 422. */
-                bucket?: "5min" | "hour" | "day";
-                /** @description Which breakdowns to compute; repeatable (dimensions=model&dimensions=user). Each value names the 'by_<value>' response field it fills, except 'status_code', which fills the failure taxonomy in 'errors_by_status_code'. Omit for every breakdown (the default); pass 'none' for a totals-and-series-only response. Each dimension left out skips one GROUP BY scan, so a caller that reads only the tiles or the time series should say so. Fields that were not requested come back empty. */
-                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
-                /** @description Also compute 'totals.p95_latency_ms', which sorts the window's latencies. */
-                include_p95?: boolean;
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
