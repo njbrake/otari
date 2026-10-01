@@ -1,6 +1,5 @@
 import { FiGlobe } from "react-icons/fi"
 import type { UsageEntry } from "@/client"
-import { Chip } from "@/design-system/indicators/Chip"
 import {
   formatCost,
   formatLatency,
@@ -23,8 +22,9 @@ import { OUTCOME_NOTE_INK, OutcomeDot } from "./StatusMark"
 /**
  * One request as the phone lists it: nine columns do not fit in 400px, so a
  * row is three lines. The model and its cost; who sent it and from where, with
- * tokens and time; and when, with the one thing worth knowing (why it failed,
- * that a fallback recovered it, or the policy that routed it). A square in the
+ * tokens and time; and when, with what is worth knowing (that a subscription
+ * paid for it, why it failed, that a fallback recovered it, or the policy that
+ * routed it). A square in the
  * margin carries the outcome, read as the desk's Status column reads it.
  */
 export function PhoneRow({
@@ -77,11 +77,6 @@ export function PhoneRow({
             ) : null}
             {describeRowSource(entry)}
           </span>
-          {isImported(entry) ? (
-            <Chip tone="info" size="sm">
-              Subscription
-            </Chip>
-          ) : null}
           {calls ? (
             <span className="inline-flex shrink-0 items-center gap-0.5 text-mono-micro">
               <FiGlobe aria-hidden className="size-2.5" />×{formatNumber(calls)}
@@ -100,6 +95,11 @@ export function PhoneRow({
             {formatUtcTime(entry.timestamp, true)} ·{" "}
             {formatRelative(entry.timestamp)}
           </span>
+          {/* Here rather than as a chip beside the sender, where at 375px it
+              took the room the name needed. */}
+          {isImported(entry) ? (
+            <span className="text-info">· Subscription</span>
+          ) : null}
           {outcome.kind !== "success" ? (
             <span>· {withStatusCode(entry.status_code, outcome.note)}</span>
           ) : outcome.note ? (
