@@ -18,8 +18,6 @@ import {
   YEAR_SPAN_S,
 } from "@/shared/helpers/timeRange"
 
-// ---------- charge lines ----------
-
 // Token lines first, tool lines after, each group keeping the order the writers
 // emitted. "Billed meters" otherwise reads as an unordered mix once a row has both.
 // A line is told apart by its rate: token meters price per million, gateway-run
@@ -29,8 +27,6 @@ export function sortChargeLines(lines: readonly ChargeLine[]): ChargeLine[] {
     (a, b) => Number(isUnitChargeLine(a)) - Number(isUnitChargeLine(b)),
   )
 }
-
-// ---------- formatting ----------
 
 // Coarser than a settled request's latency: this is a wall-clock wait an
 // operator is watching rather than a measurement, so sub-second precision is
@@ -42,8 +38,6 @@ export function formatElapsed(ms: number): string {
   return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`
 }
 
-// ---------- windows ----------
-//
 // The time presets and window math are shared with the Usage page via
 // `@/shared/helpers/timeRange`. Activity keeps a truthful "All": newest first,
 // the list endpoint applies no default and no clamp, so an omitted start really
@@ -207,8 +201,6 @@ export function splitCost(
   }
 }
 
-// ---------- token composition ----------
-//
 // One total is the least useful number on the row: on a cached agent workload it
 // is ~98% cache read, so every row shows a large, similar-looking figure. The
 // composition is what varies, so the column renders the split.
@@ -338,8 +330,6 @@ export function findPricingSelector(entry: UsageEntry): string {
     : `${entry.provider}:${entry.model}`
 }
 
-// ---------- routing ----------
-//
 // A routed request writes one usage row per attempt (all sharing a
 // `request_group_id`), so a single row answers only half of what an operator
 // wants: "attempt 1 of 2 failed" without saying what served the request. These

@@ -83,6 +83,7 @@ export function ActivityPhone({
       title: "Status",
       options: statusOptions(url, log.totals),
       picked: url.getAll("status"),
+      excluded: url.getAll("exclude_status"),
       onToggle: toggle("status"),
     },
     ...(log.isMulti
@@ -93,6 +94,7 @@ export function ActivityPhone({
               log.memberName(group.key, group.label),
             ),
             picked: url.getAll("user_id"),
+            excluded: url.getAll("exclude_user_id"),
             onToggle: toggle("member"),
             ...listed(log.sheet.member),
           },
@@ -105,6 +107,7 @@ export function ActivityPhone({
         (group) => group.label ?? shortId(group.key),
       ),
       picked: url.getAll("api_key_id"),
+      excluded: url.getAll("exclude_api_key_id"),
       onToggle: toggle("source"),
       ...listed(log.sheet.source),
     },
@@ -112,6 +115,7 @@ export function ActivityPhone({
       title: "Model",
       options: groupOptions(log.sheet.model.groups, (group) => group.key),
       picked: url.getAll("model"),
+      excluded: url.getAll("exclude_model"),
       onToggle: toggle("model"),
       isMono: true,
       ...listed(log.sheet.model),
@@ -125,6 +129,7 @@ export function ActivityPhone({
               (group) => group.key,
             ),
             picked: url.getAll("policy_name"),
+            excluded: url.getAll("exclude_policy_name"),
             onToggle: toggle("policy"),
             isMono: true,
             ...listed(log.sheet.policy),
@@ -319,7 +324,7 @@ export function ActivityPhone({
                 <div className="flex min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
                   <RequestPanel
                     entry={open}
-                    isFullScreen
+                    isOverlaid
                     position={log.position}
                     memberName={log.memberName}
                     showsMember={log.isMulti}

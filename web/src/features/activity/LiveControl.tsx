@@ -25,26 +25,32 @@ function LiveDot({ isLive }: { isLive: boolean }) {
  *
  * Live mode brings the window up to now every ten seconds; it holds still on
  * its own while the reader pages back, has a request open, or looks at a window
- * that has ended, so a row never moves under someone reading it. Members and managers get the switch alone. An operator's control
- * also reports the in-flight count and opens the list behind it, which is
- * gateway-wide by nature: a request that has not finished has no outcome, cost
- * or token count for the log's filters to match on.
+ * that has ended, so a row never moves under someone reading it. Members and
+ * managers get the switch alone. An operator's control also reports the
+ * in-flight count and opens the list behind it, which is gateway-wide by
+ * nature: a request that has not finished has no outcome, cost or token count
+ * for the log's filters to match on.
  */
 export function LiveControl({
   isLive,
   onLive,
+  isOperator,
   inFlight,
+  isInFlightFailed = false,
   inFlightUpdatedAt,
 }: {
   isLive: boolean
   onLive: (isLive: boolean) => void
-  /** The operator's in-flight read, or undefined for everyone else (and on a failed poll). */
+  isOperator: boolean
+  /** The operator's in-flight read, until it answers or when it fails. */
   inFlight: InFlightResponse | undefined
+  /** The read failed, which the list says in place of its rows. */
+  isInFlightFailed?: boolean
   inFlightUpdatedAt: number
 }) {
   const memberLabels = useMemberAttributionLabels()
   const label = isLive ? "Live" : "Paused"
-  if (!inFlight) {
+  if (!isOperator) {
     return (
       // Named for what it switches, so its pressed state carries on or off
       // rather than a label that flips as well.
@@ -59,8 +65,8 @@ export function LiveControl({
       </Button>
     )
   }
-  const shown = inFlight.requests
-  const hidden = Math.max(0, inFlight.total - shown.length)
+  const shown = inFlight?.requests ?? []
+  const hidden = inFlight ? Math.max(0, inFlight.total - shown.length) : 0
   return (
     <Popover
       label="Live updates"
@@ -69,13 +75,21 @@ export function LiveControl({
       trigger={
         <Button
           size="sm"
-          aria-label={`${label}, ${formatNumber(inFlight.total)} in flight`}
+          aria-label={
+            inFlight
+              ? `${label}, ${formatNumber(inFlight.total)} in flight`
+              : isInFlightFailed
+                ? `${label}, in-flight count unavailable`
+                : label
+          }
         >
           <LiveDot isLive={isLive} />
           {label}
-          <span className="text-subtle">
-            · {formatNumber(inFlight.total)} in flight
-          </span>
+          {inFlight ? (
+            <span className="text-subtle">
+              · {formatNumber(inFlight.total)} in flight
+            </span>
+          ) : null}
           <FiChevronDown aria-hidden className="size-3.5" />
         </Button>
       }
@@ -93,7 +107,13 @@ export function LiveControl({
         </div>
         <Divider weight="subtle" className="my-1" />
         <MenuHeading>In flight across the gateway</MenuHeading>
-        {shown.length === 0 ? (
+        {isInFlightFailed ? (
+          <p className="px-3 py-1.5 text-caption text-danger">
+            The requests in flight could not be loaded.
+          </p>
+        ) : !inFlight ? (
+          <p className="px-3 py-1.5 text-caption text-subtle">Loading…</p>
+        ) : shown.length === 0 ? (
           <p className="px-3 py-1.5 text-caption">
             Nothing running right now. Settled requests join the log as they
             land.

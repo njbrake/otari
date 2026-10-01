@@ -19,6 +19,7 @@ import {
   VALUE_FILTERS,
   type ValueColumn,
   type ValueOption,
+  valuePatch,
 } from "./activityQuery"
 import { ColumnFilterMenu } from "./ColumnFilterMenu"
 import { ColumnHeader } from "./ColumnHeader"
@@ -42,9 +43,10 @@ export const COLUMN_LABELS: Record<ColumnKey, string> = {
  * A value column lists what the window holds for it, with counts, from the
  * grouping the page reads when its menu opens (`options`): busiest first, and
  * searched on the server, so a window with more values than one read returns
- * still reaches them all. Status counts come from the totals. A numeric column offers thresholds. Cost adds the unpriced rows,
- * Status the choice to list recovered attempts as rows, and Policy the requests
- * that named a model directly.
+ * still reaches them all. Status counts come from the totals. Each value can
+ * be picked or excluded. A numeric column offers thresholds. Cost adds the
+ * unpriced rows, Status the choice to list recovered attempts as rows, and
+ * Policy the requests that named a model directly.
  */
 export function ActivityHeaderCells({
   columns,
@@ -197,6 +199,9 @@ export function ActivityHeaderCells({
         picked={url.getAll(VALUE_FILTERS[column].include)}
         excluded={url.getAll(VALUE_FILTERS[column].exclude)}
         onToggle={(value) => onRefine(togglePatch(url, column, value))}
+        onExclude={(value) =>
+          onRefine(valuePatch(url, column, value, "exclude"))
+        }
         aliases={
           column === "model"
             ? {

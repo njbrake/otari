@@ -11,7 +11,7 @@ import { MenuRow } from "./MenuRow"
  *
  * Left out of the tab order: a control in every cell would put three stops on
  * each row before the next one. The keyboard reaches the same filters through
- * the column's own menu in the header.
+ * the column's own menu in the header, which picks or excludes each value.
  */
 export function ValueFilter({
   value,

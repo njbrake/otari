@@ -33,6 +33,7 @@ describe("LiveControl", () => {
       <LiveControl
         isLive
         onLive={onLive}
+        isOperator={false}
         inFlight={undefined}
         inFlightUpdatedAt={0}
       />,
@@ -52,6 +53,7 @@ describe("LiveControl", () => {
       <LiveControl
         isLive={false}
         onLive={vi.fn()}
+        isOperator
         inFlight={RUNNING}
         inFlightUpdatedAt={Date.now()}
       />,
@@ -68,5 +70,32 @@ describe("LiveControl", () => {
     expect(
       screen.getByRole("switch", { name: "Live updates" }),
     ).toHaveAttribute("aria-checked", "false")
+  })
+
+  it("keeps an operator's list when its read fails, and says so inside", async () => {
+    const user = userEvent.setup()
+    mockApi()
+    renderPage(
+      <LiveControl
+        isLive
+        onLive={vi.fn()}
+        isOperator
+        inFlight={undefined}
+        isInFlightFailed
+        inFlightUpdatedAt={0}
+      />,
+    )
+    await flushRouter()
+    await user.click(
+      screen.getByRole("button", {
+        name: "Live, in-flight count unavailable",
+      }),
+    )
+    expect(
+      screen.getByText("The requests in flight could not be loaded."),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("switch", { name: "Live updates" }),
+    ).toHaveAttribute("aria-checked", "true")
   })
 })

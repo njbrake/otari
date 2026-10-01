@@ -27,6 +27,7 @@ export function SavedViewsMenu({
   matching,
   isDirty,
   canShare,
+  canSave,
   onApply,
   onSave,
   onDelete,
@@ -41,6 +42,8 @@ export function SavedViewsMenu({
   matching: BuiltInView | undefined
   isDirty: boolean
   canShare: boolean
+  /** False with no workspace selected, which is where a view is kept. */
+  canSave: boolean
   onApply: (view: BuiltInView) => void
   onSave: (name: string, shared: boolean) => Promise<unknown>
   onDelete: (view: SavedView) => void
@@ -175,7 +178,7 @@ export function SavedViewsMenu({
           </>
         ) : null}
         <Divider weight="subtle" className="my-1" />
-        {isNaming ? (
+        {!canSave ? null : isNaming ? (
           <form
             className="flex flex-col gap-2 px-3 py-1.5"
             onSubmit={(event) => {

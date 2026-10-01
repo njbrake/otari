@@ -28,8 +28,10 @@ import {
   activityChips,
   type ColumnKey,
   GROUPS,
+  isSubstringSearch,
   readGroup,
   readSort,
+  toSelection,
   toUsageFilters,
   VALUE_FILTERS,
 } from "./activityQuery"
@@ -93,7 +95,9 @@ function groupList(read: {
  *   workspace under "You"; a manager with no such id is shown the workspace.
  * - The aggregates (totals, groups, column counts) always send a start. With
  *   none the server's summary reads its last 30 days while the list reads all
- *   time, so "All" sends the chart's year-long extent instead.
+ *   time, so "All" sends the chart's year-long extent instead. A list the
+ *   server bounds the same way (sorted by anything but time, or searched by
+ *   substring) sends it too.
  * - Live mode brings the windows up to now on a clock (`useLiveClock`), which
  *   moves every key once a tick, and holds still while the reader pages back,
  *   has a request open, or is looking at a window that has ended.
@@ -130,7 +134,6 @@ export function useActivityLog({
   const time = useActivityWindow(url, liveClock)
   const memberLabels = useMemberAttributionLabels()
 
-  // ---------- what is asked for ----------
   const wantsOwn = viewer.isManager && url.get("scope") === "you"
   const isReady = !(wantsOwn && viewer.isFindingOwnUserId)
   const scope: "workspace" | "you" =
@@ -142,15 +145,23 @@ export function useActivityLog({
   }
   const sort = readSort(url)
   // With no start, the summary reads its last 30 days, and so does a list in
-  // any order but newest first, which the server bounds as it does the summary.
-  // Under "All" both send the chart's year-long extent instead.
+  // any order but time or searched by substring, which the server bounds as it
+  // does the summary. Under "All" both send the chart's year-long extent instead.
   const listed = toUsageFilters(url, time.list, activityScope)
   const withStart: UsageFilters = listed.start_date
     ? listed
     : { ...listed, start_date: time.chart.start }
-  const filters = sort.key === NEWEST_FIRST.key ? listed : withStart
+  const isUnbounded =
+    sort.key === NEWEST_FIRST.key && !isSubstringSearch(listed.q)
+  const filters = isUnbounded ? listed : withStart
   const aggregateFilters = withStart
-  const chartFilters = toUsageFilters(url, time.chart, activityScope)
+  // What a bulk action on imported rows reaches, closed at the moment the
+  // window was taken: an open window would otherwise reach rows that land
+  // between the count the dialog states and the write it confirms.
+  const bulkFilters: UsageFilters = {
+    ...filters,
+    end_date: filters.end_date ?? new Date(time.now).toISOString(),
+  }
   const group = readGroup(url, isMulti)
   // Groups follow time; a table sorted by cost has no stretch of time to group.
   const isGrouping = !isPhone && group !== undefined && sort.key === "timestamp"
@@ -165,7 +176,6 @@ export function useActivityLog({
   const isPaused = !isLive && isFirstPageOfOpenWindow
   const grain = isPhone ? phoneBarSpec(time.range).grain : time.chartGrain
 
-  // ---------- reads ----------
   const logs = useUsageLogs(filters, page, pageSize, {
     sort,
     enabled: isReady && !isGrouping && !isPhone,
@@ -175,17 +185,25 @@ export function useActivityLog({
     sort,
     enabled: isReady && isPhone,
   })
-  const count = useUsageCount(filters, isReady && !isGrouping)
+  const count = useUsageCount(filters, isReady && !isGrouping, sort)
   const totals = useActivityTotals(aggregateFilters, grain, {
     enabled: isReady,
     withP95: true,
   })
-  const chart = useActivityTotals(chartFilters, grain, { enabled: isReady })
-  const liveCount = useLiveUsageCount(filters, isReady && isPaused)
+  // With no span the chart and the totals read one window, so the totals'
+  // series draws the bars; a span narrows the totals, and the chart keeps the
+  // whole window.
+  const chart = useActivityTotals(
+    toUsageFilters(url, time.chart, activityScope),
+    grain,
+    { enabled: isReady && time.hasSpan },
+  )
+  const chartRead = time.hasSpan ? chart : totals
+  const liveCount = useLiveUsageCount(filters, isReady && isPaused, sort)
   const inFlight = useInFlightRequests(viewer.isOperator && !isPhone)
   const spend = useWorkspaceSpend(viewer.workspaceId)
   const importedCount = useUsageCount(
-    { ...filters, counts_toward_budget: false },
+    { ...bulkFilters, counts_toward_budget: false },
     isReady && viewer.isOperator && !isPhone,
   )
   // Whether any of the window was routed decides whether the Policy column
@@ -263,7 +281,6 @@ export function useActivityLog({
 
   const rowsRead = isGrouping ? groups : isPhone ? batches : logs
 
-  // ---------- rows and names ----------
   const rows = (isPhone ? batches.data?.pages.flat() : logs.data) ?? []
   const { rows: topRows, attempts } = nestAttempts(rows)
   // The roster's name for a person, else the alias their requests carry, else
@@ -277,7 +294,6 @@ export function useActivityLog({
   const apiKeyName = (id: string) => names.get(id) ?? shortId(id)
   const chips = activityChips(url, { member: memberName, apiKey: apiKeyName })
 
-  // ---------- the open request ----------
   const navList = isGrouping
     ? openGroups.flatMap((row) => previewRows.get(row.key ?? "") ?? [])
     : topRows
@@ -292,14 +308,25 @@ export function useActivityLog({
     ? navList.findIndex((entry) => entry.id === open.id)
     : -1
 
+  // An open window is taken again up to now, which moves the key of every read
+  // its snapshot bounds, so those read afresh on their own; the rest (a span's
+  // own bounds, or the list under "All", which sends none) are asked again.
   const refresh = () => {
-    void (isPhone ? batches : logs).refetch()
-    void count.refetch()
-    void totals.refetch()
-    void chart.refetch()
+    const isOpen = !url.get("end_date")
+    if (isOpen) time.retake()
+    const listMoves = isOpen && !time.hasSpan && Boolean(filters.start_date)
+    const aggregatesMove = isOpen && !time.hasSpan
     void spend.refetch()
-    if (isPaused) void liveCount.refetch()
-    if (isGrouping) void groups.refetch()
+    if (!listMoves) {
+      void (isPhone ? batches : logs).refetch()
+      void count.refetch()
+      if (isPaused) void liveCount.refetch()
+    }
+    if (!aggregatesMove) {
+      void totals.refetch()
+      if (isGrouping) void groups.refetch()
+    }
+    if (time.hasSpan && !isOpen) void chart.refetch()
   }
 
   return {
@@ -327,12 +354,16 @@ export function useActivityLog({
     rowsUpdatedAt: logs.dataUpdatedAt,
     total: count.isSuccess ? count.data.total : null,
     totals: totals.data?.totals,
-    series: chart.data?.series ?? [],
+    series: chartRead.data?.series ?? [],
     spend: spend.data ?? undefined,
     inFlight:
       viewer.isOperator && !inFlight.isError ? inFlight.data : undefined,
+    /** The operator's in-flight read failed, which the live control says itself. */
+    isInFlightFailed: viewer.isOperator && inFlight.isError,
     inFlightUpdatedAt: inFlight.dataUpdatedAt,
     importedCount: importedCount.data?.total ?? 0,
+    /** What a bulk action on imported rows reaches: the window the count was taken over. */
+    importedSelection: toSelection(bulkFilters),
     newRows:
       isPaused && count.data && liveCount.data
         ? Math.max(0, liveCount.data.total - count.data.total)
@@ -373,13 +404,12 @@ export function useActivityLog({
       rowsRead.error ??
       count.error ??
       totals.error ??
-      chart.error ??
+      chartRead.error ??
       policies.error ??
       previews.find((preview) => preview.error)?.error ??
       spend.error ??
       importedCount.error ??
-      fetched.error ??
-      inFlight.error,
+      fetched.error,
   }
 }
 

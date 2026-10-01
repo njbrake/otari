@@ -82,7 +82,8 @@ function describeRequested(entry: UsageEntry): string {
 }
 
 /**
- * One request, read in full beside the log (or over it, on a phone).
+ * One request, read in full beside the log (or over it, where the log has no
+ * room to spare).
  *
  * Everything the row could not hold: why it failed, how it was routed, where it
  * came from, its token composition, what it cost and why, and how long it took.
@@ -99,7 +100,7 @@ export function RequestPanel({
   onClose,
   onFilter,
   onPriceModel,
-  isFullScreen,
+  isOverlaid,
 }: {
   entry: UsageEntry
   /** "3 / 25": where the request sits in the list the arrows step through. */
@@ -113,8 +114,11 @@ export function RequestPanel({
   onFilter: (filter: "session" | "source" | "model" | "tool") => void
   /** Only for a deployment operator: a price is a deployment-wide write. */
   onPriceModel: ((modelKey: string) => void) | undefined
-  /** Read full screen on a phone, pushed over the list, rather than beside it. */
-  isFullScreen?: boolean
+  /**
+   * Read over the list (a phone's pushed view, a narrow desk's drawer), filling
+   * what holds it, rather than beside it at its own width.
+   */
+  isOverlaid?: boolean
 }) {
   const hasPlayground = useSurfaces()("playground")
   // Focus moves into the panel as it opens, so the keyboard carries on where
@@ -164,7 +168,7 @@ export function RequestPanel({
       tabIndex={-1}
       aria-label="Request details"
       className={`flex min-h-0 flex-col bg-surface ${
-        isFullScreen
+        isOverlaid
           ? "h-full w-full"
           : "h-full w-[26.25rem] shrink-0 border-l border-control-border"
       }`}
@@ -411,13 +415,17 @@ export function RequestPanel({
             </Row>
           ) : null}
           {entry.pricing_breakdown?.length
-            ? sortChargeLines(entry.pricing_breakdown).map((line) => {
+            ? sortChargeLines(entry.pricing_breakdown).map((line, index) => {
                 // A line of neither known shape was written by an older
                 // gateway. Its cost is still real, so it is shown with no rate
                 // rather than through a rate format that would print "NaN".
                 const meter = String(line.meter ?? "")
                 return (
-                  <Row key={meter} label={meter.replaceAll("_", " ")} isMono>
+                  <Row
+                    key={`${meter}-${index}`}
+                    label={meter.replaceAll("_", " ")}
+                    isMono
+                  >
                     {isUnitChargeLine(line)
                       ? `${formatNumber(line.units)} at ${formatUnitRate(line.unit_rate)}, ${formatCost(line.cost)}`
                       : isTokenChargeLine(line)

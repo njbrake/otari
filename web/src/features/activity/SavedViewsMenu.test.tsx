@@ -31,6 +31,7 @@ function renderMenu(
       matching={BUILT_IN_VIEWS[0]}
       isDirty={false}
       canShare={false}
+      canSave
       isSaving={false}
       error={null}
       onClose={vi.fn()}
@@ -109,5 +110,17 @@ describe("SavedViewsMenu", () => {
     expect(
       screen.queryByRole("checkbox", { name: "Share with the workspace" }),
     ).not.toBeInTheDocument()
+  })
+
+  it("offers no save with no workspace to keep the view in", async () => {
+    const user = userEvent.setup()
+    renderMenu({ canSave: false })
+    await user.click(screen.getByRole("button", { name: /Saved views/ }))
+    expect(
+      screen.queryByRole("button", { name: /Save current view/ }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Copy link to this view" }),
+    ).toBeInTheDocument()
   })
 })

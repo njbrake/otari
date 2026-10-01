@@ -9,6 +9,7 @@ import {
   BUILT_IN_VIEWS,
   cellFilterPatch,
   isColumnFiltered,
+  isSubstringSearch,
   nextSort,
   panelFilterPatch,
   readGroup,
@@ -49,14 +50,32 @@ describe("statusParams", () => {
 
   it("sends two statuses as the one left out", () => {
     // The API takes one status or a list to exclude, never a list to include.
+    // Keeping "Recovered" also asks for the absorbed rows the list otherwise
+    // leaves out, or the pick would read as "Failed" alone.
     expect(statusParams(["error", "absorbed"], [])).toEqual({
       exclude_status: ["success"],
+      include_absorbed: true,
+    })
+    expect(statusParams(["success", "error"], [])).toEqual({
+      exclude_status: ["absorbed"],
+    })
+  })
+
+  it("asks for absorbed rows whenever Recovered is among the picks", () => {
+    expect(statusParams(["absorbed"], [])).toEqual({
+      status: "absorbed",
+      include_absorbed: true,
+    })
+    expect(statusParams([], ["error"])).toEqual({
+      exclude_status: ["error"],
+      include_absorbed: true,
     })
   })
 
   it("combines an exclusion with the picks", () => {
     expect(statusParams([], ["success"])).toEqual({
       exclude_status: ["success"],
+      include_absorbed: true,
     })
     expect(statusParams(["success", "error"], ["error"])).toEqual({
       status: "success",
@@ -66,6 +85,27 @@ describe("statusParams", () => {
   it("sends nothing when every status is allowed", () => {
     expect(statusParams([], [])).toEqual({})
     expect(statusParams(["success", "error", "absorbed"], [])).toEqual({})
+  })
+})
+
+describe("isSubstringSearch", () => {
+  it("reads a UUID in any of the server's spellings as an id lookup", () => {
+    for (const q of [
+      "0b6e3c1a-55f1-4a3e-9f6e-0c2d9a1b7e44",
+      " 0B6E3C1A55F14A3E9F6E0C2D9A1B7E44 ",
+      "{0b6e3c1a-55f1-4a3e-9f6e-0c2d9a1b7e44}",
+      "urn:uuid:0b6e3c1a-55f1-4a3e-9f6e-0c2d9a1b7e44",
+    ]) {
+      expect(isSubstringSearch(q)).toBe(false)
+    }
+  })
+
+  it("reads anything else non-empty as a substring search", () => {
+    expect(isSubstringSearch("opus")).toBe(true)
+    expect(isSubstringSearch("0b6e3c1a-55f1")).toBe(true)
+    expect(isSubstringSearch("")).toBe(false)
+    expect(isSubstringSearch("   ")).toBe(false)
+    expect(isSubstringSearch(undefined)).toBe(false)
   })
 })
 
@@ -97,6 +137,16 @@ describe("toUsageFilters", () => {
     expect(
       toUsageFilters(urlOf("recovered=show"), WINDOW, {}).include_absorbed,
     ).toBe(true)
+  })
+
+  it("lists recovered attempts when Recovered is picked alongside another status", () => {
+    const filters = toUsageFilters(
+      urlOf("status=error&status=absorbed"),
+      WINDOW,
+      {},
+    )
+    expect(filters.exclude_status).toEqual(["success"])
+    expect(filters.include_absorbed).toBe(true)
   })
 
   it("narrows to the caller's own requests in place of any member filter", () => {

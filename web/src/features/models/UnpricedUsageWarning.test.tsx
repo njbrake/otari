@@ -110,6 +110,14 @@ describe("UnpricedUsageWarning", () => {
       "href",
       "/activity?status=success&priced=false&range=24h&source=gateway",
     )
+    // Underlined at rest, as the Dismiss beside it is: hue alone does not mark
+    // a link.
+    for (const link of [
+      screen.getByRole("link", { name: "View them" }),
+      screen.getByRole("button", { name: "Dismiss" }),
+    ]) {
+      expect(link.className.split(" ")).toContain("underline")
+    }
 
     const params = summaryParams(spy)
     expect(params.get("status")).toBe("success")

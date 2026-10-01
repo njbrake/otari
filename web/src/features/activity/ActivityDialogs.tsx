@@ -1,3 +1,4 @@
+import type { UsageMutationSelection } from "@/client"
 import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
 import {
   type ManualRates,
@@ -7,7 +8,12 @@ import { formatNumber } from "@/shared/helpers/format"
 
 export type ActivityDialog =
   | { kind: "price"; modelKey: string }
-  | { kind: "recost" | "delete"; count: number }
+  | {
+      kind: "recost" | "delete"
+      count: number
+      /** The rows `count` was taken over, fixed as the dialog opened. */
+      selection: UsageMutationSelection
+    }
 
 /**
  * The operator's three writes from the log. Setting a model's price changes
@@ -28,8 +34,11 @@ export function ActivityDialogs({
   dialog: ActivityDialog | undefined
   onClose: () => void
   onSetModelPrice: (rates: ManualRates, modelKey: string) => Promise<unknown>
-  onRecost: (rates: ManualRates) => Promise<unknown>
-  onDelete: () => void
+  onRecost: (
+    selection: UsageMutationSelection,
+    rates: ManualRates,
+  ) => Promise<unknown>
+  onDelete: (selection: UsageMutationSelection) => void
   isDeleting: boolean
   deleteError: Error | null
 }) {
@@ -60,7 +69,7 @@ export function ActivityDialogs({
         isOpen
         onOpenChange={onOpenChange}
         targetCount={dialog.count}
-        onSubmit={onRecost}
+        onSubmit={(rates) => onRecost(dialog.selection, rates)}
         submitLabel={`Recost ${rows}`}
         title="Recost imported rows"
         description={() =>
@@ -78,7 +87,7 @@ export function ActivityDialogs({
       confirmLabel="Delete rows"
       isPending={isDeleting}
       error={deleteError}
-      onConfirm={onDelete}
+      onConfirm={() => onDelete(dialog.selection)}
     />
   )
 }

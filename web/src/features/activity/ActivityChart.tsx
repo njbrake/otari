@@ -70,6 +70,9 @@ export function ActivityChart({
   }
   const hovered = hover !== undefined && !drag ? bars[hover] : undefined
   const at = (index: number) => `${(index / bars.length) * 100}%`
+  // A label past the middle hangs leftward from its bar, so it never reaches
+  // past the plot's right edge and scrolls the page sideways.
+  const isPastMiddle = (index: number) => index >= bars.length / 2
   const step = Math.max(1, Math.ceil(bars.length / TICKS))
   const ticks = bars.filter((_, index) => index % step === 0)
 
@@ -194,8 +197,14 @@ export function ActivityChart({
           </div>
           {selected ? (
             <div
-              className="absolute -top-0.5 -translate-y-full bg-foreground px-1.5 text-mono-micro whitespace-nowrap text-background"
-              style={{ left: at(selected[0]) }}
+              className={`absolute -top-0.5 -translate-y-full bg-foreground px-1.5 text-mono-micro whitespace-nowrap text-background ${
+                isPastMiddle(selected[0]) ? "-translate-x-full" : ""
+              }`}
+              style={{
+                left: isPastMiddle(selected[0])
+                  ? at(selected[1] + 1)
+                  : at(selected[0]),
+              }}
             >
               {describeSpan(
                 bars[selected[0]].start,
@@ -206,8 +215,14 @@ export function ActivityChart({
           ) : null}
           {hovered && hover !== undefined ? (
             <div
-              className="pointer-events-none absolute top-1 z-10 flex flex-col border border-border bg-surface px-2.5 py-1.5 whitespace-nowrap"
-              style={{ left: `calc(${at(hover)} + 0.875rem)` }}
+              className={`pointer-events-none absolute top-1 z-10 flex flex-col border border-border bg-surface px-2.5 py-1.5 whitespace-nowrap ${
+                isPastMiddle(hover) ? "-translate-x-full" : ""
+              }`}
+              style={{
+                left: isPastMiddle(hover)
+                  ? `calc(${at(hover)} - 0.875rem)`
+                  : `calc(${at(hover)} + 0.875rem)`,
+              }}
             >
               <span className="text-mono-caption">
                 {describeSpan(hovered.start, hovered.end, barMs)} UTC

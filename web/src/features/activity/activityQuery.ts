@@ -81,8 +81,6 @@ export type ActivityUrl = UrlState<ActivityUrlKey>
 /** A change to the page's URL: the keys it sets, each to one value or several. */
 export type Patch = Partial<Record<ActivityUrlKey, string | string[]>>
 
-// ---------- columns ----------
-
 export type ColumnKey =
   | "time"
   | "member"
@@ -178,8 +176,6 @@ export function isColumnFiltered(url: ActivityUrl, column: ColumnKey) {
   return COLUMN_FILTER_KEYS[column].some((key) => url.getAll(key).length > 0)
 }
 
-// ---------- value filters ----------
-
 /** The columns filtered by picking values, and the pair of keys each writes. */
 export const VALUE_FILTERS = {
   member: { include: "user_id", exclude: "exclude_user_id" },
@@ -204,19 +200,28 @@ export const STATUS_LABELS: Record<Status, string> = {
   absorbed: "Recovered",
 }
 
+/**
+ * The statuses picked, as the API takes them. A pick that keeps "Recovered"
+ * also asks for absorbed rows, which the list otherwise leaves out of any read
+ * that names no single status.
+ */
 export function statusParams(
   include: readonly string[],
   exclude: readonly string[],
-): Pick<UsageFilters, "status" | "exclude_status"> {
+): Pick<UsageFilters, "status" | "exclude_status" | "include_absorbed"> {
   const allowed = STATUSES.filter(
     (status) =>
       (include.length === 0 || include.includes(status)) &&
       !exclude.includes(status),
   )
   if (allowed.length === STATUSES.length) return {}
-  if (allowed.length === 1) return { status: allowed[0] }
+  const absorbed = allowed.includes("absorbed")
+    ? { include_absorbed: true }
+    : {}
+  if (allowed.length === 1) return { status: allowed[0], ...absorbed }
   return {
     exclude_status: STATUSES.filter((status) => !allowed.includes(status)),
+    ...absorbed,
   }
 }
 
@@ -391,8 +396,6 @@ export function toolPatch(tools: readonly string[]): Patch {
   return { tool: tools.length === 1 ? tools[0] : "any" }
 }
 
-// ---------- thresholds ----------
-
 export const THRESHOLD_FILTERS = {
   tokens: {
     key: "tokens_gt",
@@ -427,8 +430,6 @@ export function readNumber(
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
 }
 
-// ---------- grouping ----------
-
 export const GROUPS = {
   source: { label: "API key", groupBy: "api_key" },
   session: { label: "Session", groupBy: "source_label" },
@@ -449,8 +450,6 @@ export function readGroup(url: ActivityUrl, canSeeMembers: boolean) {
   if (group === "member" && !canSeeMembers) return undefined
   return group as GroupKey
 }
-
-// ---------- the request ----------
 
 interface ActivityScope {
   workspaceId?: string
@@ -478,11 +477,16 @@ export function toUsageFilters(
   const priced = url.get("priced")
   const latency = readNumber(url, "latency_ms_gt")
   const tokens = readNumber(url, "tokens_gt")
+  const status = statusParams(
+    url.getAll("status"),
+    url.getAll("exclude_status"),
+  )
   return {
     workspace_id: scope.workspaceId,
     start_date: window.start,
     end_date: window.end,
-    ...statusParams(url.getAll("status"), url.getAll("exclude_status")),
+    status: status.status,
+    exclude_status: status.exclude_status,
     model: list("model"),
     exclude_model: list("exclude_model"),
     requested_model: list("requested_model"),
@@ -506,8 +510,27 @@ export function toUsageFilters(
     q: url.get("q").trim() || undefined,
     // Each routed request is one row, with its earlier failed attempts counted
     // on it, unless the operator asked to see those attempts as rows.
-    include_absorbed: url.get("recovered") === "show",
+    include_absorbed:
+      status.include_absorbed ?? url.get("recovered") === "show",
   }
+}
+
+/**
+ * Whether a search reads by substring rather than looking up an id, as the
+ * server splits it (`is_substring_search`): a UUID, in the spellings Python's
+ * `uuid.UUID` takes (braces, hyphens anywhere, a `urn:uuid:` prefix), is an id
+ * lookup. The server bounds a substring search to the summary's window, so the
+ * page sends it a start.
+ */
+export function isSubstringSearch(q: string | undefined): boolean {
+  const term = (q ?? "").trim()
+  if (!term) return false
+  const hex = term
+    .replaceAll("urn:", "")
+    .replaceAll("uuid:", "")
+    .replace(/^[{}]+|[{}]+$/g, "")
+    .replaceAll("-", "")
+  return !/^[0-9a-f]{32}$/i.test(hex)
 }
 
 /**
@@ -519,8 +542,6 @@ export function toSelection(filters: UsageFilters): UsageMutationSelection {
   const { include_absorbed: _listOnly, ...selection } = filters
   return { by_filter: true, ...selection }
 }
-
-// ---------- chips ----------
 
 export interface ActivityChip {
   key: string
@@ -620,8 +641,6 @@ export const CLEAR_FILTERS: Patch = Object.fromEntries(
     )
     .map((key) => [key, ""]),
 )
-
-// ---------- saved views ----------
 
 // What a view holds: everything that decides which rows and how they are laid
 // out, and nothing about where the reader is in them (the page, an open

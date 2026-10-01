@@ -247,6 +247,8 @@ describe("ActivityPage", () => {
       await rowOf("gpt-4o")
       expect(lastList(calls).getAll("exclude_status")).toEqual(["success"])
       expect(lastList(calls).get("status")).toBeNull()
+      // Recovered is among them, so its rows are asked for.
+      expect(lastList(calls).get("include_absorbed")).toBe("true")
     })
 
     it("searches once typing settles", async () => {
@@ -463,6 +465,31 @@ describe("ActivityPage", () => {
       ).toBeInTheDocument()
     })
 
+    it("excludes a value from its column's menu, which the keyboard reaches", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockApi({
+        rows: [entry()],
+        groups: (groupBy) =>
+          groupBy === "model"
+            ? [group({ key: "claude-haiku-4-5", label: null, requests: 30 })]
+            : [],
+      })
+      renderPage(<ActivityPage />)
+      await rowOf("gpt-4o")
+
+      await user.click(screen.getByRole("button", { name: "Filter Model" }))
+      await user.click(
+        await screen.findByRole("button", {
+          name: "Exclude claude-haiku-4-5",
+        }),
+      )
+      await waitFor(() =>
+        expect(lastList(calls).getAll("exclude_model")).toEqual([
+          "claude-haiku-4-5",
+        ]),
+      )
+    })
+
     it("shows only rows above a threshold picked from a numeric column", async () => {
       const user = userEvent.setup()
       const { calls } = mockApi({ rows: [entry()] })
@@ -522,6 +549,42 @@ describe("ActivityPage", () => {
       expect(lastList(calls).get("start_date")).not.toBeNull()
     })
 
+    it("gives a substring search a start under All, and an id lookup none", async () => {
+      const { calls } = mockApi({ rows: [entry()] })
+      renderPage(<ActivityPage />, "/activity?range=all&q=opus")
+      await rowOf("gpt-4o")
+      expect(lastList(calls).get("start_date")).not.toBeNull()
+      expect(
+        calls.find((call) => call.url.includes("/usage/count"))?.url,
+      ).toContain("start_date=")
+    })
+
+    it("looks an id up over all time", async () => {
+      const { calls } = mockApi({ rows: [entry()] })
+      renderPage(
+        <ActivityPage />,
+        "/activity?range=all&q=0b6e3c1a-55f1-4a3e-9f6e-0c2d9a1b7e44",
+      )
+      await rowOf("gpt-4o")
+      expect(lastList(calls).get("start_date")).toBeNull()
+    })
+
+    it("counts in the order the list was read in", async () => {
+      const { calls } = mockApi({ rows: [entry()] })
+      renderPage(<ActivityPage />, "/activity?sort=cost&order=asc")
+      await rowOf("gpt-4o")
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (call) =>
+              call.url.includes("/usage/count") &&
+              call.url.includes("sort=cost") &&
+              !call.url.includes("counts_toward_budget"),
+          ),
+        ).toBe(true),
+      )
+    })
+
     it("asks only the totals for a 95th percentile, not the chart", async () => {
       const { calls } = mockApi({ rows: [entry()] })
       renderPage(<ActivityPage />, "/activity?start_date=2026-09-01T00:00:00Z")
@@ -558,6 +621,30 @@ describe("ActivityPage", () => {
       await waitFor(() =>
         expect(screen.getByRole("radio", { name: "24h" })).toBeChecked(),
       )
+    })
+
+    it("rewrites a custom range with no bounds to the default", async () => {
+      mockApi({ rows: [entry()] })
+      renderPage(<ActivityPage />, "/activity?range=custom")
+      await rowOf("gpt-4o")
+      await waitFor(() =>
+        expect(screen.getByRole("radio", { name: "24h" })).toBeChecked(),
+      )
+    })
+
+    it("bars a custom range at a grain its year-long frame allows", async () => {
+      const { calls } = mockApi({ rows: [entry()] })
+      renderPage(
+        <ActivityPage />,
+        "/activity?range=custom&start_date=2026-09-01T00:00:00Z&end_date=2026-09-02T00:00:00Z",
+      )
+      await rowOf("gpt-4o")
+      const buckets = calls
+        .filter((call) => call.url.includes("/usage/summary"))
+        .map((call) => new URL(call.url, "http://localhost").searchParams)
+        .map((params) => params.get("bucket"))
+      expect(buckets.length).toBeGreaterThan(0)
+      expect(buckets).not.toContain("5min")
     })
 
     it("opens a bookmarked page on that page", async () => {
@@ -823,6 +910,7 @@ describe("ActivityPage", () => {
           by_filter: true,
           workspace_id: WORKSPACE_ID,
           start_date: expect.any(String),
+          end_date: expect.any(String),
           user_id: ["me-attr"],
           q: "opus",
           cost_gt: 0.1,
@@ -869,6 +957,59 @@ describe("ActivityPage", () => {
     })
   })
 
+  describe("the operator's bulk actions, as live mode moves on", () => {
+    it("deletes over the window the dialog's count was taken over", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const user = userEvent.setup({
+          advanceTimers: vi.advanceTimersByTime,
+        })
+        const { calls } = mockApi({
+          rows: [entry({ source: "claude_code", counts_toward_budget: false })],
+          total: 4,
+        })
+        renderPage(<ActivityPage />)
+
+        await user.click(
+          await screen.findByRole("button", { name: /Manage 4 imported rows/ }),
+        )
+        await user.click(
+          screen.getByRole("button", { name: "Delete imported rows…" }),
+        )
+        const dialog = await screen.findByRole("alertdialog")
+        const counted = new URL(
+          calls.findLast(
+            (call) =>
+              call.url.includes("/usage/count") &&
+              call.url.includes("counts_toward_budget=false"),
+          )?.url ?? "",
+          "http://localhost",
+        ).searchParams
+        // Closed at the moment the window was taken, not open-ended.
+        expect(counted.get("end_date")).not.toBeNull()
+
+        // A live tick moves the window on while the dialog is open.
+        await vi.advanceTimersByTimeAsync(10_500)
+        await user.click(
+          within(dialog).getByRole("button", { name: "Delete rows" }),
+        )
+        await waitFor(() => {
+          const write = calls.find(
+            (call) =>
+              call.method === "DELETE" &&
+              call.url.endsWith(`${API_ROOT}/usage`),
+          )
+          expect(JSON.parse(write?.body ?? "{}")).toMatchObject({
+            start_date: counted.get("start_date"),
+            end_date: counted.get("end_date"),
+          })
+        })
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
   describe("who is reading", () => {
     it("reads a member's own requests from the organization route, with nothing of the operator's", async () => {
       const { calls } = mockApi({ rows: [entry()], viewer: "member" })
@@ -911,6 +1052,41 @@ describe("ActivityPage", () => {
       expect(
         screen.queryByRole("columnheader", { name: /Member/ }),
       ).not.toBeInTheDocument()
+    })
+
+    it("reads a workspace admin who is an organization member as a member, as the server does", async () => {
+      mockApi({ rows: [entry()], viewer: "workspaceAdmin" })
+      renderPage(<ActivityPage />)
+      await rowOf("gpt-4o")
+      expect(screen.getByText("Your requests")).toBeInTheDocument()
+      expect(
+        screen.queryByRole("radio", { name: "You" }),
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole("columnheader", { name: /Member/ }),
+      ).not.toBeInTheDocument()
+    })
+
+    it("marks a budget that has run over", async () => {
+      mockApi({
+        rows: [entry()],
+        viewer: "member",
+        spend: {
+          workspace_id: WORKSPACE_ID,
+          name: "Everything",
+          max_budget: 500,
+          spent: 612,
+          period_start: "2026-09-01T00:00:00Z",
+          period_end: "2026-10-01T00:00:00Z",
+        },
+      })
+      renderPage(<ActivityPage />)
+      expect(await screen.findByText("$612.00 / $500")).toHaveClass(
+        "text-danger",
+      )
+      expect(
+        screen.getByRole("progressbar", { name: /Workspace budget used/ }),
+      ).toHaveAttribute("aria-valuetext", expect.stringContaining("over"))
     })
 
     it("shows the workspace's budget to every member, and nothing when it has none", async () => {
@@ -976,6 +1152,31 @@ describe("ActivityPage", () => {
         expect(
           Date.parse(lastList(calls).get("start_date") ?? ""),
         ).toBeGreaterThan(Date.parse(first ?? ""))
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("brings a paused window up to now on refresh", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const user = userEvent.setup({
+          advanceTimers: vi.advanceTimersByTime,
+        })
+        const { calls } = mockApi({ rows: [entry()], viewer: "member" })
+        renderPage(<ActivityPage />)
+        await rowOf("gpt-4o")
+        await user.click(screen.getByRole("button", { name: "Live updates" }))
+        const first = lastList(calls).get("start_date")
+
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(lastList(calls).get("start_date")).toBe(first)
+        await user.click(screen.getByRole("button", { name: /Refresh/ }))
+        await waitFor(() =>
+          expect(
+            Date.parse(lastList(calls).get("start_date") ?? ""),
+          ).toBeGreaterThanOrEqual(Date.parse(first ?? "") + 60_000),
+        )
       } finally {
         vi.useRealTimers()
       }
@@ -1060,6 +1261,12 @@ describe("ActivityPage", () => {
       expect(summary?.url).toContain("start_date=")
       // One read for the totals and the chart, which ask the same question.
       expect(summary?.url).toContain("dimensions=none")
+      const summaries = calls.filter((call) =>
+        call.url.includes("/usage/summary"),
+      )
+      expect(summaries.every((call) => call.url.includes("include_p95"))).toBe(
+        true,
+      )
     })
 
     it("reports a failed chart and totals read rather than drawing nothing", async () => {
@@ -1068,14 +1275,31 @@ describe("ActivityPage", () => {
       expect(await screen.findByText(/Not available/)).toBeInTheDocument()
     })
 
-    it("drops the in-flight count when its read fails, and keeps the switch", async () => {
-      mockApi({ rows: [entry()], failing: ["/usage/in-flight"] })
-      renderPage(<ActivityPage />)
-      await rowOf("gpt-4o")
-      expect(
-        await screen.findByRole("button", { name: "Live updates" }),
-      ).toBeInTheDocument()
-      expect(screen.queryByText(/in flight/)).not.toBeInTheDocument()
+    it("says the in-flight read failed inside the live control, and keeps the switch", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const user = userEvent.setup({
+          advanceTimers: vi.advanceTimersByTime,
+        })
+        mockApi({ rows: [entry()], failing: ["/usage/in-flight"] })
+        renderPage(<ActivityPage />)
+        await rowOf("gpt-4o")
+        // Past the read's retries, which back off over about seven seconds.
+        await vi.advanceTimersByTimeAsync(8_000)
+        await user.click(
+          await screen.findByRole("button", {
+            name: "Live, in-flight count unavailable",
+          }),
+        )
+        expect(
+          screen.getByText("The requests in flight could not be loaded."),
+        ).toBeInTheDocument()
+        expect(
+          screen.getByRole("switch", { name: "Live updates" }),
+        ).toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it("names a member from the roster first, then the alias the row carries", async () => {
@@ -1190,6 +1414,45 @@ describe("ActivityPage", () => {
     })
   })
 
+  describe("at a narrow desk", () => {
+    it("reads a request in a drawer over the log, which keeps its lanes", async () => {
+      const user = userEvent.setup()
+      vi.spyOn(window, "matchMedia").mockImplementation(
+        (query: string) =>
+          ({
+            matches: query.includes("max-width: 1279px"),
+            media: query,
+            onchange: null,
+            addEventListener: () => undefined,
+            removeEventListener: () => undefined,
+            addListener: () => undefined,
+            removeListener: () => undefined,
+            dispatchEvent: () => false,
+          }) as MediaQueryList,
+      )
+      mockApi({ rows: [entry()] })
+      renderPage(<ActivityPage />)
+      await user.click(await rowOf("gpt-4o"))
+
+      const drawer = await screen.findByRole("dialog", { name: "Request" })
+      expect(
+        within(drawer).getByRole("complementary", { name: "Request details" }),
+      ).toBeInTheDocument()
+      await user.click(
+        within(drawer).getByRole("button", { name: "Close (Esc)" }),
+      )
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("complementary", { name: "Request details" }),
+        ).not.toBeInTheDocument(),
+      )
+      // The table kept its full set of lanes behind the drawer.
+      expect(
+        screen.getByRole("columnheader", { name: /Latency/ }),
+      ).toBeInTheDocument()
+    })
+  })
+
   describe("on a phone", () => {
     function asPhone() {
       vi.spyOn(window, "matchMedia").mockImplementation(
@@ -1274,6 +1537,23 @@ describe("ActivityPage", () => {
       expect(listCalls(calls).some((url) => url.includes("limit=40"))).toBe(
         false,
       )
+    })
+
+    it("marks an excluded value in the sheet, unchecked", async () => {
+      const user = userEvent.setup()
+      asPhone()
+      mockApi({ rows: [entry()], viewer: "member" })
+      renderPage(<ActivityPage />, "/activity?exclude_status=error")
+      await screen.findByRole("button", { name: /gpt-4o/ })
+
+      await user.click(screen.getByRole("button", { name: "Filter and sort" }))
+      const sheet = await screen.findByRole("dialog", {
+        name: "Filter and sort",
+      })
+      const failed = within(sheet).getByRole("checkbox", { name: "Failed" })
+      expect(failed).not.toBeChecked()
+      const row = failed.closest("div.flex.min-h-11") as HTMLElement
+      expect(within(row).getByText("excluded")).toBeInTheDocument()
     })
 
     it("sorts and filters from one sheet", async () => {

@@ -1,3 +1,4 @@
+import { Drawer } from "@heroui/react"
 import type { ReactNode } from "react"
 import { Button } from "@/design-system/actions/Button"
 import { RefreshButton } from "@/design-system/actions/RefreshButton"
@@ -8,6 +9,7 @@ import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { ACTIVITY_GROUP_LIMIT, NEWEST_FIRST } from "@/shared/api/usage"
 import { formatNumber } from "@/shared/helpers/format"
+import { useMediaQuery } from "@/shared/hooks/useMediaQuery"
 import { ActivityChartBand } from "./ActivityChartBand"
 import { ActivityHeaderCells, COLUMN_LABELS } from "./ActivityHeaderCells"
 import { ActivityScopeBar } from "./ActivityScopeBar"
@@ -42,9 +44,16 @@ const GROUP_COLUMNS = {
   member: "member",
 } as const
 
+// Below this the request panel beside the log leaves the log too narrow to
+// read: the panel and its gutter take 27.75rem, the compact table needs up to
+// 47rem, and the shell's sidebar and padding 19.5rem more. At 1280px the log
+// keeps about 33rem and scrolls its lanes; at 1024px it would keep 17.
+const BESIDE_QUERY = "(max-width: 1279px)"
+
 /**
  * Activity at a desk: the log as a table filtered from its own headers and
- * cells, with a request opened beside it rather than over it.
+ * cells, with a request opened beside it rather than over it where the screen
+ * is wide enough, and in a drawer over it where it is not.
  */
 export function ActivityDesk({
   url,
@@ -82,7 +91,8 @@ export function ActivityDesk({
   const { group, open } = log
   const { isManager, isOperator } = log.viewer
   const mainHeight = useMainHeight()
-  const isCompact = open !== undefined
+  const isNarrow = useMediaQuery(BESIDE_QUERY)
+  const isCompact = open !== undefined && !isNarrow
   const columns = activityColumns({
     isCompact,
     showsMembers: log.isMulti,
@@ -95,6 +105,20 @@ export function ActivityDesk({
     log.time.now,
   )
   const barMs = bars.length ? bars[0].end - bars[0].start : 0
+  const panel = (entry: NonNullable<typeof open>) => (
+    <RequestPanel
+      entry={entry}
+      isOverlaid={isNarrow}
+      position={log.position}
+      memberName={log.memberName}
+      showsMember={log.isMulti}
+      onPrevious={() => act.step(-1)}
+      onNext={() => act.step(1)}
+      onClose={() => act.openRequest(undefined)}
+      onFilter={act.panelFilter}
+      onPriceModel={onPriceModel}
+    />
+  )
 
   return (
     <div className="flex items-start">
@@ -112,7 +136,9 @@ export function ActivityDesk({
               <LiveControl
                 isLive={isLive}
                 onLive={onLive}
+                isOperator={isOperator}
                 inFlight={log.inFlight}
+                isInFlightFailed={log.isInFlightFailed}
                 inFlightUpdatedAt={log.inFlightUpdatedAt}
               />
             </div>
@@ -302,23 +328,37 @@ export function ActivityDesk({
         )}
       </div>
 
-      {open ? (
+      {open && !isNarrow ? (
         <div
           className="sticky top-0 -my-6 -mr-6 ml-6"
           style={mainHeight ? { height: `${mainHeight}px` } : undefined}
         >
-          <RequestPanel
-            entry={open}
-            position={log.position}
-            memberName={log.memberName}
-            showsMember={log.isMulti}
-            onPrevious={() => act.step(-1)}
-            onNext={() => act.step(1)}
-            onClose={() => act.openRequest(undefined)}
-            onFilter={act.panelFilter}
-            onPriceModel={onPriceModel}
-          />
+          {panel(open)}
         </div>
+      ) : null}
+      {isNarrow ? (
+        <Drawer
+          isOpen={open !== undefined}
+          onOpenChange={(isOpen) => {
+            if (!isOpen) act.openRequest(undefined)
+          }}
+        >
+          {/* Driven from state; the trigger slot is filled and hidden, as the
+              design system's dialogs do. */}
+          <Drawer.Trigger aria-hidden className="hidden">
+            Request
+          </Drawer.Trigger>
+          <Drawer.Backdrop className="bg-backdrop/30">
+            <Drawer.Content placement="right">
+              <Drawer.Dialog
+                aria-label="Request"
+                className="flex h-full w-[26.25rem] max-w-[85vw] flex-col p-0"
+              >
+                {open ? panel(open) : null}
+              </Drawer.Dialog>
+            </Drawer.Content>
+          </Drawer.Backdrop>
+        </Drawer>
       ) : null}
     </div>
   )

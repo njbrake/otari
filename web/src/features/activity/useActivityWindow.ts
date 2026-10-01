@@ -2,7 +2,6 @@ import { useEffect, useState } from "react"
 import {
   ACTIVITY_DEFAULT_KEY,
   ACTIVITY_PRESETS,
-  CUSTOM_KEY,
   findPreset,
 } from "@/shared/helpers/timeRange"
 import { resolveExtentWindow, resolveWindow } from "./activityModel"
@@ -59,31 +58,32 @@ export function useActivityWindow(
   const { list, extent, takenAt } = snapshot
 
   // A range this page does not offer (a Usage-page key such as `90d` carried
-  // over by hand) resolves to the default window, so the URL is corrected to say
-  // so. Bounds win over a preset, so a window carried in `start_date` and
-  // `end_date` is left alone.
+  // over by hand, or `custom` with no bounds to be custom about) resolves to the
+  // default window, so the URL is corrected to say so. Bounds win over a preset,
+  // so a window carried in `start_date` and `end_date` is left alone.
   const patch = url.patch
   useEffect(() => {
     if (startParam || endParam) return
-    if (range === CUSTOM_KEY || findPreset(ACTIVITY_PRESETS, range)) return
+    if (findPreset(ACTIVITY_PRESETS, range)) return
     patch({ range: ACTIVITY_DEFAULT_KEY })
   }, [range, startParam, endParam, patch])
 
   // A drill-down can carry bounds reaching outside the preset the URL names.
   // The preset's extent cannot frame those, so the chart frames the window
-  // itself, at the grain its length allows.
+  // itself. Either way a range with no grain of its own (`custom` beside
+  // bounds) takes the finest its window's length allows.
   const outside = Boolean(
     list.start &&
       extent.start &&
       Date.parse(list.start) < Date.parse(extent.start),
   )
   const chart = outside ? list : extent
-  const chartGrain = outside
-    ? grainForSpan(
-        (list.end ? Date.parse(list.end) : takenAt) -
-          Date.parse(list.start as string),
-      )
-    : (DESKTOP_GRAIN[range] ?? "5min")
+  const chartGrain =
+    (!outside && DESKTOP_GRAIN[range]) ||
+    grainForSpan(
+      (chart.end ? Date.parse(chart.end) : takenAt) -
+        Date.parse(chart.start ?? ""),
+    )
 
   return {
     range,
@@ -94,5 +94,7 @@ export function useActivityWindow(
     now: takenAt,
     /** Whether the list is narrowed inside the window: a brushed span or a drill-down. */
     hasSpan: Boolean(startParam || endParam),
+    /** Take both windows again, up to now: a refresh of a rolling window. */
+    retake: () => setSnapshot(take(Math.max(Date.now(), takenAt + 1))),
   }
 }

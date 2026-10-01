@@ -142,8 +142,11 @@ interface FetchCall {
   body: string | undefined
 }
 
-/** Who is reading: a member, a manager of the workspace, or a deployment operator. */
-export type Viewer = "member" | "manager" | "operator"
+/**
+ * Who is reading: a member, a manager of the organization, a workspace admin
+ * who is only a member of the organization, or a deployment operator.
+ */
+export type Viewer = "member" | "manager" | "workspaceAdmin" | "operator"
 
 export function mockApi(
   opts: {
@@ -284,7 +287,10 @@ export function mockApi(
       if (url.endsWith(`${API_ROOT}/organizations/me`)) {
         return jsonResponse({
           organization_member_id: "om-1",
-          role: viewer === "member" ? "member" : "owner",
+          role:
+            viewer === "member" || viewer === "workspaceAdmin"
+              ? "member"
+              : "owner",
           status: "active",
           caller: {
             user_id: CALLER_IDENTITY,
@@ -308,7 +314,12 @@ export function mockApi(
             {
               workspace_id: WORKSPACE_ID,
               name: "Production",
-              role: viewer === "member" ? "member" : "owner",
+              role:
+                viewer === "member"
+                  ? "member"
+                  : viewer === "workspaceAdmin"
+                    ? "admin"
+                    : "owner",
             },
           ],
         })

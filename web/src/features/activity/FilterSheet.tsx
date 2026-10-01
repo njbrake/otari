@@ -25,6 +25,8 @@ export interface SheetSection {
   title: string
   options: ValueOption[]
   picked: string[]
+  /** Values left out; unchecked, and marked so, since tapping one lifts that. */
+  excluded: string[]
   onToggle: (value: string) => void
   isMono?: boolean
   /** How many values the window holds past those listed, busiest first. */
@@ -154,11 +156,14 @@ export function FilterSheet({
                               {option.label}
                             </span>
                           </Checkbox>
-                          {option.count !== undefined ? (
-                            <span className="ml-auto text-mono-micro text-subtle">
-                              {formatNumber(option.count)}
-                            </span>
-                          ) : null}
+                          <span className="ml-auto flex gap-2 text-mono-micro text-subtle">
+                            {section.excluded.includes(option.value) ? (
+                              <span className="text-danger">excluded</span>
+                            ) : null}
+                            {option.count !== undefined
+                              ? formatNumber(option.count)
+                              : null}
+                          </span>
                         </div>
                       )
                     })}

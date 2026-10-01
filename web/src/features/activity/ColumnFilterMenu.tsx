@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
-import { FiX } from "react-icons/fi"
+import { FiSlash, FiX } from "react-icons/fi"
+import { IconButton } from "@/design-system/actions/IconButton"
 import { Checkbox } from "@/design-system/forms/Checkbox"
 import { SearchField } from "@/design-system/forms/SearchField"
 import { Divider } from "@/design-system/layout/Divider"
@@ -13,9 +14,10 @@ const SEARCHABLE_AFTER = 5
 
 /**
  * A column's filters, in the order the column needs them: a checklist of its
- * values, or thresholds to show only rows above, then whatever else the column
- * alone can say (the aliases callers sent under Model, unpriced rows under
- * Cost, recovered attempts under Status), and a way to clear what is set.
+ * values, each of which can also be excluded, or thresholds to show only rows
+ * above, then whatever else the column alone can say (the aliases callers sent
+ * under Model, unpriced rows under Cost, recovered attempts under Status), and
+ * a way to clear what is set.
  *
  * The values come from the server, which orders and searches them: the box
  * hands its settled term up (`onSearch`) rather than filtering what one read
@@ -27,6 +29,7 @@ export function ColumnFilterMenu({
   picked,
   excluded,
   onToggle,
+  onExclude,
   isLoading,
   isError = false,
   more = 0,
@@ -44,6 +47,8 @@ export function ColumnFilterMenu({
   /** Values left out; unchecked, and marked so, since pressing one lifts that. */
   excluded?: string[]
   onToggle?: (value: string) => void
+  /** Leave a value out: every row but those carrying it. */
+  onExclude?: (value: string) => void
   isLoading?: boolean
   isError?: boolean
   more?: number
@@ -85,6 +90,7 @@ export function ColumnFilterMenu({
     isPicked: boolean,
     isExcluded: boolean,
     toggle: (value: string) => void,
+    exclude?: (value: string) => void,
   ) => (
     <div
       key={option.value}
@@ -101,6 +107,16 @@ export function ColumnFilterMenu({
         {isExcluded ? <span className="text-danger">excluded</span> : null}
         {option.count !== undefined ? formatNumber(option.count) : null}
       </span>
+      {exclude && !isExcluded ? (
+        <IconButton
+          label={`Exclude ${option.label}`}
+          size="sm"
+          onPress={() => exclude(option.value)}
+          className="-my-1 shrink-0 md:size-6 md:min-h-6 md:min-w-6"
+        >
+          <FiSlash aria-hidden className="size-3" />
+        </IconButton>
+      ) : null}
     </div>
   )
   return (
@@ -125,6 +141,7 @@ export function ColumnFilterMenu({
                 picked?.includes(option.value) ?? false,
                 excluded?.includes(option.value) ?? false,
                 (value) => onToggle?.(value),
+                onExclude,
               ),
             )}
             {isError ? (

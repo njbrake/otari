@@ -247,19 +247,31 @@ export function useUsageRow(id: string | undefined) {
   })
 }
 
+// The count's query for the list it sits beside. Only the sort's column
+// matters: any but time bounds the window as the list's does, whichever way.
+function countParams(filters: UsageFilters, sortKey: UsageSortKey) {
+  const params = usageParams(filters)
+  if (sortKey !== NEWEST_FIRST.key) params.set("sort", sortKey)
+  return params.toString()
+}
+
 // Total rows matching the same filters, for the paginator's "N of M". A separate
-// request so /v1/usage stays a bare array; run alongside the list.
+// request so /v1/usage stays a bare array; run alongside the list, in its order.
 //
 // Deliberately as frozen as the log it counts (see `useUsageLogs`): the total
 // describes the page on screen, so a total that moved on its own would disagree
 // with the rows the operator can actually page through.
-export function useUsageCount(filters: UsageFilters, enabled = true) {
+export function useUsageCount(
+  filters: UsageFilters,
+  enabled = true,
+  sort: UsageSort = NEWEST_FIRST,
+) {
   const scope = useUsageScope()
   return useQuery({
-    queryKey: [USAGE, "count", scope.base, filters],
+    queryKey: [USAGE, "count", scope.base, filters, sort.key],
     queryFn: () =>
       apiFetch<UsageCount>(
-        `${scope.base}/count?${usageParams(filters).toString()}`,
+        `${scope.base}/count?${countParams(filters, sort.key)}`,
       ),
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
@@ -281,13 +293,17 @@ const NEW_ROW_POLL_MS = 15_000
 // other is deliberately ahead of it), and two observers of one query key cannot
 // disagree about how fresh their data is. The duplicate `COUNT(*)` at mount is
 // one indexed count, which is what makes polling it affordable in the first place.
-export function useLiveUsageCount(filters: UsageFilters, enabled = true) {
+export function useLiveUsageCount(
+  filters: UsageFilters,
+  enabled = true,
+  sort: UsageSort = NEWEST_FIRST,
+) {
   const scope = useUsageScope()
   return useQuery({
-    queryKey: [USAGE, "count", "live", scope.base, filters],
+    queryKey: [USAGE, "count", "live", scope.base, filters, sort.key],
     queryFn: () =>
       apiFetch<UsageCount>(
-        `${scope.base}/count?${usageParams(filters).toString()}`,
+        `${scope.base}/count?${countParams(filters, sort.key)}`,
       ),
     enabled: enabled && scope.isReady,
     refetchInterval: NEW_ROW_POLL_MS,
