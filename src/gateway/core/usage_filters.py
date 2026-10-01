@@ -46,9 +46,9 @@ def usage_search_condition(q: str) -> ColumnElement[bool] | None:
     A UUID is an ``Otari-Request-ID`` or a row id pasted from a log line, so it is
     matched, in canonical form, against those two columns alone, which keeps the
     lookup on their indexes (an OR with the substring arms below could use none). A
-    session label, key name or alias that is itself a UUID is not searched this way;
-    none is written in that form. Everything else is a
-    case-insensitive substring of the served model, the name the caller sent (so an
+    session label, key name or alias that is itself a UUID is therefore not matched
+    by ``q``; the ``source_label`` filter finds a UUID-shaped session label. Everything
+    else is a case-insensitive substring of the served model, the name the caller sent (so an
     alias finds its rows), the session label, the API key's name or the billed user's
     alias. The two names live on other tables and are matched through
     ``IN (subquery)`` so the condition fits any statement over ``usage_logs`` (a

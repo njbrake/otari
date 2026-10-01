@@ -1605,9 +1605,11 @@ def _refuse_wide_grid(start: datetime, end: datetime, bucket: UsageBucketGrain) 
 
     For the series that stay sparse, and for five-minute buckets, which a
     too-wide window would otherwise turn into a payload of tens of thousands of
-    points. Called before any query runs.
+    points. Called before any query runs. Measured from the bucket ``start`` falls
+    in, as the dense series counts its points, so a window that fits is never one
+    point too long for it.
     """
-    if (end - start).total_seconds() > _MAX_SERIES_POINTS * BUCKET_SECONDS[bucket]:
+    if (end - _grid_start(start, bucket)).total_seconds() > _MAX_SERIES_POINTS * BUCKET_SECONDS[bucket]:
         coarser = "hour" if bucket == "5min" else "day"
         raise HTTPException(
             status_code=422,
@@ -1616,6 +1618,12 @@ def _refuse_wide_grid(start: datetime, end: datetime, bucket: UsageBucketGrain) 
                 f"use bucket={coarser} or narrow the range"
             ),
         )
+
+
+def _grid_start(start: datetime, bucket: UsageBucketGrain) -> datetime:
+    """The start of the UTC bucket ``start`` falls in. Bucket starts are whole multiples of the step since the epoch."""
+    seconds = BUCKET_SECONDS[bucket]
+    return datetime.fromtimestamp(start.timestamp() // seconds * seconds, UTC)
 
 
 _PointT = TypeVar("_PointT")
@@ -1644,11 +1652,9 @@ def _dense_series(
     if not populated:
         return []
     make_empty = cast("Callable[[str], _PointT]", empty or _empty_usage_point)
-    seconds = BUCKET_SECONDS[bucket]
-    step = timedelta(seconds=seconds)
+    step = timedelta(seconds=BUCKET_SECONDS[bucket])
     fmt = BUCKET_FORMATS[bucket]
-    # UTC bucket starts are whole multiples of the step since the epoch.
-    cursor = datetime.fromtimestamp(start.timestamp() // seconds * seconds, UTC)
+    cursor = _grid_start(start, bucket)
     points: list[_PointT] = []
     while cursor < end:
         if len(points) >= _MAX_SERIES_POINTS:
