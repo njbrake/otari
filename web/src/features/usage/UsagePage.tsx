@@ -296,8 +296,11 @@ function BreakdownTable({
           : row.key === null
             ? { label: unknownLabel }
             : rowName(row)
+        // Capped below `md`: an auto-width lane takes its longest name, and one
+        // model id was enough to push every number off a phone. Capped, the
+        // name truncates and the first figure stays on screen.
         return (
-          <div className="flex flex-col gap-1">
+          <div className="flex max-w-[9rem] flex-col gap-1 md:max-w-none">
             <span
               className="truncate text-mono-caption text-foreground"
               title={name.id}
