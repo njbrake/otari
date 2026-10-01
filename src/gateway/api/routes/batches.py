@@ -106,6 +106,7 @@ async def log_batch_usage(
     cost: Decimal | None = None,
     counts_toward_budget: bool = True,
     workspace_id: uuid.UUID | None = None,
+    requested_model: str | None = None,
 ) -> None:
     """Log batch API usage, including token counts and cost when derivable.
 
@@ -127,6 +128,7 @@ async def log_batch_usage(
         user_id=user_id,
         timestamp=datetime.now(UTC),
         model=model,
+        requested_model=requested_model,
         provider=provider,
         endpoint=endpoint,
         prompt_tokens=prompt_tokens,
@@ -454,6 +456,7 @@ async def create_batch(
             log_writer=log_writer,
             api_key_id=api_key_id,
             model=model,
+            requested_model=request.model,
             provider=resolved.instance,
             endpoint=USAGE_ENDPOINT,
             user_id=user_id,
@@ -478,6 +481,7 @@ async def create_batch(
         log_writer=log_writer,
         api_key_id=api_key_id,
         model=model,
+        requested_model=request.model,
         provider=resolved.instance,
         endpoint=USAGE_ENDPOINT,
         user_id=user_id,

@@ -35,6 +35,7 @@ export function entry(overrides: Partial<UsageEntry> = {}): UsageEntry {
     source: "gateway",
     source_label: null,
     counts_toward_budget: true,
+    absorbed_attempts: 0,
     ...overrides,
   }
   return {

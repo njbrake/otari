@@ -55,6 +55,20 @@ class UsageLog(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
 
     model: Mapped[str] = mapped_column()
+    # The model name the caller sent, before an alias or routing policy resolved
+    # it: `model` above is what served, so an aliased request ("fast") is
+    # otherwise indistinguishable from one that named its target. NULL on rows
+    # written before the column existed, on imported usage (which reports only the
+    # model that ran), on a batch's results (logged when the batch is retrieved,
+    # from the stored batch), and on side-calls no caller named (the vision
+    # describe model, a direct search). Unindexed, like `model`.
+    requested_model: Mapped[str | None] = mapped_column()
+    # The request's `Otari-Request-ID` (sent back on every response except a gateway
+    # refusal), so a request found in a client's log can be found here. Shared by
+    # every row a completion request writes. NULL on routes that mint no id
+    # (pass-through, batches, search), on imported usage, and on rows older than the
+    # column. Indexed because it is looked up on its own, with no time window.
+    request_id: Mapped[str | None] = mapped_column(index=True)
     provider: Mapped[str | None] = mapped_column()
     endpoint: Mapped[str] = mapped_column()
 

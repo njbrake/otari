@@ -21,7 +21,10 @@ from gateway.api.routes._billing_schemas import ChargeLine, MeterMap
 from gateway.core.config import GatewayConfig
 from gateway.core.database import get_ingest_db
 from gateway.core.sql import (
+    BUCKET_FORMATS,
+    BUCKET_SECONDS,
     MAX_FILTER_VALUES,
+    UsageBucketGrain,
     bucket_expr,
     canonical_bucket,
     dialect_name,
@@ -29,12 +32,14 @@ from gateway.core.sql import (
     utc_bound,
 )
 from gateway.core.surface import Surface
+from gateway.core.usage_filters import MAX_SEARCH_LENGTH, is_substring_search, usage_search_condition
 from gateway.core.usage_source import is_served_here, not_served_here
 from gateway.inflight import get_registry
 from gateway.models.api_keys import APIKey
 from gateway.models.money import as_float
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
+from gateway.repositories.usage import usage_read_repository
 from gateway.services.external_usage_service import (
     ExternalEventsRequest,
     ExternalIngestResult,
@@ -45,6 +50,7 @@ from gateway.services.tool_usage import TOOL_METER_NAMESPACE
 from gateway.services.usage_admin_service import (
     UsageDeleteRequest,
     UsageDeleteResult,
+    UsageSelection,
     UsageSetPriceRequest,
     UsageSetPriceResult,
     delete_usage,
@@ -108,6 +114,12 @@ _SESSION_BREAKDOWN_TOP_N = 250
 _MAX_REQUEST_GROUPS = 1000
 
 Bucket = Literal["hour", "day"]
+# ``Bucket`` is the grid the grouped series and the agent-telemetry series share
+# with the telemetry port; only the summary's own series also takes five minutes.
+_SUMMARY_BUCKET_DESC = (
+    "Time-series granularity: '5min', 'hour' or 'day'. '5min' needs an explicit window of at most "
+    "1000 buckets (about 83 hours); the default 30-day window is refused with a 422."
+)
 SeriesGroupBy = Literal["model", "user_id", "api_key_id", "source"]
 
 # Coarse display buckets for a failure's status code. A closed Literal rather than
@@ -236,6 +248,20 @@ class UsageEntry(BaseModel):
     attempt_position: int | None = None
     attempt_count: int | None = None
     request_group_id: str | None = None
+    # The model name the caller sent, before an alias or a routing policy resolved
+    # it to ``model``. Null on rows written before it was recorded, on imported
+    # usage, and on side-calls no caller named.
+    requested_model: str | None = None
+    # Milliseconds from the start of the request to its first streamed chunk. Null
+    # for a non-streaming request, a stream that failed before its first chunk, a
+    # row written before it was recorded, and imported usage.
+    ttft_ms: int | None = None
+    # The request's ``Otari-Request-ID``; null where none was minted.
+    request_id: str | None = None
+    # How many earlier attempts of this row's routed request failed (rows of the
+    # same ``request_group_id`` with status ``absorbed``), whether or not a later
+    # attempt then served. Always 0 on an unrouted request and on an absorbed row.
+    absorbed_attempts: int = 0
 
     @classmethod
     def from_model(
@@ -244,6 +270,7 @@ class UsageEntry(BaseModel):
         *,
         user_alias: str | None = None,
         api_key_name: str | None = None,
+        absorbed_attempts: int = 0,
     ) -> "UsageEntry":
         return cls(
             id=log.id,
@@ -253,6 +280,10 @@ class UsageEntry(BaseModel):
             api_key_name=api_key_name,
             timestamp=_utc_iso(log.timestamp),
             model=log.model,
+            requested_model=log.requested_model,
+            request_id=log.request_id,
+            ttft_ms=log.ttft_ms,
+            absorbed_attempts=absorbed_attempts,
             provider=log.provider,
             endpoint=log.endpoint,
             source=log.source,
@@ -384,6 +415,31 @@ _DIMENSIONS_DESC = (
     "totals-and-series-only response. Each dimension left out skips one GROUP BY scan, so a caller that "
     "reads only the tiles or the time series should say so. Fields that were not requested come back empty."
 )
+_SEARCH_DESC = (
+    "Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a "
+    "case-insensitive substring of the served model, the model name the caller sent, the session "
+    f"label, the API key's name, or the billed user's alias. At most {MAX_SEARCH_LENGTH} characters. "
+    "A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, "
+    "and at most 366."
+)
+_ROW_ID_DESC = f"Look up usage rows by row id; repeatable (id=a&id=b). At most {MAX_FILTER_VALUES} per call."
+_REQUEST_ID_DESC = (
+    "Filter to the rows of one or more requests by the Otari-Request-ID their caller was sent; "
+    "repeatable. A routed request's attempts share one. "
+    f"At most {MAX_FILTER_VALUES} per call."
+)
+_REQUESTED_MODEL_DESC = (
+    "Filter to one or more model names as the caller sent them, before an alias or routing policy "
+    "resolved them; repeatable. Rows written before the name was recorded carry none and never match. "
+    f"At most {MAX_FILTER_VALUES} per call."
+)
+_INCLUDE_ABSORBED_DESC = (
+    "Whether the rows of a routed request's earlier failed attempts (status 'absorbed') are listed. "
+    "Defaults to true. With false, each request appears once, as the row that settled it, and "
+    "that row's 'absorbed_attempts' counts its earlier failed attempts. An explicit 'status' "
+    "filter takes precedence."
+)
+_INCLUDE_P95_DESC = "Also compute 'totals.p95_latency_ms', which sorts the window's latencies."
 
 
 def _usage_filters(
@@ -404,6 +460,11 @@ def _usage_filters(
     status_code: int | None = None,
     request_group_id: list[str] | None = None,
     workspace_id: uuid.UUID | None = None,
+    q: str | None = None,
+    row_id: list[str] | None = None,
+    request_id: list[str] | None = None,
+    requested_model: list[str] | None = None,
+    include_absorbed: bool = True,
     scope: ColumnElement[bool] | None,
 ) -> list[ColumnElement[bool]]:
     """Build the shared WHERE conditions for the list and count endpoints.
@@ -481,7 +542,70 @@ def _usage_filters(
         conditions.append(_tool_used_expr(tool))
     if counts_toward_budget is not None:
         conditions.append(UsageLog.counts_toward_budget.is_(counts_toward_budget))
+    if row_id:
+        conditions.append(match_any(UsageLog.id, row_id))
+    if request_id:
+        conditions.append(match_any(UsageLog.request_id, request_id))
+    if requested_model:
+        conditions.append(match_any(UsageLog.requested_model, requested_model))
+    if q is not None and (search := usage_search_condition(q)) is not None:
+        conditions.append(search)
+    if not include_absorbed and status is None:
+        # An explicit status wins, so ``status=absorbed`` still lists the attempts
+        # rather than being contradicted into an empty page.
+        conditions.append(UsageLog.status != "absorbed")
     return conditions
+
+
+def _list_window(
+    start_date: datetime | None, end_date: datetime | None, *, q: str | None
+) -> tuple[datetime | None, datetime | None]:
+    """The window a list, its count and a bulk selection by filter read.
+
+    As asked, unless a substring search would otherwise ``LIKE`` every row in the
+    log: that reads the window ``/summary`` does. An id lookup stays on its index,
+    so it keeps the window it was given. The count applies the same bound as the
+    list, so a paginator's total is the total of the pages.
+    """
+    return _resolve_window(start_date, end_date) if is_substring_search(q) else (start_date, end_date)
+
+
+def _bounded[S: UsageSelection](selection: S) -> S:
+    """A bulk selection by filter, read over the window its count was taken over."""
+    if selection.ids:
+        return selection
+    start_date, end_date = _list_window(selection.start_date, selection.end_date, q=selection.q)
+    return selection.model_copy(update={"start_date": start_date, "end_date": end_date})
+
+
+async def _list_usage_entries(
+    db: AsyncSession,
+    conditions: list[ColumnElement[bool]],
+    *,
+    scope: ColumnElement[bool] | None,
+    skip: int,
+    limit: int,
+) -> list[UsageEntry]:
+    """A page of usage rows, newest first, with their display labels and earlier failed attempts.
+
+    Shared by the deployment-wide and the organization-scoped list so the two cannot
+    drift. ``scope`` is the predicate already in ``conditions``, needed again to
+    count the attempts.
+    """
+    rows = await usage_read_repository.usage_rows(db, conditions, skip=skip, limit=limit)
+    groups = {log.request_group_id for log, _, _ in rows if log.request_group_id and log.status != "absorbed"}
+    absorbed = await usage_read_repository.absorbed_attempts(db, groups, scope)
+    return [
+        UsageEntry.from_model(
+            log,
+            user_alias=alias,
+            api_key_name=key_name,
+            absorbed_attempts=0
+            if log.status == "absorbed" or log.request_group_id is None
+            else absorbed.get(log.request_group_id, 0),
+        )
+        for log, alias, key_name in rows
+    ]
 
 
 @operator_router.get("")
@@ -507,6 +631,15 @@ async def list_usage(
         list[str] | None, Query(max_length=_MAX_REQUEST_GROUPS, description=_REQUEST_GROUP_DESC)
     ] = None,
     workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    q: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=_SEARCH_DESC)] = None,
+    row_id: Annotated[
+        list[str] | None, Query(alias="id", max_length=MAX_FILTER_VALUES, description=_ROW_ID_DESC)
+    ] = None,
+    request_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUEST_ID_DESC)] = None,
+    requested_model: Annotated[
+        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUESTED_MODEL_DESC)
+    ] = None,
+    include_absorbed: Annotated[bool, Query(description=_INCLUDE_ABSORBED_DESC)] = True,
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
 ) -> list[UsageEntry]:
@@ -515,12 +648,17 @@ async def list_usage(
     Supports optional filters for time range, user, status, failure status code,
     model, endpoint, provider, source, session (``source_label``), and request
     group (``request_group_id``, repeatable, which returns a routed request's
-    whole attempt plan). Paginated via skip/limit. The return shape is a bare JSON array; external
-    billing/analytics consumers depend on this, so the total row count for a
+    whole attempt plan), row id (``id``), the model name the caller sent
+    (``requested_model``), and free-text search (``q``). With
+    ``include_absorbed=false`` each routed request is listed once, as the row that
+    settled it, carrying ``absorbed_attempts``. Paginated via skip/limit. The
+    return shape is a bare JSON array; external billing/analytics consumers
+    depend on this, so the total row count for a
     paginated UI is served separately by ``GET /api/v1/usage/count`` rather than
     wrapped in an envelope here. Timestamps accept either ISO 8601 strings or
     Unix epoch seconds (numeric).
     """
+    start_date, end_date = _list_window(start_date, end_date, q=q)
     conditions = _usage_filters(
         start_date=start_date,
         end_date=end_date,
@@ -538,25 +676,14 @@ async def list_usage(
         counts_toward_budget=counts_toward_budget,
         request_group_id=request_group_id,
         workspace_id=workspace_id,
+        q=q,
+        row_id=row_id,
+        request_id=request_id,
+        requested_model=requested_model,
+        include_absorbed=include_absorbed,
         scope=None,
     )
-    # Outer-joined rather than looked up per row, and rather than left to the
-    # client: naming a page of rows must not cost a round trip each, nor oblige a
-    # dashboard to hold every user and every key in memory to label 100 rows.
-    # Outer so a row whose owner was deleted still comes back, with a null label.
-    stmt = (
-        select(UsageLog, User.alias, APIKey.key_name)
-        .outerjoin(User, User.user_id == UsageLog.user_id)
-        .outerjoin(APIKey, APIKey.id == UsageLog.api_key_id)
-        .where(*conditions)
-        .order_by(UsageLog.timestamp.desc())
-        .offset(skip)
-        .limit(limit)
-    )
-    result = await db.execute(stmt)
-    return [
-        UsageEntry.from_model(log, user_alias=alias, api_key_name=key_name) for log, alias, key_name in result.all()
-    ]
+    return await _list_usage_entries(db, conditions, scope=None, skip=skip, limit=limit)
 
 
 @ingest_router.post("/external-events")
@@ -611,6 +738,15 @@ async def count_usage(
         list[str] | None, Query(max_length=_MAX_REQUEST_GROUPS, description=_REQUEST_GROUP_DESC)
     ] = None,
     workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    q: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=_SEARCH_DESC)] = None,
+    row_id: Annotated[
+        list[str] | None, Query(alias="id", max_length=MAX_FILTER_VALUES, description=_ROW_ID_DESC)
+    ] = None,
+    request_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUEST_ID_DESC)] = None,
+    requested_model: Annotated[
+        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUESTED_MODEL_DESC)
+    ] = None,
+    include_absorbed: Annotated[bool, Query(description=_INCLUDE_ABSORBED_DESC)] = True,
 ) -> UsageCount:
     """Total number of usage logs matching the given filters.
 
@@ -625,6 +761,7 @@ async def count_usage(
     confirms is the number the mutation can reach. The list still pages the
     budget-exempt gateway rows it omits.
     """
+    start_date, end_date = _list_window(start_date, end_date, q=q)
     conditions = _usage_filters(
         start_date=start_date,
         end_date=end_date,
@@ -642,6 +779,11 @@ async def count_usage(
         counts_toward_budget=counts_toward_budget,
         request_group_id=request_group_id,
         workspace_id=workspace_id,
+        q=q,
+        row_id=row_id,
+        request_id=request_id,
+        requested_model=requested_model,
+        include_absorbed=include_absorbed,
         scope=None,
     )
     if counts_toward_budget is False:
@@ -708,7 +850,7 @@ async def delete_usage_rows(
     the spend ledger (``users.spend``) are untouched, so a delete can never desync a
     budget. Master-key only.
     """
-    return await delete_usage(db, request)
+    return await delete_usage(db, _bounded(request))
 
 
 @operator_router.post("/set-price")
@@ -725,7 +867,7 @@ async def set_usage_price_rows(
     configured pricing). Only imported rows (``counts_toward_budget = false``) are
     touched, so ``users.spend`` is never affected. Master-key only.
     """
-    return await set_usage_price(db, request)
+    return await set_usage_price(db, _bounded(request))
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +905,18 @@ class UsageTotals(BaseModel):
     # ``completion_tokens`` residual would drift, even negative, whenever a
     # row's meter and column disagree).
     billed_output_tokens: int = 0
+    # Nearest-rank 95th-percentile latency over requests, excluding absorbed
+    # attempts as ``avg_latency_ms`` does. Null unless ``include_p95`` was set, and
+    # when no request recorded a latency.
+    p95_latency_ms: int | None = None
+    # Rows of routed requests' earlier failed attempts (status ``absorbed``), which
+    # ``request_count`` and ``error_count`` leave out.
+    absorbed_count: int = 0
+    # The part of ``cost`` that came from imported usage (rows this deployment did
+    # not serve, such as a Claude Code subscription's). It is what that usage
+    # would have cost at API rates, never charged to a budget, so a caller shows
+    # it apart from the gateway's own spend (``cost - imported_cost``).
+    imported_cost: float = 0.0
 
 
 class UsageGroupRow(BaseModel):
@@ -853,7 +1007,7 @@ class UsageSummary(BaseModel):
 
     start_date: str
     end_date: str
-    bucket: Bucket
+    bucket: UsageBucketGrain
     totals: UsageTotals
     by_model: list[UsageGroupRow]
     by_user: list[UsageGroupRow]
@@ -939,7 +1093,7 @@ def _resolve_window(start_date: datetime | None, end_date: datetime | None) -> t
     return start, end
 
 
-def _bucket_expr(dialect: str, bucket: Bucket, column: Any = None) -> Any:
+def _bucket_expr(dialect: str, bucket: UsageBucketGrain, column: Any = None) -> Any:
     """``core.sql.bucket_expr`` defaulted to ``usage_logs.timestamp``.
 
     The grid itself is shared code, because the telemetry storage adapters
@@ -1097,6 +1251,8 @@ async def _totals(
                 ),
                 _billed_input_sum(),
                 _billed_output_sum(),
+                func.coalesce(func.sum(case((UsageLog.status == "absorbed", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((not_served_here(UsageLog.source), UsageLog.cost), else_=0)), 0.0),
             ).where(*conditions)
         )
     ).one()
@@ -1114,6 +1270,8 @@ async def _totals(
         unpriced_requests=int(row[10]),
         billed_input_tokens=int(row[11]),
         billed_output_tokens=int(row[12]),
+        absorbed_count=int(row[13]),
+        imported_cost=float(row[14]),
     )
 
 
@@ -1322,13 +1480,19 @@ async def _summary_context(
     counts_toward_budget: bool | None = None,
     status_code: int | None = None,
     workspace_id: uuid.UUID | None = None,
+    q: str | None = None,
+    requested_model: list[str] | None = None,
+    grid: UsageBucketGrain | None = None,
     scope: ColumnElement[bool] | None,
 ) -> tuple[datetime, datetime, list[ColumnElement[bool]], UsageTotals]:
     """Resolve the bounded window, the shared WHERE conditions, and the grand
     totals: the common preamble both summary endpoints run, kept in one place so a
     fix (like the naive-datetime handling in ``_resolve_window``) lands once.
+    ``grid`` refuses a window too wide for that bucket before anything is queried.
     """
     start, end = _resolve_window(start_date, end_date)
+    if grid is not None:
+        _refuse_wide_grid(start, end, grid)
     conditions = _usage_filters(
         start_date=start,
         end_date=end,
@@ -1345,6 +1509,8 @@ async def _summary_context(
         tool=tool,
         counts_toward_budget=counts_toward_budget,
         workspace_id=workspace_id,
+        q=q,
+        requested_model=requested_model,
         scope=scope,
     )
     totals = await _totals(db, conditions, status)
@@ -1356,6 +1522,25 @@ async def _summary_context(
 # returns the sparse populated buckets instead.
 _MAX_SERIES_POINTS = 1000
 
+
+def _refuse_wide_grid(start: datetime, end: datetime, bucket: UsageBucketGrain) -> None:
+    """Refuse a window with more than ``_MAX_SERIES_POINTS`` buckets of ``bucket``.
+
+    For the series that stay sparse, and for five-minute buckets, which a
+    too-wide window would otherwise turn into a payload of tens of thousands of
+    points. Called before any query runs.
+    """
+    if (end - start).total_seconds() > _MAX_SERIES_POINTS * BUCKET_SECONDS[bucket]:
+        coarser = "hour" if bucket == "5min" else "day"
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"window spans more than {_MAX_SERIES_POINTS} {bucket} buckets; "
+                f"use bucket={coarser} or narrow the range"
+            ),
+        )
+
+
 _PointT = TypeVar("_PointT")
 
 
@@ -1366,7 +1551,7 @@ def _empty_usage_point(bucket_start: str) -> UsageSeriesPoint:
 def _dense_series(
     start: datetime,
     end: datetime,
-    bucket: Bucket,
+    bucket: UsageBucketGrain,
     populated: dict[str, _PointT],
     empty: Callable[[str], _PointT] | None = None,
 ) -> list[_PointT]:
@@ -1382,13 +1567,11 @@ def _dense_series(
     if not populated:
         return []
     make_empty = cast("Callable[[str], _PointT]", empty or _empty_usage_point)
-    step = timedelta(hours=1) if bucket == "hour" else timedelta(days=1)
-    if bucket == "hour":
-        cursor = start.replace(minute=0, second=0, microsecond=0)
-        fmt = "%Y-%m-%dT%H:00:00Z"
-    else:
-        cursor = start.replace(hour=0, minute=0, second=0, microsecond=0)
-        fmt = "%Y-%m-%dT00:00:00Z"
+    seconds = BUCKET_SECONDS[bucket]
+    step = timedelta(seconds=seconds)
+    fmt = BUCKET_FORMATS[bucket]
+    # UTC bucket starts are whole multiples of the step since the epoch.
+    cursor = datetime.fromtimestamp(start.timestamp() // seconds * seconds, UTC)
     points: list[_PointT] = []
     while cursor < end:
         if len(points) >= _MAX_SERIES_POINTS:
@@ -1407,8 +1590,9 @@ async def _summary_response(
     conditions: list[ColumnElement[bool]],
     totals: UsageTotals,
     status: str | None,
-    bucket: Bucket,
+    bucket: UsageBucketGrain,
     dimensions: list[SummaryDimension] | None,
+    include_p95: bool = False,
 ) -> UsageSummary:
     """Assemble the summary from an already-resolved window and condition set.
 
@@ -1432,6 +1616,9 @@ async def _summary_response(
         await _errors_by_status_code(db, conditions) if _ERROR_TAXONOMY_DIMENSION in requested else []
     )
     by_tool = await _tool_breakdown(db, conditions) if _TOOL_DIMENSION in requested else []
+    if include_p95:
+        p95 = await usage_read_repository.p95_latency_ms(db, conditions)
+        totals = totals.model_copy(update={"p95_latency_ms": p95})
 
     expr = _bucket_expr(dialect_name(db), bucket)
     series_rows = (
@@ -1506,8 +1693,13 @@ async def usage_summary(
     tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
     counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
     workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
-    bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
+    q: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=_SEARCH_DESC)] = None,
+    requested_model: Annotated[
+        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUESTED_MODEL_DESC)
+    ] = None,
+    bucket: UsageBucketGrain = Query(default="day", description=_SUMMARY_BUCKET_DESC),
     dimensions: list[SummaryDimension] | None = Query(default=None, description=_DIMENSIONS_DESC),
+    include_p95: Annotated[bool, Query(description=_INCLUDE_P95_DESC)] = False,
 ) -> UsageSummary:
     """Aggregate spend, tokens, and request volume for the dashboard Usage page.
 
@@ -1545,6 +1737,9 @@ async def usage_summary(
         tool=tool,
         counts_toward_budget=counts_toward_budget,
         workspace_id=workspace_id,
+        q=q,
+        requested_model=requested_model,
+        grid=bucket if bucket == "5min" else None,
         scope=None,
     )
     return await _summary_response(
@@ -1556,6 +1751,7 @@ async def usage_summary(
         status=status,
         bucket=bucket,
         dimensions=dimensions,
+        include_p95=include_p95,
     )
 
 
@@ -1579,15 +1775,6 @@ async def _grouped_series_response(
     group_by: SeriesGroupBy,
 ) -> UsageGroupedSeries:
     """Assemble the grouped series, for the same reason :func:`_summary_response` exists."""
-    # Finding-5 guard: /summary densifies then caps at _MAX_SERIES_POINTS; this
-    # endpoint is sparse, so cap the bucket *grid* instead (hourly over the
-    # 366-day max window would otherwise be ~8.8k buckets x 10 groups per call).
-    step = timedelta(hours=1) if bucket == "hour" else timedelta(days=1)
-    if (end - start) / step > _MAX_SERIES_POINTS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"window spans more than {_MAX_SERIES_POINTS} {bucket} buckets; use bucket=day or narrow the range",
-        )
     column, label_join = _GROUP_COLUMNS[group_by]
     groups = await _breakdown(
         db, column, conditions, totals, limit=_SERIES_TOP_N, status_filter=status, label_join=label_join
@@ -1669,6 +1856,10 @@ async def usage_series(
     tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
     counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
     workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    q: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=_SEARCH_DESC)] = None,
+    requested_model: Annotated[
+        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUESTED_MODEL_DESC)
+    ] = None,
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
 ) -> UsageGroupedSeries:
     """Time series split by one dimension, for the dashboard's stacked charts.
@@ -1700,6 +1891,9 @@ async def usage_series(
         tool=tool,
         counts_toward_budget=counts_toward_budget,
         workspace_id=workspace_id,
+        q=q,
+        requested_model=requested_model,
+        grid=bucket,
         scope=None,
     )
     return await _grouped_series_response(

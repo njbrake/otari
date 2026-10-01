@@ -103,6 +103,9 @@ export function usageTotals(overrides: Partial<UsageTotals> = {}): UsageTotals {
     error_count: 0,
     unpriced_requests: 0,
     avg_latency_ms: null,
+    p95_latency_ms: null,
+    absorbed_count: 0,
+    imported_cost: 0,
     ...overrides,
   }
 }

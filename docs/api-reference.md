@@ -67,7 +67,10 @@ moderations, rerank, and search. Provider support differs by endpoint, so use
 
 Every Chat, Messages, and Responses response carries an `Otari-Request-ID`
 header, streaming or not. In hybrid mode it is the platform's id for the
-request; a standalone gateway mints its own.
+request; a standalone gateway mints its own and stores it on the request's
+usage row (every attempt of a routed request, too), so
+`GET /api/v1/usage?request_id=…` finds what a caller reports. A request the
+gateway refuses records the id on its row but does not yet return the header.
 
 A priced response also carries its cost on the usage object it already returns,
 as `usage.cost_usd` (a six-decimal USD string) and `usage.pricing_source`. On a

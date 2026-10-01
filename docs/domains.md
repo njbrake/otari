@@ -71,9 +71,9 @@ since. A module "runs queries" when it imports a query builder (`select`,
 | Route modules that run queries | 16, plus 1 that only calls `session.get` |
 | Route modules that define Pydantic models inline | 40 |
 | Model modules | 20 |
-| Repository modules | 21: a base, `users_repository.py`, and the rest under `tenancy/`, `overview/`, `api_keys/`, `files/`, `budgets/`, `pricing/`, `providers/` and `code_execution/` |
+| Repository modules | 22: a base, `users_repository.py`, and the rest under `tenancy/`, `overview/`, `api_keys/`, `files/`, `budgets/`, `pricing/`, `providers/`, `code_execution/` and `usage/` |
 | Service packages per domain | 6: `services/tools/`, which holds the built-in tool registry and no service yet, `services/overview/`, `services/budgets/`, `services/api_keys/`, `services/files/` and `services/providers/`, which holds the organization-scoped half of providers. `services/mail/`, `services/routing/` and `services/tenancy/` are older subpackages |
-| Repository packages per domain | 6: `repositories/overview/`, `repositories/api_keys/`, `repositories/files/`, `repositories/budgets/`, `repositories/pricing/` and `repositories/providers/`. `repositories/tenancy/` is an older subpackage |
+| Repository packages per domain | 7: `repositories/overview/`, `repositories/api_keys/`, `repositories/files/`, `repositories/budgets/`, `repositories/pricing/`, `repositories/providers/` and `repositories/usage/`. `repositories/tenancy/` is an older subpackage |
 | Modules in `schemas/` | Four domain modules so far, `budgets.py`, `files.py`, `overview.py` and `providers.py` |
 | Modules in `exceptions/` | The shared error bases in `_base.py`, which the package root re-exports, `shared_exceptions.py` for the errors no one domain owns, and eight domain modules: `budget_exceptions.py`, `files_exceptions.py`, `guardrails_exceptions.py`, `identity_exceptions.py`, `organizations_exceptions.py`, `pricing_exceptions.py`, `providers_exceptions.py` and `tools_exceptions.py` |
 
@@ -302,6 +302,10 @@ Usage rows, the usage log writer, OTLP ingest and coding-agent telemetry.
   `log_writer.py`, `agent_telemetry_service.py`,
   `agent_telemetry_admin_service.py`; the Claude Code transcript parser is
   `otari_agent.claude_code_import`, beside the CLI that uses it
+- Repositories: `usage/`, the queries behind the log's reads (a page of rows, the
+  attempts folded into them, latency percentiles); the routes' older queries
+  have not moved here yet
+- Core: `usage_filters.py`, the row filters the reads and the bulk mutations share
 - Models: `usage.py`
 
 ### inference
