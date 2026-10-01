@@ -38,23 +38,34 @@ export function DisclosureRow({
         aria-expanded={isOpen}
         aria-controls={panelId}
         onClick={onToggle}
-        className="flex min-h-11 w-full items-center gap-6 px-4 py-3 text-left transition-colors duration-150 ease-out hover:bg-surface-subtle focus-visible:otari-focus-ring motion-reduce:transition-none"
+        // A grid so the status can drop under the label on a phone. Beside
+        // the label it took the width first and left the help a one-word
+        // column; from `md` it sits on the label's line, as before.
+        className={`grid min-h-11 w-full items-center gap-x-3 gap-y-1.5 px-4 py-3 text-left transition-colors duration-150 ease-out hover:bg-surface-subtle focus-visible:otari-focus-ring motion-reduce:transition-none ${
+          trailing
+            ? "grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1fr)_auto_auto]"
+            : "grid-cols-[minmax(0,1fr)_auto]"
+        }`}
       >
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 flex-col gap-0.5 md:pr-3">
           <span className="text-emphasis">{label}</span>
           {help ? (
             <span className="text-caption text-subtle">{help}</span>
           ) : null}
         </span>
-        <span className="flex shrink-0 items-center gap-3">
-          {trailing}
-          <FiChevronRight
-            aria-hidden="true"
-            className={`h-4 w-4 text-subtle transition-transform duration-150 ease-out motion-reduce:transition-none ${
-              isOpen ? "rotate-90" : ""
-            }`}
-          />
-        </span>
+        {trailing ? (
+          <span className="col-start-1 row-start-2 flex items-center md:col-start-2 md:row-start-1">
+            {trailing}
+          </span>
+        ) : null}
+        <FiChevronRight
+          aria-hidden="true"
+          className={`h-4 w-4 text-subtle transition-transform duration-150 ease-out motion-reduce:transition-none ${
+            trailing
+              ? "col-start-2 row-span-2 row-start-1 md:col-start-3 md:row-span-1"
+              : ""
+          } ${isOpen ? "rotate-90" : ""}`}
+        />
       </button>
       {/* Rendered whether or not it is open, so `aria-controls` above always
           names an element that exists. `hidden` rather than unmounting: an
