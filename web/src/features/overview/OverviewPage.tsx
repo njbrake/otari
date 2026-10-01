@@ -1089,16 +1089,28 @@ function SpendChart({
               row of text under a chart that is not the headline. A phone's
               day column is about 10px against a 40px label, so below `md`
               every eighth: every fourth ran the labels into each other and
-              pushed the last one past the plot. */}
+              pushed the last one past the plot. The labels a phone skips are
+              not rendered there rather than hidden, because a hidden label
+              still overflows: the last one spilled past the page and let the
+              whole Overview pan sideways. */}
           <div className="mt-1.5 flex text-mono-micro text-subtle">
             {series.map((point, i) => (
               <span
                 key={point.bucket_start}
-                className={`min-w-px flex-1 text-center whitespace-nowrap ${
-                  i % 8 === 0 ? "" : "invisible md:visible"
-                }`}
+                className="min-w-px flex-1 text-center whitespace-nowrap"
               >
-                {i % 4 === 0 ? shortDate(point.bucket_start) : "\u00a0"}
+                {i % 8 === 0 ? (
+                  shortDate(point.bucket_start)
+                ) : i % 4 === 0 ? (
+                  <>
+                    <span className="hidden md:inline">
+                      {shortDate(point.bucket_start)}
+                    </span>
+                    <span className="md:hidden">{"\u00a0"}</span>
+                  </>
+                ) : (
+                  "\u00a0"
+                )}
               </span>
             ))}
           </div>

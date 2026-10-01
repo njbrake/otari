@@ -156,7 +156,7 @@ function TextSetting({
   const hasChanged = saved !== committed
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex max-w-full min-w-0 items-center gap-2">
       <input
         type="text"
         aria-label={field.key}
@@ -164,7 +164,7 @@ function TextSetting({
         disabled={disabled}
         placeholder="unset"
         onChange={(event) => setDraft(event.target.value)}
-        className={`w-56 ${INPUT_CLASS}`}
+        className={`w-56 min-w-0 ${INPUT_CLASS}`}
       />
       <Button
         size="sm"
@@ -290,14 +290,16 @@ function ConfigRow({
     // a `w-56` control and a sentence stopped fitting side by side.
     <div className="flex flex-wrap items-start justify-between gap-6 py-4">
       <div className="min-w-0">
-        <code className="font-mono text-body">{field.key}</code>
+        <code className="font-mono text-body break-words">{field.key}</code>
         {field.description ? (
           // `max-w-prose` for the reason the page header carries one: these
           // rows became full-bleed with the rest of the page, and the longest
           // description here measured 1211px, about 175 characters to the line,
           // roughly twice a readable measure. The row still spans the page; the
           // sentence inside it does not have to.
-          <p className="mt-1 max-w-prose text-caption">{field.description}</p>
+          <p className="mt-1 max-w-prose text-caption break-words">
+            {field.description}
+          </p>
         ) : null}
       </div>
       {/* `min-w-0`, not `shrink-0`: a column that refuses to shrink keeps its
