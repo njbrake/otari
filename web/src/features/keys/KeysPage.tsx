@@ -1,5 +1,5 @@
 import { Spinner } from "@heroui/react"
-import { Link } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   type RefObject,
   useCallback,
@@ -66,7 +66,7 @@ import {
   useTableSelection,
 } from "@/shared/helpers/tableSelection"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
-import { useDeployment } from "@/shared/hooks/useDeployment"
+import { useDeployment, useSurfaces } from "@/shared/hooks/useDeployment"
 import { KeyActionsMenu } from "./KeyActionsMenu"
 import { isVirtualUser, keyFingerprint, secretCaption } from "./secretCaption"
 
@@ -961,6 +961,8 @@ export function KeysPage() {
   const rotateKey = useRotateKey()
   const deleteKey = useDeleteKey()
   const memberLabels = useMemberAttributionLabels()
+  const navigate = useNavigate()
+  const servesUsage = useSurfaces()("usage")
 
   const [addOpen, setAddOpen] = useState(false)
   // Bumped on each open, and the create dialog is keyed on it, so the draft is
@@ -1114,6 +1116,15 @@ export function KeysPage() {
         }}
         onRegenerate={() => setPendingRegenerate(apiKey)}
         onDelete={() => setPendingDelete(apiKey)}
+        onViewUsage={
+          servesUsage
+            ? () =>
+                void navigate({
+                  to: "/usage",
+                  search: { api_key_id: apiKey.id },
+                })
+            : undefined
+        }
       />
     ),
     [
@@ -1125,6 +1136,8 @@ export function KeysPage() {
       updateKey.isPending,
       rotateKey.isPending,
       setActive,
+      servesUsage,
+      navigate,
     ],
   )
   // Memoized on what the cells read, so DataTable's per-row cache holds across

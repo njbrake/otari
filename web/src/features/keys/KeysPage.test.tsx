@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { useLocation } from "@tanstack/react-router"
 import { act, screen, waitFor, within } from "@testing-library/react"
 import userEvent, { type UserEvent } from "@testing-library/user-event"
 import type { ReactElement } from "react"
@@ -1629,5 +1630,67 @@ describe("KeysPage", () => {
         "exclude_from_budget",
       )
     })
+  })
+})
+
+describe("KeysPage usage link", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function UsageProbe() {
+    const location = useLocation()
+    return (
+      <div role="status" aria-label="Current location">
+        {`${location.pathname}${location.searchStr}`}
+      </div>
+    )
+  }
+
+  function renderWithUsage(deployment: DeploymentBootstrap = bootstrap()) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    return renderWithRouter(
+      <QueryClientProvider client={client}>
+        <DeploymentProvider value={deployment}>
+          <KeysPage />
+        </DeploymentProvider>
+      </QueryClientProvider>,
+      { url: "/keys", routes: [{ path: "/usage", element: <UsageProbe /> }] },
+    )
+  }
+
+  it("opens the Usage page filtered to the key from its actions menu", async () => {
+    mockApi({ keys: [apiKey()] })
+    const user = userEvent.setup()
+    await renderWithUsage()
+    const row = (await screen.findByText("ci-bot")).closest("tr")!
+
+    await chooseAction(user, row, "View usage")
+
+    expect(
+      await screen.findByRole("status", { name: "Current location" }),
+    ).toHaveTextContent("/usage?api_key_id=key-1")
+  })
+
+  it("offers no usage link where the deployment hosts no usage surface", async () => {
+    mockApi({ keys: [apiKey()] })
+    const user = userEvent.setup()
+    const deployment = bootstrap()
+    await renderWithUsage({
+      ...deployment,
+      surfaces: deployment.surfaces.filter((surface) => surface !== "usage"),
+    })
+    const row = (await screen.findByText("ci-bot")).closest("tr")!
+
+    await user.click(
+      within(row).getByRole("button", { name: "Actions for ci-bot" }),
+    )
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("menuitem", { name: /^View usage/ }),
+    ).not.toBeInTheDocument()
   })
 })
