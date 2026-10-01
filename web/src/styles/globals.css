@@ -2901,6 +2901,22 @@ main {
   height: 2.8125rem;
   padding-block: 0;
 }
+/* A phone renders three of the six lanes (`RecentActivity`), with the time as
+   a second line under the model, so the model lane gives up its floor and the
+   row grows to hold the two lines. */
+@media (max-width: 767px) {
+  .otari-overview-activity .table__column[data-key="model"] {
+    min-width: 0;
+  }
+  .otari-overview-activity .table__column[data-key="cost"],
+  .otari-overview-activity .table__column[data-key="status"] {
+    width: auto;
+  }
+  .otari-overview-activity .table__row .table__cell {
+    height: auto;
+    padding-block: 0.625rem;
+  }
+}
 
 /* The rail's footprint, published by the shell (`data-rail`) so a fixed overlay
  * can center on the content beside the rail instead of on the viewport. Zero by
