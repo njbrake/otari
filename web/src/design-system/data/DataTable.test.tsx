@@ -69,6 +69,14 @@ describe("DataTable", () => {
     expect(screen.getByText("Nothing here")).toBeInTheDocument()
   })
 
+  // jsdom has no layout and no gestures, so this pins the classes that
+  // cause the behavior (testing.md's layout exception).
+  it("contains a horizontal overscroll, so a swipe past the end is not a back gesture", () => {
+    render(<DataTable {...base({})} />)
+    const scroller = screen.getByRole("grid").parentElement
+    expect(scroller).toHaveClass("overflow-x-auto", "overscroll-x-contain")
+  })
+
   it("fires onRowAction with the row key when a row is activated", async () => {
     const user = userEvent.setup()
     const onRowAction = vi.fn()

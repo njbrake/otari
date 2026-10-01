@@ -940,6 +940,33 @@ describe("semantic tokens only", () => {
   })
 })
 
+// A horizontal scroller on a trackpad hands the swipe that runs past its end to
+// the browser, which reads it as Back or Forward and leaves the page. Containing
+// the overscroll keeps the gesture in the scroller. Written beside every
+// `overflow-x-auto` because that is where a reader looks for it, and swept
+// because a scroller added without it compiles, renders and only misbehaves
+// under a finger.
+describe("a horizontal scroller contains its overscroll", () => {
+  const SRC = join(WEB, "src")
+  const sources = walk(SRC).filter(
+    (name) => /\.tsx$/.test(name) && !/\.test\.tsx$/.test(name),
+  )
+
+  it("covers the source tree", () => {
+    expect(sources.length).toBeGreaterThan(50)
+  })
+
+  it("pairs every overflow-x-auto with overscroll-x-contain", () => {
+    const offenders = sources.flatMap((name) =>
+      (readFileSync(join(SRC, name), "utf8").match(/["'`][^"'`]*["'`]/g) ?? [])
+        .filter((literal) => /\boverflow-x-(?:auto|scroll)\b/.test(literal))
+        .filter((literal) => !/\boverscroll-x-contain\b/.test(literal))
+        .map((literal) => `${name}: ${literal}`),
+    )
+    expect(offenders).toEqual([])
+  })
+})
+
 // A bare heading is not unstyled: the `@layer base` rule in globals.css hands
 // `h1`-`h6` the display face, so a heading that skips the type scale renders in
 // Mozilla Headline at whatever size its hand-rolled classes say. otari#810

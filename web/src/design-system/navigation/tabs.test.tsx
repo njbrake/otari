@@ -211,6 +211,7 @@ describe("TabRow", () => {
     )
     const row = container.firstElementChild as HTMLElement
     expect([...row.classList]).toContain("overflow-x-auto")
+    expect([...row.classList]).toContain("overscroll-x-contain")
     expect([...row.classList]).toContain("max-w-full")
   })
 })

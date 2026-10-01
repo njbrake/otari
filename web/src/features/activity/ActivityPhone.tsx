@@ -160,7 +160,7 @@ export function ActivityPhone({
             </Button>
           </div>
           {filterCount || isSorted ? (
-            <div className="flex gap-2 overflow-x-auto px-4 pb-2.5 [scrollbar-width:none]">
+            <div className="flex gap-2 overflow-x-auto overscroll-x-contain px-4 pb-2.5 [scrollbar-width:none]">
               <ActivityChips
                 sort={
                   isSorted

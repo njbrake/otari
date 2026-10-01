@@ -401,8 +401,11 @@ export function DataTable<Row extends object>({
 
   return (
     <Table.Root ref={rootRef} className="otari-table">
+      {/* `overscroll-x-contain`: a trackpad swipe that runs past the last
+          column stops here instead of turning into the browser's back
+          gesture. */}
       <Container
-        className="overflow-x-auto"
+        className="overflow-x-auto overscroll-x-contain"
         onPointerDownCapture={(event: ReactPointerEvent) => {
           if (dataCellRowKey(event) != null) event.stopPropagation()
         }}

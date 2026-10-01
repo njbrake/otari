@@ -50,7 +50,7 @@ export function Tab({
  */
 export function TabRow({ children }: { children: ReactNode }) {
   return (
-    <div className="inline-flex max-w-full items-center gap-1 overflow-x-auto">
+    <div className="inline-flex max-w-full items-center gap-1 overflow-x-auto overscroll-x-contain">
       {children}
     </div>
   )
