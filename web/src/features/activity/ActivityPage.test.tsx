@@ -466,7 +466,6 @@ describe("ActivityPage", () => {
         viewer: "member",
         spend: {
           workspace_id: WORKSPACE_ID,
-          name: "Everything",
           max_budget: 500,
           spent: 612,
           period_start: "2026-09-01T00:00:00Z",
