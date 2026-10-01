@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import type { ReactElement } from "react"
-import { vi } from "vitest"
+import { expect, vi } from "vitest"
 
 import type {
   InFlightResponse,
@@ -385,4 +385,22 @@ export function urlOf(query: string): ActivityUrl {
       Number.parseInt(params.get(key) ?? ACTIVITY_URL_DEFAULTS[key], 10) || 0,
     patch: () => undefined,
   }
+}
+
+/** The log's row naming `model`, found in the table rather than in a chip. */
+export async function rowOf(model: string) {
+  const table = await screen.findByRole("table", { name: "Activity log" })
+  const [cell] = await within(table).findAllByText(model)
+  const row = cell.closest("tr")
+  if (!row) throw new Error(`no row for ${model}`)
+  return row
+}
+
+/** Waits for the latest list read to carry `key=value`. */
+export async function listCarries(
+  calls: Parameters<typeof lastList>[0],
+  key: string,
+  value: string | null,
+) {
+  await waitFor(() => expect(lastList(calls).get(key)).toBe(value))
 }
