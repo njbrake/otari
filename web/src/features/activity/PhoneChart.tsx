@@ -1,12 +1,17 @@
 import { type KeyboardEvent, type PointerEvent, useRef, useState } from "react"
 import { formatNumber } from "@/shared/helpers/format"
 import {
+  arrowDelta,
+  barIndexAt,
+  barSpanMs,
   type ChartBar,
   describeBar,
   describeSpan,
   formatBarTime,
   type Span,
+  stepBar,
 } from "./chartBars"
+import { StackedBars } from "./StackedBars"
 
 // Past this far a press is a slide rather than a tap.
 const SLIDE_PX = 6
@@ -36,8 +41,7 @@ export function PhoneChart({
   // pointermove forces a reflow per event.
   const press = useRef<{ x: number; box: DOMRect; isSlide: boolean }>(undefined)
   const [slide, setSlide] = useState<number>()
-  const max = Math.max(1, ...bars.map((bar) => bar.ok + bar.failed))
-  const barMs = bars.length ? bars[0].end - bars[0].start : 0
+  const barMs = barSpanMs(bars)
   const last = bars.length - 1
 
   const picked = span
@@ -47,15 +51,7 @@ export function PhoneChart({
   const hotBar = hot >= 0 ? bars[hot] : undefined
 
   const indexAt = (clientX: number, box: DOMRect) =>
-    box.width === 0
-      ? 0
-      : Math.max(
-          0,
-          Math.min(
-            last,
-            Math.floor(((clientX - box.left) / box.width) * bars.length),
-          ),
-        )
+    barIndexAt(clientX, box, bars.length)
   const pick = (index: number) =>
     onSpan({ from: bars[index].start, to: bars[index].end })
 
@@ -86,11 +82,10 @@ export function PhoneChart({
     setSlide(undefined)
   }
   const onKeyDown = (event: KeyboardEvent) => {
-    const delta =
-      event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0
+    const delta = arrowDelta(event.key)
     if (!delta || !bars.length) return
     event.preventDefault()
-    pick(Math.max(0, Math.min(last, (picked < 0 ? last : picked) + delta)))
+    pick(stepBar(picked < 0 ? last : picked, delta, bars.length))
   }
 
   return (
@@ -133,29 +128,15 @@ export function PhoneChart({
         onKeyDown={onKeyDown}
         className="flex h-[4.75rem] cursor-pointer touch-none select-none focus-visible:otari-focus-ring"
       >
-        {bars.map((bar, index) => (
-          <div
-            key={bar.start}
-            className={`flex flex-1 flex-col justify-end px-[0.09375rem] ${
-              index === hot ? "bg-primary-subtle" : ""
-            }`}
-          >
-            <div
-              className={`flex h-14 flex-col-reverse ${
-                hot >= 0 && index !== hot ? "opacity-35" : ""
-              }`}
-            >
-              <span
-                className="bg-accent"
-                style={{ height: `${(bar.ok / max) * 100}%` }}
-              />
-              <span
-                className={`bg-danger ${bar.failed ? "min-h-[0.1875rem]" : ""}`}
-                style={{ height: `${(bar.failed / max) * 100}%` }}
-              />
-            </div>
-          </div>
-        ))}
+        <StackedBars
+          bars={bars}
+          columnClassName={(index) =>
+            `px-[0.09375rem] ${index === hot ? "bg-primary-subtle" : ""}`
+          }
+          stackClassName={(index) =>
+            `h-14 ${hot >= 0 && index !== hot ? "opacity-35" : ""}`
+          }
+        />
       </div>
       <div className="flex justify-between text-mono-micro whitespace-nowrap text-subtle">
         <span>{bars.length ? formatBarTime(bars[0].start, barMs) : ""}</span>

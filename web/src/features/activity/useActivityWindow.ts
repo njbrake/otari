@@ -6,7 +6,7 @@ import {
 } from "@/shared/helpers/timeRange"
 import { resolveExtentWindow, resolveWindow } from "./activityModel"
 import type { ActivityUrl } from "./activityQuery"
-import { DESKTOP_GRAIN, grainForSpan } from "./chartBars"
+import { grainForSpan } from "./chartBars"
 
 /**
  * The two windows the page reads: the list's (the preset, or a brushed span
@@ -79,7 +79,7 @@ export function useActivityWindow(
   )
   const chart = outside ? list : extent
   const chartGrain =
-    (!outside && DESKTOP_GRAIN[range]) ||
+    (!outside && findPreset(ACTIVITY_PRESETS, range)?.bucket) ||
     grainForSpan(
       (chart.end ? Date.parse(chart.end) : takenAt) -
         Date.parse(chart.start ?? ""),

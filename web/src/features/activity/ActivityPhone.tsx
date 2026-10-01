@@ -18,7 +18,7 @@ import {
   togglePatch,
 } from "./activityQuery"
 import { PHONE_BATCH } from "./activityRows"
-import { describeSpan, PHONE_BARS, phoneBars } from "./chartBars"
+import { barSpanMs, describeSpan, PHONE_BARS, phoneBars } from "./chartBars"
 import { FilterSheet, PHONE_SORTS, type SheetSection } from "./FilterSheet"
 import { MissingRequest } from "./MissingRequest"
 import { PhoneChart } from "./PhoneChart"
@@ -68,7 +68,7 @@ export function ActivityPhone({
     (key) => key !== "30d" || !isManager,
   )
   const bars = phoneBars(log.series, log.time.range, log.time.now)
-  const barMs = bars.length ? bars[0].end - bars[0].start : 0
+  const barMs = barSpanMs(bars)
   const { sort, open, chips } = log
   const toggle =
     (column: "status" | "member" | "source" | "model" | "policy") =>

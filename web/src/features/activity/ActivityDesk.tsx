@@ -26,7 +26,7 @@ import {
   GROUPS,
 } from "./activityQuery"
 import { describeGroup, showGroupPatch } from "./activityRows"
-import { describeSpan, windowBars } from "./chartBars"
+import { barSpanMs, describeSpan, windowBars } from "./chartBars"
 import { GroupMenu } from "./GroupMenu"
 import { LiveControl } from "./LiveControl"
 import { ManageImportedMenu } from "./ManageImportedMenu"
@@ -104,7 +104,7 @@ export function ActivityDesk({
     log.time.chartGrain,
     log.time.now,
   )
-  const barMs = bars.length ? bars[0].end - bars[0].start : 0
+  const barMs = barSpanMs(bars)
   const panel = (entry: NonNullable<typeof open>) => (
     <RequestPanel
       entry={entry}
