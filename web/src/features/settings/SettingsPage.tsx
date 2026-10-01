@@ -20,6 +20,8 @@ import {
   useStoredProviders,
 } from "@/shared/api/providers"
 import { useSettings, useUpdateSettings } from "@/shared/api/settings"
+import { useIsPhone } from "@/shared/hooks/useIsPhone"
+import { useMediaQuery } from "@/shared/hooks/useMediaQuery"
 
 // A single settable field maps onto one key of UpdateSettingsRequest. The keys
 // come from the backend's `settable` marking, so cast at this one boundary.
@@ -578,6 +580,12 @@ export function SettingsPage() {
   const [search, setSearch] = useState("")
   const [settableOnly, setSettableOnly] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
+  // The "/" hint is offered only where there is a keyboard to press it: a fine
+  // pointer at a desk width. On a phone it promises a key nobody has, and it is
+  // what truncated the placeholder.
+  const hasFinePointer = useMediaQuery("(pointer: fine)")
+  const isPhone = useIsPhone()
+  const offersShortcutHint = hasFinePointer && !isPhone
 
   // "/" focuses the search box (a common shortcut for filter-heavy pages),
   // unless the user is already typing in a field.
@@ -622,7 +630,11 @@ export function SettingsPage() {
           ref={searchRef}
           type="search"
           aria-label="Search settings"
-          placeholder="Search settings (press / to focus)…"
+          placeholder={
+            offersShortcutHint
+              ? "Search settings (press / to focus)…"
+              : "Search settings…"
+          }
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           onKeyDown={(event) => {

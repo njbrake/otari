@@ -101,7 +101,13 @@ export function PlaygroundComposer({
             isDisabled={isBusy}
           />
           <div className="min-w-0">{modelPicker}</div>
-          <span className="ml-auto hidden pr-2 text-caption lg:block">
+          {/* The key hint only where a keyboard is likely; a missing model is
+              said at every pointer, since it is why sending is disabled. */}
+          <span
+            className={`ml-auto hidden pr-2 text-caption ${
+              missingModel ? "lg:block" : "lg:pointer-fine:block"
+            }`}
+          >
             {hint}
           </span>
           {isBusy ? (
