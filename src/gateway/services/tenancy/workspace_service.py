@@ -127,6 +127,19 @@ class WorkspaceService:
             raise WorkspaceNameRequiredError
         return trimmed
 
+    async def manages(self, *, user: User, workspace: Workspace) -> bool:
+        """Whether this person may manage the workspace: an organization or workspace owner or admin.
+
+        The same rule as ``_require_workspace_management_access``, for a caller that
+        decides what to allow rather than refusing outright.
+        """
+        return await authorization.has_workspace_management_access(
+            self.db,
+            user=user,
+            workspace=workspace,
+            organizations=self.organizations,
+        )
+
     async def _require_workspace_management_access(self, *, user: User, workspace: Workspace) -> None:
         """Allow an organization owner/admin, or an owner/admin of this workspace.
 
