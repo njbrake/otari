@@ -27,7 +27,8 @@ export function Tab({
       // A segment never shrinks and never wraps its label: a tab row that
       // squeezed would put the same control at two widths on one page, and a
       // wrapped label would break the row's height. The row scrolls instead.
-      className={`shrink-0 px-2.5 py-[0.3125rem] text-sm whitespace-nowrap transition-colors motion-reduce:transition-none ${
+      // 44px tall on a phone, as a segment is, and dense from `md` up.
+      className={`min-h-11 shrink-0 px-2.5 py-[0.3125rem] text-sm md:min-h-0 whitespace-nowrap transition-colors motion-reduce:transition-none ${
         isActive
           ? "bg-surface-subtle text-foreground"
           : "text-muted hover:text-foreground"

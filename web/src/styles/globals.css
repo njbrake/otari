@@ -2129,9 +2129,14 @@ main {
  * Button, which is why the hook is narrow enough to be safe.
  *
  * 767px is the shell's own MOBILE_QUERY boundary (`useIsPhone`), so the rule
- * applies exactly where the sidebar has already become a drawer. */
+ * applies exactly where the sidebar has already become a drawer.
+ *
+ * `a.button` is the other half: a router `Link` dressed with `buttonVariants`
+ * carries the class but not the slot, so a link beside a row of buttons came
+ * out 8px shorter than they did. */
 @media (max-width: 767px) {
-  [data-slot="button"] {
+  [data-slot="button"],
+  a.button {
     min-height: 2.75rem;
     min-width: 2.75rem;
   }

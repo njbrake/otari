@@ -141,6 +141,20 @@ describe("Tab", () => {
     expect([...tab.classList]).toContain("shrink-0")
     expect([...tab.classList]).toContain("whitespace-nowrap")
   })
+
+  it("reaches the 44px touch floor below md and stays dense above it", () => {
+    // A tab is a `<button>`, not HeroUI's Button, so the stylesheet's
+    // `[data-slot="button"]` floor never reached it: Usage's range tabs and the
+    // key dialog's model-access tabs were 30px targets on a phone.
+    render(
+      <Tab isActive={false} onPress={() => undefined}>
+        24h
+      </Tab>,
+    )
+    const tab = screen.getByRole("button")
+    expect([...tab.classList]).toContain("min-h-11")
+    expect([...tab.classList]).toContain("md:min-h-0")
+  })
 })
 
 describe("TabRow", () => {

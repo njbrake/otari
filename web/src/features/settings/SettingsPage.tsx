@@ -628,7 +628,7 @@ export function SettingsPage() {
           onKeyDown={(event) => {
             if (event.key === "Escape") setSearch("")
           }}
-          className="min-w-0 flex-1 rounded-lg border border-border bg-surface-alt px-3 py-2 text-body focus:border-accent focus:outline-none"
+          className={`min-w-0 flex-1 ${INPUT_CLASS}`}
         />
         <Checkbox isSelected={settableOnly} onChange={setSettableOnly}>
           Settable only

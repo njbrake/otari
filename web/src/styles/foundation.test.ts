@@ -1413,8 +1413,28 @@ describe("the phone viewport's touch-target floor", () => {
     // the shell's own MOBILE_QUERY (`useIsPhone`), so the rule turns on exactly where the
     // sidebar becomes a drawer.
     expect(CSS).toMatch(
-      /@media \(max-width: 767px\) \{\s*\[data-slot="button"\] \{\s*min-height: 2\.75rem;\s*min-width: 2\.75rem;/,
+      /@media \(max-width: 767px\) \{\s*\[data-slot="button"\],\s*a\.button \{\s*min-height: 2\.75rem;\s*min-width: 2\.75rem;/,
     )
+  })
+
+  it("sets every field at 16px below the same boundary, so iOS does not zoom", () => {
+    // iOS zooms the page when a field under 16px takes focus. This was scoped
+    // to settings rows, which left the toolbar searches, the pager's page
+    // number and every dialog field at 14px. Element-qualified so it outranks
+    // `.otari-machine-field`'s one-class size.
+    expect(CSS).toMatch(
+      /@media \(max-width: 767px\) \{\s*input\.input,\s*textarea\.input,\s*textarea\.textarea,\s*input\.search-field__input \{\s*font-size: var\(--text-base\);/,
+    )
+  })
+
+  it("raises a link dressed as a button with it", () => {
+    // `buttonVariants` on a router `Link` gives the class without the slot, so
+    // a link beside a row of real buttons stayed at 36px until the floor named
+    // it too.
+    const floor = CSS.match(
+      /@media \(max-width: 767px\) \{\s*([^{]*)\{\s*min-height: 2\.75rem;/,
+    )
+    expect(floor?.[1]).toContain("a.button")
   })
 
   it("takes the toolbar's dense field height back off at the same boundary", () => {
