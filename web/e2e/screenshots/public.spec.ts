@@ -116,11 +116,14 @@ async function stubInvitation(page: Page): Promise<void> {
         organization_name: "Acme",
         role: "admin",
         expires_at: "2025-01-22T12:00:00+00:00",
+        needs_password: false,
       },
     })
   })
   await page.route("**/v1/invitations/accept", async (route) => {
-    await route.fulfill({ json: { organization_name: "Acme", role: "admin" } })
+    await route.fulfill({
+      json: { organization_name: "Acme", role: "admin", password_set: false },
+    })
   })
 }
 
@@ -144,7 +147,7 @@ test("signup on a gateway that cannot send mail", async ({ page }) => {
 })
 
 test("signup prefilled from an accepted invitation", async ({ page }) => {
-  // The other half of the handoff below: the address arrives read-only, because
+  // The address arrives read-only, because
   // the invitation is bound to it (otari#835).
   await withMailReady(page)
   await page.goto("/#/signup?email=ada%40example.com")
@@ -152,7 +155,7 @@ test("signup prefilled from an accepted invitation", async ({ page }) => {
   await captureScreenshot(page, "signup-invited")
 })
 
-test("invitation accepted, ready to claim", async ({ page }) => {
+test("invitation accepted, ready to sign in", async ({ page }) => {
   // The accept page's own ending, and the first capture it has had. The two
   // invitation routes are stubbed for the reason the bootstrap is above: a real
   // pending token would have to be minted through the management API by a
@@ -162,7 +165,7 @@ test("invitation accepted, ready to claim", async ({ page }) => {
   await page.goto("/#/accept-invitation?token=not-a-real-token")
   await page.getByRole("button", { name: "Accept invitation" }).click()
   await expect(
-    page.getByRole("button", { name: "Set your password" }),
+    page.getByRole("button", { name: "Go to sign in" }),
   ).toBeVisible()
   await captureScreenshot(page, "accept-invitation-accepted")
 })
