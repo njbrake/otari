@@ -125,6 +125,9 @@ def test_summary_empty_range_is_all_zero(client: TestClient, master_key_header: 
         "unpriced_requests": 0,
         "billed_input_tokens": 0,
         "billed_output_tokens": 0,
+        "p95_latency_ms": None,
+        "absorbed_count": 0,
+        "imported_cost": 0.0,
     }
     assert body["by_model"] == []
     assert body["by_user"] == []
@@ -1062,7 +1065,7 @@ def test_tool_breakdown_counts_the_row_that_served_not_the_absorbed_attempt(
     So ``calls`` comes from the serving row while ``requests`` stays 1.
 
     Note what this does and does not prove. It does not exercise
-    ``_request_count_expr`` in the aggregate: the query already restricts to rows
+    ``request_count`` in the aggregate: the query already restricts to rows
     carrying tool meters, and an absorbed row never has them, so it is excluded
     before the count is taken. That expression is defensive there, and the invariant
     it defends (absorbed rows carry no tool ledger) is asserted directly in

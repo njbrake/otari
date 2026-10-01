@@ -710,7 +710,6 @@ it("has no comment opened inside another comment in the foundation", () => {
 describe("a table is a region, not a card", () => {
   const PLACES = [
     "otari-accounts-table",
-    "otari-activity-table",
     "otari-breakdown",
     "otari-budgets-table",
     "otari-domains-table",
@@ -1152,10 +1151,6 @@ describe("content text wears a type role", () => {
     [
       "features/organization/OrganizationMembersPage.tsx",
       "a table head row, an empty state, and fieldset prose",
-    ],
-    [
-      "features/activity/ActivityTimeline.tsx",
-      "the brush's drag hint beside the chart",
     ],
     // Page-referent: prose that describes the page rather than a control on
     // it. The auth pages' centered text was ruled this explicitly.

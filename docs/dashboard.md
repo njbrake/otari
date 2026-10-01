@@ -173,9 +173,28 @@ not offer the page at all.
 ## Observability
 
 Activity is the per-request log. Usage provides aggregates and time series.
-Routed requests share a request-group ID, so Activity can show the attempted
-models and the model that served the response. Imported usage is labeled by
-source and does not consume a budget.
+
+Filter Activity from the log itself: each column header sorts and holds that
+column's filters, a cell in any of the value columns can narrow the log to its
+value or exclude it, and the search box matches a request ID, a model, the name
+the caller sent, a key, a session or a member. Drag across the chart, or click a
+bar, to narrow to a stretch of time. The log can be grouped by API key, session,
+model or member. Everything about a view lives in its URL, so a link reproduces
+it, and a view can be saved by name; someone who manages the workspace can share
+one with it.
+
+A routed request is one row, served by whichever attempt succeeded; its earlier
+failed attempts are counted on it and listed under it on request. Opening a row
+shows the request beside the log: its routing plan, source, token composition,
+cost and timing. Live updates bring the log up to now every ten seconds and hold
+still while you page back, read a request, or look at a window that has ended.
+Imported usage is labeled by source, shown at its equivalent cost, and does not
+consume a budget. Everyone in a workspace sees what it has spent against its own
+ceiling, where it has one.
+
+A deployment operator also sees what is in flight, can set a model's price from
+a request that had none, and can recost or delete the imported rows the filters
+match. On a phone the log is a list, with sort and filters in one sheet.
 
 Use Prometheus at `/metrics` for process-level monitoring when
 `enable_metrics` is enabled. The scrape needs the `metrics` extra

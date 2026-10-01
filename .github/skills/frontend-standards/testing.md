@@ -131,7 +131,7 @@ suite size:
   universal (the jsdom gaps: `ResizeObserver`, `scrollTo`, object URLs).
 
 **Keep test files small.** Vitest gives one file to one worker, so a 2,000-line file is the
-suite's critical path while other workers idle, and `ActivityPage.test.tsx` is currently
+suite's critical path while other workers idle, and `RoutingPage.test.tsx` is currently
 exactly that. Split by concern (`Page.test.tsx`, `Page.deletion.test.tsx`,
 `Page.filters.test.tsx`) when a file grows several independent `describe` blocks or needs
 different mock setups per block.

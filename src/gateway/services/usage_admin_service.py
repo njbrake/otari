@@ -20,7 +20,7 @@ neither operation can desync a budget, matching the boundary the ingest path est
 
 import uuid
 from datetime import datetime
-from typing import Annotated, Any, cast
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import ColumnElement, delete, select
@@ -29,7 +29,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.metered_pricing import BillableUsage, billable_usage, price_billable_usage
-from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
+from gateway.core.sql import match_any, utc_bound
+from gateway.core.usage_filters import (
+    MAX_SEARCH_LENGTH,
+    CappedValues,
+    UsageRefinements,
+    refinement_conditions,
+    usage_search_condition,
+)
 from gateway.core.usage_source import not_served_here
 from gateway.log_config import logger
 from gateway.models.pricing import ModelPricing
@@ -44,14 +51,8 @@ _MAX_IDS = 1000
 # variables in one IN() (999), mirroring the ingest path.
 _REPRICE_CHUNK = 500
 
-# A repeatable entity filter's values, bounded the way the read endpoints bound
-# theirs (see MAX_FILTER_VALUES). The bound is annotated on the list itself rather
-# than on the ``str | list[str]`` field: on the union it would also cap a single
-# value's character length, rejecting a long provider-qualified model name.
-_CappedValues = Annotated[list[str], Field(max_length=MAX_FILTER_VALUES)]
 
-
-class UsageSelection(BaseModel):
+class UsageSelection(UsageRefinements):
     """Which imported usage rows an operation targets.
 
     Exactly one of two modes: a non-empty ``ids`` list (the current UI selection) or
@@ -70,9 +71,9 @@ class UsageSelection(BaseModel):
     # the read endpoints' ceiling for the mirror of that reason: a value set /count
     # rejects (422) but a delete accepted would run destructively over rows no count
     # could have been shown for.
-    model: str | _CappedValues | None = None
-    user_id: str | _CappedValues | None = None
-    api_key_id: str | _CappedValues | None = None
+    model: str | CappedValues | None = None
+    user_id: str | CappedValues | None = None
+    api_key_id: str | CappedValues | None = None
     status: str | None = None
     endpoint: str | None = None
     provider: str | None = None
@@ -93,6 +94,13 @@ class UsageSelection(BaseModel):
     # filter is: an operator who filtered the table to one workspace and then
     # chose "all N matching" must not delete another workspace's rows.
     workspace_id: uuid.UUID | None = None
+    # Mirrors of the read filters of the same name. Both are NULL on an imported
+    # row, the only kind this selection reaches, so either narrows it to nothing;
+    # forwarded for the invariant, as ``tool`` is. The reads' row-id ``id`` filter
+    # has no counterpart here: ``ids`` is the other mode, not a narrowing of this one.
+    request_id: str | CappedValues | None = None
+    requested_model: str | CappedValues | None = None
+    q: str | None = Field(default=None, max_length=MAX_SEARCH_LENGTH)
 
     @model_validator(mode="after")
     def _require_exactly_one_mode(self) -> "UsageSelection":
@@ -207,6 +215,13 @@ def _selection_conditions(selection: UsageSelection) -> list[ColumnElement[bool]
             if selection.tool == "any"
             else namespace[selection.tool]["billed"].as_integer().is_not(None)
         )
+    if selection.request_id is not None and selection.request_id != []:
+        conditions.append(match_any(UsageLog.request_id, selection.request_id))
+    if selection.requested_model is not None and selection.requested_model != []:
+        conditions.append(match_any(UsageLog.requested_model, selection.requested_model))
+    if selection.q is not None and (search := usage_search_condition(selection.q)) is not None:
+        conditions.append(search)
+    conditions.extend(refinement_conditions(selection))
     return conditions
 
 

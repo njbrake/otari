@@ -35,7 +35,7 @@ constants for these; `Section` is the one place the pair is named.
 | Component | Props | Use for |
 | --- | --- | --- |
 | `Section` | `className`, `contentClassName`, `bleed = true`, children | Any band of a page |
-| `PageIntro` | `title`, `action?`, children | The opening of every page |
+| `PageIntro` | `title`, `beside?`, `action?`, children | The opening of every page. `beside` sits on the title's line, for a control that belongs to the title (a saved-view picker) rather than an action |
 | `Toolbar` | `className?`, children | Above a table or list |
 | `SettingsGroup` | `title?`, `description?`, `docsHref?`, `count?`, `bounded?`, children | A form page |
 | `SettingRow` | `label`, `configKey?`, `help?`, `control`, `nested?`, `error?` | One setting inside a group |

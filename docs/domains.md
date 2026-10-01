@@ -191,6 +191,18 @@ a service package and no repository.
 Its evaluator is `otari_agent.domain`, in the `otari-agent` workspace member
 (`cli/`), so `otari hook` can run without the gateway.
 
+### saved-views
+
+A dashboard page's named filter states, each person's own or shared with a
+workspace.
+
+- Routes: `saved_views.py`
+- Services: `saved_views/`
+- Repositories: `saved_views/`
+- Schemas: `saved_views.py`
+- Exceptions: `saved_views_exceptions.py`
+- Models: `saved_views.py`
+
 ### usage-and-telemetry
 
 Usage rows, the usage log writer, OTLP ingest and coding-agent telemetry.

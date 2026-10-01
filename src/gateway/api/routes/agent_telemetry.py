@@ -16,7 +16,7 @@ the port.
 """
 
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -30,14 +30,14 @@ from gateway.api.deps import TelemetryStoragePortDep, get_db, require_deployment
 # from both endpoints has to describe the same window the same way, so they share
 # one implementation rather than two that drift.
 from gateway.api.routes.usage import (
-    _MAX_SERIES_POINTS,
     _SERIES_TOP_N,
     Bucket,
     _dense_series,
-    _request_count_expr,
+    _refuse_wide_grid,
     _resolve_window,
 )
-from gateway.core.sql import MAX_FILTER_VALUES, bucket_expr, canonical_bucket, dialect_name, match_any
+from gateway.core.sql import BUCKET_FORMATS, MAX_FILTER_VALUES, bucket_expr, canonical_bucket, dialect_name, match_any
+from gateway.core.usage_filters import request_count
 from gateway.models.usage import UsageLog
 from gateway.ports.telemetry_storage_port import (
     BehaviorCounts,
@@ -287,9 +287,7 @@ def _aware(timestamp: datetime) -> datetime:
 
 def _bucket_key(timestamp: datetime, bucket: Bucket) -> str:
     """The canonical UTC bucket a point falls in, matching the SQL bucket grid."""
-    utc = _aware(timestamp).astimezone(UTC)
-    fmt = "%Y-%m-%dT%H:00:00Z" if bucket == "hour" else "%Y-%m-%dT00:00:00Z"
-    return utc.strftime(fmt)
+    return _aware(timestamp).astimezone(UTC).strftime(BUCKET_FORMATS[bucket])
 
 
 def _ratio(numerator: float, denominator: float) -> float | None:
@@ -419,9 +417,7 @@ async def agent_telemetry_summary(
     # request writes one row per recovered attempt, and counting those would
     # deflate the error rate against a request volume the Usage page never shows.
     usage_row = (
-        await db.execute(
-            select(func.coalesce(func.sum(UsageLog.cost), 0.0), _request_count_expr()).where(*usage_conditions)
-        )
+        await db.execute(select(func.coalesce(func.sum(UsageLog.cost), 0.0), request_count()).where(*usage_conditions))
     ).one()
     usage = AgentTelemetryUsage(cost=float(usage_row[0]), requests=int(usage_row[1]))
 
@@ -556,12 +552,7 @@ async def agent_telemetry_series(
     so it charts telemetry volume rather than cost. Master-key only.
     """
     start, end = _resolve_window(start_date, end_date)
-    step = timedelta(hours=1) if bucket == "hour" else timedelta(days=1)
-    if (end - start) / step > _MAX_SERIES_POINTS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"window spans more than {_MAX_SERIES_POINTS} {bucket} buckets; use bucket=day or narrow the range",
-        )
+    _refuse_wide_grid(start, end, bucket)
     scope = _scope(start_date=start, end_date=end, user_id=user_id, api_key_id=api_key_id, name=name)
     counts = await storage.grouped_row_counts(filters=scope, group_by=group_by, bucket=bucket, top_n=_SERIES_TOP_N)
 

@@ -228,7 +228,12 @@ policy name.
 Each failed attempt before a successful fallback gets an `absorbed` usage row.
 All attempts share a `request_group_id`. Absorbed rows have no settled model
 cost and do not increase request or error totals; the final row represents the
-caller-visible request.
+caller-visible request. `GET /api/v1/usage?include_absorbed=false` lists one row
+per request, each counting its earlier failed attempts in `absorbed_attempts`.
+
+Each row also records `requested_model`, the name the caller sent, so a request
+made through a policy or an alias can be found by that name
+(`?requested_model=`) as well as by the model that served it.
 
 Built-in tool charges settle on the final row. Candidate price and remaining
 budget are checked before each attempt, so a fallback cannot silently bypass

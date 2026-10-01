@@ -81,11 +81,10 @@ async def has_workspace_management_access(
 ) -> bool:
     """Whether the caller is an organization owner/admin, or an owner/admin of this workspace.
 
-    The predicate form exists for the one caller that has to *report* the answer
-    rather than act on it: the first-request setup guide tells the dashboard
-    whether to offer itself, so a member who may see the workspace without
-    managing it is told "not for you" instead of being refused. Everything else
-    wants :func:`require_workspace_management_access`.
+    The predicate form is for a caller that decides what to allow rather than
+    refusing: the first-request setup guide, which tells a member who may see the
+    workspace without managing it "not for you", and ``WorkspaceService.manages``.
+    Everything else wants :func:`require_workspace_management_access`.
     """
     organization_membership = await organizations.members.get_active_by_organization_and_user(
         workspace.organization_id,

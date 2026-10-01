@@ -188,6 +188,7 @@ POST /otlp/v1/metrics                               # otel ingest
 # Usage analytics and maintenance
 GET /api/v1/usage/summary                           # not yet wrapped
 GET /api/v1/usage/series                            # not yet wrapped
+GET /api/v1/usage/groups                            # not yet wrapped
 DELETE /api/v1/usage                                # not yet wrapped
 POST /api/v1/usage/external-events                  # not yet wrapped
 POST /api/v1/usage/set-price                        # not yet wrapped
@@ -284,6 +285,11 @@ GET /api/v1/workspaces/{workspace_id}/members                   # dashboard-only
 POST /api/v1/workspaces/{workspace_id}/members/{user_id}        # dashboard-only
 PATCH /api/v1/workspaces/{workspace_id}/members/{user_id}       # dashboard-only
 DELETE /api/v1/workspaces/{workspace_id}/members/{user_id}      # dashboard-only
+GET /api/v1/workspaces/{workspace_id}/budget                    # dashboard-only
+GET /api/v1/workspaces/{workspace_id}/saved-views               # dashboard-only
+POST /api/v1/workspaces/{workspace_id}/saved-views              # dashboard-only
+PATCH /api/v1/workspaces/{workspace_id}/saved-views/{view_id}   # dashboard-only
+DELETE /api/v1/workspaces/{workspace_id}/saved-views/{view_id}  # dashboard-only
 GET /api/v1/organizations/me/pricing                            # dashboard-only
 POST /api/v1/organizations/me/pricing                           # dashboard-only
 PUT /api/v1/organizations/me/pricing/{pricing_id}               # dashboard-only
@@ -296,6 +302,7 @@ GET /api/v1/organizations/me/usage                              # dashboard-only
 GET /api/v1/organizations/me/usage/count                        # dashboard-only
 GET /api/v1/organizations/me/usage/summary                      # dashboard-only
 GET /api/v1/organizations/me/usage/series                       # dashboard-only
+GET /api/v1/organizations/me/usage/groups                       # dashboard-only
 GET /api/v1/organizations/me/routing-policies                   # dashboard-only
 POST /api/v1/organizations/me/routing-policies                  # dashboard-only
 DELETE /api/v1/organizations/me/routing-policies/{name}         # dashboard-only

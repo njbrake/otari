@@ -138,6 +138,29 @@ export interface UsageFilters {
   tool?: string
   // Budget participation: false scopes to imported rows (the bulk-op target set).
   counts_toward_budget?: boolean
+  // Free-text search over model, requested name, session, key name and member;
+  // a pasted request id matches that request exactly.
+  q?: string
+  // The names the caller sent (a model, a routing policy or an alias).
+  requested_model?: string[]
+  // false lists each routed request once, as the row that settled it, with its
+  // earlier failed attempts counted on that row. The list and count only.
+  include_absorbed?: boolean
+  // The inverse of the entity filters above: rows matching none of these.
+  exclude_model?: string[]
+  exclude_user_id?: string[]
+  exclude_api_key_id?: string[]
+  exclude_source?: string[]
+  exclude_status?: ("success" | "error" | "absorbed")[]
+  policy_name?: string[]
+  exclude_policy_name?: string[]
+  // true: only requests a routing policy served; false: only direct ones.
+  routed?: boolean
+  // Rows with no key, no billed user, or no session.
+  is_null?: ("api_key_id" | "user_id" | "source_label")[]
+  tokens_gt?: number
+  cost_gt?: number
+  latency_ms_gt?: number
 }
 
 /** Which tool/guardrail service a settings test targets. A path parameter in the

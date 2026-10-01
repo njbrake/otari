@@ -170,6 +170,9 @@ async def test_vision_side_call_billed_on_successful_setup(monkeypatch: pytest.M
 
     assert ctx.user_id == "user-1"
     assert len(recorder.usage_logged) == 1
+    # Billed to this request, so found by its id like the rest of its rows.
+    assert ctx.request_id is not None
+    assert recorder.usage_logged[0]["request_id"] == ctx.request_id
     assert recorder.reconciled == [0.01]
     assert recorder.refunded == 0
 

@@ -123,6 +123,13 @@ export const ACTIVATION = "workspace-activation"
 // somebody saved. Nesting would make every workspace write refetch the page's
 // whole history.
 export const PLAYGROUND = "playground"
+// Named views of a dashboard page, per workspace. Its own key: a view is a
+// query string under a name, so nothing else a page edits changes one.
+export const SAVED_VIEWS = "saved-views"
+// Not a server read: the clock a live page anchors its windows to, as a query
+// so that it ticks on `refetchInterval` and pauses in a background tab the way
+// every poll here does.
+export const LIVE_CLOCK = "live-clock"
 
 // The signed-in identity's own passkeys. Its own key and not a child of any
 // organization key: a passkey belongs to a person, not to the organization they

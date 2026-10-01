@@ -54,7 +54,7 @@ function row(page: Page, ariaLabel: string, name: string | RegExp): Locator {
 // The in-dialog dismissal, because the Escape is the half that bites. The blur
 // really is safe here, as the note this replaces said: the model box does not
 // open on focus, so focus returning to it inside the modal leaves the popover
-// shut. But `dismissComboBox` presses Escape unconditionally, and when the fill
+// shut. But an unconditional Escape is the trap, since when the fill
 // has already closed the popover that key travels on to the dialog, which
 // answers a dirty form by arming its unsaved-changes guard. The guard takes the
 // submit out of the footer, so the next press finds no "Create policy" and

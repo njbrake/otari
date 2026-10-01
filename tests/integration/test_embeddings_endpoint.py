@@ -141,6 +141,12 @@ def test_embeddings_logs_usage(
     assert embedding_logs[0]["prompt_tokens"] == 10
     assert embedding_logs[0]["completion_tokens"] == 0
 
+    # The row keeps the selector as the caller sent it, and is found by it.
+    listed = client.get(
+        f"{API_ROOT}/usage", params={"requested_model": "openai:text-embedding-3-small"}, headers=master_key_header
+    ).json()
+    assert [row["endpoint"] for row in listed] == ["/v1/embeddings"]
+
 
 def test_embeddings_logs_error_on_failure(
     client: TestClient,

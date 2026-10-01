@@ -860,6 +860,9 @@ DOMAIN_NAME_BASELINE = (
     "gateway/exceptions/control_plane_exceptions.py",
     "gateway/repositories/code_execution/",
     "gateway/repositories/tenancy/",
+    # Fork-only: the usage-and-telemetry domain's read surface (njbrake/otari#16).
+    "gateway/repositories/usage/",
+    "gateway/schemas/usage.py",
     "gateway/services/code_execution/",
     "gateway/services/control_plane/",
     "gateway/services/mail/",

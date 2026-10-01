@@ -37,6 +37,7 @@ from gateway.repositories.files import FileRepositories
 from gateway.repositories.inference import InferenceRepositories
 from gateway.repositories.overview.overview_repository import OverviewRepository
 from gateway.repositories.providers import OrgProviderKeyModelRepository
+from gateway.repositories.saved_views import SavedViewRepository
 from gateway.repositories.tenancy import OrganizationGuardrailDefinitionRepository, OrgProviderKeyRepository
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets import BudgetService, WorkspaceBudgetDefaultService
@@ -50,6 +51,7 @@ from gateway.services.organization_pricing_service import OrganizationPricingSer
 from gateway.services.overview.overview_service import OverviewService
 from gateway.services.providers import OrgProviderModelService
 from gateway.services.routing import clear_router_backend_cache
+from gateway.services.saved_views import SavedViewService
 from gateway.services.tenancy import OrganizationService, organization_guardrail_runner
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.org_provider_key_service import OrgProviderKeyService, refresh_org_provider_cache
@@ -942,6 +944,15 @@ def get_web_search_policy_port(db: PortSessionDep, container: ContainerDep) -> W
     return container.resolve(WebSearchPolicyPort, db)
 
 
+def _workspace_reader(db: AsyncSession) -> WorkspaceService:
+    """A workspace service for a service that only reads workspaces through it.
+
+    The listener is for membership writes, which such a service never makes; this
+    is the pairing `routes/workspaces.py` builds.
+    """
+    return WorkspaceService(db, membership_listener=WorkspaceBudgetDefaultService(db))
+
+
 def get_overview_service(db: Annotated[AsyncSession, Depends(get_db)]) -> OverviewService:
     """Build the dashboard overview's summary service on the request's session.
 
@@ -952,9 +963,7 @@ def get_overview_service(db: Annotated[AsyncSession, Depends(get_db)]) -> Overvi
         OverviewRepository(db),
         OrganizationService(db, membership_listener=None),
         DeploymentUserService(db),
-        # The listener is for writes; this service only reads, and the same
-        # pairing is what `routes/workspaces.py` builds.
-        WorkspaceService(db, membership_listener=WorkspaceBudgetDefaultService(db)),
+        _workspace_reader(db),
     )
 
 
@@ -982,10 +991,26 @@ def get_budget_service(
         BudgetRepositories.on(uow),
         OrganizationService(db, membership_listener=None),
         ApiKeyService(ApiKeyRepository(uow)),
+        _workspace_reader(db),
     )
 
 
 BudgetServiceDep = Annotated[BudgetService, Depends(get_budget_service)]
+
+
+def get_saved_view_service(
+    uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SavedViewService:
+    """Build the request's saved-view service on the request's Unit of Work."""
+    return SavedViewService(
+        uow,
+        SavedViewRepository(uow),
+        _workspace_reader(db),
+    )
+
+
+SavedViewServiceDep = Annotated[SavedViewService, Depends(get_saved_view_service)]
 
 
 def get_organization_guardrail_definition_service(

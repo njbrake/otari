@@ -372,6 +372,11 @@ def test_list_usage_response_shape(
         "attempt_position": None,
         "attempt_count": None,
         "request_group_id": None,
+        # Written before either was recorded, and not a routed request.
+        "requested_model": None,
+        "request_id": None,
+        "ttft_ms": None,
+        "absorbed_attempts": 0,
     }
 
 
