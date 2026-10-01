@@ -23,7 +23,11 @@ import type {
   UsageSortKey,
   UsageTotals,
 } from "@/client"
-import { NEWEST_FIRST, type UsageSort } from "@/shared/api/usage"
+import {
+  NEWEST_FIRST,
+  type UsageSort,
+  withoutListOnly,
+} from "@/shared/api/usage"
 import {
   formatCompact,
   formatSeconds,
@@ -539,8 +543,7 @@ export function isSubstringSearch(q: string | undefined): boolean {
  * narrows it to imported rows itself.
  */
 export function toSelection(filters: UsageFilters): UsageMutationSelection {
-  const { include_absorbed: _listOnly, ...selection } = filters
-  return { by_filter: true, ...selection }
+  return { by_filter: true, ...withoutListOnly(filters) }
 }
 
 export interface ActivityChip {

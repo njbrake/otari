@@ -6,7 +6,7 @@ import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { DismissChip } from "@/design-system/indicators/DismissChip"
 import { Segmented } from "@/design-system/navigation/Segmented"
-import { NEWEST_FIRST } from "@/shared/api/usage"
+import { isSameSort, NEWEST_FIRST } from "@/shared/api/usage"
 import { formatNumber, formatUsd } from "@/shared/helpers/format"
 import { ActivitySearch } from "./ActivitySearch"
 import { shortId, splitCost } from "./activityModel"
@@ -138,13 +138,10 @@ export function ActivityPhone({
       : []),
   ]
   const cost = readNumber(url, "cost_gt")
-  const isSorted =
-    sort.key !== NEWEST_FIRST.key || sort.order !== NEWEST_FIRST.order
+  const isSorted = !isSameSort(sort, NEWEST_FIRST)
   const sortLabel =
-    PHONE_SORTS.find(
-      (option) =>
-        option.sort.key === sort.key && option.sort.order === sort.order,
-    )?.label ?? "Sorted"
+    PHONE_SORTS.find((option) => isSameSort(option.sort, sort))?.label ??
+    "Sorted"
   const filterCount = chips.length + (act.span ? 1 : 0)
   const { billed, subscription } = splitCost(log.totals)
   const failed = log.totals?.error_count ?? 0

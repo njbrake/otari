@@ -4,7 +4,7 @@ import { FiX } from "react-icons/fi"
 import { Button } from "@/design-system/actions/Button"
 import { IconButton } from "@/design-system/actions/IconButton"
 import { Checkbox } from "@/design-system/forms/Checkbox"
-import type { UsageSort } from "@/shared/api/usage"
+import { isSameSort, type UsageSort } from "@/shared/api/usage"
 import { formatNumber, formatUsd } from "@/shared/helpers/format"
 import { THRESHOLD_FILTERS, type ValueOption } from "./activityQuery"
 
@@ -124,10 +124,7 @@ export function FilterSheet({
                   {PHONE_SORTS.map((option) => (
                     <Choice
                       key={option.label}
-                      isOn={
-                        option.sort.key === sort.key &&
-                        option.sort.order === sort.order
-                      }
+                      isOn={isSameSort(option.sort, sort)}
                       onPress={() => onSort(option.sort)}
                     >
                       {option.label}
