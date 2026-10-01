@@ -7,6 +7,7 @@ import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { Checkbox } from "@/design-system/forms/Checkbox"
 import { Field } from "@/design-system/forms/Field"
 import { copyToClipboard } from "@/design-system/helpers/clipboard"
+import { Dot } from "@/design-system/indicators/Dot"
 import { Divider } from "@/design-system/layout/Divider"
 import { Popover } from "@/design-system/overlays/Popover"
 import { BUILT_IN_VIEWS, type BuiltInView } from "./activityQuery"
@@ -135,9 +136,7 @@ export function SavedViewsMenu({
             <span className="max-w-[12.5rem] truncate">
               {current ?? "Unsaved view"}
             </span>
-            {isDirty ? (
-              <span aria-hidden className="size-1.5 shrink-0 bg-attention" />
-            ) : null}
+            {isDirty ? <Dot className="bg-attention" /> : null}
             <FiChevronDown aria-hidden className="size-3.5" />
           </Button>
         )

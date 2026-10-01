@@ -6,7 +6,6 @@
 import { FiGlobe } from "react-icons/fi"
 import type { UsageEntry } from "@/client"
 import { Chip } from "@/design-system/indicators/Chip"
-import { Dot } from "@/design-system/indicators/Dot"
 import {
   formatCost,
   formatLatency,
@@ -18,14 +17,20 @@ import {
 } from "@/shared/helpers/format"
 import {
   buildTokenComposition,
-  describeFailure,
+  cacheHitFraction,
+  compositionInput,
+  countToolCalls,
   describeRowSource,
   describeTool,
   isImported,
   listToolUsage,
   requestedAlias,
-  TOKEN_SEGMENTS,
+  rowCost,
+  rowOutcome,
+  tokenSegments,
 } from "./activityModel"
+import { OUTCOME_NOTE_INK, StatusMark } from "./StatusMark"
+import { TokenCompositionBar } from "./TokenCompositionBar"
 
 export function TimeCell({
   entry,
@@ -60,7 +65,7 @@ export function ModelCell({
   onTool: (tools: string[]) => void
 }) {
   const tools = listToolUsage(entry)
-  const calls = tools.reduce((sum, tool) => sum + tool.billed, 0)
+  const calls = countToolCalls(entry)
   const alias = requestedAlias(entry)
   const route =
     entry.policy_name && !showsPolicy
@@ -153,15 +158,13 @@ export function TokensCell({
   if (!composition) {
     return <span className="text-mono-caption text-subtle">—</span>
   }
-  const segments = TOKEN_SEGMENTS.map((segment) => ({
-    ...segment,
-    value: composition[segment.key],
-  })).filter((segment) => segment.value > 0)
-  const summary = segments
+  const summary = tokenSegments(composition)
     .map((segment) => `${segment.label} ${formatNumber(segment.value)}`)
     .join(", ")
-  const cached =
-    composition.cacheRead / Math.max(1, composition.total - composition.output)
+  const cached = cacheHitFraction(
+    composition.cacheRead,
+    compositionInput(composition),
+  )
   const width = Math.max(10, (composition.total / Math.max(1, maxTokens)) * 80)
   return (
     <span
@@ -171,31 +174,22 @@ export function TokensCell({
       <span className="text-mono-caption">
         {formatTokens(composition.total)}
       </span>
-      <span
-        role="img"
-        aria-label={`Token composition: ${summary}`}
-        className="mt-[0.1875rem] flex h-[0.1875rem] gap-px"
-        style={{ width: `${width / 16}rem` }}
-      >
-        {segments.map((segment) => (
-          <span
-            key={segment.key}
-            className={segment.fill}
-            style={{
-              flex: Math.max(segment.value, composition.total * 0.01),
-            }}
-          />
-        ))}
-      </span>
+      <TokenCompositionBar
+        composition={composition}
+        label={`Token composition: ${summary}`}
+        className="mt-[0.1875rem] h-[0.1875rem]"
+        widthRem={width / 16}
+      />
     </span>
   )
 }
 
 export function CostCell({ entry }: { entry: UsageEntry }) {
-  if (entry.status !== "success") {
+  const cost = rowCost(entry)
+  if (cost.kind === "none") {
     return <span className="text-mono-caption text-subtle">—</span>
   }
-  if (entry.cost === null) {
+  if (cost.kind === "unpriced") {
     return (
       <>
         <div className="text-mono-caption text-subtle">—</div>
@@ -203,17 +197,16 @@ export function CostCell({ entry }: { entry: UsageEntry }) {
       </>
     )
   }
-  const isImportedRow = isImported(entry)
   return (
     <>
       <div
-        className={`text-mono-caption ${isImportedRow ? "text-subtle" : ""}`}
+        className={`text-mono-caption ${cost.isBilled ? "" : "text-subtle"}`}
       >
-        {formatCost(entry.cost)}
+        {formatCost(cost.cost)}
       </div>
-      {isImportedRow ? (
+      {cost.isBilled ? null : (
         <div className="text-mono-micro text-subtle">not billed</div>
-      ) : null}
+      )}
     </>
   )
 }
@@ -238,35 +231,22 @@ export function LatencyCell({ entry }: { entry: UsageEntry }) {
 }
 
 export function StatusCell({ entry }: { entry: UsageEntry }) {
-  if (entry.status === "success") {
-    return (
-      <>
-        <span className="flex items-center gap-2 text-mono-caption text-subtle">
-          <Dot className="bg-success" />
-          {entry.status_code ?? "OK"}
-        </span>
-        {entry.absorbed_attempts ? (
-          <div className="pl-3.5 text-mono-micro whitespace-nowrap text-warning">
-            {formatNumber(entry.absorbed_attempts)} recovered
-          </div>
-        ) : null}
-      </>
-    )
-  }
-  const isRecovered = entry.status === "absorbed"
+  const { kind, label, note } = rowOutcome(entry)
   return (
     <>
-      <span
-        className={`flex items-center gap-2 text-mono-caption ${isRecovered ? "text-muted" : "text-danger"}`}
+      <StatusMark
+        kind={kind}
+        className={`text-mono-caption ${kind === "success" ? "text-subtle" : ""}`}
       >
-        <Dot className={isRecovered ? "bg-text-subtle" : "bg-danger"} />
-        {entry.status_code ?? (isRecovered ? "Recovered" : "Failed")}
-      </span>
-      <div
-        className={`pl-3.5 text-mono-micro whitespace-nowrap ${isRecovered ? "text-subtle" : "text-danger"}`}
-      >
-        {describeFailure(entry)}
-      </div>
+        {label}
+      </StatusMark>
+      {note ? (
+        <div
+          className={`pl-3.5 text-mono-micro whitespace-nowrap ${OUTCOME_NOTE_INK[kind]}`}
+        >
+          {note}
+        </div>
+      ) : null}
     </>
   )
 }

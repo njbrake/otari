@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from "react"
 import type { UsageTotals } from "@/client"
 import { TextButton } from "@/design-system/actions/TextButton"
+import { billedTokenTotal } from "@/features/usage/usageTotals"
 import {
   formatLatency,
   formatNumber,
@@ -8,7 +9,7 @@ import {
   formatTokens,
   formatUsd,
 } from "@/shared/helpers/format"
-import { splitCost } from "./activityModel"
+import { cacheHitFraction, splitCost } from "./activityModel"
 
 /**
  * One line of what the rows below add up to: how many, how many failed, what
@@ -37,9 +38,11 @@ export function ActivityTotals({
   const recovered = totals?.absorbed_count ?? 0
   const { billed, subscription } = splitCost(totals)
   const unpriced = totals?.unpriced_requests ?? 0
-  const input = totals?.billed_input_tokens ?? 0
-  const tokens = input + (totals?.billed_output_tokens ?? 0)
-  const cached = input ? (totals?.cache_read_tokens ?? 0) / input : 0
+  const tokens = billedTokenTotal(totals) ?? 0
+  const cached = cacheHitFraction(
+    totals?.cache_read_tokens ?? 0,
+    totals?.billed_input_tokens ?? 0,
+  )
   const p95 = formatLatency(totals?.p95_latency_ms)
   const parts = [
     <span key="failed" className={failed ? "text-danger" : undefined}>

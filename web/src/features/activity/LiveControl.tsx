@@ -2,6 +2,7 @@ import { FiChevronDown } from "react-icons/fi"
 import type { InFlightResponse } from "@/client"
 import { Button } from "@/design-system/actions/Button"
 import { Toggle } from "@/design-system/forms/Toggle"
+import { Dot } from "@/design-system/indicators/Dot"
 import { Divider } from "@/design-system/layout/Divider"
 import { Popover } from "@/design-system/overlays/Popover"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
@@ -11,12 +12,7 @@ import { InFlightWait } from "./InFlightWait"
 import { MenuHeading } from "./MenuRow"
 
 function LiveDot({ isLive }: { isLive: boolean }) {
-  return (
-    <span
-      aria-hidden
-      className={`size-1.5 shrink-0 ${isLive ? "bg-success" : "bg-text-subtle"}`}
-    />
-  )
+  return <Dot className={isLive ? "bg-success" : "bg-text-subtle"} />
 }
 
 /**

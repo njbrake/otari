@@ -4,7 +4,9 @@ import type { ChargeLine, UsageEntry } from "@/client"
 import { entry } from "@/tests/activity"
 import {
   buildTokenComposition,
+  cacheHitFraction,
   computeToolCost,
+  countToolCalls,
   describeFailure,
   describeRowSource,
   formatElapsed,
@@ -13,8 +15,11 @@ import {
   requestedAlias,
   resolveExtentWindow,
   resolveWindow,
+  rowCost,
+  rowOutcome,
   sortChargeLines,
   sortPlanRows,
+  tokenSegments,
 } from "./activityModel"
 
 /** A fixed clock, so a rolling preset's start is an exact instant to compare. */
@@ -408,5 +413,112 @@ describe("describeFailure", () => {
     expect(describeFailure(entry({ status: "error", status_code: null }))).toBe(
       "Failed",
     )
+  })
+})
+
+describe("rowOutcome", () => {
+  it("reads a served request by its code, noting what a fallback recovered", () => {
+    expect(rowOutcome(entry({ status_code: 200 }))).toEqual({
+      kind: "success",
+      label: "200",
+      note: "",
+    })
+    expect(
+      rowOutcome(entry({ status_code: null, absorbed_attempts: 2 })),
+    ).toEqual({ kind: "success", label: "OK", note: "2 recovered" })
+  })
+
+  it("reads an absorbed attempt as recovered, not failed", () => {
+    expect(rowOutcome(entry({ status: "absorbed", status_code: 529 }))).toEqual(
+      { kind: "recovered", label: "529", note: "Overloaded" },
+    )
+    expect(
+      rowOutcome(entry({ status: "absorbed", status_code: null })).label,
+    ).toBe("Recovered")
+  })
+
+  it("reads a failure with its reason", () => {
+    expect(rowOutcome(entry({ status: "error", status_code: 429 }))).toEqual({
+      kind: "failed",
+      label: "429",
+      note: "Rate limited",
+    })
+    expect(
+      rowOutcome(entry({ status: "error", status_code: null })).label,
+    ).toBe("Failed")
+  })
+})
+
+describe("rowCost", () => {
+  it("charges nothing for a request that was not served", () => {
+    expect(rowCost(entry({ status: "error", cost: null }))).toEqual({
+      kind: "none",
+    })
+    expect(rowCost(entry({ status: "absorbed", cost: 0.02 }))).toEqual({
+      kind: "none",
+    })
+  })
+
+  it("says a served request with no price is unpriced", () => {
+    expect(rowCost(entry({ cost: null }))).toEqual({ kind: "unpriced" })
+  })
+
+  it("marks an imported row's cost as one nothing billed", () => {
+    expect(rowCost(entry({ cost: 0.5 }))).toEqual({
+      kind: "priced",
+      cost: 0.5,
+      isBilled: true,
+    })
+    expect(rowCost(entry({ cost: 0.5, source: "claude_code" }))).toEqual({
+      kind: "priced",
+      cost: 0.5,
+      isBilled: false,
+    })
+  })
+})
+
+describe("countToolCalls", () => {
+  it("adds up the calls of every tool, and is zero with none", () => {
+    expect(countToolCalls(entry())).toBe(0)
+    expect(
+      countToolCalls(
+        entry({
+          billing_meters: {
+            tools: {
+              web_search: { billed: 3, errors: 0 },
+              web_fetch: { billed: 2, errors: 1 },
+            },
+          },
+        }),
+      ),
+    ).toBe(5)
+  })
+})
+
+describe("tokenSegments", () => {
+  it("lists the buckets in bar order, leaving out the empty ones", () => {
+    expect(
+      tokenSegments({
+        fresh: 10,
+        cacheRead: 0,
+        cacheWrite: 5,
+        output: 2,
+        total: 17,
+      }).map((segment) => [segment.key, segment.value]),
+    ).toEqual([
+      ["fresh", 10],
+      ["cacheWrite", 5],
+      ["output", 2],
+    ])
+  })
+})
+
+describe("cacheHitFraction", () => {
+  it("is the cache read over every input token", () => {
+    expect(cacheHitFraction(75, 100)).toBe(0.75)
+  })
+
+  it("is zero with no input", () => {
+    expect(cacheHitFraction(0, 0)).toBe(0)
   })
 })

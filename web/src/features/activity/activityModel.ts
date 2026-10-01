@@ -9,6 +9,7 @@
 
 import type { ChargeLine, UsageEntry } from "@/client"
 import { isUnitChargeLine } from "@/client"
+import { formatNumber } from "@/shared/helpers/format"
 import {
   ACTIVITY_DEFAULT_KEY,
   ACTIVITY_PRESETS,
@@ -186,6 +187,63 @@ export function describeFailure(entry: UsageEntry): string {
   )
 }
 
+/** How a request ended: served, an attempt a fallback recovered from, or failed. */
+export type OutcomeKind = "success" | "recovered" | "failed"
+
+export interface RowOutcome {
+  kind: OutcomeKind
+  /** The status code, or the outcome in a word where none was recorded. */
+  label: string
+  /**
+   * The one thing worth adding, or "": why it failed, or on a served request
+   * how many earlier attempts a fallback recovered.
+   */
+  note: string
+}
+
+/**
+ * A row's outcome, read the same way wherever the row is shown (a cell, a
+ * phone row, the request panel), so no two of them can disagree about it. An
+ * absorbed row is an attempt a routing policy recovered from: the request it
+ * belonged to was served, so it reads as recovered rather than failed.
+ */
+export function rowOutcome(entry: UsageEntry): RowOutcome {
+  const code =
+    entry.status_code === null ? undefined : String(entry.status_code)
+  if (entry.status === "success") {
+    return {
+      kind: "success",
+      label: code ?? "OK",
+      note: entry.absorbed_attempts
+        ? `${formatNumber(entry.absorbed_attempts)} recovered`
+        : "",
+    }
+  }
+  const kind = entry.status === "absorbed" ? "recovered" : "failed"
+  return {
+    kind,
+    label: code ?? (kind === "recovered" ? "Recovered" : "Failed"),
+    note: describeFailure(entry),
+  }
+}
+
+/**
+ * What a row cost, as the log reports it: nothing for a request that was not
+ * served (a failure, or an attempt a fallback recovered), "unpriced" for a
+ * served one with no price, and otherwise its cost, which imported usage
+ * carries as an equivalent nothing billed.
+ */
+export type RowCost =
+  | { kind: "none" }
+  | { kind: "unpriced" }
+  | { kind: "priced"; cost: number; isBilled: boolean }
+
+export function rowCost(entry: UsageEntry): RowCost {
+  if (entry.status !== "success") return { kind: "none" }
+  if (entry.cost === null) return { kind: "unpriced" }
+  return { kind: "priced", cost: entry.cost, isBilled: !isImported(entry) }
+}
+
 /**
  * What a set of requests cost, split the way the page reports it: what the
  * gateway billed, and what imported usage came to, which a subscription paid
@@ -285,6 +343,11 @@ export function listToolUsage(entry: UsageEntry): ToolUsage[] {
     .sort((a, b) => b.billed - a.billed || a.tool.localeCompare(b.tool))
 }
 
+/** How many times the gateway ran a tool for this row, across every tool. */
+export function countToolCalls(entry: UsageEntry): number {
+  return listToolUsage(entry).reduce((sum, tool) => sum + tool.billed, 0)
+}
+
 // Cost attributable to gateway-run tools on this row, from the rate stored with the
 // row rather than the live price, so a historical row reads as it was billed.
 export function computeToolCost(entry: UsageEntry): number | null {
@@ -315,6 +378,30 @@ export const TOKEN_SEGMENTS: {
   { key: "cacheWrite", label: "Cache write", fill: "bg-chart-ramp-4" },
   { key: "output", label: "Output", fill: "bg-chart-ramp-2" },
 ]
+
+/** A composition's segments in bar order, leaving out the buckets it has none of. */
+export function tokenSegments(composition: TokenComposition) {
+  return TOKEN_SEGMENTS.map((segment) => ({
+    ...segment,
+    value: composition[segment.key],
+  })).filter((segment) => segment.value > 0)
+}
+
+/**
+ * The share of input served from the cache. `input` is every input token,
+ * both cache buckets included: a composition's input side, a group's
+ * `input_tokens`, the totals' `billed_input_tokens`. One denominator, so a
+ * row, a group and the totals line answer the same question. Zero with no
+ * input.
+ */
+export function cacheHitFraction(cacheRead: number, input: number): number {
+  return input > 0 ? cacheRead / input : 0
+}
+
+/** A composition's input side: fresh input and both cache buckets. */
+export function compositionInput(composition: TokenComposition): number {
+  return composition.total - composition.output
+}
 
 // The pricing key a usage row bills against. A row stores the instance and the
 // bare model separately (`log_usage` is called with `provider=resolved.instance,
