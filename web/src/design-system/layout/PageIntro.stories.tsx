@@ -79,3 +79,16 @@ export const DocsLinkAndAction: Story = {
     action: <Button variant="primary">Create key</Button>,
   },
 }
+
+/**
+ * `beside` sits on the title's line: a control that belongs to the title, such
+ * as which saved view of the page is showing, rather than an action.
+ */
+export const WithBeside: Story = {
+  args: {
+    title: "Activity",
+    beside: <Button size="sm">All requests</Button>,
+    children:
+      "A per-request log of what the gateway served: tokens, cost, latency, and failures.",
+  },
+}

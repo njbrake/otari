@@ -317,6 +317,7 @@ hides.
 | `ConfirmRowAction` | `confirmLabel`, `onConfirm`, `isPending?`, and `icon` + `label` or children | The same two-step inside a row. Its trigger takes a glyph; its armed half stays words. It supplies its own `isDanger` and its own Cancel. Not for a delete |
 | `RefreshButton` | `onRefresh`, `isFetching?`, `updatedAt?`, `label?` | A refetch, with its own freshness caption. Pass `updatedAt` or the caption reads nothing |
 | `CopyButton` | `value`, `label` | Copy one value. Icon-only, 44x44 hit area |
+| `TextButton` | `onPress`, children | An action inside a sentence or a caption line ("Clear filters", "Dismiss"). Set as a link, at the size of the text around it. Somewhere to go is a router `Link` instead |
 | `CopyField` | `label`, `value`, `multiline?`, `concealed?`, `action?` | A readonly field of a value to paste elsewhere. `concealed` is what it shows until the operator asks for the value, for a credential: Copy copies the real one either way, so a key is handed over without being read off the screen |
 
 API-key handoff fields start concealed, showing the first eight and last four

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   deltaFraction,
+  formatCompact,
   formatCost,
   formatLatency,
   formatNumber,
@@ -13,10 +14,17 @@ import {
   formatRelative,
   formatReleaseDate,
   formatScore,
+  formatSeconds,
   formatTokens,
   formatUnitRate,
   formatUsd,
   formatUsdHeadline,
+  formatUtcDateTime,
+  formatUtcDay,
+  formatUtcMinute,
+  formatUtcMonth,
+  formatUtcTime,
+  formatUtcWeekdayHour,
 } from "@/shared/helpers/format"
 
 describe("formatNumber", () => {
@@ -74,6 +82,7 @@ describe("formatPct", () => {
     expect(formatPct(0)).toBe("0.0%")
     expect(formatPct(0.021)).toBe("2.1%")
     expect(formatPct(1.25)).toBe("125.0%")
+    expect(formatPct(0.964, 0)).toBe("96%")
   })
 })
 
@@ -209,6 +218,38 @@ describe("formatRelative", () => {
 
   it("returns 'never' for missing timestamps", () => {
     expect(formatRelative(null, now)).toBe("never")
+  })
+})
+
+describe("the gateway's clock", () => {
+  // 09:05:07 UTC, and still the 27th: a zone behind UTC would read the 26th.
+  const MOMENT = "2026-09-27T09:05:07Z"
+
+  it("reads a request's moment in UTC, whatever the browser's zone", () => {
+    expect(formatUtcTime(MOMENT)).toBe("09:05")
+    expect(formatUtcTime(MOMENT, true)).toBe("09:05:07")
+    expect(formatUtcDay(MOMENT)).toBe("Sep 27")
+    expect(formatUtcMonth(MOMENT)).toBe("Sep")
+    expect(formatUtcMinute(MOMENT)).toBe("Sep 27 09:05")
+    expect(formatUtcDateTime(MOMENT)).toBe("2026-09-27 09:05:07 UTC")
+    expect(formatUtcWeekdayHour(MOMENT)).toBe("Sun 09h")
+  })
+
+  it("keeps midnight at 00, not 24", () => {
+    expect(formatUtcTime("2026-09-27T00:00:00Z")).toBe("00:00")
+  })
+
+  it("takes epoch milliseconds, and hands back what is not a date", () => {
+    expect(formatUtcTime(Date.parse(MOMENT))).toBe("09:05")
+    expect(formatUtcDateTime("not a date")).toBe("not a date")
+  })
+})
+
+describe("thresholds", () => {
+  it("reads a round number compactly and a duration in seconds", () => {
+    expect(formatCompact(500_000)).toBe("500K")
+    expect(formatSeconds(10_000)).toBe("10 s")
+    expect(formatSeconds(2_500)).toBe("2.5 s")
   })
 })
 

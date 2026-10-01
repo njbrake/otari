@@ -116,39 +116,6 @@ export function rangeFromBuckets(
   }
 }
 
-// Map an active window onto bucket indices of a timeline (extent) series, for
-// positioning the brush slider. `startIndex` is the last bucket starting at or
-// before the window start; `endIndex` is the last bucket starting before the
-// (exclusive) window end. An absent bound extends to that end of the series.
-export function bucketIndexRange(
-  starts: string[],
-  startIso: string | undefined,
-  endIso: string | undefined,
-): { startIndex: number; endIndex: number } {
-  const n = starts.length
-  if (n === 0) return { startIndex: 0, endIndex: 0 }
-  const ms = starts.map((stamp) => new Date(stamp).getTime())
-  // No bucket matching means the window opens before the series does, which is
-  // the first bucket, so an absent match clamps to 0 rather than to -1.
-  const startMs = startIso ? new Date(startIso).getTime() : undefined
-  const endMs = endIso ? new Date(endIso).getTime() : undefined
-  const startIndex =
-    startMs === undefined
-      ? 0
-      : Math.max(
-          0,
-          ms.findLastIndex((value) => value <= startMs),
-        )
-  const endIndex =
-    endMs === undefined
-      ? n - 1
-      : Math.max(
-          0,
-          ms.findLastIndex((value) => value < endMs),
-        )
-  return { startIndex, endIndex: Math.max(startIndex, endIndex) }
-}
-
 // ---------- effective-window caption ----------
 
 function formatDay(ms: number, withYear: boolean): string {

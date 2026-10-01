@@ -179,22 +179,6 @@ export async function expectOk(
 
 // ---------- filters ----------
 
-// The filter pickers live behind the "Add filter" toggle (see FilterChips), so a
-// select or combobox cannot be driven until the region is revealed. Idempotent:
-// the toggle reads "Done" once open, so a second call is a no-op rather than a
-// close.
-export async function openFilterPickers(page: Page): Promise<void> {
-  // One control under two names, so waiting on it covers a page that has not
-  // painted yet. A bare `isVisible()` on "Add filter" does not wait, so straight
-  // after a navigation it reports false and the region is never opened.
-  const toggle = page.getByRole("button", { name: /^(Add filter|Done)$/ })
-  await expect(toggle).toBeVisible()
-  if ((await toggle.innerText()).trim() === "Add filter") {
-    await toggle.click()
-  }
-  await expect(page.getByRole("button", { name: "Done" })).toBeVisible()
-}
-
 // An applied filter renders as a chip carrying its dimension and value, whatever
 // set it. This is the assertion that a filter was actually applied rather than
 // merely typed, and the ✕ that clears it hangs off the same pill.
@@ -205,21 +189,12 @@ export function filterChip(page: Page, label: string, value: string): Locator {
     .first()
 }
 
-// Put a combobox's suggestion popover away, and wait until it is actually gone.
+// Put a combobox's suggestion popover away inside a dialog, and wait until it is
+// actually gone.
 //
 // This is not cosmetic. React-aria marks the rest of the page `aria-hidden` while
-// a popover is open, so every `getByRole` outside it resolves to nothing: a table
-// that is plainly on screen reads as zero rows, and a chip that was just added
-// reads as absent. Blur as well as Escape, because these boxes open on focus and
-// committing a value clears the query, which re-opens the list under the cursor.
-export async function dismissComboBox(box: Locator): Promise<void> {
-  await box.press("Escape")
-  await box.blur()
-  await expect(box).not.toHaveAttribute("aria-expanded", "true")
-}
-
-// The same, for a combobox inside a dialog. Two differences, and the second one
-// is why this is a separate helper rather than a flag.
+// a popover is open, so every `getByRole` outside it resolves to nothing, the
+// dialog's own submit included.
 //
 // No `blur()`: a modal contains focus, so it lands straight back on the box and
 // the box re-opens on focus. Escape alone closes the popover.
@@ -258,19 +233,6 @@ export async function pickOption(
       : new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`)
   await (scope ?? page).getByRole("button", { name }).click()
   await page.getByRole("option", { name: option, exact: true }).click()
-}
-
-// Commit a value into one of the multi-value filter comboboxes. They allow
-// custom values, so Enter is what commits a typed id.
-export async function addFilterValue(
-  page: Page,
-  label: string,
-  value: string,
-): Promise<void> {
-  const box = page.getByRole("combobox", { name: label })
-  await box.fill(value)
-  await box.press("Enter")
-  await dismissComboBox(box)
 }
 
 // ---------- tables ----------

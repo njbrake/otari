@@ -1,0 +1,272 @@
+/**
+ * What each column of the log shows for one row. Two lines at most: the value,
+ * then the one thing worth knowing about it, quietly.
+ */
+
+import { FiGlobe } from "react-icons/fi"
+import type { UsageEntry } from "@/client"
+import { Chip } from "@/design-system/indicators/Chip"
+import { Dot } from "@/design-system/indicators/Dot"
+import {
+  formatCost,
+  formatLatency,
+  formatNumber,
+  formatPct,
+  formatRelative,
+  formatTokens,
+  formatUtcTime,
+} from "@/shared/helpers/format"
+import {
+  buildTokenComposition,
+  describeFailure,
+  describeRowSource,
+  describeTool,
+  isImported,
+  listToolUsage,
+  requestedAlias,
+  TOKEN_SEGMENTS,
+} from "./activityModel"
+
+export function TimeCell({
+  entry,
+  isAttempt,
+}: {
+  entry: UsageEntry
+  /** A recovered attempt shown under the row that served names its attempt instead. */
+  isAttempt?: boolean
+}) {
+  return (
+    <>
+      <div className="text-mono-caption" title={entry.timestamp}>
+        {formatUtcTime(entry.timestamp, true)}
+      </div>
+      <div className="text-mono-micro text-subtle">
+        {isAttempt
+          ? `attempt ${entry.attempt_position ?? "?"}`
+          : formatRelative(entry.timestamp)}
+      </div>
+    </>
+  )
+}
+
+export function ModelCell({
+  entry,
+  showsPolicy,
+  onTool,
+}: {
+  entry: UsageEntry
+  /** Whether the Policy column is on screen; if not, the route goes here. */
+  showsPolicy: boolean
+  onTool: (tools: string[]) => void
+}) {
+  const tools = listToolUsage(entry)
+  const calls = tools.reduce((sum, tool) => sum + tool.billed, 0)
+  const alias = requestedAlias(entry)
+  const route =
+    entry.policy_name && !showsPolicy
+      ? `via ${entry.policy_name}${
+          entry.attempt_position && entry.attempt_count
+            ? ` · attempt ${entry.attempt_position}/${entry.attempt_count}`
+            : ""
+        }`
+      : undefined
+  const note = alias ? `requested as ${alias}` : route
+  return (
+    <>
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-mono-caption">{entry.model}</span>
+        {calls ? (
+          <button
+            type="button"
+            title={`Gateway tools ran ${formatNumber(calls)}× on this request. Click to show only requests that used them.`}
+            aria-label={`Filter to requests using ${tools
+              .map((tool) => describeTool(tool.tool))
+              .join(", ")}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              onTool(tools.map((tool) => tool.tool))
+            }}
+            className="inline-flex h-[1.125rem] shrink-0 items-center gap-1 border border-border-strong bg-surface-subtle px-1.5 text-mono-micro whitespace-nowrap text-foreground focus-visible:otari-focus-ring"
+          >
+            <FiGlobe aria-hidden className="size-2.5" />×{formatNumber(calls)}
+          </button>
+        ) : null}
+      </div>
+      {note ? (
+        <div className="truncate text-mono-micro text-subtle">{note}</div>
+      ) : null}
+    </>
+  )
+}
+
+export function PolicyCell({
+  entry,
+  isAttempt,
+}: {
+  entry: UsageEntry
+  isAttempt?: boolean
+}) {
+  if (!entry.policy_name) return <span className="text-subtle">Direct</span>
+  const position = entry.attempt_position ?? undefined
+  const isFallback = position !== undefined && position > 1
+  return (
+    <>
+      <div className="truncate text-mono-caption">{entry.policy_name}</div>
+      {position !== undefined && entry.attempt_count != null ? (
+        <div
+          className={`truncate text-mono-micro ${isFallback ? "text-warning" : "text-subtle"}`}
+        >
+          {position}/{entry.attempt_count} ·{" "}
+          {isAttempt ? "failed" : isFallback ? "fallback" : "default"}
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+export function SourceCell({ entry }: { entry: UsageEntry }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span className="truncate">{describeRowSource(entry)}</span>
+      {isImported(entry) ? (
+        <Chip tone="info" size="sm">
+          Subscription
+        </Chip>
+      ) : null}
+    </span>
+  )
+}
+
+/**
+ * The billed total, and a hairline bar of its composition whose length is the
+ * row's share of the largest row on the page, so a heavy request stands out in
+ * a scan. The title carries every number the bar draws.
+ */
+export function TokensCell({
+  entry,
+  maxTokens,
+}: {
+  entry: UsageEntry
+  maxTokens: number
+}) {
+  const composition = buildTokenComposition(entry)
+  if (!composition) {
+    return <span className="text-mono-caption text-subtle">—</span>
+  }
+  const segments = TOKEN_SEGMENTS.map((segment) => ({
+    ...segment,
+    value: composition[segment.key],
+  })).filter((segment) => segment.value > 0)
+  const summary = segments
+    .map((segment) => `${segment.label} ${formatNumber(segment.value)}`)
+    .join(", ")
+  const cached =
+    composition.cacheRead / Math.max(1, composition.total - composition.output)
+  const width = Math.max(10, (composition.total / Math.max(1, maxTokens)) * 80)
+  return (
+    <span
+      className="flex flex-col items-end"
+      title={`${summary}. ${formatPct(cached, 0)} of input from cache.`}
+    >
+      <span className="text-mono-caption">
+        {formatTokens(composition.total)}
+      </span>
+      <span
+        role="img"
+        aria-label={`Token composition: ${summary}`}
+        className="mt-[0.1875rem] flex h-[0.1875rem] gap-px"
+        style={{ width: `${width / 16}rem` }}
+      >
+        {segments.map((segment) => (
+          <span
+            key={segment.key}
+            className={segment.fill}
+            style={{
+              flex: Math.max(segment.value, composition.total * 0.01),
+            }}
+          />
+        ))}
+      </span>
+    </span>
+  )
+}
+
+export function CostCell({ entry }: { entry: UsageEntry }) {
+  if (entry.status !== "success") {
+    return <span className="text-mono-caption text-subtle">—</span>
+  }
+  if (entry.cost === null) {
+    return (
+      <>
+        <div className="text-mono-caption text-subtle">—</div>
+        <div className="text-mono-micro text-subtle">unpriced</div>
+      </>
+    )
+  }
+  const isImportedRow = isImported(entry)
+  return (
+    <>
+      <div
+        className={`text-mono-caption ${isImportedRow ? "text-subtle" : ""}`}
+      >
+        {formatCost(entry.cost)}
+      </div>
+      {isImportedRow ? (
+        <div className="text-mono-micro text-subtle">not billed</div>
+      ) : null}
+    </>
+  )
+}
+
+export function LatencyCell({ entry }: { entry: UsageEntry }) {
+  const note =
+    entry.ttft_ms !== null
+      ? `TTFT ${formatLatency(entry.ttft_ms)}`
+      : entry.status === "error"
+        ? "no response"
+        : ""
+  return (
+    <>
+      <div className="text-mono-caption">
+        {formatLatency(entry.latency_ms) ?? "—"}
+      </div>
+      <div className="min-h-[0.9375rem] text-mono-micro whitespace-nowrap text-subtle">
+        {note}
+      </div>
+    </>
+  )
+}
+
+export function StatusCell({ entry }: { entry: UsageEntry }) {
+  if (entry.status === "success") {
+    return (
+      <>
+        <span className="flex items-center gap-2 text-mono-caption text-subtle">
+          <Dot className="bg-success" />
+          {entry.status_code ?? "OK"}
+        </span>
+        {entry.absorbed_attempts ? (
+          <div className="pl-3.5 text-mono-micro whitespace-nowrap text-warning">
+            {formatNumber(entry.absorbed_attempts)} recovered
+          </div>
+        ) : null}
+      </>
+    )
+  }
+  const isRecovered = entry.status === "absorbed"
+  return (
+    <>
+      <span
+        className={`flex items-center gap-2 text-mono-caption ${isRecovered ? "text-muted" : "text-danger"}`}
+      >
+        <Dot className={isRecovered ? "bg-text-subtle" : "bg-danger"} />
+        {entry.status_code ?? (isRecovered ? "Recovered" : "Failed")}
+      </span>
+      <div
+        className={`pl-3.5 text-mono-micro whitespace-nowrap ${isRecovered ? "text-subtle" : "text-danger"}`}
+      >
+        {describeFailure(entry)}
+      </div>
+    </>
+  )
+}

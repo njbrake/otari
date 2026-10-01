@@ -111,8 +111,7 @@ export const TrendStacked: Story = {
 
 /**
  * Drag across the plot to select a range. The chart reports bucket indices and
- * the caller decides what that means; here it just narrows `window`, which is how
- * the chart renders a selection back.
+ * the caller decides what that means; here it just reports them.
  */
 export const TrendWithRangeSelection: Story = {
   render: () => {
@@ -128,7 +127,6 @@ export const TrendWithRangeSelection: Story = {
           formatValue={count}
           formatXTick={day}
           ariaLabel="Requests per day"
-          window={range}
           onSelectRange={(startIndex, endIndex) =>
             setRange({ startIndex, endIndex })
           }

@@ -1,3 +1,5 @@
+import { formatNumber } from "@/design-system/helpers/format"
+
 // These three are re-exported rather than defined here: they carry no product
 // vocabulary, so components in the design system need them, and that layer may
 // not import this one. This module stays the single formatter module a page
@@ -142,6 +144,102 @@ export function formatDateTime(iso: string | null | undefined): string {
     return iso
   }
   return date.toLocaleString()
+}
+
+// ---------- the gateway's clock ----------
+//
+// A request log reads in UTC, the clock its charts bucket by, whatever zone the
+// browser is in. Each takes an ISO string or epoch milliseconds, and hands back
+// a value that is not a date as it came, as `formatDateTime` does.
+
+function readUtc(value: string | number): Date | undefined {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : date
+}
+
+const utc = (options: Intl.DateTimeFormatOptions) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: "UTC", ...options })
+const UTC_CLOCK = utc({ hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+const UTC_CLOCK_SECONDS = utc({
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+})
+const UTC_MONTH = utc({ month: "short" })
+const UTC_DAY = utc({ month: "short", day: "numeric" })
+const UTC_DATE = utc({ year: "numeric", month: "2-digit", day: "2-digit" })
+const UTC_WEEKDAY_HOUR = utc({
+  weekday: "short",
+  hour: "2-digit",
+  hourCycle: "h23",
+})
+
+/** A formatter's fields by name, for a layout no locale writes (ISO dates, "Sun 12h"). */
+function fieldsOf(
+  format: Intl.DateTimeFormat,
+  date: Date,
+): Partial<Record<Intl.DateTimeFormatPartTypes, string>> {
+  return Object.fromEntries(
+    format.formatToParts(date).map((part) => [part.type, part.value]),
+  )
+}
+
+/** "15:31", or "15:31:07" with seconds. */
+export function formatUtcTime(
+  value: string | number,
+  withSeconds = false,
+): string {
+  const date = readUtc(value)
+  if (!date) return String(value)
+  return (withSeconds ? UTC_CLOCK_SECONDS : UTC_CLOCK).format(date)
+}
+
+/** "Sep". */
+export function formatUtcMonth(value: string | number): string {
+  const date = readUtc(value)
+  return date ? UTC_MONTH.format(date) : String(value)
+}
+
+/** "Sep 27". */
+export function formatUtcDay(value: string | number): string {
+  const date = readUtc(value)
+  return date ? UTC_DAY.format(date) : String(value)
+}
+
+/** "Sep 27 15:31", a window's bound. */
+export function formatUtcMinute(value: string | number): string {
+  return readUtc(value)
+    ? `${formatUtcDay(value)} ${formatUtcTime(value)}`
+    : String(value)
+}
+
+/** "2026-09-27 15:31:07 UTC", one request's moment in full. */
+export function formatUtcDateTime(value: string | number): string {
+  const date = readUtc(value)
+  if (!date) return String(value)
+  const { year, month, day } = fieldsOf(UTC_DATE, date)
+  return `${year}-${month}-${day} ${UTC_CLOCK_SECONDS.format(date)} UTC`
+}
+
+/** "Sun 12h", a half-day on a week's chart. */
+export function formatUtcWeekdayHour(value: string | number): string {
+  const date = readUtc(value)
+  if (!date) return String(value)
+  const { weekday, hour } = fieldsOf(UTC_WEEKDAY_HOUR, date)
+  return `${weekday} ${hour}h`
+}
+
+const compact = new Intl.NumberFormat("en-US", { notation: "compact" })
+
+/** A round threshold, compactly: 500000 -> "500K". */
+export function formatCompact(value: number): string {
+  return compact.format(value)
+}
+
+/** A duration in whole-ish seconds, for a threshold: 10000 -> "10 s". */
+export function formatSeconds(ms: number): string {
+  return `${formatNumber(ms / 1000)} s`
 }
 
 // The heading a dated row sits under in a history list: "Today", "Yesterday",

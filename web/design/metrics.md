@@ -89,7 +89,7 @@ the chip picks its own hue.
 
 ```ts
 SpendMeter: { spent, allocated, ariaLabel, nearLimitAt = 0.8, className? }
-Meter: { fraction, ariaLabel }
+Meter: { fraction, ariaLabel, className? }  // 140px wide unless the row sets it
 SeverityMark: { severity: { status: "ok" | "warn" | "alert", word: string } }
 Dot: { className }
 ```
