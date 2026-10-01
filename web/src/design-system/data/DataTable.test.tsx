@@ -69,12 +69,23 @@ describe("DataTable", () => {
     expect(screen.getByText("Nothing here")).toBeInTheDocument()
   })
 
-  // jsdom has no layout and no gestures, so this pins the classes that
+  // jsdom has no layout and no gestures, so these pin the classes that
   // cause the behavior (testing.md's layout exception).
   it("contains a horizontal overscroll, so a swipe past the end is not a back gesture", () => {
     render(<DataTable {...base({})} />)
     const scroller = screen.getByRole("grid").parentElement
     expect(scroller).toHaveClass("overflow-x-auto", "overscroll-x-contain")
+  })
+
+  it("holds the empty message to the scroller's visible width", () => {
+    render(<DataTable {...base({ rows: [], emptyContent: "Nothing here" })} />)
+    expect(screen.getByRole("grid").parentElement).toHaveClass("@container")
+    // The text's own box is EmptyMessage's; one step out is the pin.
+    expect(screen.getByText("Nothing here").parentElement).toHaveClass(
+      "sticky",
+      "left-0",
+      "w-[100cqi]",
+    )
   })
 
   it("fires onRowAction with the row key when a row is activated", async () => {

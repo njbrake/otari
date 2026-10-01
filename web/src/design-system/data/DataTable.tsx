@@ -403,9 +403,9 @@ export function DataTable<Row extends object>({
     <Table.Root ref={rootRef} className="otari-table">
       {/* `overscroll-x-contain`: a trackpad swipe that runs past the last
           column stops here instead of turning into the browser's back
-          gesture. */}
+          gesture. `@container` is what the empty state measures below. */}
       <Container
-        className="overflow-x-auto overscroll-x-contain"
+        className="@container overflow-x-auto overscroll-x-contain"
         onPointerDownCapture={(event: ReactPointerEvent) => {
           if (dataCellRowKey(event) != null) event.stopPropagation()
         }}
@@ -486,17 +486,22 @@ export function DataTable<Row extends object>({
             items={isLoading && rows.length === 0 ? [] : rows}
             dependencies={[renderRow]}
             renderEmptyState={() => (
-              <EmptyMessage>
-                {isLoading ? (
-                  <span className="inline-flex items-center gap-2">
-                    {/* Decorative beside its own label: HeroUI's spinner is a
-                        role="status" region announcing "Loading" on its own. */}
-                    <Spinner size="sm" aria-hidden="true" /> Loading…
-                  </span>
-                ) : (
-                  emptyContent
-                )}
-              </EmptyMessage>
+              // The cell spans every column, so on a table wider than the
+              // screen its centered message sat off to the right. Held to the
+              // scroller's visible width and pinned to its left edge instead.
+              <div className="sticky left-0 w-[100cqi]">
+                <EmptyMessage>
+                  {isLoading ? (
+                    <span className="inline-flex items-center gap-2">
+                      {/* Decorative beside its own label: HeroUI's spinner is a
+                          role="status" region announcing "Loading" on its own. */}
+                      <Spinner size="sm" aria-hidden="true" /> Loading…
+                    </span>
+                  ) : (
+                    emptyContent
+                  )}
+                </EmptyMessage>
+              </div>
             )}
           >
             {renderRow}
