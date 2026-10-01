@@ -1,4 +1,3 @@
-import { Drawer } from "@heroui/react"
 import type { ReactNode } from "react"
 import { Button } from "@/design-system/actions/Button"
 import { RefreshButton } from "@/design-system/actions/RefreshButton"
@@ -7,6 +6,7 @@ import { TablePagination } from "@/design-system/data/TablePagination"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { PageIntro } from "@/design-system/layout/PageIntro"
+import { Sheet } from "@/design-system/overlays/Sheet"
 import { ACTIVITY_GROUP_LIMIT, NEWEST_FIRST } from "@/shared/api/usage"
 import { formatNumber } from "@/shared/helpers/format"
 import { useMediaQuery } from "@/shared/hooks/useMediaQuery"
@@ -33,7 +33,7 @@ import { LiveControl } from "./LiveControl"
 import { ManageImportedMenu } from "./ManageImportedMenu"
 import { MissingRequest } from "./MissingRequest"
 import { RequestPanel } from "./RequestPanel"
-import type { ActivityActions } from "./useActivityActions"
+import { type ActivityActions, REQUEST_VIEW_ID } from "./useActivityActions"
 import type { ActivityLog } from "./useActivityLog"
 import { useMainHeight } from "./useMainHeight"
 
@@ -338,28 +338,16 @@ export function ActivityDesk({
         </div>
       ) : null}
       {isNarrow ? (
-        <Drawer
+        <Sheet
           isOpen={open !== undefined}
           onOpenChange={(isOpen) => {
             if (!isOpen) act.openRequest(undefined)
           }}
+          label="Request"
+          id={REQUEST_VIEW_ID}
         >
-          {/* Driven from state; the trigger slot is filled and hidden, as the
-              design system's dialogs do. */}
-          <Drawer.Trigger aria-hidden className="hidden">
-            Request
-          </Drawer.Trigger>
-          <Drawer.Backdrop className="bg-backdrop/30">
-            <Drawer.Content placement="right">
-              <Drawer.Dialog
-                aria-label="Request"
-                className="flex h-full w-[26.25rem] max-w-[85vw] flex-col p-0"
-              >
-                {open ? panel(open) : null}
-              </Drawer.Dialog>
-            </Drawer.Content>
-          </Drawer.Backdrop>
-        </Drawer>
+          {open ? panel(open) : null}
+        </Sheet>
       ) : null}
     </div>
   )

@@ -1,8 +1,7 @@
-import { Drawer, ToggleButton, ToggleButtonGroup } from "@heroui/react"
+import { ToggleButton, ToggleButtonGroup } from "@heroui/react"
 import type { ReactNode } from "react"
-import { FiX } from "react-icons/fi"
 import { Button } from "@/design-system/actions/Button"
-import { IconButton } from "@/design-system/actions/IconButton"
+import { Sheet } from "@/design-system/overlays/Sheet"
 import { isSameSort, type UsageSort } from "@/shared/api/usage"
 import { formatNumber, formatUsd } from "@/shared/helpers/format"
 import type { ValueFilterModel } from "./activityFilters"
@@ -30,7 +29,7 @@ export interface SheetSection extends ValueFilterModel {
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="flex flex-col gap-1.5 border-t border-border-subtle px-4 pt-3.5 pb-1.5">
+    <section className="flex flex-col gap-1.5 border-t border-border-subtle px-4 pt-3.5 pb-1.5 first:border-t-0">
       <h3 className="text-overline">{title}</h3>
       {children}
     </section>
@@ -113,99 +112,85 @@ export function FilterSheet({
   onReset: (() => void) | undefined
 }) {
   return (
-    <Drawer isOpen={isOpen} onOpenChange={onOpenChange}>
-      <Drawer.Backdrop className="bg-backdrop/30">
-        <Drawer.Content placement="bottom">
-          <Drawer.Dialog
-            aria-label="Filter and sort"
-            className="flex max-h-[82dvh] flex-col border-t border-control-border bg-surface p-0"
-          >
-            <Drawer.Header className="flex flex-row items-center py-2 pr-2 pl-4">
-              <Drawer.Heading className="flex-1 text-title">
-                Filter and sort
-              </Drawer.Heading>
-              {onReset ? (
-                <Button size="sm" onPress={onReset}>
-                  Reset
-                </Button>
+    <Sheet
+      isOpen={isOpen}
+      onOpenChange={onOpenChange}
+      placement="bottom"
+      label="Filter and sort"
+      title="Filter and sort"
+      actions={
+        onReset ? (
+          <Button size="sm" onPress={onReset}>
+            Reset
+          </Button>
+        ) : null
+      }
+      footer={
+        <Button
+          variant="primary"
+          fullWidth
+          className="h-12"
+          onPress={() => onOpenChange(false)}
+        >
+          Show {count === undefined ? "" : `${formatNumber(count)} `}
+          requests
+        </Button>
+      }
+    >
+      <div className="pb-2">
+        <Section title="Sort">
+          <ChoiceGroup
+            label="Sort"
+            isRequired
+            options={PHONE_SORTS.map((option) => ({
+              id: option.label,
+              label: option.label,
+            }))}
+            selected={
+              PHONE_SORTS.find((option) => isSameSort(option.sort, sort))?.label
+            }
+            onChange={(id) => {
+              const picked = PHONE_SORTS.find((option) => option.label === id)
+              if (picked) onSort(picked.sort)
+            }}
+          />
+        </Section>
+        {sections.map((section) =>
+          section.options.length || section.isError ? (
+            <Section key={section.title} title={section.title}>
+              <ValueChecklist
+                density="sheet"
+                options={section.options}
+                picked={section.picked}
+                excluded={section.excluded}
+                isMono={section.isMono}
+                onToggle={(value) => onRefine(section.toggle(value))}
+              />
+              {section.isError ? (
+                <p className="pb-2 text-caption text-danger">
+                  These values could not be loaded.
+                </p>
+              ) : section.more ? (
+                <p className="pb-2 text-caption text-subtle">
+                  And {formatNumber(section.more)} more, less busy
+                </p>
               ) : null}
-              <IconButton label="Close" onPress={() => onOpenChange(false)}>
-                <FiX aria-hidden className="size-4" />
-              </IconButton>
-            </Drawer.Header>
-            <Drawer.Body className="m-0 flex-1 overflow-y-auto p-0 pb-2 text-foreground">
-              <Section title="Sort">
-                <ChoiceGroup
-                  label="Sort"
-                  isRequired
-                  options={PHONE_SORTS.map((option) => ({
-                    id: option.label,
-                    label: option.label,
-                  }))}
-                  selected={
-                    PHONE_SORTS.find((option) => isSameSort(option.sort, sort))
-                      ?.label
-                  }
-                  onChange={(id) => {
-                    const picked = PHONE_SORTS.find(
-                      (option) => option.label === id,
-                    )
-                    if (picked) onSort(picked.sort)
-                  }}
-                />
-              </Section>
-              {sections.map((section) =>
-                section.options.length || section.isError ? (
-                  <Section key={section.title} title={section.title}>
-                    <ValueChecklist
-                      density="sheet"
-                      options={section.options}
-                      picked={section.picked}
-                      excluded={section.excluded}
-                      isMono={section.isMono}
-                      onToggle={(value) => onRefine(section.toggle(value))}
-                    />
-                    {section.isError ? (
-                      <p className="pb-2 text-caption text-danger">
-                        These values could not be loaded.
-                      </p>
-                    ) : section.more ? (
-                      <p className="pb-2 text-caption text-subtle">
-                        And {formatNumber(section.more)} more, less busy
-                      </p>
-                    ) : null}
-                  </Section>
-                ) : null,
-              )}
-              <Section title="Cost">
-                <ChoiceGroup
-                  label="Cost above"
-                  isMono
-                  options={COST_STEPS.map((step) => ({
-                    id: String(step),
-                    label: `> ${formatUsd(step)}`,
-                  }))}
-                  selected={cost === undefined ? undefined : String(cost)}
-                  onChange={(id) =>
-                    onCost(id === undefined ? undefined : Number(id))
-                  }
-                />
-              </Section>
-            </Drawer.Body>
-            <Drawer.Footer className="border-t border-border px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
-              <Button
-                variant="primary"
-                fullWidth
-                className="h-12"
-                onPress={() => onOpenChange(false)}
-              >
-                Show {count === undefined ? "" : `${formatNumber(count)} `}
-                requests
-              </Button>
-            </Drawer.Footer>
-          </Drawer.Dialog>
-        </Drawer.Content>
-      </Drawer.Backdrop>
-    </Drawer>
+            </Section>
+          ) : null,
+        )}
+        <Section title="Cost">
+          <ChoiceGroup
+            label="Cost above"
+            isMono
+            options={COST_STEPS.map((step) => ({
+              id: String(step),
+              label: `> ${formatUsd(step)}`,
+            }))}
+            selected={cost === undefined ? undefined : String(cost)}
+            onChange={(id) => onCost(id === undefined ? undefined : Number(id))}
+          />
+        </Section>
+      </div>
+    </Sheet>
   )
 }

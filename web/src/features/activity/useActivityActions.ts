@@ -15,6 +15,13 @@ import type { Span } from "./chartBars"
 import type { ActivityLog } from "./useActivityLog"
 
 /**
+ * The id of the panel a request is read in when it is laid over the log, so
+ * the page's arrow keys still step through requests from inside it while any
+ * other dialog keeps its keys.
+ */
+export const REQUEST_VIEW_ID = "activity-request"
+
+/**
  * What the page's controls do to the URL, shared by both layouts, and the
  * page's keys: while a request is open, up and down (or j and k) step through
  * the list and Escape closes it; otherwise Escape clears a brushed span. Not
@@ -54,7 +61,7 @@ export function useActivityActions(url: ActivityUrl, log: ActivityLog) {
     const target = event.target as HTMLElement | null
     if (
       target?.closest(
-        "input, textarea, select, [role=dialog]:not([data-request-view]), [role=radiogroup], [role=slider]",
+        `input, textarea, select, [role=dialog]:not(#${REQUEST_VIEW_ID}), [role=radiogroup], [role=slider]`,
       )
     )
       return

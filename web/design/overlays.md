@@ -1,6 +1,6 @@
 # Overlays
 
-Three components put something on top of the page, and picking the wrong one is
+Several components put something on top of the page, and picking the wrong one is
 the most common mistake here, so start with the question rather than the list.
 
 ```text
@@ -11,6 +11,8 @@ Does the operator need to interact with what appears?
       ├── Is it about the control that opened it?
       │    └── Yes -> Popover      (anchored, takes focus, not modal)
       │         or MenuButton      (when all it holds is actions or choices)
+      ├── Is it a place to read or adjust beside the page, which stays put?
+      │    └── Yes -> Sheet        (from the right, or a phone's bottom or full screen)
       └── Does it want the whole screen's attention?
            └── Yes -> FormDialog   (a place to work: creating or editing)
                 or ConfirmDialog   (one question: are you sure)
@@ -148,6 +150,25 @@ An item holds text, a leading glyph and a trailing detail, never a second
 control: a button inside a `menuitem` is a nested interactive element no
 assistive technology reads well. Where a row seems to need one, the action is
 an item of its own or a submenu.
+
+## Sheet
+
+A panel that slides in from an edge while the page it came from stays where
+it was: from the right beside what it is about (a request's detail, the way
+in to a model), from the bottom as a phone's sheet (filters), or over the whole
+screen as a phone's pushed view. One frame for all of them, so the backdrop,
+the edge it draws against the page, the header and the safe-area padding are
+decided once.
+
+`title` gives it a header: the heading, any `actions`, and a Close, which is
+an `IconButton` in every sheet. A pushed view takes `back` instead, a way back
+named for where it returns to. With neither, the body owns the whole panel,
+for content that brings its own header. The body owns its padding.
+
+Controlled, like the dialogs, because a sheet usually opens from a row or a
+link elsewhere on the page. A sheet with a trigger of its own (a phone's menu
+button) passes it as `trigger`, which is rendered as-is and has to be our
+`Button` or `IconButton`, as `Popover`'s is.
 
 ## The three dialogs
 

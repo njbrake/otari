@@ -1769,6 +1769,8 @@ describe("the catalog shows every prop", () => {
       "where focus lands after the frame is gone, which needs the trigger to unmount with it: a story could pass the prop and would demonstrate nothing",
     "feedback/FormDialog.target":
       "`RestoreFocus`'s, the helper behind `returnFocusRef`, exported for the feedback dialog; the same reason applies",
+    "overlays/Sheet.id":
+      "a handle for the page's own key handling to tell the sheet from another dialog; it changes nothing on screen",
   }
 
   // Not props: the first two are every component's, and a leading underscore is

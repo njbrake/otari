@@ -1,10 +1,10 @@
-import { Modal } from "@heroui/react"
 import type { ReactNode } from "react"
-import { FiChevronLeft, FiSliders } from "react-icons/fi"
+import { FiSliders } from "react-icons/fi"
 import { Button } from "@/design-system/actions/Button"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { Segmented } from "@/design-system/navigation/Segmented"
+import { Sheet } from "@/design-system/overlays/Sheet"
 import { isSameSort, NEWEST_FIRST } from "@/shared/api/usage"
 import { formatNumber } from "@/shared/helpers/format"
 import { ActivityChips } from "./ActivityChips"
@@ -20,7 +20,7 @@ import { PhoneChart } from "./PhoneChart"
 import { PhoneRow } from "./PhoneRow"
 import { RequestPanel } from "./RequestPanel"
 import { ScopeSwitch } from "./ScopeSwitch"
-import type { ActivityActions } from "./useActivityActions"
+import { type ActivityActions, REQUEST_VIEW_ID } from "./useActivityActions"
 import type { ActivityLog, GroupList } from "./useActivityLog"
 import { WorkspaceBudget } from "./WorkspaceBudget"
 
@@ -217,61 +217,38 @@ export function ActivityPhone({
         )}
       </div>
 
-      {/* Over the whole screen, shell included, as a pushed view is. A modal,
+      {/* Over the whole screen, shell included, as a pushed view is. Modal,
           so focus stays in it and the page underneath leaves the tab order. */}
-      <Modal
+      <Sheet
         isOpen={open !== undefined}
         onOpenChange={(isOpen) => {
           if (!isOpen) act.openRequest(undefined)
         }}
+        placement="full"
+        label="Request"
+        id={REQUEST_VIEW_ID}
+        back={{
+          label: "Activity",
+          onPress: () => act.openRequest(undefined),
+        }}
       >
-        {/* Driven from state; the trigger slot is filled and hidden, as the
-            design system's dialogs do. */}
-        <Modal.Trigger aria-hidden className="hidden">
-          Request
-        </Modal.Trigger>
-        <Modal.Backdrop>
-          <Modal.Container size="full" className="p-0">
-            <Modal.Dialog
-              aria-label="Request"
-              data-request-view
-              className="flex h-dvh flex-col rounded-none bg-surface p-0 pt-[env(safe-area-inset-top)]"
-              // HeroUI's full size still caps the width inside a margin, in an
-              // unlayered rule no utility can outrank, and a pushed view spans
-              // the screen.
-              style={{ width: "100%", maxWidth: "none" }}
-            >
-              <div className="flex h-11 shrink-0 items-center border-b border-border px-2">
-                {/* A pushed view's way back: a link's face at the touch floor. */}
-                <button
-                  type="button"
-                  onClick={() => act.openRequest(undefined)}
-                  className="flex h-11 items-center gap-0.5 px-2 text-link focus-visible:otari-focus-ring"
-                >
-                  <FiChevronLeft aria-hidden className="size-[1.125rem]" />
-                  Activity
-                </button>
-              </div>
-              {open ? (
-                <div className="flex min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
-                  <RequestPanel
-                    entry={open}
-                    isOverlaid
-                    position={log.position}
-                    memberName={log.memberName}
-                    showsMember={log.isMulti}
-                    onPrevious={() => act.step(-1)}
-                    onNext={() => act.step(1)}
-                    onClose={() => act.openRequest(undefined)}
-                    onFilter={act.panelFilter}
-                    onPriceModel={onPriceModel}
-                  />
-                </div>
-              ) : null}
-            </Modal.Dialog>
-          </Modal.Container>
-        </Modal.Backdrop>
-      </Modal>
+        {open ? (
+          <div className="flex min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
+            <RequestPanel
+              entry={open}
+              isOverlaid
+              position={log.position}
+              memberName={log.memberName}
+              showsMember={log.isMulti}
+              onPrevious={() => act.step(-1)}
+              onNext={() => act.step(1)}
+              onClose={() => act.openRequest(undefined)}
+              onFilter={act.panelFilter}
+              onPriceModel={onPriceModel}
+            />
+          </div>
+        ) : null}
+      </Sheet>
 
       {isSheetOpen ? (
         <FilterSheet
