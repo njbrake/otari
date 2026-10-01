@@ -1410,7 +1410,7 @@ describe("no font size is written at a call site", () => {
 describe("the phone viewport's touch-target floor", () => {
   it("raises every HeroUI button to 44px below the shell's mobile boundary", () => {
     // `[data-slot="button"]` is HeroUI's Button and nothing else, and 767px is
-    // AppShell's own MOBILE_QUERY, so the rule turns on exactly where the
+    // the shell's own MOBILE_QUERY (`useIsPhone`), so the rule turns on exactly where the
     // sidebar becomes a drawer.
     expect(CSS).toMatch(
       /@media \(max-width: 767px\) \{\s*\[data-slot="button"\] \{\s*min-height: 2\.75rem;\s*min-width: 2\.75rem;/,

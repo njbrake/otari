@@ -59,6 +59,7 @@ import { useOrganizationContext } from "@/shared/api/organizations"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useDocumentTitle } from "@/shared/hooks/useDocumentTitle"
 import { useEntitlements } from "@/shared/hooks/useEntitlements"
+import { useIsPhone } from "@/shared/hooks/useIsPhone"
 import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import { useTelemetry } from "@/shared/telemetry/overlayTelemetry"
 
@@ -77,17 +78,6 @@ const CHROME_TITLES: Record<string, string | undefined> = {
 const SIDEBAR_WIDTH = "w-[16.5rem]"
 const COLLAPSED_SIDEBAR_WIDTH = "w-[4.5rem]"
 const SIDEBAR_COLLAPSED_KEY = "otari.dashboard.sidebarCollapsed"
-
-// Below this width the sidebar's fixed footprint squashes page content, so it
-// switches to an off-canvas drawer toggled from the header. Matches Tailwind's
-// `md` breakpoint (the classes that hide the trigger and drawer chrome use `md:`).
-const MOBILE_QUERY = "(max-width: 767px)"
-
-function readIsMobile(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function")
-    return false
-  return window.matchMedia(MOBILE_QUERY).matches
-}
 
 function readStoredCollapsed(): boolean {
   if (typeof window === "undefined") return false
@@ -585,9 +575,10 @@ function AppShellChrome() {
   // already gone from state.
   const lastMobileLevelRef = useRef<MobileLevel | null>(null)
   const accountTriggerRef = useRef<HTMLButtonElement>(null)
-  const restoreSidebarFocusRef = useRef(false)
   const [collapsed, setCollapsed] = useState<boolean>(readStoredCollapsed)
-  const [isMobile, setIsMobile] = useState<boolean>(readIsMobile)
+  // Below `md` the sidebar's fixed footprint squashes page content, so it
+  // becomes an off-canvas drawer toggled from the header.
+  const isMobile = useIsPhone()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   // The organization rail, opened as a level *inside* the drawer rather than by
   // going to a page. Mobile only, and it exists because the two rails are a
@@ -645,34 +636,20 @@ function AppShellChrome() {
     isVisible,
   )
 
-  // Track the mobile breakpoint so the sidebar can render as an off-canvas
-  // drawer below it and as the fixed-width rail above it. Closing the drawer when
-  // the viewport grows past the breakpoint keeps a stale open state from leaving
-  // a fixed overlay stranded over the desktop layout.
-  useEffect(() => {
-    if (
-      typeof window === "undefined" ||
-      typeof window.matchMedia !== "function"
-    )
-      return
-    const query = window.matchMedia(MOBILE_QUERY)
-    const onChange = (event: MediaQueryListEvent) => {
-      if (!event.matches) {
-        restoreSidebarFocusRef.current =
-          asideRef.current?.contains(document.activeElement) ?? false
-        closeMobileNav()
-      }
-      setIsMobile(event.matches)
+  // Crossing to the desk closes the drawer, so a stale open state cannot leave
+  // a fixed overlay stranded over the desktop layout. Adjusted while
+  // rendering, so no frame draws the desk with the drawer still open. The
+  // drawer is modal, so an open one held focus, which then stays on the
+  // sidebar rather than falling to the now-hidden toggle (see below).
+  const [wasMobile, setWasMobile] = useState(isMobile)
+  const [restoreSidebarFocus, setRestoreSidebarFocus] = useState(false)
+  if (wasMobile !== isMobile) {
+    setWasMobile(isMobile)
+    if (!isMobile) {
+      setRestoreSidebarFocus(mobileNavOpen)
+      closeMobileNav()
     }
-    // Safari < 14 (and some older engines) only expose the deprecated
-    // addListener/removeListener; fall back to it so the shell doesn't throw.
-    if (typeof query.addEventListener === "function") {
-      query.addEventListener("change", onChange)
-      return () => query.removeEventListener("change", onChange)
-    }
-    query.addListener(onChange)
-    return () => query.removeListener(onChange)
-  }, [closeMobileNav])
+  }
 
   // Escape closes the drawer, matching the dismissible-overlay convention. The
   // organization submenu first when it is open, so one press unwinds one level
@@ -697,8 +674,8 @@ function AppShellChrome() {
   // it to the now-hidden toggle or losing it when the submenu unmounts.
   useEffect(() => {
     if (!isMobile) {
-      if (restoreSidebarFocusRef.current) {
-        restoreSidebarFocusRef.current = false
+      if (restoreSidebarFocus) {
+        setRestoreSidebarFocus(false)
         asideRef.current?.focus()
       }
       return
@@ -708,7 +685,7 @@ function AppShellChrome() {
     } else if (asideRef.current?.contains(document.activeElement)) {
       toggleRef.current?.focus()
     }
-  }, [isMobile, mobileNavOpen])
+  }, [isMobile, mobileNavOpen, restoreSidebarFocus])
 
   // A level inside the drawer rather than a second overlay, so it moves focus
   // the way the drawer does: onto the control that leaves the level when it
