@@ -18,10 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlmodel import SQLModel
 
 import gateway.models  # noqa: F401  (registers every table on the shared metadata)
+from gateway.api.routes.usage import _activity_groups_response
 from gateway.core.sql import bucket_expr, canonical_bucket
-from gateway.core.usage_filters import usage_search_condition
+from gateway.core.usage_filters import SortOrder, UsageRefinements, refinement_conditions, usage_search_condition
 from gateway.models.usage import UsageLog
-from gateway.repositories.usage.usage_read_repository import p95_latency_ms
+from gateway.repositories.usage.usage_read_repository import _group_models, _ordering, p95_latency_ms
 
 T0 = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
 WORKSPACE = uuid.uuid4()
@@ -104,3 +105,75 @@ def test_search_treats_like_wildcards_as_text() -> None:
         return set((await db.execute(select(UsageLog.id).where(condition))).scalars())
 
     assert _run(body) == {"underscore"}
+
+
+def test_a_sort_puts_rows_without_a_value_last_in_both_directions() -> None:
+    async def body(db: AsyncSession) -> tuple[list[str], list[str]]:
+        db.add_all(
+            [
+                _log(id="cheap", cost=0.01, timestamp=T0),
+                _log(id="unpriced", cost=None, timestamp=T0 + timedelta(minutes=1)),
+                _log(id="dear", cost=0.9, timestamp=T0 + timedelta(minutes=2)),
+            ]
+        )
+        await db.commit()
+
+        async def ids(order: SortOrder) -> list[str]:
+            stmt = select(UsageLog.id).order_by(*_ordering("cost", order))
+            return list((await db.execute(stmt)).scalars())
+
+        return await ids("desc"), await ids("asc")
+
+    assert _run(body) == (["dear", "cheap", "unpriced"], ["cheap", "dear", "unpriced"])
+
+
+def test_an_exclusion_keeps_the_rows_with_no_value() -> None:
+    async def body(db: AsyncSession) -> set[str]:
+        db.add_all([_log(id="priya", user_id="u-priya"), _log(id="nobody", user_id=None)])
+        await db.commit()
+        conditions = refinement_conditions(UsageRefinements(exclude_user_id=["u-priya"]))
+        return set((await db.execute(select(UsageLog.id).where(*conditions))).scalars())
+
+    assert _run(body) == {"nobody"}
+
+
+def test_activity_groups_aggregate_on_sqlite() -> None:
+    async def body(db: AsyncSession) -> list[tuple[str | None, int, int, str, str, list[str]]]:
+        db.add_all(
+            [
+                _log(model="a", source_label="s1", latency_ms=100, timestamp=T0),
+                _log(model="b", source_label="s1", latency_ms=200, timestamp=T0 + timedelta(minutes=5)),
+                _log(model="b", source_label="s1", status="absorbed", latency_ms=999, timestamp=T0),
+                _log(model="a", source_label=None, latency_ms=50, timestamp=T0 + timedelta(minutes=1)),
+            ]
+        )
+        await db.commit()
+        page = await _activity_groups_response(
+            db,
+            group_by="source_label",
+            start=T0,
+            end=T0 + timedelta(hours=1),
+            conditions=[],
+            status=None,
+            search=None,
+            order="recent",
+            skip=0,
+            limit=10,
+        )
+        return [(g.key, g.requests, g.latency_ms, g.first_at, g.last_at, g.models) for g in page.groups]
+
+    assert _run(body) == [
+        ("s1", 2, 300, "2026-07-01T09:00:00+00:00", "2026-07-01T09:05:00+00:00", ["a", "b"]),
+        (None, 1, 50, "2026-07-01T09:01:00+00:00", "2026-07-01T09:01:00+00:00", ["a"]),
+    ]
+
+
+def test_a_page_with_no_groups_names_no_models() -> None:
+    """An empty page asks nothing: with no keys to match, the query would group the whole window."""
+
+    async def body(db: AsyncSession) -> dict[str | None, tuple[list[str], int]]:
+        db.add(_log(model="a"))
+        await db.commit()
+        return await _group_models(db, UsageLog.api_key_id, [], [], None)
+
+    assert _run(body) == {}

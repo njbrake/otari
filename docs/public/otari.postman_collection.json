@@ -5433,7 +5433,7 @@
         {
           "name": "List Organization Usage",
           "request": {
-            "description": "List the caller's organization's usage logs, most recent first.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage``: same filters, same bare\nJSON array, same separate ``/count`` for a paginator's total, confined to\nwhat the caller's membership lets them see. Scope is never a parameter here.",
+            "description": "List the caller's organization's usage logs, newest first unless ``sort``/``order`` say otherwise.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage``: same filters, same bare\nJSON array, same separate ``/count`` for a paginator's total, confined to\nwhat the caller's membership lets them see. Scope is never a parameter here.",
             "header": [],
             "method": "GET",
             "url": {
@@ -5575,6 +5575,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Order rows by this column; ties fall back to newest first. 'source' is the API key's name (or the provenance source when there is no key), 'member' the billed user's alias, 'status' ranks failures, then earlier failed attempts and the requests served after one, then successes. Rows with no cost, latency, member or policy sort last in either direction. Any order but time sorts every row in the window, so it takes the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+                  "disabled": true,
+                  "key": "sort",
+                  "value": ""
+                },
+                {
+                  "description": "Sort direction.",
+                  "disabled": true,
+                  "key": "order",
+                  "value": ""
+                },
+                {
                   "description": "",
                   "disabled": true,
                   "key": "skip",
@@ -5585,9 +5597,81 @@
                   "disabled": true,
                   "key": "limit",
                   "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&request_group_id=&workspace_id=&q=&id=&request_id=&requested_model=&include_absorbed=&skip=&limit="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&request_group_id=&workspace_id=&q=&id=&request_id=&requested_model=&include_absorbed=&sort=&order=&skip=&limit=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -5731,13 +5815,319 @@
                   "value": ""
                 },
                 {
+                  "description": "The order the list beside this count was read in. Any order but time bounds the window as the list's does, so the total is the total of its pages.",
+                  "disabled": true,
+                  "key": "sort",
+                  "value": ""
+                },
+                {
                   "description": "Whether the rows of a routed request's earlier failed attempts (status 'absorbed') are listed. Defaults to true. With false, each request appears once, as the row that settled it, and that row's 'absorbed_attempts' counts its earlier failed attempts. An explicit 'status' filter takes precedence.",
                   "disabled": true,
                   "key": "include_absorbed",
                   "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/count?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&request_group_id=&workspace_id=&q=&id=&request_id=&requested_model=&include_absorbed="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/count?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&request_group_id=&workspace_id=&q=&id=&request_id=&requested_model=&sort=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+            }
+          }
+        },
+        {
+          "name": "Organization Usage Activity Groups",
+          "request": {
+            "description": "The caller's organization's activity log, one row per API key, session, model, user, policy or alias.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage/groups``: the same\naggregation over the rows this caller may read.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "usage",
+                "groups"
+              ],
+              "query": [
+                {
+                  "description": "Collapse the log to one row per API key, session (source_label), model, billed user, routing policy, or alias: the name the caller sent (requested_model) where it named neither the model that served nor the policy. 'alias' leaves out the rows that used none.",
+                  "disabled": false,
+                  "key": "group_by",
+                  "value": "api_key"
+                },
+                {
+                  "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "start_date",
+                  "value": ""
+                },
+                {
+                  "description": "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "end_date",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+                  "disabled": true,
+                  "key": "status",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly",
+                  "disabled": true,
+                  "key": "status_code",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "model",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single endpoint (e.g. '/v1/chat/completions')",
+                  "disabled": true,
+                  "key": "endpoint",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provider (e.g. 'openai')",
+                  "disabled": true,
+                  "key": "provider",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')",
+                  "disabled": true,
+                  "key": "source",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single session/project label (the source_label carried by imported usage)",
+                  "disabled": true,
+                  "key": "source_label",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing.",
+                  "disabled": true,
+                  "key": "priced",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
+                  "disabled": true,
+                  "key": "tool",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
+                  "disabled": true,
+                  "key": "counts_toward_budget",
+                  "value": ""
+                },
+                {
+                  "description": "Only usage recorded in this workspace.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a case-insensitive substring of the served model, the model name the caller sent, the session label, the API key's name, or the billed user's alias. At most 200 characters. A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+                  "disabled": true,
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "requested_model",
+                  "value": ""
+                },
+                {
+                  "description": "Keep the groups whose value, or the name it resolves to (a key's name, a member's alias), contains this, case-insensitive. What a column's filter menu searches. At most 200 characters.",
+                  "disabled": true,
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "description": "'recent' lists the most recently active group first; 'requests' the busiest.",
+                  "disabled": true,
+                  "key": "order",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "skip",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "limit",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/groups?group_by=api_key&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&search=&order=&skip=&limit=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -5873,9 +6263,81 @@
                   "disabled": true,
                   "key": "bucket",
                   "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/series?group_by=model&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&bucket="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/series?group_by=model&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&bucket=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -6017,9 +6479,81 @@
                   "disabled": true,
                   "key": "include_p95",
                   "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&bucket=&dimensions=&include_p95="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&bucket=&dimensions=&include_p95=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }
@@ -7966,7 +8500,7 @@
         {
           "name": "List Usage",
           "request": {
-            "description": "List usage logs ordered by timestamp (most recent first).\n\nSupports optional filters for time range, user, status, failure status code,\nmodel, endpoint, provider, source, session (``source_label``), and request\ngroup (``request_group_id``, repeatable, which returns a routed request's\nwhole attempt plan), row id (``id``), the model name the caller sent\n(``requested_model``), and free-text search (``q``). With\n``include_absorbed=false`` each routed request is listed once, as the row that\nsettled it, carrying ``absorbed_attempts``. Paginated via skip/limit. The\nreturn shape is a bare JSON array; external billing/analytics consumers\ndepend on this, so the total row count for a\npaginated UI is served separately by ``GET /api/v1/usage/count`` rather than\nwrapped in an envelope here. Timestamps accept either ISO 8601 strings or\nUnix epoch seconds (numeric).",
+            "description": "List usage logs, newest first unless ``sort``/``order`` say otherwise.\n\nSupports optional filters for time range, user, status, failure status code,\nmodel, endpoint, provider, source, session (``source_label``), and request\ngroup (``request_group_id``, repeatable, which returns a routed request's\nwhole attempt plan), row id (``id``), the model name the caller sent\n(``requested_model``), and free-text search (``q``). With\n``include_absorbed=false`` each routed request is listed once, as the row that\nsettled it, carrying ``absorbed_attempts``. Paginated via skip/limit. The\nreturn shape is a bare JSON array; external billing/analytics consumers\ndepend on this, so the total row count for a\npaginated UI is served separately by ``GET /api/v1/usage/count`` rather than\nwrapped in an envelope here. Timestamps accept either ISO 8601 strings or\nUnix epoch seconds (numeric).",
             "header": [],
             "method": "GET",
             "url": {
@@ -8106,6 +8640,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Order rows by this column; ties fall back to newest first. 'source' is the API key's name (or the provenance source when there is no key), 'member' the billed user's alias, 'status' ranks failures, then earlier failed attempts and the requests served after one, then successes. Rows with no cost, latency, member or policy sort last in either direction. Any order but time sorts every row in the window, so it takes the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+                  "disabled": true,
+                  "key": "sort",
+                  "value": ""
+                },
+                {
+                  "description": "Sort direction.",
+                  "disabled": true,
+                  "key": "order",
+                  "value": ""
+                },
+                {
                   "description": "",
                   "disabled": true,
                   "key": "skip",
@@ -8116,9 +8662,81 @@
                   "disabled": true,
                   "key": "limit",
                   "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&request_group_id=&workspace_id=&q=&id=&request_id=&requested_model=&include_absorbed=&skip=&limit="
+              "raw": "{{baseUrl}}/api/v1/usage?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&request_group_id=&workspace_id=&q=&id=&request_id=&requested_model=&include_absorbed=&sort=&order=&skip=&limit=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -8279,13 +8897,91 @@
                   "value": ""
                 },
                 {
+                  "description": "The order the list beside this count was read in. Any order but time bounds the window as the list's does, so the total is the total of its pages.",
+                  "disabled": true,
+                  "key": "sort",
+                  "value": ""
+                },
+                {
                   "description": "Whether the rows of a routed request's earlier failed attempts (status 'absorbed') are listed. Defaults to true. With false, each request appears once, as the row that settled it, and that row's 'absorbed_attempts' counts its earlier failed attempts. An explicit 'status' filter takes precedence.",
                   "disabled": true,
                   "key": "include_absorbed",
                   "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/count?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&request_group_id=&workspace_id=&q=&id=&request_id=&requested_model=&include_absorbed="
+              "raw": "{{baseUrl}}/api/v1/usage/count?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&request_group_id=&workspace_id=&q=&id=&request_id=&requested_model=&sort=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -8320,6 +9016,232 @@
                 "external-events"
               ],
               "raw": "{{baseUrl}}/api/v1/usage/external-events"
+            }
+          }
+        },
+        {
+          "name": "Usage Activity Groups",
+          "request": {
+            "description": "The activity log collapsed to one row per API key, session, model, user, policy or alias.\n\nEach group carries its request, failure and earlier-failed-attempt counts, the\ngateway's own and imported cost, billed tokens, summed latency, its time\nspan and the models it used, most recently active first or busiest first. Same filters\nand window bounds as ``/summary``. To list a group's requests, filter\n``GET /api/v1/usage`` to its key (``is_null`` for the group whose key is None)\nover the ``start_date``/``end_date`` returned here, with\n``include_absorbed=false`` to match ``requests``.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "usage",
+                "groups"
+              ],
+              "query": [
+                {
+                  "description": "Collapse the log to one row per API key, session (source_label), model, billed user, routing policy, or alias: the name the caller sent (requested_model) where it named neither the model that served nor the policy. 'alias' leaves out the rows that used none.",
+                  "disabled": false,
+                  "key": "group_by",
+                  "value": "api_key"
+                },
+                {
+                  "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "start_date",
+                  "value": ""
+                },
+                {
+                  "description": "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "end_date",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+                  "disabled": true,
+                  "key": "status",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly",
+                  "disabled": true,
+                  "key": "status_code",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "model",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single endpoint (e.g. '/v1/chat/completions')",
+                  "disabled": true,
+                  "key": "endpoint",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provider (e.g. 'openai')",
+                  "disabled": true,
+                  "key": "provider",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')",
+                  "disabled": true,
+                  "key": "source",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single session/project label (the source_label carried by imported usage)",
+                  "disabled": true,
+                  "key": "source_label",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing.",
+                  "disabled": true,
+                  "key": "priced",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
+                  "disabled": true,
+                  "key": "tool",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
+                  "disabled": true,
+                  "key": "counts_toward_budget",
+                  "value": ""
+                },
+                {
+                  "description": "Only usage recorded in this workspace.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a case-insensitive substring of the served model, the model name the caller sent, the session label, the API key's name, or the billed user's alias. At most 200 characters. A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+                  "disabled": true,
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "requested_model",
+                  "value": ""
+                },
+                {
+                  "description": "Keep the groups whose value, or the name it resolves to (a key's name, a member's alias), contains this, case-insensitive. What a column's filter menu searches. At most 200 characters.",
+                  "disabled": true,
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "description": "'recent' lists the most recently active group first; 'requests' the busiest.",
+                  "disabled": true,
+                  "key": "order",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "skip",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "limit",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/usage/groups?group_by=api_key&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&search=&order=&skip=&limit=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -8473,9 +9395,81 @@
                   "disabled": true,
                   "key": "bucket",
                   "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/series?group_by=model&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&bucket="
+              "raw": "{{baseUrl}}/api/v1/usage/series?group_by=model&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&bucket=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -8649,9 +9643,81 @@
                   "disabled": true,
                   "key": "include_p95",
                   "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/summary?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&bucket=&dimensions=&include_p95="
+              "raw": "{{baseUrl}}/api/v1/usage/summary?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&bucket=&dimensions=&include_p95=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }
