@@ -4,13 +4,13 @@ import { FiChevronLeft, FiSliders } from "react-icons/fi"
 import { Button } from "@/design-system/actions/Button"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
-import { DismissChip } from "@/design-system/indicators/DismissChip"
 import { Segmented } from "@/design-system/navigation/Segmented"
 import { isSameSort, NEWEST_FIRST } from "@/shared/api/usage"
-import { formatNumber, formatUsd } from "@/shared/helpers/format"
+import { formatNumber } from "@/shared/helpers/format"
+import { ActivityChips } from "./ActivityChips"
 import { ActivitySearch } from "./ActivitySearch"
+import { ActivityTotals } from "./ActivityTotals"
 import { valueFilterModel } from "./activityFilters"
-import { splitCost } from "./activityModel"
 import { type ActivityUrl, readNumber } from "./activityQuery"
 import { PHONE_BATCH } from "./activityRows"
 import { barSpanMs, describeSpan, PHONE_BARS, phoneBars } from "./chartBars"
@@ -91,8 +91,6 @@ export function ActivityPhone({
     PHONE_SORTS.find((option) => isSameSort(option.sort, sort))?.label ??
     "Sorted"
   const filterCount = chips.length + (act.span ? 1 : 0)
-  const { billed, subscription } = splitCost(log.totals)
-  const failed = log.totals?.error_count ?? 0
 
   return (
     <>
@@ -163,40 +161,29 @@ export function ActivityPhone({
           </div>
           {filterCount || isSorted ? (
             <div className="flex gap-2 overflow-x-auto px-4 pb-2.5 [scrollbar-width:none]">
-              {isSorted ? (
-                <DismissChip
-                  label="Sort"
-                  value={sortLabel}
-                  onDismiss={() => act.sort(NEWEST_FIRST)}
-                />
-              ) : null}
-              {act.span ? (
-                <DismissChip
-                  label="Time"
-                  value={describeSpan(act.span.from, act.span.to, barMs)}
-                  onDismiss={() => act.setSpan(undefined)}
-                />
-              ) : null}
-              {chips.map((chip) => (
-                <DismissChip
-                  key={chip.key}
-                  label={chip.label}
-                  value={chip.value}
-                  onDismiss={() => act.refine(chip.clear)}
-                />
-              ))}
+              <ActivityChips
+                sort={
+                  isSorted
+                    ? {
+                        value: sortLabel,
+                        onDismiss: () => act.sort(NEWEST_FIRST),
+                      }
+                    : undefined
+                }
+                span={
+                  act.span
+                    ? {
+                        value: describeSpan(act.span.from, act.span.to, barMs),
+                        onDismiss: () => act.setSpan(undefined),
+                      }
+                    : undefined
+                }
+                chips={chips}
+                onClearChip={(chip) => act.refine(chip.clear)}
+              />
             </div>
           ) : null}
-          <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 border-t border-border-subtle bg-surface-subtle px-4 py-[0.4375rem] text-mono-micro whitespace-nowrap text-subtle">
-            <span className="text-foreground">
-              {formatNumber(log.totals?.request_count ?? 0)} requests
-            </span>
-            <span className={failed ? "text-danger" : undefined}>
-              {formatNumber(failed)} failed
-            </span>
-            <span className="text-foreground">{formatUsd(billed)} billed</span>
-            <span>{formatUsd(subscription)} subscription</span>
-          </div>
+          <ActivityTotals totals={log.totals} variant="phone" />
         </div>
 
         {log.isLoadingRows ? (

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 import { Button } from "@/design-system/actions/Button"
-import { DismissChip } from "@/design-system/indicators/DismissChip"
+import { ActivityChips } from "./ActivityChips"
 import type { ActivityChip } from "./activityQuery"
 
 /**
@@ -29,21 +29,7 @@ export function ActivityToolbar({
   return (
     <div className="flex min-h-13 flex-wrap items-center gap-2 border-b border-border py-2.5">
       {search}
-      {timeChip ? (
-        <DismissChip
-          label="Time"
-          value={timeChip.value}
-          onDismiss={timeChip.onDismiss}
-        />
-      ) : null}
-      {chips.map((chip) => (
-        <DismissChip
-          key={chip.key}
-          label={chip.label}
-          value={chip.value}
-          onDismiss={() => onClearChip(chip)}
-        />
-      ))}
+      <ActivityChips span={timeChip} chips={chips} onClearChip={onClearChip} />
       {chips.length || timeChip ? (
         <Button size="sm" onPress={onClearAll}>
           Clear all
