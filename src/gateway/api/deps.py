@@ -37,7 +37,7 @@ from gateway.repositories.overview.overview_repository import OverviewRepository
 from gateway.repositories.providers import OrgProviderKeyModelRepository
 from gateway.repositories.saved_views import SavedViewRepository
 from gateway.repositories.tenancy import OrganizationGuardrailDefinitionRepository, OrgProviderKeyRepository
-from gateway.repositories.usage import UsageReadRepository, UsageSummaryRepository
+from gateway.repositories.usage import UsageReadRepository, UsageRetentionRepository, UsageSummaryRepository
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets import BudgetService, WorkspaceBudgetDefaultService
 from gateway.services.code_execution import SandboxContainerRegistry
@@ -58,7 +58,7 @@ from gateway.services.tenancy.organization_guardrail_definition_service import (
 )
 from gateway.services.tenancy.provisioning_service import ensure_bootstrap_identity
 from gateway.services.tenancy.workspace_service import WorkspaceService
-from gateway.services.usage import UsageReadService
+from gateway.services.usage import TelemetryRetentionService, UsageReadService
 from gateway.services.workspace_scope import default_workspace_id
 
 # Legacy module-level fallback. Config now lives on ``app.state.config`` (set in
@@ -655,6 +655,11 @@ def build_file_service(uow: UnitOfWork, file_store: FileStoragePort, config: Gat
         raise RuntimeError("Unscoped uploads are not supported in this context; specify a workspace.")
 
     return FileService(uow, FileRepositories.on(uow), file_store, config, reject_unscoped_upload)
+
+
+def build_telemetry_retention_service(uow: UnitOfWork, storage: TelemetryStoragePort) -> TelemetryRetentionService:
+    """Build the retention sweep for one worker pass."""
+    return TelemetryRetentionService(uow, UsageRetentionRepository(uow), storage)
 
 
 def build_sandbox_file_bridge(

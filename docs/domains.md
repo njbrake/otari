@@ -71,7 +71,7 @@ since. A module "runs queries" when it imports a query builder (`select`,
 | Route modules that run queries | 16, plus 1 that only calls `session.get` |
 | Route modules that define Pydantic models inline | 40 |
 | Model modules | 21 |
-| Repository modules | 25: a base, `users_repository.py`, and the rest under `tenancy/`, `overview/`, `api_keys/`, `files/`, `budgets/`, `pricing/`, `providers/`, `code_execution/`, `saved_views/` and `usage/` |
+| Repository modules | 26: a base, `users_repository.py`, and the rest under `tenancy/`, `overview/`, `api_keys/`, `files/`, `budgets/`, `pricing/`, `providers/`, `code_execution/`, `saved_views/` and `usage/` |
 | Service packages per domain | 8: `services/tools/`, which holds the built-in tool registry and no service yet, `services/overview/`, `services/budgets/`, `services/api_keys/`, `services/files/`, `services/saved_views/`, `services/usage/`, which holds the usage log's reads, and `services/providers/`, which holds the organization-scoped half of providers. `services/mail/`, `services/routing/` and `services/tenancy/` are older subpackages |
 | Repository packages per domain | 8: `repositories/overview/`, `repositories/api_keys/`, `repositories/files/`, `repositories/budgets/`, `repositories/pricing/`, `repositories/providers/`, `repositories/saved_views/` and `repositories/usage/`. `repositories/tenancy/` is an older subpackage |
 | Modules in `schemas/` | Six domain modules so far, `budgets.py`, `files.py`, `overview.py`, `providers.py`, `saved_views.py` and `usage.py` |
@@ -311,14 +311,16 @@ Usage rows, the usage log writer, OTLP ingest and coding-agent telemetry.
 - Routes: `usage.py`, `organization_usage.py`, `otlp.py`, `agent_telemetry.py`;
   helpers `_billing_schemas.py` and `_usage_common.py`, the read filters and the
   summary window both usage route modules take
-- Services: `usage/`, the log's reads and the summary over the repositories below;
+- Services: `usage/`, the log's reads and the summary over the repositories below,
+  and the retention sweep that deletes imported rows past `telemetry_retention_days`;
   `usage_admin_service.py`, `external_usage_service.py`, `log_writer.py`,
   `agent_telemetry_service.py`, `agent_telemetry_admin_service.py`; the Claude Code transcript parser is
   `otari_agent.claude_code_import`, beside the CLI that uses it
 - Repositories: `usage/`, the queries behind the log's reads (a page of rows in
   any order, the attempts folded into them, latency percentiles, the activity
   groups) and behind the summary and the grouped series; the routes' older
-  queries, such as the count, have not moved here yet
+  queries, such as the count, have not moved here yet; and the retention sweep's
+  batched delete
 - Schemas: `usage.py`, the summary's, the grouped series' and the activity
   groups' response models; the routes' older models have not moved here yet
 - Core: `usage_filters.py`, the row filters, sort orders, request-count

@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncGenerator, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -15,12 +15,13 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from typing_extensions import override
 
 from gateway import features
-from gateway.api.deps import build_file_service, set_config
+from gateway.api.deps import build_file_service, build_telemetry_retention_service, set_config
 from gateway.api.main import register_routers
 from gateway.container import Container, build_container
 from gateway.core.config import API_KEY_HEADER, API_ROOT, GATEWAY_TOKEN_HEADER, X_API_KEY_HEADER, GatewayConfig
 from gateway.core.database import create_session, dispose_db, init_db
 from gateway.core.feature import Worker
+from gateway.core.unit_of_work import create_unit_of_work
 from gateway.dashboard import DASHBOARD_PACKAGE_PATH, get_dashboard_build_id, get_dashboard_dir
 from gateway.exceptions import TenancyError
 from gateway.exceptions.control_plane_exceptions import ControlPlaneError
@@ -30,6 +31,7 @@ from gateway.log_config import logger
 from gateway.ports.api_key_format_port import ApiKeyFormatPort
 from gateway.ports.file_storage_port import FileStoragePort
 from gateway.ports.model_provider_port import ModelProviderPort
+from gateway.ports.telemetry_storage_port import TelemetryStoragePort
 from gateway.rate_limit import RateLimiter
 from gateway.root_page import FAVICON_SVG, ROOT_TUTORIAL_HTML
 from gateway.services.alias_service import load_aliases_at_startup, reset_alias_cache, run_alias_refresher
@@ -93,6 +95,7 @@ from gateway.services.tenancy.organization_guardrail_runner import (
     run_guardrail_runner_refresher,
 )
 from gateway.services.tool_settings_service import apply_overrides_from_db as apply_tool_overrides_from_db
+from gateway.services.usage import TelemetryRetentionService, run_telemetry_retention_sweeper
 from gateway.version import __version__
 
 # Every path here must be mounted; a contract test checks.
@@ -189,6 +192,20 @@ def _start_file_sweeper(config: GatewayConfig, container: Container) -> Coroutin
     return run_file_sweeper(config.files_sweep_interval_sec, lambda uow: build_file_service(uow, file_store, config))
 
 
+def _start_telemetry_retention_sweeper(config: GatewayConfig, container: Container) -> Coroutine[Any, Any, None] | None:
+    """Return the telemetry retention sweep, or None when no retention window is set."""
+    if config.telemetry_retention_days <= 0:
+        return None
+
+    @asynccontextmanager
+    async def open_service() -> AsyncIterator[TelemetryRetentionService]:
+        # The telemetry port is session-bound and commits on its own session.
+        async with create_unit_of_work() as uow, create_session() as session:
+            yield build_telemetry_retention_service(uow, container.resolve(TelemetryStoragePort, session))
+
+    return run_telemetry_retention_sweeper(config.telemetry_retention_days, open_service)
+
+
 def _start_container_sweeper(config: GatewayConfig, _container: Container) -> Coroutine[Any, Any, None] | None:
     """Return the sandbox container sweep, or None when no sandbox is held past its request."""
     if not config.sandbox_configured() or config.sandbox_container_idle_ttl_sec <= 0:
@@ -252,6 +269,9 @@ _LIFESPAN_WORKERS: tuple[_LifespanWorker, ...] = (
     # Same posture for uploaded files: expiry hides a file, this gives its
     # bytes back.
     _LifespanWorker("file retention sweep", _start_file_sweeper),
+    # Imported usage and agent telemetry arrive far faster than served traffic;
+    # this keeps them to the configured window.
+    _LifespanWorker("telemetry retention sweep", _start_telemetry_retention_sweeper),
     # The provider reclaims a held sandbox on its own timer; this drops the
     # rows that named it once nobody can resume them.
     _LifespanWorker("sandbox container sweep", _start_container_sweeper),
