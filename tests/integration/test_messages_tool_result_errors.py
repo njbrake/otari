@@ -1,9 +1,8 @@
 """A tool result's ``is_error`` reaches a bridged provider as text and a native one as the flag.
 
-any-llm copies the flag onto the OpenAI ``role: tool`` message it builds for a
-provider with no native Messages API, and a strict backend refuses the request
-for it (see ``gateway.services.providers.tool_result_errors``). Asserted at the
-``amessages`` boundary, which is where the request leaves otari.
+For a provider with no native Messages API, any-llm builds an OpenAI ``role: tool``
+message, and a strict backend refuses one carrying ``is_error``. Asserted below
+``amessages``, at the provider call, so the conversion any-llm owns is exercised.
 """
 
 from collections.abc import Generator
@@ -11,7 +10,10 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from any_llm.types.messages import MessageResponse, MessageUsage, TextBlock
+from any_llm.providers.anthropic.anthropic import AnthropicProvider
+from any_llm.providers.openai.openai import OpenaiProvider
+from any_llm.types.completion import ChatCompletion, CompletionParams
+from any_llm.types.messages import MessageResponse, MessagesParams, MessageUsage, TextBlock
 from fastapi.testclient import TestClient
 
 from gateway.core.config import API_KEY_HEADER, API_ROOT, GatewayConfig
@@ -19,6 +21,17 @@ from gateway.core.config import API_KEY_HEADER, API_ROOT, GatewayConfig
 from .conftest import build_test_client
 
 HEADERS = {API_KEY_HEADER: "Bearer test-master-key"}
+
+MESSAGES = [
+    {"role": "user", "content": "push the branch"},
+    {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "push", "input": {}}]},
+    {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "blocked by referee", "is_error": True}
+        ],
+    },
+]
 
 
 @pytest.fixture
@@ -39,80 +52,70 @@ def client(postgres_url: str) -> Generator[TestClient]:
     yield from build_test_client(config)
 
 
-def _response() -> MessageResponse:
-    return MessageResponse(
-        id="msg_1",
-        type="message",
-        role="assistant",
-        model="m",
-        content=[TextBlock(type="text", text="understood", citations=None)],
-        stop_reason=None,
-        stop_sequence=None,
-        usage=MessageUsage(
-            input_tokens=10,
-            output_tokens=2,
-            cache_creation_input_tokens=None,
-            cache_read_input_tokens=None,
-            cache_creation=None,
-            server_tool_use=None,
-            service_tier=None,
-        ),
-        container=None,
-    )
-
-
-def _sent_tool_result(client: TestClient, model: str) -> dict[str, Any]:
-    """Post a turn whose last tool result failed, and return that result as it left for the provider."""
+def _post(client: TestClient, model: str) -> None:
     created = client.post(f"{API_ROOT}/users", json={"user_id": "test-user"}, headers=HEADERS)
     assert created.status_code == 200, created.text
-    captured: dict[str, Any] = {}
-
-    async def mock_amessages(**kwargs: Any) -> MessageResponse:
-        captured.update(kwargs)
-        return _response()
-
-    with patch("gateway.api.routes.messages.amessages", new=mock_amessages):
-        resp = client.post(
-            f"{API_ROOT}/messages",
-            json={
-                "model": model,
-                "max_tokens": 16,
-                "metadata": {"user_id": "test-user"},
-                "messages": [
-                    {"role": "user", "content": "push the branch"},
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "tool_use", "id": "toolu_1", "name": "push", "input": {}}],
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": "toolu_1",
-                                "content": "blocked by referee",
-                                "is_error": True,
-                            }
-                        ],
-                    },
-                ],
-            },
-            headers=HEADERS,
-        )
+    resp = client.post(
+        f"{API_ROOT}/messages",
+        json={"model": model, "max_tokens": 16, "metadata": {"user_id": "test-user"}, "messages": MESSAGES},
+        headers=HEADERS,
+    )
     assert resp.status_code == 200, resp.text
-    result: dict[str, Any] = captured["messages"][-1]["content"][0]
-    return result
 
 
 def test_a_bridged_provider_receives_the_error_as_text(client: TestClient) -> None:
-    sent = _sent_tool_result(client, "home_lab:qwen3")
+    captured: list[CompletionParams] = []
 
-    assert "is_error" not in sent
-    assert sent["content"] == "Error: blocked by referee"
+    async def fake_acompletion(self: OpenaiProvider, params: CompletionParams, **kwargs: Any) -> ChatCompletion:
+        captured.append(params)
+        return ChatCompletion.model_validate(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "qwen3",
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "understood"}}
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+            }
+        )
+
+    with patch.object(OpenaiProvider, "_acompletion", fake_acompletion):
+        _post(client, "home_lab:qwen3")
+
+    tool_messages = [m for m in captured[0].messages if isinstance(m, dict) and m.get("role") == "tool"]
+    assert tool_messages == [{"role": "tool", "tool_call_id": "toolu_1", "content": "Error: blocked by referee"}]
 
 
 def test_a_native_messages_provider_receives_the_flag(client: TestClient) -> None:
-    sent = _sent_tool_result(client, "anthropic:claude-opus-4")
+    captured: list[MessagesParams] = []
 
+    async def fake_amessages(self: AnthropicProvider, params: MessagesParams, **kwargs: Any) -> MessageResponse:
+        captured.append(params)
+        return MessageResponse(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            model="m",
+            content=[TextBlock(type="text", text="understood", citations=None)],
+            stop_reason=None,
+            stop_sequence=None,
+            usage=MessageUsage(
+                input_tokens=10,
+                output_tokens=2,
+                cache_creation_input_tokens=None,
+                cache_read_input_tokens=None,
+                cache_creation=None,
+                server_tool_use=None,
+                service_tier=None,
+            ),
+            container=None,
+        )
+
+    with patch.object(AnthropicProvider, "_amessages", fake_amessages):
+        _post(client, "anthropic:claude-opus-4")
+
+    sent = captured[0].messages[-1]["content"][0]
     assert sent["is_error"] is True
     assert sent["content"] == "blocked by referee"

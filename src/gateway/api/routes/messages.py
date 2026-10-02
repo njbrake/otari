@@ -91,7 +91,6 @@ from gateway.services.mcp_loop_messages import (
     anthropic_tool_loop_stream,
 )
 from gateway.services.provider_kwargs import ProviderAccounts
-from gateway.services.providers.tool_result_errors import fold_tool_result_errors
 from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME
 from gateway.services.tool_format import inject_purpose_hints_anthropic, openai_to_anthropic_tools
 from gateway.services.tools import SERVER_TOOL_USE_ID_PREFIX, Dialect, ToolUseBudget
@@ -601,11 +600,11 @@ class _MessagesAdapter:
 
     async def call_provider(self, kwargs: dict[str, Any]) -> MessageResponse:
         provider_kwargs, _ = _split_client_betas(kwargs)
-        return await amessages(**fold_tool_result_errors(provider_kwargs))  # type: ignore[return-value]
+        return await amessages(**provider_kwargs)  # type: ignore[return-value]
 
     async def open_provider_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[MessageStreamEvent]:
         provider_kwargs, _ = _split_client_betas(kwargs)
-        return await amessages(**fold_tool_result_errors(provider_kwargs))  # type: ignore[return-value]
+        return await amessages(**provider_kwargs)  # type: ignore[return-value]
 
     def prepare_stream_kwargs(
         self,

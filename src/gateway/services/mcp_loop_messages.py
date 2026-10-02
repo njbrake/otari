@@ -45,7 +45,6 @@ from gateway.services.mcp_loop import (
     MaxToolIterationsExceeded,
     ToolBackend,
 )
-from gateway.services.providers.tool_result_errors import fold_tool_result_errors
 from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME, CodeExecution
 from gateway.services.tool_format import openai_to_anthropic_tools
 from gateway.services.tool_usage import is_tool_error
@@ -542,7 +541,7 @@ class _MessagesToolLoopStrategy:
     # ---- non-streaming hooks ----
 
     async def call(self, kwargs: dict[str, Any]) -> MessageResponse:
-        result: MessageResponse = await amessages(**fold_tool_result_errors(kwargs))  # type: ignore[assignment]
+        result: MessageResponse = await amessages(**kwargs)  # type: ignore[assignment]
         return result
 
     def new_usage_accumulator(self) -> _MessagesUsageAccumulator:
@@ -641,7 +640,7 @@ class _MessagesToolLoopStrategy:
     # ---- streaming hooks ----
 
     async def open_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[MessageStreamEvent]:
-        stream: AsyncIterator[MessageStreamEvent] = await amessages(**fold_tool_result_errors(kwargs))  # type: ignore[assignment]
+        stream: AsyncIterator[MessageStreamEvent] = await amessages(**kwargs)  # type: ignore[assignment]
         return stream
 
     def new_stream_state(self) -> _MessagesStreamState:
