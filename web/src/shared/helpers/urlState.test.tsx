@@ -1,3 +1,4 @@
+import { useRouter } from "@tanstack/react-router"
 import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
@@ -120,5 +121,122 @@ describe("useUrlState.patch with arrays", () => {
       result.current.patch({ model: [] })
     })
     expect(result.current.getAll("model")).toEqual([])
+  })
+})
+
+const PAGE_DEFAULTS = { request: "", model: "" } as const
+
+// The hook and the router it drives, on a page with somewhere else to go.
+async function pageFor(url: string, previous: string[] = []) {
+  const { result } = renderHook(
+    () => ({ url: useUrlState(PAGE_DEFAULTS), router: useRouter() }),
+    {
+      wrapper: withRouter({
+        url,
+        previous,
+        routes: [{ path: "/keys", element: null }],
+      }),
+    },
+  )
+  await flushRouter()
+  return result
+}
+
+describe("useUrlState once its page is left", () => {
+  it("drops a patch that lands after the location moved to another page", async () => {
+    const result = await pageFor("/activity?model=gpt-4o")
+    // Held from the page's last render, the way a timer, an effect or a close
+    // handler holds it while the next page is already showing.
+    const { url, router } = result.current
+
+    await act(async () => {
+      await router.navigate({ to: "/keys", search: { tab: "active" } })
+    })
+    await act(async () => {
+      url.patch({ request: "", model: "claude-sonnet-5" })
+    })
+
+    expect(router.state.location.href).toBe("/keys?tab=active")
+  })
+})
+
+describe("useUrlState.patch with push", () => {
+  it("adds an entry that going back closes, rather than leaving the page", async () => {
+    const result = await pageFor("/activity?model=gpt-4o", ["/keys"])
+
+    await act(async () => {
+      result.current.url.patch({ request: "a" }, { push: true })
+    })
+    expect(result.current.url.get("request")).toBe("a")
+
+    await act(async () => {
+      result.current.router.history.back()
+    })
+    await flushRouter()
+    expect(result.current.router.state.location.href).toBe(
+      "/activity?model=gpt-4o",
+    )
+  })
+
+  it("is undone by back(), which steps back over the entry it added", async () => {
+    const result = await pageFor("/activity?model=gpt-4o", ["/keys"])
+
+    await act(async () => {
+      result.current.url.patch({ request: "a" }, { push: true })
+    })
+    // Stepping to another request rewrites the entry rather than adding one.
+    await act(async () => {
+      result.current.url.patch({ request: "b" })
+    })
+    // Twice, as an overlay's own Escape and the page's can both ask.
+    await act(async () => {
+      result.current.url.back({ request: "" })
+      result.current.url.back({ request: "" })
+    })
+    await flushRouter()
+    expect(result.current.router.state.location.href).toBe(
+      "/activity?model=gpt-4o",
+    )
+
+    // The entry behind is still the page before it: one more step back leaves.
+    await act(async () => {
+      result.current.router.history.back()
+    })
+    await flushRouter()
+    expect(result.current.router.state.location.pathname).toBe("/keys")
+  })
+
+  it("falls back to a patch once the URL has moved on since the push", async () => {
+    const result = await pageFor("/activity", ["/keys"])
+
+    await act(async () => {
+      result.current.url.patch({ request: "a" }, { push: true })
+    })
+    await act(async () => {
+      result.current.url.patch({ model: "gpt-4o" })
+    })
+    await act(async () => {
+      result.current.url.back({ request: "" })
+    })
+    await flushRouter()
+    // Going back would have dropped the filter set since, so it stays.
+    expect(result.current.router.state.location.href).toBe(
+      "/activity?model=gpt-4o",
+    )
+  })
+
+  it("patches in place where nothing was pushed, as a linked request is", async () => {
+    const result = await pageFor("/activity?request=a", ["/keys"])
+
+    await act(async () => {
+      result.current.url.back({ request: "" })
+    })
+    await flushRouter()
+    expect(result.current.router.state.location.href).toBe("/activity")
+    await act(async () => {
+      result.current.router.history.back()
+    })
+    await flushRouter()
+    expect(result.current.router.state.location.pathname).toBe("/keys")
   })
 })

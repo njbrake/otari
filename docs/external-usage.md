@@ -147,6 +147,14 @@ and unpriced totals.
 Imported rows do not appear in budget-consumption gauges because those gauges
 read the enforcement ledger.
 
+## Retention
+
+Imported rows and agent telemetry are kept indefinitely by default. Set
+`telemetry_retention_days` (`OTARI_TELEMETRY_RETENTION_DAYS`) to have a
+background sweep delete both once they are older than that many days. It runs
+every six hours. Usage the gateway served itself is never deleted, budget-exempt
+traffic included.
+
 ## Related documentation
 
 - [API reference](api-reference.md)

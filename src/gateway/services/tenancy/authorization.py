@@ -170,10 +170,33 @@ async def resolve_visible_workspace_scope(
     return VisibleWorkspaceScope(organization=organization, workspace_ids=workspace_ids)
 
 
+async def resolve_managed_workspace_ids(
+    db: AsyncSession,
+    *,
+    user: User,
+    scope: VisibleWorkspaceScope,
+) -> list[uuid.UUID] | None:
+    """The workspaces in ``scope`` this caller manages: the set form of :func:`has_workspace_management_access`.
+
+    ``None`` means every workspace, for an organization owner or admin, which is
+    also what makes a scope see every workspace. Anyone else manages the
+    workspaces they actively hold an owner or admin membership in, read in one
+    query rather than one check per workspace.
+    """
+    if scope.sees_every_workspace:
+        return None
+    return await WorkspaceMemberRepository(db).get_workspace_ids_for_user(
+        user_id=user.id,
+        organization_id=scope.organization.id,
+        roles=MANAGEMENT_ROLES,
+    )
+
+
 __all__ = [
     "VisibleWorkspaceScope",
     "has_workspace_management_access",
     "require_workspace_management_access",
+    "resolve_managed_workspace_ids",
     "resolve_visible_workspace",
     "resolve_visible_workspace_scope",
     "resolve_workspace_in_organization",

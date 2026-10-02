@@ -14,6 +14,8 @@ Four things are asserted for each of the four routes:
 - a member reads their own requests in the workspaces they belong to: not the
   sibling workspace they do not belong to, and not other people's requests in
   the workspace they share;
+- a workspace owner or admin reads everyone's requests in the workspace they
+  manage, and only their own in any other;
 - ``workspace_id`` narrows and never widens, answering 404 outside the scope the
   way a workspace that does not exist does;
 - the scope follows the *membership*, not the ``active_organization_id`` pointer,
@@ -77,13 +79,14 @@ _ALPHA_ONE_VIEWER_MODELS = ("alpha-one-viewer",)
 # Billed to the member, in the workspace they do not belong to: theirs, and still
 # outside their scope.
 _ALPHA_TWO_MEMBER_MODELS = ("alpha-two-member",)
-_ALPHA_MODELS = (
-    _ALPHA_ONE_MODELS
-    + _ALPHA_TWO_MODELS
-    + _ALPHA_ONE_MEMBER_MODELS
-    + _ALPHA_ONE_VIEWER_MODELS
-    + _ALPHA_TWO_MEMBER_MODELS
+# Billed to the workspace admin, who manages Alpha one and is a plain member of
+# Alpha two.
+_ALPHA_ONE_WS_ADMIN_MODELS = ("alpha-one-ws-admin",)
+_ALPHA_TWO_WS_ADMIN_MODELS = ("alpha-two-ws-admin",)
+_ALPHA_ONE_EVERYONE = (
+    _ALPHA_ONE_MODELS + _ALPHA_ONE_MEMBER_MODELS + _ALPHA_ONE_VIEWER_MODELS + _ALPHA_ONE_WS_ADMIN_MODELS
 )
+_ALPHA_MODELS = _ALPHA_ONE_EVERYONE + _ALPHA_TWO_MODELS + _ALPHA_TWO_MEMBER_MODELS + _ALPHA_TWO_WS_ADMIN_MODELS
 
 
 def _identity(
@@ -94,6 +97,7 @@ def _identity(
     role: str = "member",
     is_superuser: bool = False,
     workspace_ids: tuple[uuid.UUID, ...] = (),
+    managed_workspace_ids: tuple[uuid.UUID, ...] = (),
     membership: bool = True,
 ) -> tuple[uuid.UUID, str]:
     """Create an identity with a live dashboard session, and return its cookie.
@@ -121,12 +125,14 @@ def _identity(
                 status="active",
             )
         )
-    for workspace_id in workspace_ids:
+    for workspace_id, workspace_role in [(w, "member") for w in workspace_ids] + [
+        (w, "admin") for w in managed_workspace_ids
+    ]:
         session.add(
             WorkspaceMember(
                 workspace_id=workspace_id,
                 user_id=user.id,
-                role="member",
+                role=workspace_role,
                 status="active",
             )
         )
@@ -215,6 +221,14 @@ def world(client: TestClient, master_key_header: dict[str, str], db_session_fact
                 role="viewer",
                 workspace_ids=(alpha_one.id,),
             ),
+            # An organization member who administers Alpha one and only belongs to Alpha two.
+            "alpha_ws_admin": _identity(
+                session,
+                email="ws-admin@alpha.test",
+                organization_id=alpha.id,
+                workspace_ids=(alpha_two.id,),
+                managed_workspace_ids=(alpha_one.id,),
+            ),
             # In the organization, in none of its workspaces.
             "alpha_newcomer": _identity(session, email="new@alpha.test", organization_id=alpha.id),
             "beta_owner": _identity(session, email="owner@beta.test", organization_id=beta.id, role="owner"),
@@ -237,12 +251,17 @@ def world(client: TestClient, master_key_header: dict[str, str], db_session_fact
         # A usage row names the attribution user it was billed to, which is keyed
         # on the identity's id, so those rows exist before the usage that cites them.
         session.add_all(
-            [AttributionUser(user_id=str(built.users[who]), alias=who) for who in ("alpha_member", "alpha_viewer")]
+            [
+                AttributionUser(user_id=str(built.users[who]), alias=who)
+                for who in ("alpha_member", "alpha_viewer", "alpha_ws_admin")
+            ]
         )
         session.commit()
         _usage_rows(session, alpha_one.id, _ALPHA_ONE_MEMBER_MODELS, user_id=built.users["alpha_member"])
         _usage_rows(session, alpha_one.id, _ALPHA_ONE_VIEWER_MODELS, user_id=built.users["alpha_viewer"])
         _usage_rows(session, alpha_two.id, _ALPHA_TWO_MEMBER_MODELS, user_id=built.users["alpha_member"])
+        _usage_rows(session, alpha_one.id, _ALPHA_ONE_WS_ADMIN_MODELS, user_id=built.users["alpha_ws_admin"])
+        _usage_rows(session, alpha_two.id, _ALPHA_TWO_WS_ADMIN_MODELS, user_id=built.users["alpha_ws_admin"])
         built.sessions = {name: token for name, (_, token) in people.items()}
         return built
     finally:
@@ -350,6 +369,103 @@ def test_a_viewer_is_scoped_like_a_member_and_not_like_an_admin(client: TestClie
     assert listed.isdisjoint(_ALPHA_TWO_MODELS + _ALPHA_ONE_MODELS)
 
 
+def test_a_workspace_admin_reads_everyones_requests_in_the_workspace_they_manage(
+    client: TestClient, world: _World
+) -> None:
+    """Named or not, the managed workspace is read whole, members' and viewers' rows included."""
+    alpha_one = world.workspaces["alpha_one"]
+    assert _models_listed(client, world, "alpha_ws_admin", f"?workspace_id={alpha_one}") == set(_ALPHA_ONE_EVERYONE)
+    assert _models_summarized(client, world, "alpha_ws_admin", f"?workspace_id={alpha_one}") == set(_ALPHA_ONE_EVERYONE)
+    listed = _models_listed(client, world, "alpha_ws_admin")
+    assert set(_ALPHA_ONE_EVERYONE) <= listed
+
+
+def test_a_workspace_admin_reads_only_their_own_requests_in_another_workspace(
+    client: TestClient, world: _World
+) -> None:
+    """Managing Alpha one widens Alpha one and nothing else, on either branch of the scope."""
+    alpha_two = world.workspaces["alpha_two"]
+    assert _models_listed(client, world, "alpha_ws_admin", f"?workspace_id={alpha_two}") == set(
+        _ALPHA_TWO_WS_ADMIN_MODELS
+    )
+    listed = _models_listed(client, world, "alpha_ws_admin")
+    assert listed == set(_ALPHA_ONE_EVERYONE + _ALPHA_TWO_WS_ADMIN_MODELS)
+    assert listed.isdisjoint(_ALPHA_TWO_MODELS + _ALPHA_TWO_MEMBER_MODELS + _BETA_MODELS)
+    assert _models_summarized(client, world, "alpha_ws_admin") == listed
+
+
+@pytest.mark.parametrize("query", ["", "?workspace_id={alpha_one}", "?workspace_id={alpha_two}"])
+def test_a_workspace_admins_aggregates_carry_the_same_scope_as_their_list(
+    client: TestClient, world: _World, query: str
+) -> None:
+    """The count, the groups and the series read the rows the list does, and no more."""
+    query = query.format(**{name: str(workspace) for name, workspace in world.workspaces.items()})
+    listed = _models_listed(client, world, "alpha_ws_admin", query)
+    joiner = "&" if query else "?"
+
+    code, body = _as(client, world, "alpha_ws_admin", f"{API_ROOT}/organizations/me/usage/count{query}")
+    assert code == status.HTTP_200_OK, body
+    assert body == {"total": len(listed)}
+
+    code, body = _as(
+        client, world, "alpha_ws_admin", f"{API_ROOT}/organizations/me/usage/groups{query}{joiner}group_by=model"
+    )
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert {group["key"] for group in body["groups"]} == listed
+
+    code, body = _as(
+        client, world, "alpha_ws_admin", f"{API_ROOT}/organizations/me/usage/series{query}{joiner}group_by=model"
+    )
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert {group["key"] for group in body["groups"] if not group.get("is_other")} == listed
+
+
+def test_a_suspended_workspace_admin_membership_stops_widening_the_workspace(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """Management is read from the active membership, so suspending it takes the workspace back."""
+    session = db_session_factory()
+    try:
+        membership = (
+            session.query(WorkspaceMember)
+            .filter(col(WorkspaceMember.workspace_id) == world.workspaces["alpha_one"])
+            .filter(col(WorkspaceMember.user_id) == world.users["alpha_ws_admin"])
+            .one()
+        )
+        membership.status = "suspended"
+        session.add(membership)
+        session.commit()
+    finally:
+        session.close()
+
+    assert _models_listed(client, world, "alpha_ws_admin") == set(_ALPHA_TWO_WS_ADMIN_MODELS)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("DELETE", f"{API_ROOT}/usage", {"ids": ["x"]}),
+        (
+            "POST",
+            f"{API_ROOT}/usage/set-price",
+            {"ids": ["x"], "input_price_per_million": 1, "output_price_per_million": 1},
+        ),
+    ],
+)
+def test_a_workspace_admin_cannot_reach_the_bulk_usage_mutations(
+    client: TestClient, world: _World, method: str, path: str, payload: dict[str, object]
+) -> None:
+    """Reading a workspace's requests grants nothing on the operator-only writes."""
+    client.cookies.set(SESSION_COOKIE_NAME, world.sessions["alpha_ws_admin"])
+    try:
+        response = client.request(method, path, json=payload)
+    finally:
+        client.cookies.clear()
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+
+
 def test_a_member_of_no_workspace_reads_an_empty_page_rather_than_a_refusal(client: TestClient, world: _World) -> None:
     """Nothing was refused; there is simply nothing here yet."""
     code, body = _as(client, world, "alpha_newcomer", f"{API_ROOT}/organizations/me/usage")
@@ -431,7 +547,9 @@ def test_a_superuser_reads_their_active_organization_and_not_every_tenant(client
 
 def test_a_workspace_filter_inside_the_scope_narrows_the_read(client: TestClient, world: _World) -> None:
     query = f"?workspace_id={world.workspaces['alpha_two']}"
-    assert _models_listed(client, world, "alpha_owner", query) == set(_ALPHA_TWO_MODELS + _ALPHA_TWO_MEMBER_MODELS)
+    assert _models_listed(client, world, "alpha_owner", query) == set(
+        _ALPHA_TWO_MODELS + _ALPHA_TWO_MEMBER_MODELS + _ALPHA_TWO_WS_ADMIN_MODELS
+    )
 
 
 @pytest.mark.parametrize("path", _SCOPED_PATHS)

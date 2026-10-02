@@ -246,4 +246,19 @@ describe("RequestPanel", () => {
     expect(screen.getByText("1,000 at $3.00 / 1M, $0.003")).toBeInTheDocument()
     expect(screen.getByText("2 at $0.01, $0.02")).toBeInTheDocument()
   })
+
+  it("lists every charge line an older gateway wrote with no meter", async () => {
+    const errors = vi.spyOn(console, "error")
+    await renderPanel(
+      entry({
+        pricing_breakdown: [
+          { cost: 0.5 },
+          { cost: 0.25 },
+        ] as unknown as UsageEntry["pricing_breakdown"],
+      }),
+    )
+    expect(
+      errors.mock.calls.some((call) => String(call[0]).includes("same key")),
+    ).toBe(false)
+  })
 })

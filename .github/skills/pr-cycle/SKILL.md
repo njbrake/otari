@@ -133,6 +133,8 @@ A child PR hits the second case as soon as its parent is squash-merged, because 
 unsquashed commits and the squash on `main` are the same content twice.
 `git rebase --onto origin/main <the parent's old head>` drops the absorbed commits and clears it.
 
+**`CI gate` is the summary row.** `.github/workflows/ci-gate.yml` waits for every other workflow run on the head commit and fails if any failed, so it is the one check a ruleset can require without stranding a PR whose path filters start nothing. It goes green last; a red gate names the workflow that failed.
+
 **"Green" means the PR is mergeable and the full expected set has passed**, not merely that
 nothing is pending. A base other than `main` can produce a `gh pr checks` that lists only one or
 two passing rows, which can look complete to someone who does not know what the set should be.

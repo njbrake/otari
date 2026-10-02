@@ -49,7 +49,7 @@ describe("PageIntro", () => {
     ).toHaveClass("pb-5")
   })
 
-  it("stacks on a narrow viewport and turns into a row above it", () => {
+  it("stacks in a narrow content pane and turns into a row in a wide one", () => {
     const { container } = render(
       <PageIntro
         title="API keys"
@@ -57,8 +57,11 @@ describe("PageIntro", () => {
       />,
     )
     expect([...header(container).classList]).toContain("flex-col")
-    expect([...header(container).classList]).toContain("sm:flex-row")
-    expect([...header(container).classList]).toContain("sm:items-start")
+    // A container query, not a viewport breakpoint: beside a tablet's rail the
+    // pane is narrower than the viewport says.
+    expect([...header(container).classList]).toContain("@2xl:flex-row")
+    expect([...header(container).classList]).toContain("@2xl:items-start")
+    expect([...header(container).classList]).not.toContain("sm:flex-row")
   })
 
   it("describes the page when given a description", () => {

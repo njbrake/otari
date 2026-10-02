@@ -42,7 +42,7 @@ export function KpiCell({
     // beside it (218px at 1280, since the track shrinks and the string does
     // not). Bounding the column is what makes the truncation and the
     // sparkline's `w-full` mean anything.
-    <div className="grid row-span-4 min-w-0 grid-rows-subgrid grid-cols-[minmax(0,1fr)] gap-1.5 border-border px-7 py-[1.125rem] not-last:border-r">
+    <div className="grid row-span-4 min-w-0 grid-rows-subgrid grid-cols-[minmax(0,1fr)] gap-1.5 border-border px-7 py-[1.125rem]">
       <span className="flex items-end text-overline">{label}</span>
       {/* 400, deliberately, where the rest of the page's emphasis is 550: at
           30px the size is already the hierarchy, and a heavier numeral here

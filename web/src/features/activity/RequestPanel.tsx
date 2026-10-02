@@ -14,7 +14,6 @@ import { Button } from "@/design-system/actions/Button"
 import { CopyButton } from "@/design-system/actions/CopyButton"
 import { IconButton } from "@/design-system/actions/IconButton"
 import { Chip } from "@/design-system/indicators/Chip"
-import { Dot } from "@/design-system/indicators/Dot"
 import {
   formatCost,
   formatLatency,
@@ -26,18 +25,22 @@ import {
 import { useSurfaces } from "@/shared/hooks/useDeployment"
 import {
   buildTokenComposition,
+  cacheHitFraction,
+  compositionInput,
   computeToolCost,
-  describeFailure,
   describeRowSource,
   describeTool,
   findPricingSelector,
   isImported,
   listToolUsage,
+  rowOutcome,
   sortChargeLines,
-  TOKEN_SEGMENTS,
+  tokenSegments,
   withStatusCode,
 } from "./activityModel"
 import { RoutingPlan } from "./RoutingPlan"
+import { StatusMark } from "./StatusMark"
+import { TokenCompositionBar } from "./TokenCompositionBar"
 
 function Row({
   label,
@@ -82,7 +85,8 @@ function describeRequested(entry: UsageEntry): string {
 }
 
 /**
- * One request, read in full beside the log (or over it, on a phone).
+ * One request, read in full beside the log (or over it, where the log has no
+ * room to spare).
  *
  * Everything the row could not hold: why it failed, how it was routed, where it
  * came from, its token composition, what it cost and why, and how long it took.
@@ -99,7 +103,7 @@ export function RequestPanel({
   onClose,
   onFilter,
   onPriceModel,
-  isFullScreen,
+  isOverlaid,
 }: {
   entry: UsageEntry
   /** "3 / 25": where the request sits in the list the arrows step through. */
@@ -113,8 +117,11 @@ export function RequestPanel({
   onFilter: (filter: "session" | "source" | "model" | "tool") => void
   /** Only for a deployment operator: a price is a deployment-wide write. */
   onPriceModel: ((modelKey: string) => void) | undefined
-  /** Read full screen on a phone, pushed over the list, rather than beside it. */
-  isFullScreen?: boolean
+  /**
+   * Read over the list (a phone's pushed view, a narrow desk's drawer), filling
+   * what holds it, rather than beside it at its own width.
+   */
+  isOverlaid?: boolean
 }) {
   const hasPlayground = useSurfaces()("playground")
   // Focus moves into the panel as it opens, so the keyboard carries on where
@@ -136,6 +143,7 @@ export function RequestPanel({
   const tools = listToolUsage(entry)
   const toolCost = computeToolCost(entry)
   const isImportedRow = isImported(entry)
+  const outcome = rowOutcome(entry)
   const pricingKey = findPricingSelector(entry)
   // No price to cost it at: a request served on an unpriced model, or one the
   // gateway refused for lacking a price. The refusal is told apart by its text,
@@ -147,16 +155,6 @@ export function RequestPanel({
     (entry.error_message ?? "").includes("require_pricing")
   const isUnpriced =
     entry.cost === null && (entry.status === "success" || isPricingRefusal)
-  const segments = composition
-    ? TOKEN_SEGMENTS.map((segment) => ({
-        ...segment,
-        value: composition[segment.key],
-      })).filter((segment) => segment.value > 0)
-    : []
-  const cacheHit = composition
-    ? composition.cacheRead /
-      Math.max(1, composition.total - composition.output)
-    : 0
 
   return (
     <aside
@@ -164,7 +162,7 @@ export function RequestPanel({
       tabIndex={-1}
       aria-label="Request details"
       className={`flex min-h-0 flex-col bg-surface ${
-        isFullScreen
+        isOverlaid
           ? "h-full w-full"
           : "h-full w-[26.25rem] shrink-0 border-l border-control-border"
       }`}
@@ -198,9 +196,9 @@ export function RequestPanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-[1.125rem] overflow-y-auto px-5 pt-3 pb-5">
-        {entry.status === "error" ? (
+        {outcome.kind === "failed" ? (
           <p className="border border-danger bg-danger-subtle px-3 py-2 text-sm break-words text-danger">
-            {withStatusCode(entry.status_code, describeFailure(entry))}
+            {withStatusCode(entry.status_code, outcome.note)}
             {entry.error_message ? `: ${entry.error_message}` : ""}
           </p>
         ) : null}
@@ -212,23 +210,12 @@ export function RequestPanel({
             {formatUtcDateTime(entry.timestamp)}
           </Row>
           <Row label="Status">
-            {entry.status === "success" ? (
-              <span className="flex items-center gap-2">
-                <Dot className="bg-success" />
-                {withStatusCode(entry.status_code, "Succeeded")}
-              </span>
-            ) : (
-              <span
-                className={`flex items-center gap-2 ${entry.status === "error" ? "text-danger" : "text-muted"}`}
-              >
-                <Dot
-                  className={
-                    entry.status === "error" ? "bg-danger" : "bg-text-subtle"
-                  }
-                />
-                {withStatusCode(entry.status_code, describeFailure(entry))}
-              </span>
-            )}
+            <StatusMark kind={outcome.kind}>
+              {withStatusCode(
+                entry.status_code,
+                outcome.kind === "success" ? "Succeeded" : outcome.note,
+              )}
+            </StatusMark>
           </Row>
           {showsMember && entry.user_id ? (
             <Row label="Member">
@@ -327,18 +314,11 @@ export function RequestPanel({
 
         {composition ? (
           <Group title="Tokens">
-            <div className="mb-2 flex h-1.5 gap-px">
-              {segments.map((segment) => (
-                <span
-                  key={segment.key}
-                  className={segment.fill}
-                  style={{
-                    flex: Math.max(segment.value, composition.total * 0.01),
-                  }}
-                />
-              ))}
-            </div>
-            {segments.map((segment) => (
+            <TokenCompositionBar
+              composition={composition}
+              className="mb-2 h-1.5"
+            />
+            {tokenSegments(composition).map((segment) => (
               <Row
                 key={segment.key}
                 isMono
@@ -355,7 +335,15 @@ export function RequestPanel({
             <Row label="Total" isMono>
               {formatNumber(composition.total)}{" "}
               <span className="text-subtle">
-                · {formatPct(cacheHit, 0)} cache hit
+                ·{" "}
+                {formatPct(
+                  cacheHitFraction(
+                    composition.cacheRead,
+                    compositionInput(composition),
+                  ),
+                  0,
+                )}{" "}
+                cache hit
               </span>
             </Row>
           </Group>
@@ -411,13 +399,17 @@ export function RequestPanel({
             </Row>
           ) : null}
           {entry.pricing_breakdown?.length
-            ? sortChargeLines(entry.pricing_breakdown).map((line) => {
+            ? sortChargeLines(entry.pricing_breakdown).map((line, index) => {
                 // A line of neither known shape was written by an older
                 // gateway. Its cost is still real, so it is shown with no rate
                 // rather than through a rate format that would print "NaN".
                 const meter = String(line.meter ?? "")
                 return (
-                  <Row key={meter} label={meter.replaceAll("_", " ")} isMono>
+                  <Row
+                    key={`${meter}-${index}`}
+                    label={meter.replaceAll("_", " ")}
+                    isMono
+                  >
                     {isUnitChargeLine(line)
                       ? `${formatNumber(line.units)} at ${formatUnitRate(line.unit_rate)}, ${formatCost(line.cost)}`
                       : isTokenChargeLine(line)

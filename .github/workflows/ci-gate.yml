@@ -1,0 +1,74 @@
+name: CI Gate
+
+# The one check a ruleset requires. Almost every workflow here is path-filtered,
+# and a required check whose workflow never starts blocks the pull request
+# forever, so requiring them one by one would strand every docs-only change.
+# This job always runs: it waits for every other workflow run on the pull
+# request's head commit to finish and fails if any of them did. A run skipped
+# by its path filter never exists, so it is neither waited for nor counted.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  actions: read
+
+concurrency:
+  group: ci-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: CI gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const sha = context.payload.pull_request.head.sha
+            const self = context.runId
+            const passing = new Set(["success", "skipped", "neutral"])
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+            // Workflow runs for one event are created together, but give a slow
+            // start a minute before trusting that the set is complete.
+            await sleep(60_000)
+            let settledPolls = 0
+            for (;;) {
+              const runs = (
+                await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  head_sha: sha,
+                  per_page: 100,
+                })
+              ).filter((run) => run.id !== self && run.event.startsWith("pull_request"))
+              // A rerun or a newer attempt of the same workflow replaces the older one.
+              const latest = new Map()
+              for (const run of runs) {
+                const seen = latest.get(run.workflow_id)
+                if (!seen || run.run_attempt > seen.run_attempt || run.id > seen.id) {
+                  latest.set(run.workflow_id, run)
+                }
+              }
+              const pending = [...latest.values()].filter((run) => run.status !== "completed")
+              if (pending.length === 0) {
+                // Two quiet polls in a row, so a workflow created late is not missed.
+                settledPolls += 1
+                if (settledPolls >= 2) {
+                  const failed = [...latest.values()].filter((run) => !passing.has(run.conclusion))
+                  for (const run of latest.values()) {
+                    core.info(`${run.conclusion}: ${run.name} ${run.html_url}`)
+                  }
+                  if (failed.length > 0) {
+                    core.setFailed(`Failed: ${failed.map((run) => run.name).join(", ")}`)
+                  }
+                  return
+                }
+              } else {
+                settledPolls = 0
+                core.info(`Waiting on: ${pending.map((run) => run.name).join(", ")}`)
+              }
+              await sleep(30_000)
+            }

@@ -272,12 +272,33 @@ def test_refinements_narrow_the_summary(client: TestClient, master_key_header: d
         # The token and latency columns are 32-bit; past that is a 422, not a database error.
         [("tokens_gt", str(2**31))],
         [("latency_ms_gt", str(2**31))],
+        # Past the cost column's range, or not finite, a threshold cannot be bound to it.
+        [("cost_gt", "1e12")],
+        [("cost_gt", "1e30")],
+        [("cost_gt", "inf")],
+        [("cost_gt", "nan")],
     ],
 )
 def test_refinements_are_validated(
     client: TestClient, master_key_header: dict[str, str], params: list[tuple[str, str]]
 ) -> None:
     assert client.get(USAGE, params=tuple(params), headers=master_key_header).status_code == 422
+
+
+def test_the_largest_cost_threshold_is_read(client: TestClient, master_key_header: dict[str, str]) -> None:
+    response = client.get(USAGE, params={"cost_gt": "999999999999"}, headers=master_key_header)
+    assert response.status_code == 200, response.text
+    assert response.json() == []
+
+
+@pytest.mark.parametrize("cost_gt", ["1e30", "Infinity", "NaN"])
+def test_a_bulk_cost_threshold_is_validated(
+    client: TestClient, master_key_header: dict[str, str], cost_gt: str
+) -> None:
+    # Raw JSON: Python's encoder writes inf and nan as bare Infinity and NaN, which is what a client could send.
+    body = f'{{"by_filter": true, "cost_gt": {cost_gt}}}'
+    headers = {**master_key_header, "Content-Type": "application/json"}
+    assert client.request("DELETE", USAGE, content=body, headers=headers).status_code == 422
 
 
 def test_bulk_set_price_by_filter_honors_the_refinements(
@@ -421,11 +442,12 @@ def test_groups_by_policy_match_the_policy_filters(client: TestClient, master_ke
 def test_groups_by_alias_hold_only_the_names_that_were_aliases(
     client: TestClient, master_key_header: dict[str, str], db_session: Session
 ) -> None:
-    """A name that is the model, in either form, or the routing policy is not an alias."""
+    """A name that is the model, in any form, or the routing policy is not an alias."""
     _row(db_session, "fast-1", requested_model="fast")
     _row(db_session, "fast-2", timestamp=T0 + timedelta(minutes=1), requested_model="fast")
     _row(db_session, "bare", requested_model="claude-haiku-4-5")
     _row(db_session, "qualified", requested_model="anthropic:claude-haiku-4-5")
+    _row(db_session, "slashed", requested_model="anthropic/claude-haiku-4-5")
     _row(db_session, "policy", requested_model="cheap-first", policy_name="cheap-first")
     _row(db_session, "unnamed")
     db_session.commit()
@@ -462,3 +484,31 @@ def test_groups_list_the_busiest_first_when_asked(client: TestClient, master_key
 
 def test_groups_require_a_known_dimension(client: TestClient, master_key_header: dict[str, str]) -> None:
     assert client.get(f"{USAGE}/groups", params={"group_by": "endpoint"}, headers=master_key_header).status_code == 422
+
+
+@pytest.mark.parametrize("operation", ["delete", "set-price"])
+def test_a_bulk_selection_by_filter_reads_the_window_its_sorted_count_did(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session, operation: str
+) -> None:
+    """A count sorted by cost with no start reads 30 days, so the mutation it sized touches no older row."""
+    imported = {"source": "claude_code", "counts_toward_budget": False, "cost": None}
+    _row(db_session, "old", **imported)
+    _row(db_session, "recent", timestamp=datetime.now(UTC) - timedelta(days=1), **imported)
+    db_session.commit()
+
+    counted = client.get(
+        f"{USAGE}/count", params={"sort": "cost", "counts_toward_budget": "false"}, headers=master_key_header
+    ).json()
+    assert counted == {"total": 1}
+    if operation == "delete":
+        response = client.request("DELETE", USAGE, json={"by_filter": True, "sort": "cost"}, headers=master_key_header)
+        assert response.json() == {"deleted": 1}
+        assert {row["id"] for row in client.get(USAGE, headers=master_key_header).json()} == {"old"}
+    else:
+        rates = {"input_price_per_million": 1.0, "output_price_per_million": 1.0}
+        response = client.post(
+            f"{USAGE}/set-price", json={"by_filter": True, "sort": "cost", **rates}, headers=master_key_header
+        )
+        assert response.json()["matched"] == 1
+        costs = {row["id"]: row["cost"] for row in client.get(USAGE, headers=master_key_header).json()}
+        assert costs == {"old": None, "recent": pytest.approx(0.00011)}

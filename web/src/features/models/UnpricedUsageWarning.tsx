@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router"
 import { useState } from "react"
-import { TextButton } from "@/design-system/actions/TextButton"
+import { TEXT_LINK_CLASS, TextButton } from "@/design-system/actions/TextButton"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { isDeploymentOperator } from "@/features/organization/roles"
 import { useOrganizationContext } from "@/shared/api/organizations"
@@ -102,7 +102,7 @@ export function UnpricedUsageWarning() {
               range: "24h",
               source: "gateway",
             }}
-            className="text-sm text-link underline-offset-2 hover:underline focus-visible:otari-focus-ring"
+            className={`text-sm ${TEXT_LINK_CLASS}`}
           >
             View them
           </Link>

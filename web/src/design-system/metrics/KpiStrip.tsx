@@ -8,6 +8,20 @@ const COLUMNS = {
   5: "grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5",
 } as const
 
+// The vertical rules, one per breakpoint of the column counts above, so a rule
+// only ever stands between two cells on the same row. A cell draws its rule on
+// its left and the first cell of each row draws none: a right-hand rule on
+// every cell but the last put one at the end of each wrapped row, against
+// nothing. The sets each breakpoint names are disjoint, and a wider breakpoint
+// comes later in the stylesheet, so each one overrides the narrower one cleanly.
+// The widest is one row, because `columns` is the number of cells.
+const DIVIDERS = [
+  "[&>*:nth-child(2n)]:border-l",
+  "sm:[&>*:nth-child(3n+1)]:border-l-0",
+  "sm:[&>*:not(:nth-child(3n+1))]:border-l",
+  "xl:[&>*:not(:first-child)]:border-l",
+].join(" ")
+
 /**
  * Equal cells divided by vertical rules, between horizontal ones. Equal rather
  * than content-sized so the divisions land on a rhythm rather than wherever the
@@ -33,7 +47,7 @@ export function KpiStrip({
       // other. Without it a label that wraps makes its own cell taller and
       // drops its value below the others'.
       className="border-y border-border"
-      contentClassName={COLUMNS[columns]}
+      contentClassName={`${COLUMNS[columns]} ${DIVIDERS}`}
       // The graphic row is dropped uniformly in the empty state, so the strip
       // gets shorter without any cell changing shape relative to its neighbors.
       data-empty={isEmpty ? "true" : undefined}

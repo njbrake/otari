@@ -9,11 +9,7 @@ import { useIsPhone } from "@/shared/hooks/useIsPhone"
 import { ActivityDesk } from "./ActivityDesk"
 import { type ActivityDialog, ActivityDialogs } from "./ActivityDialogs"
 import { ActivityPhone } from "./ActivityPhone"
-import {
-  ACTIVITY_URL_DEFAULTS,
-  type ColumnKey,
-  toSelection,
-} from "./activityQuery"
+import { ACTIVITY_URL_DEFAULTS, type ColumnKey } from "./activityQuery"
 import { SavedViewsMenu } from "./SavedViewsMenu"
 import { useActivityActions } from "./useActivityActions"
 import { useActivityLog } from "./useActivityLog"
@@ -70,7 +66,8 @@ export function ActivityPage() {
       current={views.current}
       matching={views.matching}
       isDirty={views.isDirty}
-      canShare={viewer.isManager}
+      canShare={viewer.canShareViews}
+      canSave={viewer.workspaceId !== ""}
       onApply={views.apply}
       onSave={views.save}
       onDelete={(view) => views.remove(view.id)}
@@ -80,14 +77,12 @@ export function ActivityPage() {
     />
   )
 
-  // ---------- the operator's writes ----------
   const deleteUsage = useDeleteUsage()
   const recost = useSetUsagePrice()
   const setModelPrice = useSetPricing()
   const onPriceModel = viewer.isOperator
     ? (modelKey: string) => setDialog({ kind: "price", modelKey })
     : undefined
-  const selection = toSelection(log.filters)
 
   const empty = (
     <EmptyMessage>
@@ -132,8 +127,14 @@ export function ActivityPage() {
           expanded={expanded}
           onExpanded={setExpanded}
           onPriceModel={onPriceModel}
+          // The count and the rows it describes are taken together as the
+          // dialog opens, so a window that moves on does not move the write.
           onManageImported={(kind) =>
-            setDialog({ kind, count: log.importedCount })
+            setDialog({
+              kind,
+              count: log.importedCount,
+              selection: log.importedSelection,
+            })
           }
           empty={empty}
         />
@@ -158,13 +159,13 @@ export function ActivityPage() {
             { onSuccess: () => setDialog(undefined) },
           )
         }
-        onRecost={(rates) =>
+        onRecost={(selection, rates) =>
           recost.mutateAsync(
             { ...selection, ...rates },
             { onSuccess: () => setDialog(undefined) },
           )
         }
-        onDelete={() =>
+        onDelete={(selection) =>
           deleteUsage.mutate(selection, {
             onSuccess: () => setDialog(undefined),
           })

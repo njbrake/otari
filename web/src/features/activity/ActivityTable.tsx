@@ -16,7 +16,6 @@ import { Fragment, type ReactNode } from "react"
 import { FiChevronDown, FiChevronRight } from "react-icons/fi"
 import type { UsageActivityGroup, UsageEntry } from "@/client"
 import { TextButton } from "@/design-system/actions/TextButton"
-import { Dot } from "@/design-system/indicators/Dot"
 import {
   formatLatency,
   formatNumber,
@@ -36,9 +35,14 @@ import {
   TimeCell,
   TokensCell,
 } from "./activityCells"
-import { buildTokenComposition, describeRowSource } from "./activityModel"
+import {
+  buildTokenComposition,
+  cacheHitFraction,
+  describeRowSource,
+} from "./activityModel"
 import { type ColumnKey, STATUS_LABELS, type Status } from "./activityQuery"
 import { GROUP_PREVIEW } from "./activityRows"
+import { StatusMark } from "./StatusMark"
 import { ValueFilter } from "./ValueFilter"
 
 const CELL = "relative px-4 py-1.5 align-middle"
@@ -305,7 +309,7 @@ export function ActivityTable({
   const groupRow = (view: ActivityGroupView) => {
     const { group } = view
     const billed = Math.max(0, group.cost - group.imported_cost)
-    const cached = group.cache_read_tokens / Math.max(1, group.input_tokens)
+    const cached = cacheHitFraction(group.cache_read_tokens, group.input_tokens)
     const models =
       groupColumn === "model"
         ? ""
@@ -364,15 +368,16 @@ export function ActivityTable({
           return (
             <td key={column} className={CELL}>
               {group.errors ? (
-                <span className="flex items-center gap-2 text-mono-caption text-danger">
-                  <Dot className="bg-danger" />
+                <StatusMark kind="failed" className="text-mono-caption">
                   {formatNumber(group.errors)} failed
-                </span>
+                </StatusMark>
               ) : (
-                <span className="flex items-center gap-2 text-mono-caption text-subtle">
-                  <Dot className="bg-success" />
+                <StatusMark
+                  kind="success"
+                  className="text-mono-caption text-subtle"
+                >
                   none failed
-                </span>
+                </StatusMark>
               )}
             </td>
           )

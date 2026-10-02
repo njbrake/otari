@@ -12,7 +12,8 @@ import { useSurfaces } from "@/shared/hooks/useDeployment"
  *
  * - A member reads their own requests; the server narrows the log for them.
  * - A manager of the workspace (an organization or workspace owner or admin)
- *   reads everyone's, can narrow to their own, and can share a view.
+ *   reads everyone's requests in it, can narrow to their own, and can share a
+ *   view.
  * - A deployment operator also watches in-flight requests, manages imported
  *   rows and sets model prices, which are deployment-wide writes.
  *
@@ -39,6 +40,7 @@ export function useActivityViewer() {
   return {
     isOperator,
     isManager,
+    canShareViews: isManager,
     /** The id the caller's own requests carry, once the roster has answered. */
     ownUserId,
     /** Whether the roster that names it is still on its way. */

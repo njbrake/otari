@@ -25,10 +25,15 @@ reading of the same rows:
   member or viewer reads the ones they actively belong to. A member who belongs
   to no workspace gets an empty page, not a refusal: the surface is theirs and
   simply has nothing in it yet.
-* **Whose requests** follows the same split: an owner, an admin or a superuser
-  reads everyone's, and a member or viewer reads only the rows billed to them
+* **Whose requests** follows the workspace management rule
+  (``has_workspace_management_access``): in a workspace the caller manages, as
+  an owner or admin of the organization or of that workspace, they read
+  everyone's rows, and anywhere else only the rows billed to them
   (``users.user_id`` is their identity's id, the row their own keys bill
-  through), even in a workspace they share with other people.
+  through), even in a workspace they share with other people. Managing one
+  workspace widens that workspace and no other, so a workspace admin reading
+  across the organization sees the rest of it as a member does. A superuser
+  reads everyone's rows in a workspace they name.
 * **``workspace_id`` still narrows, and cannot widen.** It is put through
   ``resolve_workspace_in_organization``, the same resolver every other
   workspace-scoped read uses, so a workspace outside the caller's scope answers
@@ -38,80 +43,55 @@ Reads only. Deleting rows and repricing them stay deployment-wide, as does
 ``/api/v1/usage/in-flight``: its registry entries carry no workspace at all
 (see ``usage.list_in_flight``), so there is nothing there to scope yet.
 
-Every aggregation is the one ``usage.py`` already runs. This module contributes
-route declarations and a scope predicate, and nothing that could compute a
+Every aggregation is the one ``usage.py`` runs, through the same read service.
+This module contributes route declarations and a scope predicate, and nothing that could compute a
 different answer to the same question.
 """
 
 import uuid
-from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import ColumnElement, and_, false, func, select
+from sqlalchemy import ColumnElement, and_, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
-from gateway.api.deps import CurrentIdentity, get_db, verify_master_key
-from gateway.api.routes.usage import (
-    _API_KEY_MULTI_DESC,
-    _COUNT_SORT_DESC,
-    _COUNTS_DESC,
-    _DIMENSIONS_DESC,
-    _END_DESC,
-    _ENDPOINT_DESC,
-    _GROUP_BY_DESC,
-    _GROUP_ORDER_DESC,
-    _GROUP_SEARCH_DESC,
-    _INCLUDE_ABSORBED_DESC,
-    _INCLUDE_P95_DESC,
-    _MAX_REQUEST_GROUPS,
-    _MODEL_MULTI_DESC,
-    _ORDER_DESC,
-    _PRICED_DESC,
-    _PROVIDER_DESC,
-    _REQUEST_GROUP_DESC,
-    _REQUEST_ID_DESC,
-    _REQUESTED_MODEL_DESC,
-    _ROW_ID_DESC,
-    _SEARCH_DESC,
-    _SORT_DESC,
-    _SOURCE_DESC,
-    _SOURCE_LABEL_DESC,
-    _START_DESC,
-    _STATUS_CODE_DESC,
-    _STATUS_DESC,
-    _SUMMARY_BUCKET_DESC,
-    _TOOL_DESC,
-    _USER_MULTI_DESC,
-    _WORKSPACE_DESC,
+from gateway.api.deps import CurrentIdentity, UsageReadServiceDep, get_db, verify_master_key
+from gateway.api.routes._usage_common import (
+    COUNT_SORT_DESC,
+    DIMENSIONS_DESC,
+    GROUP_BY_DESC,
+    GROUP_ORDER_DESC,
+    GROUP_SEARCH_DESC,
+    INCLUDE_P95_DESC,
+    ORDER_DESC,
+    SORT_DESC,
+    SUMMARY_BUCKET_DESC,
+    UsageListFilters,
+    UsageReadFilters,
+    summary_window,
+)
+from gateway.api.routes.usage import UsageCount, UsageEntry
+from gateway.core.sql import UsageBucketGrain
+from gateway.core.surface import Surface
+from gateway.core.usage_filters import MAX_SEARCH_LENGTH, SortOrder, UsageSort, list_window, resolve_window
+from gateway.models.tenancy import User as TenancyUser
+from gateway.models.tenancy import Workspace
+from gateway.models.usage import UsageLog
+from gateway.schemas.usage import (
+    ActivityGroupBy,
+    ActivityGroupOrder,
     Bucket,
     SeriesGroupBy,
     SummaryDimension,
-    ToolFilter,
-    UsageCount,
-    UsageEntry,
+    UsageActivityGroups,
     UsageGroupedSeries,
     UsageSummary,
-    _activity_groups_response,
-    _grouped_series_response,
-    _list_usage_entries,
-    _list_window,
-    _resolve_window,
-    _summary_context,
-    _summary_response,
-    _usage_filters,
-    _usage_refinements,
 )
-from gateway.core.sql import MAX_FILTER_VALUES, UsageBucketGrain
-from gateway.core.surface import Surface
-from gateway.core.usage_filters import MAX_SEARCH_LENGTH, SortOrder, UsageRefinements, UsageSort
-from gateway.models.tenancy import MANAGEMENT_ROLES, Workspace
-from gateway.models.tenancy import User as TenancyUser
-from gateway.models.usage import UsageLog
-from gateway.schemas.usage import ActivityGroupBy, ActivityGroupOrder, UsageActivityGroups
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import (
+    has_workspace_management_access,
+    resolve_managed_workspace_ids,
     resolve_visible_workspace_scope,
     resolve_workspace_in_organization,
 )
@@ -128,18 +108,6 @@ router = APIRouter(
 
 # Hosted only: on standalone the organization is the deployment, so ``usage`` already shows it.
 SURFACE = Surface("organization_usage", standalone=False)
-
-
-async def _reads_everyones_requests(
-    user: TenancyUser,
-    organization_id: uuid.UUID,
-    organizations: OrganizationService,
-) -> bool:
-    """Whether this caller reads every person's requests in their scope, or only their own."""
-    if user.is_superuser:
-        return True
-    membership = await organizations.members.get_active_by_organization_and_user(organization_id, user.id)
-    return membership is not None and membership.role in MANAGEMENT_ROLES
 
 
 def _own_requests(user: TenancyUser) -> ColumnElement[bool]:
@@ -176,11 +144,11 @@ async def _scope_condition(
         # the caller is not a member of, which is what keeps the parameter from
         # being an existence oracle either way.
         #
-        # The equality returned below duplicates the one ``_usage_filters`` builds
+        # The equality returned below duplicates the one ``UsageReadFilters.conditions`` builds
         # from the same parameter, and that is deliberate: the scope has to be
         # sufficient on its own, so a later change to how the filter is applied
         # cannot leave a request scoped by nothing.
-        await resolve_workspace_in_organization(
+        workspace = await resolve_workspace_in_organization(
             db,
             user=user,
             workspace_id=workspace_id,
@@ -188,7 +156,9 @@ async def _scope_condition(
             organizations=organizations,
         )
         workspace_rows = col(UsageLog.workspace_id) == workspace_id
-        if await _reads_everyones_requests(user, organization.id, organizations):
+        if user.is_superuser or await has_workspace_management_access(
+            db, user=user, workspace=workspace, organizations=organizations
+        ):
             return workspace_rows
         return and_(workspace_rows, _own_requests(user))
 
@@ -201,46 +171,23 @@ async def _scope_condition(
         # Belongs to no workspace yet. An empty result, and deliberately not a
         # 403: nothing was refused, there is simply nothing here.
         return false()
-    # Not the management arm above, so a member: their own requests, in their workspaces.
-    return and_(col(UsageLog.workspace_id).in_(scope.workspace_ids), _own_requests(user))
+    # Not the management arm above, so a member of the organization: everyone's
+    # requests in the workspaces they manage, and their own in the rest of theirs.
+    visible = col(UsageLog.workspace_id).in_(scope.workspace_ids)
+    managed = await resolve_managed_workspace_ids(db, user=user, scope=scope)
+    if not managed:
+        return and_(visible, _own_requests(user))
+    return and_(visible, or_(col(UsageLog.workspace_id).in_(managed), _own_requests(user)))
 
 
 @router.get("")
 async def list_organization_usage(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
-    refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
-    start_date: datetime | None = Query(default=None, description=_START_DESC),
-    end_date: datetime | None = Query(default=None, description=_END_DESC),
-    user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
-    status: str | None = Query(default=None, description=_STATUS_DESC),
-    status_code: int | None = Query(default=None, description=_STATUS_CODE_DESC),
-    model: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_MODEL_MULTI_DESC)] = None,
-    endpoint: str | None = Query(default=None, description=_ENDPOINT_DESC),
-    provider: str | None = Query(default=None, description=_PROVIDER_DESC),
-    source: str | None = Query(default=None, description=_SOURCE_DESC),
-    source_label: str | None = Query(default=None, description=_SOURCE_LABEL_DESC),
-    api_key_id: Annotated[
-        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_API_KEY_MULTI_DESC)
-    ] = None,
-    priced: bool | None = Query(default=None, description=_PRICED_DESC),
-    tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
-    counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
-    request_group_id: Annotated[
-        list[str] | None, Query(max_length=_MAX_REQUEST_GROUPS, description=_REQUEST_GROUP_DESC)
-    ] = None,
-    workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
-    q: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=_SEARCH_DESC)] = None,
-    row_id: Annotated[
-        list[str] | None, Query(alias="id", max_length=MAX_FILTER_VALUES, description=_ROW_ID_DESC)
-    ] = None,
-    request_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUEST_ID_DESC)] = None,
-    requested_model: Annotated[
-        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUESTED_MODEL_DESC)
-    ] = None,
-    include_absorbed: Annotated[bool, Query(description=_INCLUDE_ABSORBED_DESC)] = True,
-    sort: Annotated[UsageSort, Query(description=_SORT_DESC)] = "timestamp",
-    order: Annotated[SortOrder, Query(description=_ORDER_DESC)] = "desc",
+    reads: UsageReadServiceDep,
+    filters: Annotated[UsageListFilters, Depends()],
+    sort: Annotated[UsageSort, Query(description=SORT_DESC)] = "timestamp",
+    order: Annotated[SortOrder, Query(description=ORDER_DESC)] = "desc",
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
 ) -> list[UsageEntry]:
@@ -250,71 +197,19 @@ async def list_organization_usage(
     JSON array, same separate ``/count`` for a paginator's total, confined to
     what the caller's membership lets them see. Scope is never a parameter here.
     """
-    scope = await _scope_condition(db, user=identity, workspace_id=workspace_id)
-    start_date, end_date = _list_window(start_date, end_date, q=q, sort=sort)
-    conditions = _usage_filters(
-        start_date=start_date,
-        end_date=end_date,
-        user_id=user_id,
-        status=status,
-        status_code=status_code,
-        model=model,
-        endpoint=endpoint,
-        provider=provider,
-        source=source,
-        source_label=source_label,
-        api_key_id=api_key_id,
-        priced=priced,
-        tool=tool,
-        counts_toward_budget=counts_toward_budget,
-        request_group_id=request_group_id,
-        workspace_id=workspace_id,
-        q=q,
-        row_id=row_id,
-        request_id=request_id,
-        requested_model=requested_model,
-        include_absorbed=include_absorbed,
-        refine=refine,
-        scope=scope,
-    )
-    return await _list_usage_entries(db, conditions, scope=scope, skip=skip, limit=limit, sort=sort, order=order)
+    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    start_date, end_date = list_window(filters.start_date, filters.end_date, q=filters.q, sort=sort)
+    conditions = filters.conditions(start_date=start_date, end_date=end_date, scope=scope)
+    rows = await reads.page(conditions, scope=scope, sort=sort, order=order, skip=skip, limit=limit)
+    return [UsageEntry.from_page_row(row) for row in rows]
 
 
 @router.get("/count")
 async def count_organization_usage(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
-    refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
-    start_date: datetime | None = Query(default=None, description=_START_DESC),
-    end_date: datetime | None = Query(default=None, description=_END_DESC),
-    user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
-    status: str | None = Query(default=None, description=_STATUS_DESC),
-    status_code: int | None = Query(default=None, description=_STATUS_CODE_DESC),
-    model: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_MODEL_MULTI_DESC)] = None,
-    endpoint: str | None = Query(default=None, description=_ENDPOINT_DESC),
-    provider: str | None = Query(default=None, description=_PROVIDER_DESC),
-    source: str | None = Query(default=None, description=_SOURCE_DESC),
-    source_label: str | None = Query(default=None, description=_SOURCE_LABEL_DESC),
-    api_key_id: Annotated[
-        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_API_KEY_MULTI_DESC)
-    ] = None,
-    priced: bool | None = Query(default=None, description=_PRICED_DESC),
-    tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
-    counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
-    request_group_id: Annotated[
-        list[str] | None, Query(max_length=_MAX_REQUEST_GROUPS, description=_REQUEST_GROUP_DESC)
-    ] = None,
-    workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
-    q: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=_SEARCH_DESC)] = None,
-    row_id: Annotated[
-        list[str] | None, Query(alias="id", max_length=MAX_FILTER_VALUES, description=_ROW_ID_DESC)
-    ] = None,
-    request_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUEST_ID_DESC)] = None,
-    requested_model: Annotated[
-        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUESTED_MODEL_DESC)
-    ] = None,
-    sort: Annotated[UsageSort, Query(description=_COUNT_SORT_DESC)] = "timestamp",
-    include_absorbed: Annotated[bool, Query(description=_INCLUDE_ABSORBED_DESC)] = True,
+    filters: Annotated[UsageListFilters, Depends()],
+    sort: Annotated[UsageSort, Query(description=COUNT_SORT_DESC)] = "timestamp",
 ) -> UsageCount:
     """Total rows matching these filters, within the caller's scope.
 
@@ -325,32 +220,9 @@ async def count_organization_usage(
     is not narrowed to imported rows here: that narrowing sizes the bulk mutations, and
     this surface has none. So this total keeps matching the list beside it.
     """
-    start_date, end_date = _list_window(start_date, end_date, q=q, sort=sort)
-    conditions = _usage_filters(
-        start_date=start_date,
-        end_date=end_date,
-        user_id=user_id,
-        status=status,
-        status_code=status_code,
-        model=model,
-        endpoint=endpoint,
-        provider=provider,
-        source=source,
-        source_label=source_label,
-        api_key_id=api_key_id,
-        priced=priced,
-        tool=tool,
-        counts_toward_budget=counts_toward_budget,
-        request_group_id=request_group_id,
-        workspace_id=workspace_id,
-        q=q,
-        row_id=row_id,
-        request_id=request_id,
-        requested_model=requested_model,
-        include_absorbed=include_absorbed,
-        refine=refine,
-        scope=await _scope_condition(db, user=identity, workspace_id=workspace_id),
-    )
+    start_date, end_date = list_window(filters.start_date, filters.end_date, q=filters.q, sort=sort)
+    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    conditions = filters.conditions(start_date=start_date, end_date=end_date, scope=scope)
     stmt: Any = select(func.count()).select_from(UsageLog).where(*conditions)
     return UsageCount(total=(await db.execute(stmt)).scalar_one())
 
@@ -359,31 +231,11 @@ async def count_organization_usage(
 async def organization_usage_summary(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
-    refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
-    start_date: datetime | None = Query(default=None, description=_START_DESC),
-    end_date: datetime | None = Query(default=None, description=_END_DESC),
-    user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
-    status: str | None = Query(default=None, description=_STATUS_DESC),
-    status_code: int | None = Query(default=None, description=_STATUS_CODE_DESC),
-    model: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_MODEL_MULTI_DESC)] = None,
-    endpoint: str | None = Query(default=None, description=_ENDPOINT_DESC),
-    provider: str | None = Query(default=None, description=_PROVIDER_DESC),
-    source: str | None = Query(default=None, description=_SOURCE_DESC),
-    source_label: str | None = Query(default=None, description=_SOURCE_LABEL_DESC),
-    api_key_id: Annotated[
-        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_API_KEY_MULTI_DESC)
-    ] = None,
-    priced: bool | None = Query(default=None, description=_PRICED_DESC),
-    tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
-    counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
-    workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
-    q: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=_SEARCH_DESC)] = None,
-    requested_model: Annotated[
-        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUESTED_MODEL_DESC)
-    ] = None,
-    bucket: UsageBucketGrain = Query(default="day", description=_SUMMARY_BUCKET_DESC),
-    dimensions: list[SummaryDimension] | None = Query(default=None, description=_DIMENSIONS_DESC),
-    include_p95: Annotated[bool, Query(description=_INCLUDE_P95_DESC)] = False,
+    reads: UsageReadServiceDep,
+    filters: Annotated[UsageReadFilters, Depends()],
+    bucket: UsageBucketGrain = Query(default="day", description=SUMMARY_BUCKET_DESC),
+    dimensions: list[SummaryDimension] | None = Query(default=None, description=DIMENSIONS_DESC),
+    include_p95: Annotated[bool, Query(description=INCLUDE_P95_DESC)] = False,
 ) -> UsageSummary:
     """Aggregate spend, tokens and request volume for the caller's organization.
 
@@ -393,36 +245,13 @@ async def organization_usage_summary(
     caller reads. The breakdown by user names the people inside the caller's own
     scope, which is the roster they can already read.
     """
-    start, end, conditions, totals = await _summary_context(
-        db,
-        start_date=start_date,
-        end_date=end_date,
-        user_id=user_id,
-        status=status,
-        status_code=status_code,
-        model=model,
-        endpoint=endpoint,
-        provider=provider,
-        source=source,
-        source_label=source_label,
-        api_key_id=api_key_id,
-        priced=priced,
-        tool=tool,
-        counts_toward_budget=counts_toward_budget,
-        workspace_id=workspace_id,
-        q=q,
-        requested_model=requested_model,
-        grid=bucket if bucket == "5min" else None,
-        refine=refine,
-        scope=await _scope_condition(db, user=identity, workspace_id=workspace_id),
-    )
-    return await _summary_response(
-        db,
+    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    start, end = summary_window(filters, grid=bucket if bucket == "5min" else None)
+    return await reads.summary(
         start=start,
         end=end,
-        conditions=conditions,
-        totals=totals,
-        status=status,
+        conditions=filters.conditions(start_date=start, end_date=end, scope=scope),
+        status=filters.status,
         bucket=bucket,
         dimensions=dimensions,
         include_p95=include_p95,
@@ -433,29 +262,9 @@ async def organization_usage_summary(
 async def organization_usage_series(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
-    refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
+    reads: UsageReadServiceDep,
+    filters: Annotated[UsageReadFilters, Depends()],
     group_by: SeriesGroupBy = Query(description="Dimension to split the series by"),
-    start_date: datetime | None = Query(default=None, description=_START_DESC),
-    end_date: datetime | None = Query(default=None, description=_END_DESC),
-    user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
-    status: str | None = Query(default=None, description=_STATUS_DESC),
-    status_code: int | None = Query(default=None, description=_STATUS_CODE_DESC),
-    model: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_MODEL_MULTI_DESC)] = None,
-    endpoint: str | None = Query(default=None, description=_ENDPOINT_DESC),
-    provider: str | None = Query(default=None, description=_PROVIDER_DESC),
-    source: str | None = Query(default=None, description=_SOURCE_DESC),
-    source_label: str | None = Query(default=None, description=_SOURCE_LABEL_DESC),
-    api_key_id: Annotated[
-        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_API_KEY_MULTI_DESC)
-    ] = None,
-    priced: bool | None = Query(default=None, description=_PRICED_DESC),
-    tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
-    counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
-    workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
-    q: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=_SEARCH_DESC)] = None,
-    requested_model: Annotated[
-        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUESTED_MODEL_DESC)
-    ] = None,
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
 ) -> UsageGroupedSeries:
     """Time series split by one dimension, for the caller's organization.
@@ -465,36 +274,13 @@ async def organization_usage_series(
     dashboard serializes one filter object for both, so a filter one of them
     ignored would make the stacked chart disagree with the tiles beside it.
     """
-    start, end, conditions, totals = await _summary_context(
-        db,
-        start_date=start_date,
-        end_date=end_date,
-        user_id=user_id,
-        status=status,
-        status_code=status_code,
-        model=model,
-        endpoint=endpoint,
-        provider=provider,
-        source=source,
-        source_label=source_label,
-        api_key_id=api_key_id,
-        priced=priced,
-        tool=tool,
-        counts_toward_budget=counts_toward_budget,
-        workspace_id=workspace_id,
-        q=q,
-        requested_model=requested_model,
-        grid=bucket,
-        refine=refine,
-        scope=await _scope_condition(db, user=identity, workspace_id=workspace_id),
-    )
-    return await _grouped_series_response(
-        db,
+    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    start, end = summary_window(filters, grid=bucket)
+    return await reads.grouped_series(
         start=start,
         end=end,
-        conditions=conditions,
-        totals=totals,
-        status=status,
+        conditions=filters.conditions(start_date=start, end_date=end, scope=scope),
+        status=filters.status,
         bucket=bucket,
         group_by=group_by,
     )
@@ -504,31 +290,11 @@ async def organization_usage_series(
 async def organization_usage_activity_groups(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
-    refine: Annotated[UsageRefinements, Depends(_usage_refinements)],
-    group_by: ActivityGroupBy = Query(description=_GROUP_BY_DESC),
-    start_date: datetime | None = Query(default=None, description=_START_DESC),
-    end_date: datetime | None = Query(default=None, description=_END_DESC),
-    user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
-    status: str | None = Query(default=None, description=_STATUS_DESC),
-    status_code: int | None = Query(default=None, description=_STATUS_CODE_DESC),
-    model: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_MODEL_MULTI_DESC)] = None,
-    endpoint: str | None = Query(default=None, description=_ENDPOINT_DESC),
-    provider: str | None = Query(default=None, description=_PROVIDER_DESC),
-    source: str | None = Query(default=None, description=_SOURCE_DESC),
-    source_label: str | None = Query(default=None, description=_SOURCE_LABEL_DESC),
-    api_key_id: Annotated[
-        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_API_KEY_MULTI_DESC)
-    ] = None,
-    priced: bool | None = Query(default=None, description=_PRICED_DESC),
-    tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
-    counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
-    workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
-    q: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=_SEARCH_DESC)] = None,
-    requested_model: Annotated[
-        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_REQUESTED_MODEL_DESC)
-    ] = None,
-    search: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=_GROUP_SEARCH_DESC)] = None,
-    order: Annotated[ActivityGroupOrder, Query(description=_GROUP_ORDER_DESC)] = "recent",
+    reads: UsageReadServiceDep,
+    filters: Annotated[UsageReadFilters, Depends()],
+    group_by: ActivityGroupBy = Query(description=GROUP_BY_DESC),
+    search: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=GROUP_SEARCH_DESC)] = None,
+    order: Annotated[ActivityGroupOrder, Query(description=GROUP_ORDER_DESC)] = "recent",
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> UsageActivityGroups:
@@ -537,35 +303,15 @@ async def organization_usage_activity_groups(
     The tenant-scoped counterpart of ``GET /api/v1/usage/groups``: the same
     aggregation over the rows this caller may read.
     """
-    start, end = _resolve_window(start_date, end_date)
-    conditions = _usage_filters(
-        start_date=start,
-        end_date=end,
-        user_id=user_id,
-        status=status,
-        status_code=status_code,
-        model=model,
-        endpoint=endpoint,
-        provider=provider,
-        source=source,
-        source_label=source_label,
-        api_key_id=api_key_id,
-        priced=priced,
-        tool=tool,
-        counts_toward_budget=counts_toward_budget,
-        workspace_id=workspace_id,
-        q=q,
-        requested_model=requested_model,
-        refine=refine,
-        scope=await _scope_condition(db, user=identity, workspace_id=workspace_id),
-    )
-    return await _activity_groups_response(
-        db,
+    start, end = resolve_window(filters.start_date, filters.end_date)
+    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    conditions = filters.conditions(start_date=start, end_date=end, scope=scope)
+    return await reads.activity_groups(
         group_by=group_by,
         start=start,
         end=end,
         conditions=conditions,
-        status=status,
+        status=filters.status,
         search=search,
         order=order,
         skip=skip,

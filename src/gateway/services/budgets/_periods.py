@@ -5,6 +5,7 @@ Every surface that caps spend derives its window here, so a calendar-aligned bud
 
 from datetime import UTC, datetime, timedelta
 
+from gateway.core.sql import utc_bound
 from gateway.models.budgets import ALIGN_DAY, ALIGN_MONTH, ALIGN_WEEK
 
 # An upper bound on a period length, in seconds (roughly ten years). Without one,
@@ -71,15 +72,30 @@ def rolled_window(
     return window if window is not None else (now, None)
 
 
-def as_utc(value: datetime | None) -> datetime | None:
-    """Read a stored timestamp as UTC.
+def period_has_ended(period_end: datetime | None, now: datetime) -> bool:
+    """Whether a stored period has run out at ``now``. One that never ends never has."""
+    ends = utc_bound(period_end)
+    return ends is not None and now >= ends
 
-    SQLite hands datetimes back naive, and comparing one to an aware ``now``
-    raises. A stored value is always the UTC it was written as, so say so.
+
+def effective_period(
+    period_end: datetime | None,
+    now: datetime,
+    *,
+    duration: int | None,
+    alignment: str | None,
+) -> tuple[datetime, datetime | None] | None:
+    """The window a ceiling whose stored period ends at ``period_end`` has rolled into at ``now``.
+
+    None while the stored period still runs (or never ends): the stored window is
+    the one in force. Once it has run out, the gate rolls the ceiling into
+    :func:`rolled_window` when a request next reaches it, and a read before then
+    must report what that roll will leave. Raises ``ValueError`` as
+    :func:`period_window` does.
     """
-    if value is None or value.tzinfo is not None:
-        return value
-    return value.replace(tzinfo=UTC)
+    if not period_has_ended(period_end, now):
+        return None
+    return rolled_window(now, duration=duration, alignment=alignment)
 
 
 def budget_window(now: datetime, budget: object) -> tuple[datetime, datetime] | None:
@@ -100,8 +116,9 @@ def budget_window(now: datetime, budget: object) -> tuple[datetime, datetime] | 
 __all__ = [
     "MAX_BUDGET_DURATION_SEC",
     "aligned_window",
-    "as_utc",
     "budget_window",
+    "effective_period",
+    "period_has_ended",
     "period_window",
     "rolled_window",
 ]

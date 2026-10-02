@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import type { ReactElement } from "react"
-import { vi } from "vitest"
+import { expect, vi } from "vitest"
 
 import type {
   InFlightResponse,
@@ -13,6 +13,11 @@ import type {
   UsageTotals,
   WorkspaceSpend,
 } from "@/client"
+import {
+  ACTIVITY_URL_DEFAULTS,
+  type ActivityUrl,
+  type ActivityUrlKey,
+} from "@/features/activity/activityQuery"
 import { API_ROOT } from "@/shared/api/client"
 import { SelectedWorkspaceProvider } from "@/shared/hooks/SelectedWorkspace"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
@@ -143,8 +148,11 @@ interface FetchCall {
   body: string | undefined
 }
 
-/** Who is reading: a member, a manager of the workspace, or a deployment operator. */
-export type Viewer = "member" | "manager" | "operator"
+/**
+ * Who is reading: a member, a manager of the organization, a workspace admin
+ * who is only a member of the organization, or a deployment operator.
+ */
+export type Viewer = "member" | "manager" | "workspaceAdmin" | "operator"
 
 export function mockApi(
   opts: {
@@ -285,7 +293,10 @@ export function mockApi(
       if (url.endsWith(`${API_ROOT}/organizations/me`)) {
         return jsonResponse({
           organization_member_id: "om-1",
-          role: viewer === "member" ? "member" : "owner",
+          role:
+            viewer === "member" || viewer === "workspaceAdmin"
+              ? "member"
+              : "owner",
           status: "active",
           caller: {
             user_id: CALLER_IDENTITY,
@@ -309,7 +320,12 @@ export function mockApi(
             {
               workspace_id: WORKSPACE_ID,
               name: "Production",
-              role: viewer === "member" ? "member" : "owner",
+              role:
+                viewer === "member"
+                  ? "member"
+                  : viewer === "workspaceAdmin"
+                    ? "admin"
+                    : "owner",
             },
           ],
         })
@@ -320,7 +336,12 @@ export function mockApi(
   return { mock, calls }
 }
 
-export function renderPage(ui: ReactElement, route = "/activity") {
+export function renderPage(
+  ui: ReactElement,
+  route = "/activity",
+  /** Entries behind `route`, for where going back lands. */
+  previous: string[] = [],
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -331,7 +352,7 @@ export function renderPage(ui: ReactElement, route = "/activity") {
       </QueryClientProvider>
     </DeploymentProvider>,
     {
-      wrapper: withRouter({ url: route }),
+      wrapper: withRouter({ url: route, previous }),
     },
   )
 }
@@ -352,4 +373,41 @@ export function listCalls(calls: FetchCall[]): string[] {
 export function lastList(calls: FetchCall[]): URLSearchParams {
   const url = listCalls(calls).at(-1) ?? ""
   return new URL(url, "http://localhost").searchParams
+}
+
+/** `useUrlState` over a query string, with the page's defaults. */
+export function urlOf(query: string): ActivityUrl {
+  const params = new URLSearchParams(query)
+  const all = (key: ActivityUrlKey) => {
+    if (!params.has(key)) {
+      return ACTIVITY_URL_DEFAULTS[key] ? [ACTIVITY_URL_DEFAULTS[key]] : []
+    }
+    return params.getAll(key).filter((value) => value.trim() !== "")
+  }
+  return {
+    get: (key) => params.get(key) ?? ACTIVITY_URL_DEFAULTS[key],
+    getAll: all,
+    getNumber: (key) =>
+      Number.parseInt(params.get(key) ?? ACTIVITY_URL_DEFAULTS[key], 10) || 0,
+    patch: () => undefined,
+    back: () => undefined,
+  }
+}
+
+/** The log's row naming `model`, found in the table rather than in a chip. */
+export async function rowOf(model: string) {
+  const table = await screen.findByRole("table", { name: "Activity log" })
+  const [cell] = await within(table).findAllByText(model)
+  const row = cell.closest("tr")
+  if (!row) throw new Error(`no row for ${model}`)
+  return row
+}
+
+/** Waits for the latest list read to carry `key=value`. */
+export async function listCarries(
+  calls: Parameters<typeof lastList>[0],
+  key: string,
+  value: string | null,
+) {
+  await waitFor(() => expect(lastList(calls).get(key)).toBe(value))
 }

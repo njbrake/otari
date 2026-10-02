@@ -464,7 +464,6 @@ ROUTE_DATABASE_IMPORT_BASELINE = (
     "gateway/api/routes/workspace_mcp_servers.py",
     "gateway/api/routes/workspace_member_budget_policies.py",
     "gateway/api/routes/workspace_web_search.py",
-    "gateway/api/routes/workspaces.py",
 )
 
 
@@ -867,6 +866,8 @@ DOMAIN_NAME_BASELINE = (
     "gateway/services/control_plane/",
     "gateway/services/mail/",
     "gateway/services/tenancy/",
+    # Fork-only, usage-and-telemetry like repositories/usage/ above.
+    "gateway/services/usage/",
 )
 # These modules belong to no domain. The set grows when the shared set does.
 SHARED_EXCEPTION_MODULES = ("gateway/exceptions/_base.py", "gateway/exceptions/shared_exceptions.py")

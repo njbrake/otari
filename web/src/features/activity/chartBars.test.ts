@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest"
 
 import type { UsageSeriesPoint } from "@/client"
-import { describeBar, fillBars, phoneBars, windowBars } from "./chartBars"
+import {
+  arrowDelta,
+  barIndexAt,
+  barMax,
+  barSpanMs,
+  describeBar,
+  fillBars,
+  phoneBars,
+  stepBar,
+  windowBars,
+} from "./chartBars"
 
 const HOUR = 3_600_000
 
@@ -83,6 +93,12 @@ describe("phoneBars", () => {
 })
 
 describe("windowBars", () => {
+  it("lays a 5-minute grain at five minutes a bar", () => {
+    const now = Date.parse("2026-01-15T12:00:00Z")
+    const bars = windowBars([], { start: "2026-01-15T11:00:00Z" }, "5min", now)
+    expect(barSpanMs(bars)).toBe(5 * 60_000)
+  })
+
   it("runs a bar per bucket to now for an open-ended window", () => {
     const now = Date.parse("2026-01-15T12:00:00Z")
     const bars = windowBars([], { start: "2026-01-15T11:00:00Z" }, "5min", now)
@@ -95,5 +111,44 @@ describe("describeBar", () => {
     expect(describeBar(5 * 60_000)).toBe("5 min")
     expect(describeBar(2 * HOUR, true)).toBe("2-hour")
     expect(describeBar(48 * HOUR, true)).toBe("2-day")
+  })
+})
+
+describe("bar geometry", () => {
+  const from = Date.parse("2026-01-15T00:00:00Z")
+  const bars = fillBars(
+    [point("2026-01-15T01:00:00Z", 4, 1)],
+    from,
+    from + 3 * HOUR,
+    HOUR,
+  )
+
+  it("reads the bars' length and the tallest bar off the bars", () => {
+    expect(barSpanMs(bars)).toBe(HOUR)
+    expect(barMax(bars)).toBe(4)
+  })
+
+  it("scales an empty chart against one and gives it no length", () => {
+    expect(barSpanMs([])).toBe(0)
+    expect(barMax([])).toBe(1)
+  })
+
+  it("finds the bar under a pointer, held inside the plot", () => {
+    const box = { left: 100, width: 300 }
+    expect(barIndexAt(150, box, 3)).toBe(0)
+    expect(barIndexAt(250, box, 3)).toBe(1)
+    expect(barIndexAt(50, box, 3)).toBe(0)
+    expect(barIndexAt(999, box, 3)).toBe(2)
+    expect(barIndexAt(250, { left: 0, width: 0 }, 3)).toBe(0)
+    expect(barIndexAt(250, undefined, 3)).toBe(0)
+  })
+
+  it("steps along the bars with the arrow keys, stopping at either end", () => {
+    expect(arrowDelta("ArrowLeft")).toBe(-1)
+    expect(arrowDelta("ArrowRight")).toBe(1)
+    expect(arrowDelta("Enter")).toBe(0)
+    expect(stepBar(0, -1, 3)).toBe(0)
+    expect(stepBar(1, 1, 3)).toBe(2)
+    expect(stepBar(2, 1, 3)).toBe(2)
   })
 })

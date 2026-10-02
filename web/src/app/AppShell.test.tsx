@@ -65,7 +65,15 @@ function mockMatchMedia(matches: boolean, options: { legacy?: boolean } = {}) {
     ) => listeners.delete(cb)
   }
   vi.stubGlobal("matchMedia", vi.fn().mockReturnValue(mql))
-  return { mql, listeners }
+  // A real list reports the new answer from `matches` as well as on the
+  // event, and the shell reads the former.
+  const change = (next: boolean) => {
+    mql.matches = next
+    listeners.forEach((cb) => {
+      cb({ matches: next } as MediaQueryListEvent)
+    })
+  }
+  return { mql, listeners, change }
 }
 
 // AppShell is the root route's component in the real tree, so it renders its
@@ -305,7 +313,7 @@ describe("AppShell responsive layout", () => {
   })
 
   it("resets the submenu and preserves focus across the mobile breakpoint", async () => {
-    const { listeners } = mockMatchMedia(true)
+    const { change } = mockMatchMedia(true)
     const user = userEvent.setup()
     const { container } = await renderShell()
 
@@ -318,11 +326,7 @@ describe("AppShell responsive layout", () => {
     ).toBeInTheDocument()
 
     // Simulate crossing to a desktop viewport.
-    act(() => {
-      listeners.forEach((cb) => {
-        cb({ matches: false } as MediaQueryListEvent)
-      })
-    })
+    act(() => change(false))
 
     expect(
       screen.getByRole("button", { name: "Open navigation" }),
@@ -334,11 +338,7 @@ describe("AppShell responsive layout", () => {
     // Returning to mobile and reopening starts at the workspace level. The
     // submenu belongs to the drawer that framed it and cannot survive the
     // breakpoint transition.
-    act(() => {
-      listeners.forEach((cb) => {
-        cb({ matches: true } as MediaQueryListEvent)
-      })
-    })
+    act(() => change(true))
     await user.click(screen.getByRole("button", { name: "Open navigation" }))
     expect(
       await screen.findByRole("link", { name: "API keys" }),
@@ -478,7 +478,7 @@ describe("AppShell responsive layout", () => {
   it("subscribes via the legacy matchMedia API when addEventListener is absent", async () => {
     // Safari < 14 exposes only addListener/removeListener; the shell must still
     // react to breakpoint changes rather than throwing on a missing method.
-    const { listeners } = mockMatchMedia(true, { legacy: true })
+    const { listeners, change } = mockMatchMedia(true, { legacy: true })
     await renderShell()
 
     // The component registered through addListener, so the captured set is live.
@@ -487,11 +487,7 @@ describe("AppShell responsive layout", () => {
       screen.getByRole("button", { name: "Open navigation" }),
     ).toBeInTheDocument()
 
-    act(() => {
-      listeners.forEach((cb) => {
-        cb({ matches: false } as MediaQueryListEvent)
-      })
-    })
+    act(() => change(false))
 
     // A desktop-width change still flips the layout off the mobile drawer.
     expect(

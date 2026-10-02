@@ -683,6 +683,52 @@ describe("OverviewPage", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThan(0)
   })
 
+  it("keeps three lanes of the recent-activity preview on a phone", async () => {
+    // Six lanes need about 830px, and a 390px phone clipped the table at its
+    // Key column. The phone keeps model, cost and status, and dates the row
+    // under its model instead.
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query: string) =>
+        ({
+          matches: query.includes("max-width: 767px"),
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList,
+    )
+    mockApi({
+      logs: [
+        {
+          id: "1",
+          user_id: null,
+          api_key_id: null,
+          api_key_name: "ci-bot",
+          timestamp: "2026-07-22T00:00:00Z",
+          model: "gpt-5.6",
+          provider: "openai",
+          endpoint: "/v1/chat/completions",
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          cost: 0.5,
+          status: "success",
+          error_message: null,
+          latency_ms: 120,
+        },
+      ],
+    })
+    renderPage(<OverviewPage />)
+    const table = await screen.findByRole("grid", { name: "Recent activity" })
+    expect(await within(table).findByText("gpt-5.6")).toBeInTheDocument()
+    const headers = within(table)
+      .getAllByRole("columnheader")
+      .map((header) => header.textContent)
+    expect(headers).toEqual(["Model", "Cost", "Status"])
+    expect(within(table).queryByText("ci-bot")).toBeNull()
+  })
+
   it("keeps the page up when one tile query fails (per-tile isolation)", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input)

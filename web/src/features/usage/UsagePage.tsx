@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router"
 import { useMemo, useState } from "react"
 import { FiShare } from "react-icons/fi"
 import type {
+  ApiKey,
   SummaryDimension,
   UsageBucket,
   UsageFilters,
@@ -41,6 +42,7 @@ import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { ShareDialog } from "@/features/usage/ShareDialog"
 import { billedTokenTotal, cacheSums } from "@/features/usage/usageTotals"
 import { type UserDisplay, userDisplay } from "@/features/users/userDisplay"
+import { useKeySearch, useKeysById } from "@/shared/api/apiKeys"
 import { ApiError } from "@/shared/api/client"
 import {
   NO_BREAKDOWNS,
@@ -68,7 +70,9 @@ import {
   USAGE_DEFAULT_KEY,
   USAGE_PRESETS,
 } from "@/shared/helpers/timeRange"
+import { useUrlState } from "@/shared/helpers/urlState"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
+import { useDebounced } from "@/shared/hooks/useDebounced"
 
 // ---------- formatting ----------
 
@@ -94,6 +98,19 @@ function formatBucketLabel(iso: string, bucket: UsageBucket): string {
   })
 }
 
+// A key's id is a UUID; its first eight characters are enough to tell keys apart
+// in a list and short enough to read.
+const shortId = (id: string) => `${id.slice(0, 8)}…`
+
+// How a listed key reads in the picker: its name, else the visible part of its
+// secret (what the Keys page shows), else a short id.
+function apiKeyLabel(apiKey: ApiKey): string {
+  if (apiKey.key_name) return apiKey.key_name
+  if (apiKey.key_prefix)
+    return `${apiKey.key_prefix}…${apiKey.key_suffix ?? ""}`
+  return shortId(apiKey.id)
+}
+
 // ---------- window presets ----------
 //
 // The time presets and window math live in `@/shared/helpers/timeRange` and are shared
@@ -113,6 +130,20 @@ const DEFAULT_PRESET = findPreset(
 ) as RangePreset
 
 const TABLE_TOP_N = 15
+
+// How many listed keys the API key picker asks the server for at once: a picker
+// shows a handful, and typing narrows the rest.
+const KEY_OPTION_LIMIT = 20
+
+// The filters a link can carry, named as the usage API and the Activity page
+// name them, so one query string means the same thing on all three. Each is
+// repeatable except `workspace_id`, which the endpoints take once.
+const USAGE_URL_DEFAULTS = {
+  model: "",
+  user_id: "",
+  api_key_id: "",
+  workspace_id: "",
+} as const
 
 // ---------- the analytics chart: metric × group-by ----------
 //
@@ -270,8 +301,11 @@ function BreakdownTable({
           : row.key === null
             ? { label: unknownLabel }
             : rowName(row)
+        // Capped below `md`: an auto-width lane takes its longest name, and one
+        // model id was enough to push every number off a phone. Capped, the
+        // name truncates and the first figure stays on screen.
         return (
-          <div className="flex flex-col gap-1">
+          <div className="flex max-w-[9rem] flex-col gap-1 md:max-w-none">
             <span
               className="truncate text-mono-caption text-foreground"
               title={name.id}
@@ -549,10 +583,16 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
   const [customEnd, setCustomEnd] = useState<string | undefined>()
   // Entity filters are sets, not single choices: the question this page answers is
   // usually a comparison ("these two models", "this team's three keys"). The
-  // endpoints take each one repeatably and match any of its values.
-  const [modelFilters, setModelFilters] = useState<string[]>([])
-  const [userFilters, setUserFilters] = useState<string[]>([])
-  const [apiKeyFilters, setApiKeyFilters] = useState<string[]>([])
+  // endpoints take each one repeatably and match any of its values. They live in
+  // the URL under the API's own param names, so a filtered view survives a reload
+  // and a link from Keys or Activity lands on it.
+  const url = useUrlState(USAGE_URL_DEFAULTS)
+  const modelFilters = url.getAll("model")
+  const userFilters = url.getAll("user_id")
+  const apiKeyFilters = url.getAll("api_key_id")
+  const setModelFilters = (next: string[]) => url.patch({ model: next })
+  const setUserFilters = (next: string[]) => url.patch({ user_id: next })
+  const setApiKeyFilters = (next: string[]) => url.patch({ api_key_id: next })
   const [metric, setMetric] = useState<ChartMetric>("cost")
   const [groupBy, setGroupBy] = useState<"" | UsageGroupBy>("")
 
@@ -568,16 +608,30 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
 
   const { selected: workspace } = useSelectedWorkspace()
   // The organization page's own workspace narrowing, in place of the sidebar's
-  // switcher (which offers only the caller's memberships).
-  const [workspaceFilter, setWorkspaceFilter] = useState<string | undefined>()
+  // switcher (which offers only the caller's memberships). The workspace page
+  // ignores the param: its scope is the switcher's.
+  const workspaceFilter = orgWide ? url.get("workspace_id") : ""
+  const setWorkspaceFilter = (next: string) => url.patch({ workspace_id: next })
   const workspaces = useWorkspaces(orgWide)
+  // The key picker searches on the server, in the same scope as the Keys page:
+  // the switcher's workspace here, the workspace filter (or all) on the
+  // organization page. Debounced on the way into the query key.
+  const [keySearch, setKeySearch] = useState("")
+  const keyTerm = useDebounced(keySearch.trim())
+  const keyMatches = useKeySearch(
+    keyTerm,
+    orgWide ? workspaceFilter || undefined : workspace?.workspace_id,
+    KEY_OPTION_LIMIT,
+  )
   const filters: UsageFilters = useMemo(
     () => ({
       // From the sidebar's switcher, like the request log's; the organization
       // page swaps that for its own filter, unset by default. `previousFilters`
       // spreads this, so the period-over-period comparison is scoped to the
       // same workspace as the window it is compared against.
-      workspace_id: orgWide ? workspaceFilter : workspace?.workspace_id,
+      workspace_id: orgWide
+        ? workspaceFilter || undefined
+        : workspace?.workspace_id,
       start_date: winStart,
       end_date: winEnd,
       model: modelFilters.length > 0 ? modelFilters : undefined,
@@ -701,13 +755,51 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
       label: name.id ? `${name.label} (${name.id})` : name.label,
     }
   })
-  // API key options label by name (falling back to a short id), value is the id.
-  const keyOptions = realGroups(entitySuggest.data?.by_api_key).map(
-    (group) => ({
-      value: group.key as string,
-      label: group.label ?? `${(group.key as string).slice(0, 8)}…`,
-    }),
+  // API key options: the in-window keys by spend, then the server's matches for
+  // what is typed among every key the viewer can list, so a quiet key can still
+  // be picked. A typed term narrows the in-window keys too, here, because those
+  // are already loaded and include keys the viewer may not list. A caller who
+  // may not list keys keeps the in-window list. An operator's listing is
+  // deployment-wide, so the organization page keeps only the keys in this
+  // organization's workspaces.
+  const inOrganization = (apiKey: ApiKey) =>
+    !orgWide ||
+    !workspaces.data ||
+    workspaces.data.some(
+      (orgWorkspace) => orgWorkspace.id === apiKey.workspace_id,
+    )
+  const matchedKeys = (keyMatches.data ?? []).filter(inOrganization)
+  const inWindowKeys = realGroups(entitySuggest.data?.by_api_key).map(
+    (group) => {
+      const id = group.key as string
+      return { value: id, label: group.label ?? shortId(id) }
+    },
   )
+  const inWindowKeyIds = new Set(inWindowKeys.map((option) => option.value))
+  const keyQuery = keyTerm.toLowerCase()
+  const keyOptions = [
+    ...inWindowKeys.filter(
+      (option) =>
+        !keyQuery ||
+        option.value.toLowerCase() === keyQuery ||
+        option.label.toLowerCase().includes(keyQuery),
+    ),
+    ...matchedKeys
+      .filter((apiKey) => !inWindowKeyIds.has(apiKey.id))
+      .map((apiKey) => ({ value: apiKey.id, label: apiKeyLabel(apiKey) }))
+      .sort((a, b) => a.label.localeCompare(b.label)),
+  ]
+  // A picked key keeps its name on its chip once the search has moved on, and
+  // one a link named reads by name too: each is looked up by id unless the
+  // window already names it.
+  const pickedKeys = useKeysById(
+    apiKeyFilters.filter((id) => !inWindowKeyIds.has(id)),
+  )
+  const keyLabel = (id: string) => {
+    const picked = pickedKeys.find((apiKey) => apiKey.id === id)
+    if (picked) return apiKeyLabel(picked)
+    return labelFor(keyOptions, id)
+  }
   // Just the in-window models: a picked one needs no place in this list, because
   // the picker hides what is already selected and the chips carry the raw name.
   const modelOptionList = modelOptions.map((model) => ({
@@ -733,7 +825,7 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
     modelFilters.length > 0 ||
     userFilters.length > 0 ||
     apiKeyFilters.length > 0 ||
-    workspaceFilter !== undefined ||
+    workspaceFilter !== "" ||
     timeFiltered
 
   // Named on the share card's face. A card whose numbers came from a filtered
@@ -744,7 +836,7 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
     // unnarrowed organization card says so rather than staying silent, since
     // silence is what a workspace-scoped card looks like and the two figures
     // are worth very different amounts.
-    workspaceFilter !== undefined
+    workspaceFilter !== ""
       ? `workspace ${workspaceLabel(workspaceFilter)}`
       : orgWide
         ? "organization-wide"
@@ -769,12 +861,9 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
     options: { value: string; label: string }[],
     value: string,
   ) => options.find((option) => option.value === value)?.label ?? value
-  const clearEntityFilters = () => {
-    setModelFilters([])
-    setUserFilters([])
-    setApiKeyFilters([])
-    setWorkspaceFilter(undefined)
-  }
+  // One patch, so clearing is one history entry rather than four navigations.
+  const clearEntityFilters = () =>
+    url.patch({ model: [], user_id: [], api_key_id: [], workspace_id: "" })
   const valueChips = (
     dimension: string,
     label: string,
@@ -795,14 +884,14 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
   const filterChips: FilterChip[] = [
     // The workspace filter is single-valued (the endpoint takes one id), so its
     // chip is built directly rather than through valueChips.
-    ...(workspaceFilter !== undefined
+    ...(workspaceFilter !== ""
       ? [
           {
             key: `workspace:${workspaceFilter}`,
             label: "Workspace",
             value: workspaceLabel(workspaceFilter),
             clearLabel: `Remove Workspace filter ${workspaceLabel(workspaceFilter)}`,
-            onClear: () => setWorkspaceFilter(undefined),
+            onClear: () => setWorkspaceFilter(""),
           },
         ]
       : []),
@@ -820,13 +909,7 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
       (value) => value,
       setModelFilters,
     ),
-    ...valueChips(
-      "key",
-      "API key",
-      apiKeyFilters,
-      (value) => labelFor(keyOptions, value),
-      setApiKeyFilters,
-    ),
+    ...valueChips("key", "API key", apiKeyFilters, keyLabel, setApiKeyFilters),
   ]
 
   // Distinguish "this gateway has never served a request" from "no rows match
@@ -971,7 +1054,7 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
           : row.key === null
             ? "(unknown)"
             : effectiveGroupBy === "api_key_id"
-              ? (row.label ?? `${row.key.slice(0, 8)}…`)
+              ? (row.label ?? shortId(row.key))
               : effectiveGroupBy === "user_id"
                 ? userRowName(row).label
                 : row.key,
@@ -1247,17 +1330,17 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
         {orgWide ? (
           <FilterSelect
             label="Workspace"
-            value={workspaceFilter ?? ""}
-            onChange={(value) => setWorkspaceFilter(value || undefined)}
+            value={workspaceFilter}
+            onChange={setWorkspaceFilter}
             options={[
               { value: "", label: "All workspaces" },
               ...workspaceOptions,
             ]}
           />
         ) : null}
-        {/* allowsCustom because the options are the in-window top spenders (a
-            breakdown capped at 100): an entity below that rank, or with no traffic
-            in the window, is not offered, so Enter has to commit a pasted id. */}
+        {/* allowsCustom because the user options are the in-window top spenders
+            (a breakdown capped at 100), and a key the viewer may not list is
+            offered only while it spends, so Enter has to commit a pasted id. */}
         <FilterMultiComboBox
           label="User"
           values={userFilters}
@@ -1278,6 +1361,7 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
           values={apiKeyFilters}
           onChange={setApiKeyFilters}
           options={keyOptions}
+          onSearchChange={setKeySearch}
           allowsCustom
           placeholder="All keys"
         />

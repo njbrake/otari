@@ -11,6 +11,7 @@ import { API_ROOT } from "@/shared/api/client"
 import { SelectedWorkspaceProvider } from "@/shared/hooks/SelectedWorkspace"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
+  apiKey,
   bootstrap,
   organizationContext,
   organizationMember,
@@ -78,8 +79,8 @@ function summary(overrides: Partial<UsageSummary> = {}): UsageSummary {
         is_other: false,
       },
     ],
-    // `label` is the server-resolved key name; the picker reads it from here
-    // rather than from a full /v1/keys listing.
+    // `label` is the server-resolved key name, which names an in-window key
+    // even for a viewer who may not list keys.
     by_api_key: [
       {
         key: "key-1",
@@ -310,7 +311,10 @@ function LocationProbe() {
   )
 }
 
-function renderPage(ui: ReactElement, options: { scoped?: boolean } = {}) {
+function renderPage(
+  ui: ReactElement,
+  options: { scoped?: boolean; url?: string } = {},
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -332,7 +336,7 @@ function renderPage(ui: ReactElement, options: { scoped?: boolean } = {}) {
     </DeploymentProvider>,
     {
       wrapper: withRouter({
-        url: "/usage",
+        url: options.url ?? "/usage",
         routes: [{ path: "/activity", element: <LocationProbe /> }],
       }),
     },
@@ -1397,6 +1401,285 @@ describe("UsagePage", () => {
     expect(loc).toContain("model=gpt-5.6")
     expect(loc).toContain("user_id=alice")
     expect(loc).toContain("user_id=bob")
+  })
+})
+
+// Every key the operator can list: one with traffic in the window (key-1, which
+// the summary's by_api_key carries), one named key with none, and one unnamed
+// key that reads by the visible part of its secret.
+const LISTED_KEYS = [
+  apiKey(),
+  apiKey({ id: "key-2", key_name: "nightly-batch" }),
+  apiKey({
+    id: "key-3",
+    key_name: null,
+    key_prefix: "gw-Zz9",
+    key_suffix: "Q1",
+  }),
+]
+
+// The page with the location beside it, so a test reads what the URL says
+// rather than inferring it from the requests.
+function renderWithLocation(url: string, scope?: "organization") {
+  return renderPage(
+    <>
+      <UsagePage scope={scope} />
+      <LocationProbe />
+    </>,
+    { url },
+  )
+}
+
+const currentLocation = () =>
+  screen.getByRole("status", { name: "Current location" }).textContent ?? ""
+
+describe("UsagePage filters in the URL", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("applies the filters a link carries", async () => {
+    const fetchMock = mockApi(summary(), {
+      [`${API_ROOT}/keys`]: LISTED_KEYS,
+    })
+    renderWithLocation("/usage?api_key_id=key-1&model=gpt-5.6&model=o5")
+    await screen.findByText("$1,240.50")
+
+    const main = fetchMock.mock.calls
+      .map(([u]) => String(u))
+      .filter((u) => u.includes(`${API_ROOT}/usage/summary`))
+      .find((u) => u.includes("api_key_id=key-1"))
+    expect(main).toContain("model=gpt-5.6")
+    expect(main).toContain("model=o5")
+    expect(
+      screen.getByRole("button", { name: "Remove API key filter ci-bot" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Remove Model filter o5" }),
+    ).toBeInTheDocument()
+  })
+
+  it("writes a pick to the URL, so a reload keeps it", async () => {
+    mockApi(summary(), { [`${API_ROOT}/keys`]: LISTED_KEYS })
+    const user = userEvent.setup()
+    const first = renderWithLocation("/usage")
+    await screen.findByText("$1,240.50")
+
+    await user.click(screen.getByRole("button", { name: "Add filter" }))
+    await user.click(screen.getByPlaceholderText("All keys"))
+    await user.click(
+      await screen.findByRole("option", { name: "nightly-batch" }),
+    )
+    // The picker stays open on the remaining keys; dismiss it to reach the next.
+    await user.keyboard("{Escape}")
+    await user.click(screen.getByRole("combobox", { name: "User" }))
+    await user.click(await screen.findByRole("option", { name: /alice/ }))
+    await user.keyboard("{Escape}")
+
+    await waitFor(() => {
+      expect(currentLocation()).toContain("api_key_id=key-2")
+      expect(currentLocation()).toContain("user_id=alice")
+    })
+    const saved = currentLocation()
+    first.unmount()
+
+    // A fresh router at the same address is what a reload is.
+    renderWithLocation(saved)
+    expect(
+      await screen.findByRole("button", {
+        name: "Remove API key filter nightly-batch",
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Remove User filter Alice (alice)" }),
+    ).toBeInTheDocument()
+  })
+
+  it("drops a removed value from the URL and clears every filter at once", async () => {
+    mockApi(summary(), { [`${API_ROOT}/keys`]: LISTED_KEYS })
+    const user = userEvent.setup()
+    renderWithLocation("/usage?api_key_id=key-1&api_key_id=key-2&model=gpt-5.6")
+    await screen.findByText("$1,240.50")
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Remove API key filter nightly-batch",
+      }),
+    )
+    await waitFor(() => expect(currentLocation()).not.toContain("key-2"))
+    expect(currentLocation()).toContain("api_key_id=key-1")
+
+    await user.click(screen.getByRole("button", { name: "Clear all" }))
+    await waitFor(() => expect(currentLocation()).toBe("/usage"))
+  })
+
+  it("narrows the organization page to the workspace a link names", async () => {
+    const fetchMock = mockApi(summary())
+    renderWithLocation("/usage?workspace_id=ws-2", "organization")
+    await screen.findByText("$1,240.50")
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([u]) =>
+          String(u).includes(`${API_ROOT}/organizations/me/usage/summary`) &&
+          String(u).includes("workspace_id=ws-2"),
+      ),
+    ).toBe(true)
+  })
+
+  it("leaves the workspace page on the switcher's scope whatever the URL says", async () => {
+    const fetchMock = mockApi(summary())
+    renderWithLocation("/usage?workspace_id=ws-2")
+    await screen.findByText("$1,240.50")
+
+    expect(
+      fetchMock.mock.calls.some(([u]) =>
+        String(u).includes("workspace_id=ws-2"),
+      ),
+    ).toBe(false)
+    expect(
+      screen.queryByRole("button", { name: /Remove Workspace filter/ }),
+    ).not.toBeInTheDocument()
+  })
+})
+
+describe("UsagePage API key picker", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("offers the listed keys, the in-window ones first", async () => {
+    const fetchMock = mockApi(summary(), {
+      [`${API_ROOT}/keys`]: LISTED_KEYS,
+    })
+    const user = userEvent.setup()
+    renderPage(<UsagePage />)
+    await screen.findByText("$1,240.50")
+
+    await user.click(screen.getByPlaceholderText("All keys"))
+    await screen.findByRole("option", { name: "nightly-batch" })
+    const listbox = screen.getByRole("listbox")
+    expect(
+      within(listbox)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["ci-bot", "gw-Zz9…Q1", "nightly-batch"])
+
+    // A key with no traffic in the window is still a filter the page sends.
+    await user.click(screen.getByRole("option", { name: "nightly-batch" }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([u]) =>
+            String(u).includes(`${API_ROOT}/usage/summary`) &&
+            String(u).includes("api_key_id=key-2"),
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it("searches the server for what is typed, and offers its matches as they come", async () => {
+    const fetchMock = mockApi(summary())
+    const answer = fetchMock.getMockImplementation()!
+    // The server's matching, which the picker must not redo: `gw-Zz9` finds
+    // the key named "nightly-batch" by its fingerprint, not its name.
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "http://x")
+      if (url.pathname === `${API_ROOT}/keys`) {
+        const term = url.searchParams.get("search")
+        const rows = term
+          ? [apiKey({ id: "key-2", key_name: "nightly-batch" })]
+          : LISTED_KEYS.slice(0, 2)
+        return new Response(JSON.stringify(rows), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      return answer(input, init)
+    })
+    const user = userEvent.setup()
+    renderPage(<UsagePage />)
+    await screen.findByText("$1,240.50")
+
+    const keyReads = () =>
+      fetchMock.mock.calls
+        .map(([u]) => new URL(String(u), "http://x"))
+        .filter((u) => u.pathname === `${API_ROOT}/keys`)
+    await waitFor(() => expect(keyReads().length).toBeGreaterThan(0))
+    // Bounded, and never the whole list.
+    expect(keyReads().every((u) => u.searchParams.get("limit") === "20")).toBe(
+      true,
+    )
+
+    await user.click(screen.getByPlaceholderText("All keys"))
+    await user.keyboard("gw-Zz9")
+    // The in-window key does not match the term, so only the server's match is left.
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("option").map((option) => option.textContent),
+      ).toEqual(["nightly-batch"]),
+    )
+    // Debounced: one read for the settled term rather than one per keystroke.
+    const searched = keyReads().filter((u) => u.searchParams.has("search"))
+    expect(searched.map((u) => u.searchParams.get("search"))).toEqual([
+      "gw-Zz9",
+    ])
+
+    await user.click(screen.getByRole("option", { name: "nightly-batch" }))
+    await user.keyboard("{Escape}")
+    // The chip keeps the name once the search has been cleared.
+    expect(
+      await screen.findByRole("button", {
+        name: "Remove API key filter nightly-batch",
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("names a key a link picked by looking it up by id", async () => {
+    const fetchMock = mockApi(summary(), {
+      [`${API_ROOT}/keys`]: [
+        apiKey({ id: "key-2", key_name: "nightly-batch" }),
+      ],
+    })
+    renderPage(<UsagePage />, { url: "/usage?api_key_id=key-2" })
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Remove API key filter nightly-batch",
+      }),
+    ).toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.some(([u]) => {
+        const url = new URL(String(u), "http://x")
+        return (
+          url.pathname === `${API_ROOT}/keys` &&
+          url.searchParams.get("search") === "key-2"
+        )
+      }),
+    ).toBe(true)
+  })
+
+  it("keeps the in-window keys when the viewer may not list keys", async () => {
+    const fetchMock = mockApi(summary())
+    const answer = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).includes(`${API_ROOT}/keys?`)) {
+        return new Response(JSON.stringify({ detail: "Forbidden" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      return answer(input, init)
+    })
+    const user = userEvent.setup()
+    renderPage(<UsagePage />)
+    await screen.findByText("$1,240.50")
+
+    await user.click(screen.getByPlaceholderText("All keys"))
+    expect(
+      await screen.findByRole("option", { name: "ci-bot" }),
+    ).toBeInTheDocument()
+    expect(screen.getAllByRole("option")).toHaveLength(1)
   })
 })
 

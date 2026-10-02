@@ -45,7 +45,10 @@ export function Field({
       isRequired={isRequired}
       isDisabled={isDisabled}
       isInvalid={isInvalid}
-      className="flex max-w-md flex-col gap-1"
+      // `min-w-0` so a field in a row can shrink below its input's intrinsic
+      // width, which grows with the reader's text size and otherwise pushed
+      // the row past a phone's edge.
+      className="flex max-w-md min-w-0 flex-col gap-1"
     >
       {/* No manual "*": HeroUI marks a required field's label through CSS
           ([data-required=true] > .label::after), so adding one renders two. */}

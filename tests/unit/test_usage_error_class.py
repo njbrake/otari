@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from gateway.api.routes.usage import error_class_for
+from gateway.schemas.usage import error_class_for
 
 
 @pytest.mark.parametrize(

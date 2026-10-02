@@ -82,4 +82,21 @@ describe("DisclosureRow", () => {
     expect(row.className).toContain("min-h-11")
     expect(screen.queryAllByRole("button")).toHaveLength(1)
   })
+
+  it("drops its status under the label below md", () => {
+    // Beside the label on a phone, a status like "Unavailable · no backend"
+    // took the width first and left the help a one-word column. Below md it
+    // takes the label's column on a second line, the chevron spanning both;
+    // from md it returns to the label's line.
+    render(<Harness />)
+    const status = screen.getByText("0 tools").parentElement as HTMLElement
+    expect([...status.classList]).toEqual(
+      expect.arrayContaining([
+        "col-start-1",
+        "row-start-2",
+        "md:col-start-2",
+        "md:row-start-1",
+      ]),
+    )
+  })
 })

@@ -7,7 +7,7 @@ filters the operator was shown.
 """
 
 from datetime import UTC, datetime
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, overload
 
 from sqlalchemy import ColumnElement, Integer, func, text
 from sqlalchemy import cast as sql_cast
@@ -39,8 +39,12 @@ def match_any(column: Any, value: str | list[str]) -> ColumnElement[bool]:
     return cast("ColumnElement[bool]", condition)
 
 
+@overload
+def utc_bound(value: datetime) -> datetime: ...
+@overload
+def utc_bound(value: None) -> None: ...
 def utc_bound(value: datetime | None) -> datetime | None:
-    """Pin an offset-less window bound to UTC.
+    """Pin an offset-less window bound, or a stored timestamp, to UTC.
 
     The date query params and selection bodies advertise ISO 8601, which parses to a
     naive value when the caller omits the offset. The driver then resolves it against
@@ -49,6 +53,9 @@ def utc_bound(value: datetime | None) -> datetime | None:
     select a different set of rows per deployment. Shared for the usual reason: a
     count an operator confirms and the delete that re-derives its target set from the
     same bound have to mean the same instant.
+
+    A stored timestamp is read the same way: SQLite hands a timezone-aware column
+    back naive, and the value is the UTC it was written as.
     """
     if value is None or value.tzinfo is not None:
         return value

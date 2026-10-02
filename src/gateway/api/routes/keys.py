@@ -4,7 +4,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
@@ -44,6 +44,30 @@ SURFACE = Surface("keys")
 # for the same reason a write is, because the id a read hands back is what a write
 # is aimed with, and a 404 is the answer a route with no business in a row gives.
 NOT_INTERNAL = col(APIKey.internal_secret).is_(None)
+
+KEY_SEARCH_MAX_LENGTH = 200
+KEY_SEARCH_DESC = (
+    "Narrow to keys whose name, prefix or suffix contains this text, case-insensitively, or whose id is this text."
+)
+
+
+def key_search_condition(search: str | None) -> ColumnElement[bool] | None:
+    """Keys a picker's search term matches, or None when there is nothing to search for.
+
+    A substring of the name or of either half of the fingerprint, which is what a
+    key's label is built from, or the id itself, so a picker can name a key it was
+    handed by id. ``autoescape`` makes ``%`` and ``_`` literal. It only narrows: the
+    caller's tenant conditions stay on the statement beside it.
+    """
+    term = (search or "").strip()
+    if not term:
+        return None
+    return or_(
+        col(APIKey.id) == term,
+        col(APIKey.key_name).icontains(term, autoescape=True),
+        col(APIKey.key_prefix).icontains(term, autoescape=True),
+        col(APIKey.key_suffix).icontains(term, autoescape=True),
+    )
 
 
 async def _load_key_in_organization(
@@ -358,12 +382,15 @@ async def list_keys(
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     workspace_id: Annotated[uuid.UUID | None, Query(description="Only keys in this workspace.")] = None,
+    search: Annotated[str | None, Query(max_length=KEY_SEARCH_MAX_LENGTH, description=KEY_SEARCH_DESC)] = None,
 ) -> list[KeyInfo]:
-    """List the API keys in the caller's organization.
+    """List the API keys in the caller's organization, oldest first.
 
     Requires master key authentication. An unset ``workspace_id`` lists every key
     in that organization; naming a workspace in another one lists nothing rather
     than refusing, so the filter reports no more than the unfiltered read does.
+    ``search`` narrows within that scope, so a picker can ask for the matches
+    instead of filtering whatever page it fetched.
     """
     statement = (
         select(APIKey)
@@ -372,6 +399,11 @@ async def list_keys(
     )
     if workspace_id is not None:
         statement = statement.where(col(APIKey.workspace_id) == workspace_id)
+    if (matches := key_search_condition(search)) is not None:
+        statement = statement.where(matches)
+    # Ordered so a page, and a picker's top matches, are stable, with the id as a
+    # tiebreak for keys minted in the same instant.
+    statement = statement.order_by(col(APIKey.created_at), col(APIKey.id))
     result = await db.execute(statement.offset(skip).limit(limit))
     keys = result.scalars().all()
 

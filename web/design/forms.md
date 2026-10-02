@@ -193,11 +193,17 @@ layout takes back off. Three places exist:
 | `.otari-settings` | `layout/SettingsGroup`, and only with `bounded` |
 
 `.otari-settings` differs from the other two in one way worth knowing: on a
-phone its field also gains block padding and 16px type, where a toolbar's keeps
-the dense 4px and 14px. That is because the row's control stops sharing the row
-and stacks full width under its label there, so it is a form field again rather
-than one of a strip of small ones, and iOS zooms the page when a field under
-16px takes focus.
+phone its field also gains block padding, where a toolbar's keeps the dense 4px.
+That is because the row's control stops sharing the row and stacks full width
+under its label there, so it is a form field again rather than one of a strip of
+small ones.
+
+**Every field is 16px on a phone, whatever place it is in.** iOS zooms the page
+when a field under 16px takes focus and leaves it zoomed after the keyboard
+goes, so `design-system.css` sets `.input`, `.textarea` and the search field to
+`--text-base` below `md`. A field that is not one of those (a bare `<input>`
+with classes of its own) misses the rule, which is one more reason to build it
+from `INPUT_CLASS`.
 
 **No call site picks a height.** A page says "this row is a toolbar" and every
 control in it agrees on a size, which is what stopped the six pages with a filter

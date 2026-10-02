@@ -43,7 +43,7 @@ export function Segmented({
     <div
       role="radiogroup"
       aria-label={label}
-      className="inline-flex w-fit max-w-full overflow-x-auto border border-control-border"
+      className="inline-flex w-fit max-w-full overflow-x-auto overscroll-x-contain border border-control-border"
     >
       {options.map((option) => {
         const selected = option.value === value

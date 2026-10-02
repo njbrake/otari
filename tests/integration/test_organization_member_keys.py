@@ -475,6 +475,40 @@ def test_the_workspace_filter_narrows_and_never_widens(client: TestClient, world
     assert listed == []
 
 
+def test_a_search_narrows_within_the_callers_keys_and_never_widens(client: TestClient, world: _World) -> None:
+    """A colleague's key and another organization's key match the term and stay out of reach."""
+    code, mine = _create(client, world, "alpha_member", {"key_name": "shared-term mine"})
+    assert code == status.HTTP_200_OK
+    code, other = _create(client, world, "alpha_member", {"key_name": "unrelated"})
+    assert code == status.HTTP_200_OK
+    code, colleagues = _create(client, world, "alpha_colleague", {"key_name": "shared-term theirs"})
+    assert code == status.HTTP_200_OK
+    code, betas = _create(client, world, "beta_owner", {"key_name": "shared-term beta"})
+    assert code == status.HTTP_200_OK
+
+    code, listed = _request(client, world, "alpha_member", "GET", f"{_PREFIX}?search=SHARED-term")
+    assert code == status.HTTP_200_OK, listed
+    assert [row["id"] for row in listed] == [mine["id"]]
+
+    # Even by id, which is how the dashboard names a key it was handed.
+    for foreign in (colleagues, betas):
+        code, listed = _request(client, world, "alpha_member", "GET", f"{_PREFIX}?search={foreign['id']}")
+        assert code == status.HTTP_200_OK
+        assert listed == []
+    code, listed = _request(client, world, "alpha_member", "GET", f"{_PREFIX}?search={other['id']}")
+    assert code == status.HTTP_200_OK
+    assert [row["id"] for row in listed] == [other["id"]]
+
+    # The deployment-wide surface narrows within the operator's organization the
+    # same way: alpha's keys, whoever owns them, and never beta's.
+    code, listed = _request(client, world, "alpha_operator", "GET", f"{API_ROOT}/keys?search=shared-term")
+    assert code == status.HTTP_200_OK, listed
+    assert {row["id"] for row in listed} == {mine["id"], colleagues["id"]}
+    code, listed = _request(client, world, "alpha_operator", "GET", f"{API_ROOT}/keys?search={betas['id']}")
+    assert code == status.HTTP_200_OK
+    assert listed == []
+
+
 # =============================================================================
 # Acting on a key: the owner predicate on every load
 # =============================================================================

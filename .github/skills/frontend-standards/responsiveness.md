@@ -53,6 +53,12 @@ operator. See [testing.md](./testing.md).
   so `opacity-0 group-hover:opacity-100` is a control that does not exist on a phone. Write
   `opacity-100 md:opacity-0 md:group-hover:opacity-100` instead: always visible where there is
   no pointer, revealed on hover where there is.
+- **A horizontal scroller takes `overscroll-x-contain`** beside its `overflow-x-auto`. Without
+  it a trackpad swipe that runs past the last column becomes the browser's Back gesture and
+  leaves the page. `src/styles/foundation.test.ts` fails on a scroller missing it.
+- **A keyboard shortcut hint shows only where there is a keyboard.** Gate it on
+  `useMediaQuery("(pointer: fine)")` and `!useIsPhone()`, or `pointer-fine:` where a class can
+  say it: on a phone the hint promises a key nobody has.
 - **A keyboard shortcut needs a button too.** If a feature is reachable only by a chord, it is
   unreachable on the device with no keyboard.
 - **Guard `autoFocus` outside a modal.** On a page load it raises the soft keyboard over half

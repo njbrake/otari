@@ -174,6 +174,12 @@ not offer the page at all.
 
 Activity is the per-request log. Usage provides aggregates and time series.
 
+Whose requests they show follows workspace management. In a workspace you
+manage, as an owner or admin of the organization or of that workspace itself,
+you see everyone's requests and can narrow to your own; in any other workspace
+you belong to, you see only your own. Managing one workspace widens that
+workspace and no other.
+
 Filter Activity from the log itself: each column header sorts and holds that
 column's filters, a cell in any of the value columns can narrow the log to its
 value or exclude it, and the search box matches a request ID, a model, the name
@@ -182,6 +188,15 @@ bar, to narrow to a stretch of time. The log can be grouped by API key, session,
 model or member. Everything about a view lives in its URL, so a link reproduces
 it, and a view can be saved by name; someone who manages the workspace can share
 one with it.
+
+Filter Usage by user, model or API key under Add filter; the organization page
+adds a workspace filter. Each filter takes several values, and every key you can
+see is offered, including one with no traffic in the window. The filters live in
+the URL under the same names Activity reads (`user_id`, `model`, `api_key_id`,
+and `workspace_id` on the organization page), so a filtered view survives a
+reload, can be linked, and carries into Activity when you drill into a row. A
+key's actions menu on the API keys page has View usage, which opens Usage
+filtered to that key.
 
 A routed request is one row, served by whichever attempt succeeded; its earlier
 failed attempts are counted on it and listed under it on request. Opening a row

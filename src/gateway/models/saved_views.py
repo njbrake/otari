@@ -14,7 +14,7 @@ workspace.
 import uuid
 from typing import Literal
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Index, text
 from sqlmodel import Field, SQLModel
 
 from gateway.models.base import CreatedAtMixin, PrimaryKeyMixin, UpdatedAtMixin
@@ -36,12 +36,13 @@ class SavedView(SQLModel, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, table
 
     __tablename__ = "saved_view"
     __table_args__ = (
-        # One name per person per page, so "Failures this week" means one thing in
-        # their own menu. Two people may each share a view of the same name; the
-        # menu names who shared it. Its leading columns also serve the menu's query
-        # (a page's views in one workspace), the owner count and the workspace
-        # foreign key, so none of them needs an index of its own.
-        UniqueConstraint("workspace_id", "page", "user_id", "name", name="uq_saved_view_owner_name"),
+        # One name per person per page, ignoring case as the menu's order does, so
+        # "Failures this week" means one thing in their own menu. Two people may each
+        # share a view of the same name; the menu names who shared it. Its leading
+        # columns also serve the menu's query (a page's views in one workspace), the
+        # owner count and the workspace foreign key, so none of them needs an index
+        # of its own.
+        Index("uq_saved_view_owner_lower_name", "workspace_id", "page", "user_id", text("lower(name)"), unique=True),
     )
 
     user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE", index=True)

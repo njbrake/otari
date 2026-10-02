@@ -14,6 +14,7 @@ from gateway.container import Container
 from gateway.core.config import API_KEY_HEADER, API_ROOT, X_API_KEY_HEADER, GatewayConfig
 from gateway.core.database import DATABASE_ERRORS, create_session, get_db
 from gateway.core.feature import CoreFeature
+from gateway.core.sql import utc_bound
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.log_config import logger
 from gateway.metrics import REGISTRY, Counter
@@ -39,6 +40,7 @@ from gateway.repositories.overview.overview_repository import OverviewRepository
 from gateway.repositories.providers import OrgProviderKeyModelRepository
 from gateway.repositories.saved_views import SavedViewRepository
 from gateway.repositories.tenancy import OrganizationGuardrailDefinitionRepository, OrgProviderKeyRepository
+from gateway.repositories.usage import UsageReadRepository, UsageRetentionRepository, UsageSummaryRepository
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets import BudgetService, WorkspaceBudgetDefaultService
 from gateway.services.code_execution import SandboxContainerRegistry
@@ -60,6 +62,7 @@ from gateway.services.tenancy.organization_guardrail_definition_service import (
 )
 from gateway.services.tenancy.provisioning_service import ensure_bootstrap_identity
 from gateway.services.tenancy.workspace_service import WorkspaceService
+from gateway.services.usage import TelemetryRetentionService, UsageReadService
 from gateway.services.workspace_scope import default_workspace_id
 
 # Legacy module-level fallback. Config now lives on ``app.state.config`` (set in
@@ -79,20 +82,6 @@ AUTH_FAILURES = Counter(
 def record_auth_failure(reason: str) -> None:
     """Record an authentication failure."""
     AUTH_FAILURES.labels(reason=reason).inc()
-
-
-def _as_utc(value: datetime | None) -> datetime | None:
-    """Return ``value`` as a timezone-aware datetime in UTC.
-
-    SQLite stores ``DateTime(timezone=True)`` columns as naive strings and
-    returns them naive on read. PostgreSQL returns them as aware. Normalising
-    here keeps the subtraction/comparison call sites identical across both
-    backends — a naive value is *assumed* to be UTC, which matches how the
-    gateway writes them (always ``datetime.now(UTC)``).
-    """
-    if value is None or value.tzinfo is not None:
-        return value
-    return value.replace(tzinfo=UTC)
 
 
 def set_config(config: GatewayConfig) -> None:
@@ -250,7 +239,7 @@ async def _verify_and_update_api_key(db: AsyncSession, token: str, key_format: A
             detail="API key is inactive",
         )
 
-    expires_at = _as_utc(api_key.expires_at)
+    expires_at = utc_bound(api_key.expires_at)
     if expires_at is not None and expires_at < datetime.now(UTC):
         record_auth_failure("expired_key")
         raise HTTPException(
@@ -259,7 +248,7 @@ async def _verify_and_update_api_key(db: AsyncSession, token: str, key_format: A
         )
 
     now = datetime.now(UTC)
-    last_used_at = _as_utc(api_key.last_used_at)
+    last_used_at = utc_bound(api_key.last_used_at)
     should_update_last_used = (
         last_used_at is None or (now - last_used_at).total_seconds() >= _LAST_USED_UPDATE_INTERVAL_SECONDS
     )
@@ -686,6 +675,11 @@ def build_idempotency_service(uow: UnitOfWork, config: GatewayConfig) -> Idempot
     return IdempotencyService(uow, InferenceRepositories.on(uow), config)
 
 
+def build_telemetry_retention_service(uow: UnitOfWork, storage: TelemetryStoragePort) -> TelemetryRetentionService:
+    """Build the retention sweep for one worker pass."""
+    return TelemetryRetentionService(uow, UsageRetentionRepository(uow), storage)
+
+
 def build_sandbox_file_bridge(
     *,
     raw_request: Request,
@@ -944,13 +938,15 @@ def get_web_search_policy_port(db: PortSessionDep, container: ContainerDep) -> W
     return container.resolve(WebSearchPolicyPort, db)
 
 
-def _workspace_reader(db: AsyncSession) -> WorkspaceService:
-    """A workspace service for a service that only reads workspaces through it.
+def get_workspace_service(db: Annotated[AsyncSession, Depends(get_db)]) -> WorkspaceService:
+    """Build the workspace service on the request's session.
 
-    The listener is for membership writes, which such a service never makes; this
-    is the pairing `routes/workspaces.py` builds.
+    Also what another service that reads workspaces through it receives.
     """
     return WorkspaceService(db, membership_listener=WorkspaceBudgetDefaultService(db))
+
+
+WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
 
 
 def get_overview_service(db: Annotated[AsyncSession, Depends(get_db)]) -> OverviewService:
@@ -963,7 +959,7 @@ def get_overview_service(db: Annotated[AsyncSession, Depends(get_db)]) -> Overvi
         OverviewRepository(db),
         OrganizationService(db, membership_listener=None),
         DeploymentUserService(db),
-        _workspace_reader(db),
+        get_workspace_service(db),
     )
 
 
@@ -991,7 +987,7 @@ def get_budget_service(
         BudgetRepositories.on(uow),
         OrganizationService(db, membership_listener=None),
         ApiKeyService(ApiKeyRepository(uow)),
-        _workspace_reader(db),
+        get_workspace_service(db),
     )
 
 
@@ -1006,11 +1002,19 @@ def get_saved_view_service(
     return SavedViewService(
         uow,
         SavedViewRepository(uow),
-        _workspace_reader(db),
+        get_workspace_service(db),
     )
 
 
 SavedViewServiceDep = Annotated[SavedViewService, Depends(get_saved_view_service)]
+
+
+def get_usage_read_service(uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> UsageReadService:
+    """Build the request's usage-log read service on the request's Unit of Work."""
+    return UsageReadService(uow, UsageReadRepository(uow), UsageSummaryRepository(uow))
+
+
+UsageReadServiceDep = Annotated[UsageReadService, Depends(get_usage_read_service)]
 
 
 def get_organization_guardrail_definition_service(

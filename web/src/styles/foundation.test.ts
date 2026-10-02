@@ -940,6 +940,33 @@ describe("semantic tokens only", () => {
   })
 })
 
+// A horizontal scroller on a trackpad hands the swipe that runs past its end to
+// the browser, which reads it as Back or Forward and leaves the page. Containing
+// the overscroll keeps the gesture in the scroller. Written beside every
+// `overflow-x-auto` because that is where a reader looks for it, and swept
+// because a scroller added without it compiles, renders and only misbehaves
+// under a finger.
+describe("a horizontal scroller contains its overscroll", () => {
+  const SRC = join(WEB, "src")
+  const sources = walk(SRC).filter(
+    (name) => /\.tsx$/.test(name) && !/\.test\.tsx$/.test(name),
+  )
+
+  it("covers the source tree", () => {
+    expect(sources.length).toBeGreaterThan(50)
+  })
+
+  it("pairs every overflow-x-auto with overscroll-x-contain", () => {
+    const offenders = sources.flatMap((name) =>
+      (readFileSync(join(SRC, name), "utf8").match(/["'`][^"'`]*["'`]/g) ?? [])
+        .filter((literal) => /\boverflow-x-(?:auto|scroll)\b/.test(literal))
+        .filter((literal) => !/\boverscroll-x-contain\b/.test(literal))
+        .map((literal) => `${name}: ${literal}`),
+    )
+    expect(offenders).toEqual([])
+  })
+})
+
 // A bare heading is not unstyled: the `@layer base` rule in globals.css hands
 // `h1`-`h6` the display face, so a heading that skips the type scale renders in
 // Mozilla Headline at whatever size its hand-rolled classes say. otari#810
@@ -1410,11 +1437,31 @@ describe("no font size is written at a call site", () => {
 describe("the phone viewport's touch-target floor", () => {
   it("raises every HeroUI button to 44px below the shell's mobile boundary", () => {
     // `[data-slot="button"]` is HeroUI's Button and nothing else, and 767px is
-    // AppShell's own MOBILE_QUERY, so the rule turns on exactly where the
+    // the shell's own MOBILE_QUERY (`useIsPhone`), so the rule turns on exactly where the
     // sidebar becomes a drawer.
     expect(CSS).toMatch(
-      /@media \(max-width: 767px\) \{\s*\[data-slot="button"\] \{\s*min-height: 2\.75rem;\s*min-width: 2\.75rem;/,
+      /@media \(max-width: 767px\) \{\s*\[data-slot="button"\],\s*a\.button \{\s*min-height: 2\.75rem;\s*min-width: 2\.75rem;/,
     )
+  })
+
+  it("sets every field at 16px below the same boundary, so iOS does not zoom", () => {
+    // iOS zooms the page when a field under 16px takes focus. This was scoped
+    // to settings rows, which left the toolbar searches, the pager's page
+    // number and every dialog field at 14px. Element-qualified so it outranks
+    // `.otari-machine-field`'s one-class size.
+    expect(CSS).toMatch(
+      /@media \(max-width: 767px\) \{\s*input\.input,\s*textarea\.input,\s*textarea\.textarea,\s*input\.search-field__input \{\s*font-size: var\(--text-base\);/,
+    )
+  })
+
+  it("raises a link dressed as a button with it", () => {
+    // `buttonVariants` on a router `Link` gives the class without the slot, so
+    // a link beside a row of real buttons stayed at 36px until the floor named
+    // it too.
+    const floor = CSS.match(
+      /@media \(max-width: 767px\) \{\s*([^{]*)\{\s*min-height: 2\.75rem;/,
+    )
+    expect(floor?.[1]).toContain("a.button")
   })
 
   it("takes the toolbar's dense field height back off at the same boundary", () => {
@@ -1769,6 +1816,8 @@ describe("the catalog shows every prop", () => {
       "where focus lands after the frame is gone, which needs the trigger to unmount with it: a story could pass the prop and would demonstrate nothing",
     "feedback/FormDialog.target":
       "`RestoreFocus`'s, the helper behind `returnFocusRef`, exported for the feedback dialog; the same reason applies",
+    "overlays/Sheet.id":
+      "a handle for the page's own key handling to tell the sheet from another dialog; it changes nothing on screen",
   }
 
   // Not props: the first two are every component's, and a leading underscore is

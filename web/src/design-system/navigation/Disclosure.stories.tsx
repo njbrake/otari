@@ -28,7 +28,7 @@ export const Default: Story = {
   render: () => (
     <div className="w-96">
       <Disclosure heading="Raw request">
-        <pre className="overflow-x-auto font-mono text-mono-caption">
+        <pre className="overflow-x-auto overscroll-x-contain font-mono text-mono-caption">
           {'{\n  "model": "gpt-4o-mini",\n  "stream": true\n}'}
         </pre>
       </Disclosure>

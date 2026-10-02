@@ -46,6 +46,11 @@ cells leave one empty track on a wide viewport and three leave two. Both call si
 in the product pass five. If a page has fewer than five things worth leading with,
 it does not want this band: put the one number in the `PageIntro` sentence instead.
 
+The vertical rules belong to the strip, not the cell, and stand only between two cells
+on the same row: a cell rules itself off from the one before it, and the first cell of
+each row at each breakpoint draws nothing. A rule on every cell but the last left one
+at the end of each wrapped row.
+
 A cell has four rows and **always four**, in this order:
 
 1. `label`: overline, bottom-aligned so a wrapped label still shares its baseline.
@@ -89,7 +94,7 @@ the chip picks its own hue.
 
 ```ts
 SpendMeter: { spent, allocated, ariaLabel, nearLimitAt = 0.8, className? }
-Meter: { fraction, ariaLabel, className? }  // 140px wide unless the row sets it
+Meter: { fraction, ariaLabel }
 SeverityMark: { severity: { status: "ok" | "warn" | "alert", word: string } }
 Dot: { className }
 ```

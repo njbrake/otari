@@ -132,6 +132,7 @@ _SETTING_NAMES = frozenset(
         "smtp_user",
         "stream_missing_usage_policy",
         "streaming_keepalive_interval_ms",
+        "telemetry_retention_days",
         "terms_url",
         "tools_header",
         "ui_base_url",

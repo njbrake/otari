@@ -193,7 +193,7 @@ def test_search_narrows_the_summary_the_same_way(
 
     summary = client.get(
         f"{USAGE}/summary",
-        params={"q": "gpt", "start_date": (T0 - timedelta(days=1)).isoformat(), "dimensions": "none"},
+        params={"q": "gpt", **WINDOW, "dimensions": "none"},
         headers=master_key_header,
     ).json()
     assert summary["totals"]["request_count"] == 1
@@ -434,6 +434,36 @@ def test_five_minute_buckets_are_refused_over_a_window_too_wide_to_chart(
         headers=master_key_header,
     )
     assert fits.status_code == 200
+
+
+def test_the_five_minute_limit_counts_the_buckets_the_series_fills(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    """The series starts at the bucket the window opens in, so an off-grid start fills one bucket more."""
+    _row(db_session, timestamp=T0)
+    db_session.commit()
+    span = timedelta(minutes=5 * 1000)
+
+    on_grid = _summary(
+        client,
+        master_key_header,
+        bucket="5min",
+        dimensions="none",
+        start_date=T0.isoformat(),
+        end_date=(T0 + span).isoformat(),
+    )
+    series = on_grid["series"]
+    assert isinstance(series, list)
+    assert len(series) == 1000
+    assert (series[0]["bucket_start"], series[0]["requests"]) == ("2026-07-01T09:00:00Z", 1)
+
+    off_grid = T0 + timedelta(minutes=1)
+    refused = client.get(
+        f"{USAGE}/summary",
+        params={"bucket": "5min", "start_date": off_grid.isoformat(), "end_date": (off_grid + span).isoformat()},
+        headers=master_key_header,
+    )
+    assert refused.status_code == 422
 
 
 def test_the_grouped_series_does_not_take_the_five_minute_bucket(

@@ -898,6 +898,16 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, BaseSett
             "with its own capture_agent_telemetry (null inherits this setting)."
         ),
     )
+    telemetry_retention_days: Annotated[int, OMITTED] = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Days imported usage rows and agent_telemetry rows are kept before a background sweep "
+            "deletes them. Imported usage is what this deployment did not serve (coding-agent "
+            "telemetry, the external-events API) and never counts toward a budget; usage the gateway "
+            "served is never deleted. 0 keeps everything. Standalone mode only."
+        ),
+    )
     streaming_keepalive_interval_ms: Annotated[int, Shown(SettingsGroup.GENERAL)] = Field(
         default=15000,
         ge=0,

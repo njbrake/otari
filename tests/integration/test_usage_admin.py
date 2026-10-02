@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -49,7 +51,7 @@ def _make_log(
     # Which cached-token convention the counts were reported under, or None for a
     # row written before the column existed.
     cache_tokens_in_prompt: bool | None = None,
-    billing_meters: dict[str, int] | None = None,
+    billing_meters: dict[str, Any] | None = None,
     cost: float | None = None,
     status: str = "success",
     timestamp: datetime = _TS,
@@ -187,6 +189,57 @@ def test_delete_by_filter_unpriced_only(
     db_session.expire_all()
     assert _get(db_session, "unpriced") is None
     assert _get(db_session, "priced") is not None
+
+
+@pytest.mark.parametrize("operation", ["delete", "set-price"])
+def test_count_and_mutation_agree_on_rows_that_still_need_pricing(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session, operation: str
+) -> None:
+    """``priced=false`` reaches a row charged only for tool calls, as the count counts it.
+
+    Its tokens were never metered, so it still needs pricing even though it carries
+    a cost; a mutation that read ``priced=false`` as ``cost IS NULL`` alone would
+    leave it out of the set the operator confirmed.
+    """
+    _make_log(db_session, log_id="no-cost", counts_toward_budget=False, cost=None)
+    _make_log(
+        db_session,
+        log_id="tool-only",
+        counts_toward_budget=False,
+        cost=0.01,
+        billing_meters={"tools": {"web_search": {"billed": 1, "unit_rate": 0.01}}},
+    )
+    _make_log(
+        db_session,
+        log_id="token-priced",
+        counts_toward_budget=False,
+        cost=0.02,
+        billing_meters={"total_input_tokens": 1000, "completion_tokens": 500},
+    )
+    db_session.commit()
+
+    counted = client.get(
+        COUNT_PATH, params={"counts_toward_budget": "false", "priced": "false"}, headers=master_key_header
+    )
+    assert counted.status_code == 200
+    assert counted.json()["total"] == 2
+
+    selection = {"by_filter": True, "priced": False}
+    if operation == "delete":
+        resp = client.request("DELETE", DELETE_PATH, json=selection, headers=master_key_header)
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] == counted.json()["total"]
+        db_session.expire_all()
+        assert _get(db_session, "tool-only") is None
+        assert _get(db_session, "token-priced") is not None
+    else:
+        resp = client.post(
+            SET_PRICE_PATH,
+            json={**selection, "input_price_per_million": 1.0, "output_price_per_million": 2.0},
+            headers=master_key_header,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["matched"] == counted.json()["total"]
 
 
 def test_delete_by_filter_never_touches_gateway_rows(

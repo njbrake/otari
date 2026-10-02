@@ -1,8 +1,6 @@
-import { useState } from "react"
 import { FiFilter, FiSlash } from "react-icons/fi"
 import { Button } from "@/design-system/actions/Button"
-import { Popover } from "@/design-system/overlays/Popover"
-import { MenuRow } from "./MenuRow"
+import { MenuButton, MenuItem } from "@/design-system/overlays/Menu"
 
 /**
  * The filter a cell offers on its own value: only rows with it, or every row
@@ -11,7 +9,7 @@ import { MenuRow } from "./MenuRow"
  *
  * Left out of the tab order: a control in every cell would put three stops on
  * each row before the next one. The keyboard reaches the same filters through
- * the column's own menu in the header.
+ * the column's own menu in the header, which picks or excludes each value.
  */
 export function ValueFilter({
   value,
@@ -20,28 +18,18 @@ export function ValueFilter({
   value: string
   onFilter: (mode: "include" | "exclude") => void
 }) {
-  const [isOpen, setIsOpen] = useState(false)
-  const pick = (mode: "include" | "exclude") => {
-    setIsOpen(false)
-    onFilter(mode)
-  }
   return (
     // Stops the press reaching the row, which would open the request.
     // biome-ignore lint/a11y/noStaticElementInteractions: a containment boundary, not a control
     // biome-ignore lint/a11y/useKeyWithClickEvents: the controls inside handle their own keys
     <span
       onClick={(event) => event.stopPropagation()}
-      className={`absolute top-1/2 right-1.5 z-[1] -translate-y-1/2 ${
-        isOpen
-          ? "opacity-100"
-          : "opacity-0 group-hover/cell:opacity-100 pointer-coarse:opacity-100"
-      }`}
+      className="absolute top-1/2 right-1.5 z-[1] -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100"
     >
-      <Popover
+      <MenuButton
         label={`Filter by ${value}`}
-        padding="none"
-        isOpen={isOpen}
-        onOpenChange={setIsOpen}
+        placement="bottom"
+        onAction={(key) => onFilter(key === "exclude" ? "exclude" : "include")}
         trigger={
           <Button
             size="sm"
@@ -54,15 +42,13 @@ export function ValueFilter({
           </Button>
         }
       >
-        <div className="flex w-60 flex-col py-1">
-          <MenuRow icon={FiFilter} onPress={() => pick("include")}>
-            Only <b className="font-medium text-foreground">{value}</b>
-          </MenuRow>
-          <MenuRow icon={FiSlash} onPress={() => pick("exclude")}>
-            Exclude <b className="font-medium text-foreground">{value}</b>
-          </MenuRow>
-        </div>
-      </Popover>
+        <MenuItem id="include" icon={FiFilter} textValue={`Only ${value}`}>
+          Only <b className="font-medium text-foreground">{value}</b>
+        </MenuItem>
+        <MenuItem id="exclude" icon={FiSlash} textValue={`Exclude ${value}`}>
+          Exclude <b className="font-medium text-foreground">{value}</b>
+        </MenuItem>
+      </MenuButton>
     </span>
   )
 }

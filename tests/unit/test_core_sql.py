@@ -19,3 +19,8 @@ def test_aware_bound_is_left_alone() -> None:
 
 def test_missing_bound_stays_missing() -> None:
     assert utc_bound(None) is None
+
+
+def test_a_naive_stored_timestamp_subtracts_from_an_aware_now() -> None:
+    """SQLite hands a timezone-aware column back naive; read through this, it compares with ``now(UTC)``."""
+    assert (datetime.now(UTC) - utc_bound(datetime(2026, 5, 19, 12, 0))).total_seconds() >= 0

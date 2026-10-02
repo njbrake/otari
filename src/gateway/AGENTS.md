@@ -281,10 +281,11 @@ where one exists.
 ## Usage filters
 
 Usage list, count, series, and bulk mutation must share filter semantics through
-`core/sql.py`, `core/usage_filters.py` (the search and `UsageRefinements`, which
-`UsageSelection` inherits), and the usage services. Every visible filter belongs on
-`UsageSelection` with the same scalar-or-list shape and
-`MAX_FILTER_VALUES` bound.
+`core/sql.py`, `core/usage_filters.py` (`entity_conditions`, which the read filters
+in `routes/_usage_common.py` and `UsageSelection` both build from, and
+`UsageRefinements`, which `UsageSelection` inherits), and the usage services.
+Every visible filter belongs on `UsageSelection` with the same scalar-or-list
+shape and `MAX_FILTER_VALUES` bound.
 
 Bulk mutation re-derives rows from the submitted filters. It never trusts a
 count calculated earlier by the dashboard. Imported-only guards do not replace

@@ -20,6 +20,8 @@ import {
   useStoredProviders,
 } from "@/shared/api/providers"
 import { useSettings, useUpdateSettings } from "@/shared/api/settings"
+import { useIsPhone } from "@/shared/hooks/useIsPhone"
+import { useMediaQuery } from "@/shared/hooks/useMediaQuery"
 
 // A single settable field maps onto one key of UpdateSettingsRequest. The keys
 // come from the backend's `settable` marking, so cast at this one boundary.
@@ -154,7 +156,7 @@ function TextSetting({
   const hasChanged = saved !== committed
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex max-w-full min-w-0 items-center gap-2">
       <input
         type="text"
         aria-label={field.key}
@@ -162,7 +164,7 @@ function TextSetting({
         disabled={disabled}
         placeholder="unset"
         onChange={(event) => setDraft(event.target.value)}
-        className={`w-56 ${INPUT_CLASS}`}
+        className={`w-56 min-w-0 ${INPUT_CLASS}`}
       />
       <Button
         size="sm"
@@ -288,14 +290,16 @@ function ConfigRow({
     // a `w-56` control and a sentence stopped fitting side by side.
     <div className="flex flex-wrap items-start justify-between gap-6 py-4">
       <div className="min-w-0">
-        <code className="font-mono text-body">{field.key}</code>
+        <code className="font-mono text-body break-words">{field.key}</code>
         {field.description ? (
           // `max-w-prose` for the reason the page header carries one: these
           // rows became full-bleed with the rest of the page, and the longest
           // description here measured 1211px, about 175 characters to the line,
           // roughly twice a readable measure. The row still spans the page; the
           // sentence inside it does not have to.
-          <p className="mt-1 max-w-prose text-caption">{field.description}</p>
+          <p className="mt-1 max-w-prose text-caption break-words">
+            {field.description}
+          </p>
         ) : null}
       </div>
       {/* `min-w-0`, not `shrink-0`: a column that refuses to shrink keeps its
@@ -578,6 +582,12 @@ export function SettingsPage() {
   const [search, setSearch] = useState("")
   const [settableOnly, setSettableOnly] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
+  // The "/" hint is offered only where there is a keyboard to press it: a fine
+  // pointer at a desk width. On a phone it promises a key nobody has, and it is
+  // what truncated the placeholder.
+  const hasFinePointer = useMediaQuery("(pointer: fine)")
+  const isPhone = useIsPhone()
+  const offersShortcutHint = hasFinePointer && !isPhone
 
   // "/" focuses the search box (a common shortcut for filter-heavy pages),
   // unless the user is already typing in a field.
@@ -622,13 +632,17 @@ export function SettingsPage() {
           ref={searchRef}
           type="search"
           aria-label="Search settings"
-          placeholder="Search settings (press / to focus)…"
+          placeholder={
+            offersShortcutHint
+              ? "Search settings (press / to focus)…"
+              : "Search settings…"
+          }
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Escape") setSearch("")
           }}
-          className="min-w-0 flex-1 rounded-lg border border-border bg-surface-alt px-3 py-2 text-body focus:border-accent focus:outline-none"
+          className={`min-w-0 flex-1 ${INPUT_CLASS}`}
         />
         <Checkbox isSelected={settableOnly} onChange={setSettableOnly}>
           Settable only

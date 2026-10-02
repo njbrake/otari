@@ -26,18 +26,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import TelemetryStoragePortDep, get_db, require_deployment_operator
 
-# The window, bucket-grid, and fold conventions are `usage.py`'s: a summary read
+# The window, bucket-grid, and fold conventions are the usage reads': a summary read
 # from both endpoints has to describe the same window the same way, so they share
 # one implementation rather than two that drift.
-from gateway.api.routes.usage import (
-    _SERIES_TOP_N,
-    Bucket,
-    _dense_series,
-    _refuse_wide_grid,
-    _resolve_window,
-)
+from gateway.api.routes._usage_common import refuse_wide_grid
+from gateway.core.series import SERIES_TOP_N, dense_series
 from gateway.core.sql import BUCKET_FORMATS, MAX_FILTER_VALUES, bucket_expr, canonical_bucket, dialect_name, match_any
-from gateway.core.usage_filters import request_count
+from gateway.core.usage_filters import request_count, resolve_window
 from gateway.models.usage import UsageLog
 from gateway.ports.telemetry_storage_port import (
     BehaviorCounts,
@@ -45,6 +40,7 @@ from gateway.ports.telemetry_storage_port import (
     TelemetryScanTooLargeError,
     TelemetryStoragePort,
 )
+from gateway.schemas.usage import Bucket
 from gateway.services.agent_telemetry_admin_service import (
     AgentTelemetryDeleteRequest,
     AgentTelemetryDeleteResult,
@@ -405,7 +401,7 @@ async def agent_telemetry_summary(
     diffed per series generation: a re-exported total adds nothing, and a counter
     reset never reads as negative work. Master-key only.
     """
-    start, end = _resolve_window(start_date, end_date)
+    start, end = resolve_window(start_date, end_date)
     scope = _scope(start_date=start, end_date=end, user_id=user_id, api_key_id=api_key_id, session_label=session_label)
     usage_conditions = _usage_filters(
         start=start, end=end, user_id=user_id, api_key_id=api_key_id, session_label=session_label
@@ -511,7 +507,7 @@ async def _summary_series(
     for raw_bucket, cost in usage_rows:
         point_for(canonical_bucket(raw_bucket, bucket)).cost = float(cost)
 
-    return _dense_series(start, end, bucket, populated, lambda key: AgentTelemetrySeriesPoint(bucket_start=key))
+    return dense_series(start, end, bucket, populated, lambda key: AgentTelemetrySeriesPoint(bucket_start=key))
 
 
 @router.get("/count")
@@ -551,10 +547,10 @@ async def agent_telemetry_series(
     ``other``, and sparse points (populated cells only). Counts rows, not spend,
     so it charts telemetry volume rather than cost. Master-key only.
     """
-    start, end = _resolve_window(start_date, end_date)
-    _refuse_wide_grid(start, end, bucket)
+    start, end = resolve_window(start_date, end_date)
+    refuse_wide_grid(start, end, bucket)
     scope = _scope(start_date=start, end_date=end, user_id=user_id, api_key_id=api_key_id, name=name)
-    counts = await storage.grouped_row_counts(filters=scope, group_by=group_by, bucket=bucket, top_n=_SERIES_TOP_N)
+    counts = await storage.grouped_row_counts(filters=scope, group_by=group_by, bucket=bucket, top_n=SERIES_TOP_N)
 
     # The fold reconciles the ranked groups against every matching row, so the
     # stacked series adds up to the total whatever storage ranked. It is encoded
