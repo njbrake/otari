@@ -1383,11 +1383,13 @@ export interface paths {
         };
         /**
          * List Keys
-         * @description List the API keys in the caller's organization.
+         * @description List the API keys in the caller's organization, oldest first.
          *
          *     Requires master key authentication. An unset ``workspace_id`` lists every key
          *     in that organization; naming a workspace in another one lists nothing rather
          *     than refusing, so the filter reports no more than the unfiltered read does.
+         *     ``search`` narrows within that scope, so a picker can ask for the matches
+         *     instead of filtering whatever page it fetched.
          */
         get: operations["keys-list_keys"];
         put?: never;
@@ -2192,7 +2194,8 @@ export interface paths {
          *     Only keys billed to the caller's own user: an operator-minted key assigned
          *     to them is theirs to see here, and nobody else's key ever is. Naming a
          *     workspace outside their organization lists nothing rather than refusing, so
-         *     the filter reports no more than the unfiltered read does.
+         *     the filter reports no more than the unfiltered read does. ``search`` narrows
+         *     within the same rows.
          */
         get: operations["organization-keys-list_own_keys"];
         put?: never;
@@ -16430,6 +16433,8 @@ export interface operations {
                 limit?: number;
                 /** @description Only keys in this workspace. */
                 workspace_id?: string | null;
+                /** @description Narrow to keys whose name, prefix or suffix contains this text, case-insensitively, or whose id is this text. */
+                search?: string | null;
             };
             header?: never;
             path?: never;
@@ -17887,6 +17892,8 @@ export interface operations {
                 limit?: number;
                 /** @description Only keys in this workspace. */
                 workspace_id?: string | null;
+                /** @description Narrow to keys whose name, prefix or suffix contains this text, case-insensitively, or whose id is this text. */
+                search?: string | null;
             };
             header?: never;
             path?: never;

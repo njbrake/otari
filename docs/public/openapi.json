@@ -23537,7 +23537,7 @@
     },
     "/api/v1/keys": {
       "get": {
-        "description": "List the API keys in the caller's organization.\n\nRequires master key authentication. An unset ``workspace_id`` lists every key\nin that organization; naming a workspace in another one lists nothing rather\nthan refusing, so the filter reports no more than the unfiltered read does.",
+        "description": "List the API keys in the caller's organization, oldest first.\n\nRequires master key authentication. An unset ``workspace_id`` lists every key\nin that organization; naming a workspace in another one lists nothing rather\nthan refusing, so the filter reports no more than the unfiltered read does.\n``search`` narrows within that scope, so a picker can ask for the matches\ninstead of filtering whatever page it fetched.",
         "operationId": "keys-list_keys",
         "parameters": [
           {
@@ -23580,6 +23580,25 @@
               ],
               "description": "Only keys in this workspace.",
               "title": "Workspace Id"
+            }
+          },
+          {
+            "description": "Narrow to keys whose name, prefix or suffix contains this text, case-insensitively, or whose id is this text.",
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Narrow to keys whose name, prefix or suffix contains this text, case-insensitively, or whose id is this text.",
+              "title": "Search"
             }
           }
         ],
@@ -25902,7 +25921,7 @@
     },
     "/api/v1/organizations/me/keys": {
       "get": {
-        "description": "List the caller's own API keys in their active organization, newest first.\n\nOnly keys billed to the caller's own user: an operator-minted key assigned\nto them is theirs to see here, and nobody else's key ever is. Naming a\nworkspace outside their organization lists nothing rather than refusing, so\nthe filter reports no more than the unfiltered read does.",
+        "description": "List the caller's own API keys in their active organization, newest first.\n\nOnly keys billed to the caller's own user: an operator-minted key assigned\nto them is theirs to see here, and nobody else's key ever is. Naming a\nworkspace outside their organization lists nothing rather than refusing, so\nthe filter reports no more than the unfiltered read does. ``search`` narrows\nwithin the same rows.",
         "operationId": "organization-keys-list_own_keys",
         "parameters": [
           {
@@ -25945,6 +25964,25 @@
               ],
               "description": "Only keys in this workspace.",
               "title": "Workspace Id"
+            }
+          },
+          {
+            "description": "Narrow to keys whose name, prefix or suffix contains this text, case-insensitively, or whose id is this text.",
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Narrow to keys whose name, prefix or suffix contains this text, case-insensitively, or whose id is this text.",
+              "title": "Search"
             }
           }
         ],

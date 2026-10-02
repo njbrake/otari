@@ -53,10 +53,13 @@ from gateway.api.deps import (
 )
 from gateway.api.routes.keys import (
     _KEY_EXCEEDS_USER_DETAIL,
+    KEY_SEARCH_DESC,
+    KEY_SEARCH_MAX_LENGTH,
     NOT_INTERNAL,
     CreateKeyResponse,
     KeyInfo,
     _load_key_in_organization,
+    key_search_condition,
 )
 from gateway.auth.models import hash_key, key_suffix
 from gateway.core.config import GatewayConfig
@@ -302,13 +305,15 @@ async def list_own_keys(
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     workspace_id: Annotated[uuid.UUID | None, Query(description="Only keys in this workspace.")] = None,
+    search: Annotated[str | None, Query(max_length=KEY_SEARCH_MAX_LENGTH, description=KEY_SEARCH_DESC)] = None,
 ) -> list[KeyInfo]:
     """List the caller's own API keys in their active organization, newest first.
 
     Only keys billed to the caller's own user: an operator-minted key assigned
     to them is theirs to see here, and nobody else's key ever is. Naming a
     workspace outside their organization lists nothing rather than refusing, so
-    the filter reports no more than the unfiltered read does.
+    the filter reports no more than the unfiltered read does. ``search`` narrows
+    within the same rows.
     """
     organization_id, owner_user_id = await _caller_context(db, identity)
     statement = (
@@ -322,6 +327,8 @@ async def list_own_keys(
     )
     if workspace_id is not None:
         statement = statement.where(col(APIKey.workspace_id) == workspace_id)
+    if (matches := key_search_condition(search)) is not None:
+        statement = statement.where(matches)
     # Ordered so paging through more than one page is stable, with the id as a
     # tiebreak for keys minted in the same instant.
     statement = statement.order_by(col(APIKey.created_at).desc(), col(APIKey.id))

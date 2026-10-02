@@ -121,6 +121,35 @@ def test_list_api_keys_pagination(client: TestClient, master_key_header: dict[st
     assert len(data) <= 3
 
 
+def test_list_api_keys_search_matches_name_and_fingerprint(
+    client: TestClient, master_key_header: dict[str, str]
+) -> None:
+    """``search`` narrows on the name, either half of the fingerprint, and the id."""
+    created = {}
+    for name in ("Billing Robot", "ci-runner", "batch_job", "100% done", "100 done"):
+        response = client.post(f"{API_ROOT}/keys", json={"key_name": name}, headers=master_key_header)
+        assert response.status_code == 200
+        created[name] = response.json()
+
+    def search(term: str) -> set[str]:
+        response = client.get(f"{API_ROOT}/keys", params={"search": term}, headers=master_key_header)
+        assert response.status_code == 200, response.text
+        return {row["id"] for row in response.json()}
+
+    assert search("robot") == {created["Billing Robot"]["id"]}
+    assert search("  BILLING  ") == {created["Billing Robot"]["id"]}
+    robot = created["Billing Robot"]
+    assert robot["id"] in search(robot["key_suffix"])
+    assert robot["id"] in search(robot["key_prefix"])
+    assert search(robot["id"]) == {robot["id"]}
+    # The wildcards are literal: `%` and `_` match themselves, not any text.
+    assert search("100%") == {created["100% done"]["id"]}
+    assert search("h_j") == {created["batch_job"]["id"]}
+    assert search("no key is named this") == set()
+    # A blank term narrows nothing.
+    assert search(" ") >= {key["id"] for key in created.values()}
+
+
 def test_get_api_key(client: TestClient, master_key_header: dict[str, str], api_key_obj: dict[str, Any]) -> None:
     """Test getting specific API key details."""
     response = client.get(f"{API_ROOT}/keys/{api_key_obj['id']}", headers=master_key_header)

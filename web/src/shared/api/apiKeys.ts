@@ -1,4 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  keepPreviousData,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import type {
   ApiKey,
   CreateKeyRequest,
@@ -55,6 +61,60 @@ export function useKeys(workspaceId?: string, enabled = true) {
     queryFn: () => fetchAllKeys(scope.base, workspaceId),
     enabled: scope.isReady && enabled,
     staleTime: 60_000,
+  })
+}
+
+/**
+ * The keys matching a search term, for a picker.
+ *
+ * The term goes to the server, which matches the name, either half of the
+ * fingerprint and the id, so what comes back is the matches out of every key the
+ * caller may list rather than out of a page already fetched. Bounded because a
+ * picker shows a handful of rows. Debounce the term before it gets here
+ * (`useDebounced`), or every keystroke is a request and the answers race.
+ */
+export function useKeySearch(
+  search: string,
+  workspaceId: string | undefined,
+  limit: number,
+) {
+  const scope = useKeysScope()
+  return useQuery({
+    queryKey: [KEYS, scope.base, "search", workspaceId ?? null, search, limit],
+    queryFn: () => {
+      const params = new URLSearchParams({ limit: String(limit) })
+      if (workspaceId) params.set("workspace_id", workspaceId)
+      if (search) params.set("search", search)
+      return apiFetch<ApiKey[]>(`${scope.base}?${params}`)
+    },
+    enabled: scope.isReady,
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
+  })
+}
+
+/**
+ * Each listed key among `ids`, looked up by id, for the labels of keys a page
+ * already holds (a filter chip from a link) that no search result carries.
+ * Through the search parameter, which matches an id exactly, because the member
+ * surface has no read of one key. A key the caller may not list is absent.
+ */
+export function useKeysById(ids: readonly string[]) {
+  const scope = useKeysScope()
+  return useQueries({
+    queries: ids.map((id) => ({
+      queryKey: [KEYS, scope.base, "by-id", id],
+      queryFn: () =>
+        apiFetch<ApiKey[]>(
+          `${scope.base}?${new URLSearchParams({ search: id, limit: "1" })}`,
+        ),
+      enabled: scope.isReady,
+      staleTime: 60_000,
+    })),
+    combine: (results) =>
+      results.flatMap((result, index) =>
+        (result.data ?? []).filter((apiKey) => apiKey.id === ids[index]),
+      ),
   })
 }
 
