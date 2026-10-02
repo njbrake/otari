@@ -10,7 +10,9 @@ one.
 
 `src/app/AppShell.tsx` handles the chrome: below `MOBILE_QUERY` (`max-width: 767px`, Tailwind's
 `md` boundary) the sidebar becomes an off-canvas drawer with a focus trap, the background is
-`inert` while it is open, and the collapse chevron is hidden. That is the part that is done.
+`inert` while it is open, and the collapse chevron is hidden. A swipe right opens the drawer and a
+swipe left closes it (`src/app/useDrawerSwipe.ts`); a surface that drags sideways itself keeps the
+gesture by declaring `touch-action` without `pan-x`, as the charts do. That is the part that is done.
 
 **Pages are the gap.** Outside the shell the tree has a handful of `sm:grid-cols-*` and three
 `md:hidden`, and every table renders at its desktop width whatever the viewport. Treat a page

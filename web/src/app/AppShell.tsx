@@ -51,6 +51,7 @@ import { PostSignInGate } from "@/app/overlayPostSignInGate"
 import { PendingPage } from "@/app/PendingPage"
 import { TelemetryIdentity } from "@/app/TelemetryIdentity"
 import { UpdatePrompt } from "@/app/UpdatePrompt"
+import { useDrawerSwipe } from "@/app/useDrawerSwipe"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { PricingWarning } from "@/features/models/PricingWarning"
 import { UnpricedUsageWarning } from "@/features/models/UnpricedUsageWarning"
@@ -566,6 +567,7 @@ function AppShellChrome() {
     ? (organizationLanding?.to ?? "/organization/members")
     : (workspaceLanding?.to ?? "/")
 
+  const rowRef = useRef<HTMLDivElement>(null)
   const asideRef = useRef<HTMLElement>(null)
   const mainRef = useRef<HTMLElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
@@ -750,6 +752,14 @@ function AppShellChrome() {
   // is in it, and the trail beside that control is the one thing worth reading
   // while the drawer is open.
   const backgroundInert = isMobile && mobileNavOpen ? true : undefined
+  // A swipe right opens the drawer and a swipe left closes it, the way a native
+  // app's side menu does.
+  useDrawerSwipe(rowRef, {
+    enabled: isMobile,
+    isOpen: mobileNavOpen,
+    onOpen: () => setMobileNavOpen(true),
+    onClose: closeMobileNav,
+  })
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
@@ -783,6 +793,7 @@ function AppShellChrome() {
           it. The update prompt and the connection status are out of flow and
           carry their own fill, so they do not enter into this. */}
       <div
+        ref={rowRef}
         className="relative flex min-h-0 flex-1"
         // What the rail costs the content beside it, for a `position: fixed`
         // overlay that has to center on that content rather than on the

@@ -1,4 +1,4 @@
-import { act, cleanup, screen, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -74,6 +74,16 @@ function mockMatchMedia(matches: boolean, options: { legacy?: boolean } = {}) {
     })
   }
   return { mql, listeners, change }
+}
+
+/** One finger across `element` from `fromX` to `toX`, as a phone delivers it. */
+function swipe(element: Element, fromX: number, toX: number) {
+  const at = (clientX: number) => ({ identifier: 0, clientX, clientY: 300 })
+  fireEvent.touchStart(element, {
+    touches: [at(fromX)],
+    changedTouches: [at(fromX)],
+  })
+  fireEvent.touchEnd(element, { touches: [], changedTouches: [at(toX)] })
 }
 
 // AppShell is the root route's component in the real tree, so it renders its
@@ -366,6 +376,31 @@ describe("AppShell responsive layout", () => {
     expect(
       screen.getByRole("button", { name: "Open navigation" }),
     ).toHaveFocus()
+  })
+
+  it("opens the drawer on a swipe right and closes it on a swipe left", async () => {
+    mockMatchMedia(true)
+    await renderShell()
+
+    swipe(screen.getByText("PAGE CONTENT"), 80, 280)
+    expect(
+      screen.getByRole("button", { name: "Close navigation" }),
+    ).toHaveAttribute("aria-expanded", "true")
+
+    swipe(screen.getByRole("navigation", { name: "Sidebar" }), 300, 100)
+    expect(
+      screen.getByRole("button", { name: "Open navigation" }),
+    ).toHaveAttribute("aria-expanded", "false")
+  })
+
+  it("leaves a swipe alone on the desk, where there is no drawer", async () => {
+    mockMatchMedia(false)
+    await renderShell()
+
+    swipe(screen.getByText("PAGE CONTENT"), 80, 280)
+    expect(
+      screen.queryByRole("button", { name: "Close navigation" }),
+    ).toBeNull()
   })
 
   it("fills the viewport below the top bar rather than floating over the page", async () => {
