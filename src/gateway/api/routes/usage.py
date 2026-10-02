@@ -140,6 +140,8 @@ class UsageEntry(BaseModel):
     cache_read_tokens: int | None
     cache_write_tokens: int | None
     cache_write_1h_tokens: int | None
+    # A subset of completion_tokens; null on rows written before it was recorded.
+    reasoning_tokens: int | None = None
     # Precise shapes with a permissive fallback arm; see _billing_schemas for why
     # the fallback is what keeps a row written by an older gateway renderable.
     billing_meters: MeterMap | None
@@ -225,6 +227,7 @@ class UsageEntry(BaseModel):
             cache_read_tokens=log.cache_read_tokens,
             cache_write_tokens=log.cache_write_tokens,
             cache_write_1h_tokens=log.cache_write_1h_tokens,
+            reasoning_tokens=log.reasoning_tokens,
             billing_meters=log.billing_meters,
             pricing_breakdown=log.pricing_breakdown,
             cost=as_float(log.cost),

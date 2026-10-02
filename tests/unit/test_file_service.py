@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from datetime import UTC, datetime
 from typing import Any, cast
 from unittest.mock import Mock
@@ -30,8 +30,14 @@ from gateway.exceptions.files_exceptions import (
 )
 from gateway.models.files import FileObject
 from gateway.ports.file_storage_port import FileStoragePort
-from gateway.repositories.files import FilePageQuery, FileRepositories, FileRepository
-from gateway.services.files import FileDialect, FileListing, FileScope, FileService, NewFile
+from gateway.ports.provider_file_port import ProviderFilePort
+from gateway.repositories.files import (
+    FilePageQuery,
+    FileProviderCopyRepository,
+    FileRepositories,
+    FileRepository,
+)
+from gateway.services.files import FileBackends, FileDialect, FileListing, FileScope, FileService, NewFile
 
 _WORKSPACE = uuid.uuid4()
 _DEFAULT_WORKSPACE = uuid.uuid4()
@@ -43,19 +49,21 @@ class _MemoryStore:
         self._delete_error = delete_error
         self._read_error = read_error
 
-    async def put(self, file_id: str, data: bytes) -> str:
-        self.blobs[file_id] = data
+    async def allocate(self, file_id: str) -> str:
         return file_id
+
+    async def put(self, storage_ref: str, data: bytes) -> None:
+        self.blobs[storage_ref] = data
 
     async def get(self, storage_ref: str) -> bytes:
         return self.blobs[storage_ref]
 
-    async def put_stream(self, file_id: str, chunks: AsyncIterator[bytes]) -> tuple[str, int]:
+    async def put_stream(self, storage_ref: str, chunks: AsyncIterator[bytes]) -> int:
         data = bytearray()
         async for chunk in chunks:
             data.extend(chunk)
-        self.blobs[file_id] = bytes(data)
-        return file_id, len(data)
+        self.blobs[storage_ref] = bytes(data)
+        return len(data)
 
     async def get_stream(self, storage_ref: str) -> Any:
         if self._read_error is not None:
@@ -87,17 +95,32 @@ class _StubFiles:
         add_error: Exception | None = None,
         delete_error: Exception | None = None,
         rows: list[FileObject] | None = None,
+        reservation_gone: bool = False,
     ) -> None:
         self._add_error = add_error
         self._delete_error = delete_error
         self._rows = rows or []
+        self._reservation_gone = reservation_gone
         self.added: list[FileObject] = []
+        self.stored: list[FileObject] = []
+        self.removed: list[str] = []
         self.discarded: list[str] = []
 
     async def add(self, record: FileObject) -> None:
         if self._add_error is not None:
             raise self._add_error
         self.added.append(record)
+
+    async def mark_stored(self, record: FileObject, size: int) -> bool:
+        if self._reservation_gone:
+            return False
+        record.bytes = size
+        record.pending_since = None
+        self.stored.append(record)
+        return True
+
+    async def remove_all(self, file_ids: Collection[str]) -> None:
+        self.removed.extend(file_ids)
 
     async def page(self, query: FilePageQuery) -> list[FileObject]:
         return self._rows[: query.limit]
@@ -138,8 +161,8 @@ def _service(
 
     return FileService(
         cast(UnitOfWork, _FakeUnitOfWork()),
-        FileRepositories(files=cast(FileRepository, files)),
-        cast(FileStoragePort, store),
+        FileRepositories(files=cast(FileRepository, files), provider_copies=cast(FileProviderCopyRepository, None)),
+        FileBackends(storage=cast(FileStoragePort, store), provider_files=cast(ProviderFilePort, None)),
         GatewayConfig(**config),
         _default_workspace,
     )
@@ -162,7 +185,7 @@ def _upload(*parts: bytes, workspace_id: uuid.UUID | None = _WORKSPACE) -> NewFi
 
 
 @pytest.mark.asyncio
-async def test_an_upload_whose_row_will_not_land_takes_its_blob_with_it() -> None:
+async def test_an_upload_whose_row_will_not_land_writes_no_bytes() -> None:
     store = _MemoryStore()
     service = _service(store, _StubFiles(add_error=SQLAlchemyError()))
 
@@ -173,19 +196,54 @@ async def test_an_upload_whose_row_will_not_land_takes_its_blob_with_it() -> Non
 
 
 @pytest.mark.asyncio
-async def test_an_empty_upload_is_refused_and_leaves_no_blob() -> None:
+async def test_a_stored_upload_is_reserved_first_and_stamped_once_its_bytes_land() -> None:
     store = _MemoryStore()
+    files = _StubFiles()
+
+    record = await _service(store, files).store(_upload(b"a,b\n"))
+
+    assert files.added == [record]
+    assert files.stored == [record]
+    assert record.pending_since is None
+    assert record.bytes == len(b"a,b\n")
+    assert store.blobs == {record.storage_ref: b"a,b\n"}
+
+
+@pytest.mark.asyncio
+async def test_an_empty_upload_is_refused_and_gives_its_reservation_back() -> None:
+    store = _MemoryStore()
+    files = _StubFiles()
 
     with pytest.raises(EmptyUploadError):
-        await _service(store, _StubFiles()).store(_upload())
+        await _service(store, files).store(_upload())
 
+    assert files.stored == []
+    assert files.removed == [files.added[0].id]
     assert store.blobs == {}
 
 
 @pytest.mark.asyncio
-async def test_an_upload_past_the_ceiling_is_refused() -> None:
+async def test_an_upload_past_the_ceiling_is_refused_and_gives_its_reservation_back() -> None:
+    store = _MemoryStore()
+    files = _StubFiles()
+
     with pytest.raises(UploadTooLargeError):
-        await _service(_MemoryStore(), _StubFiles(), files_max_bytes=4).store(_upload(b"12345"))
+        await _service(store, files, files_max_bytes=4).store(_upload(b"12345"))
+
+    assert files.removed == [files.added[0].id]
+    assert store.blobs == {}
+
+
+@pytest.mark.asyncio
+async def test_an_upload_reclaimed_while_it_was_writing_is_refused_and_takes_its_bytes() -> None:
+    """The sweep can reach a reservation mid-write, and a silent stamp would claim a file nobody holds."""
+    store = _MemoryStore()
+    files = _StubFiles(reservation_gone=True)
+
+    with pytest.raises(FileStorageError):
+        await _service(store, files).store(_upload(b"a,b\n"))
+
+    assert store.blobs == {}
 
 
 @pytest.mark.asyncio
@@ -205,8 +263,12 @@ async def test_output_builder_requires_explicit_workspace_for_uploads(
 ) -> None:
     store = _MemoryStore()
     files = _StubFiles()
-    monkeypatch.setattr(FileRepositories, "on", Mock(return_value=FileRepositories(files=cast(FileRepository, files))))
-    service = build_file_service(cast(UnitOfWork, _FakeUnitOfWork()), cast(FileStoragePort, store), GatewayConfig())
+    repositories = FileRepositories(
+        files=cast(FileRepository, files), provider_copies=cast(FileProviderCopyRepository, None)
+    )
+    monkeypatch.setattr(FileRepositories, "on", Mock(return_value=repositories))
+    backends = FileBackends(storage=cast(FileStoragePort, store), provider_files=cast(ProviderFilePort, None))
+    service = build_file_service(cast(UnitOfWork, _FakeUnitOfWork()), backends, GatewayConfig())
 
     if workspace_id is None:
         with pytest.raises(

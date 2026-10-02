@@ -80,7 +80,8 @@ the corresponding startup value after the database is available.
 | `public_catalog` | Serve the model catalog to visitors without a session. Defaults to `false`. |
 | `public_catalog_rate_limit_per_minute` | Anonymous catalog reads per client address per minute. Defaults to 60. |
 | `rate_limit_rpm` | Per-user request limit. Unset disables it. |
-| `enable_metrics` | Serve Prometheus metrics at `/metrics`. |
+| `idempotency_retention_sec` | How long a completion sent with an `Idempotency-Key` is kept for a retry to replay. Defaults to a day; `0` ignores the header. Needs `OTARI_SECRET_KEY`, which encrypts the stored response. See [Retrying safely](api-reference.md#retrying-safely). |
+| `enable_metrics` | Serve Prometheus metrics at `/metrics`. Needs the `metrics` extra (`pip install gateway[metrics]`), which the Docker image installs; setting this without it refuses to start. |
 | `enable_docs` | Serve OpenAPI, Swagger UI, and ReDoc. |
 | `mode` | `standalone`, `hosted`, or `hybrid`. See [Modes](modes.md). |
 
@@ -199,6 +200,21 @@ run the provider and search-tool re-encryption endpoints, then remove the old
 key. Losing every configured encryption key makes stored credentials
 unrecoverable.
 
+### Provider copies
+
+A request that asks a provider's own code execution to run over an attached file
+gets a short-lived copy of that file in the provider's account (see
+[Files](files.md#a-file-the-providers-own-code-execution-reads)). The account a
+copy is in is named by a keyed digest of the credential that made it, so the
+digest needs a key of its own: `OTARI_PROVIDER_ACCOUNT_PEPPER`.
+
+Otari refuses to start while `files_provider_upload_enabled` is on, which it is
+by default, and the pepper is unset, shorter than 32 characters, or equal to the
+master key or an `OTARI_SECRET_KEY` key. Generate one with
+`otari gen-provider-account-pepper` or `openssl rand -base64 32`, and keep it in
+your secret store. Rotating it costs nothing but a fresh copy of each file the
+next time a request uses it. Hybrid mode makes no copies and needs no pepper.
+
 ## Pricing
 
 Pricing keys use `provider:model` or `instance:model`:
@@ -283,11 +299,12 @@ path, and `dashboard_login_rate_limit_per_minute` is sized for password
 attempts, not for browsing. Set it to `null` to remove the limit.
 
 Two limits of that throttle are worth knowing before a catalog is put on the
-open internet. The address is the socket's, and the bundled server is started
-without proxy headers, so behind a reverse proxy every visitor shares the
-proxy's address and one scraper exhausts the budget for everyone; put the
-throttle in the proxy instead. And the counter is per worker, so a deployment
-running N workers serves up to N times the configured number.
+open internet. Behind a reverse proxy every visitor shares the proxy's
+address, and one scraper exhausts the budget for everyone, unless
+`forwarded_allow_ips` trusts that proxy; see
+[Behind a reverse proxy](deployment.md#behind-a-reverse-proxy). And the counter
+is per worker, so a deployment running N workers serves up to N times the
+configured number.
 
 In hosted mode a visitor sees the same thing a visitor sees anywhere else: the
 process-wide `providers:` instances, which in that mode are the deployment's
