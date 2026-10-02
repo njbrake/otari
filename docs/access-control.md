@@ -187,6 +187,8 @@ dashboard to finish. Where an edge serves the dashboard elsewhere, set
 OAuth signs in an existing Otari identity whose email the provider verifies. It
 does not provision arbitrary provider accounts.
 
+A provider sign-in on an address that is not yet verified marks it verified. It also removes any password and verification link set on that address before then: the provider confirms who owns the address, not who chose that password. The person can set a new password from their account page once signed in. A password on an address that was already verified is kept.
+
 ### Signup
 
 Signup sets a password for an address and sends a verification link. What an
@@ -199,10 +201,14 @@ unknown address does depends on `open_signup`:
 - `true`: an unknown address is registered, with an organization and workspace of
   its own. Use it where the deployment serves many tenants.
 
+Signup never sets a password on an address that is already verified. That is the
+state a Google or GitHub sign-in leaves, and the person who signs in that way
+adds a password from Account settings while signed in.
+
 Either way the response says the same thing whether the address was unknown,
-already claimed, or genuinely just claimed, so its body discloses nothing about
-the address. Response *timing* still does, because the eligible path sends mail
-before it answers; that is [otari#720](https://github.com/mozilla-ai/otari/issues/720)
+already claimed, already verified, or genuinely just claimed, so its body
+discloses nothing about the address. Response *timing* still does, because the
+eligible path sends mail before it answers; that is [otari#720](https://github.com/mozilla-ai/otari/issues/720)
 and it applies to both postures.
 
 Signup needs mail configured, because an account that cannot verify its address

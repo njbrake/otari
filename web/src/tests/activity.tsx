@@ -88,6 +88,7 @@ export function totals(overrides: Partial<UsageTotals> = {}): UsageTotals {
     billed_output_tokens: 0,
     absorbed_count: 0,
     imported_cost: 0,
+    reasoning_tokens: 0,
     ...overrides,
   }
 }

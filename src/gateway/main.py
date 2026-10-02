@@ -15,7 +15,12 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from typing_extensions import override
 
 from gateway import features
-from gateway.api.deps import build_file_service, build_telemetry_retention_service, set_config
+from gateway.api.deps import (
+    build_file_service,
+    build_idempotency_service,
+    build_telemetry_retention_service,
+    set_config,
+)
 from gateway.api.main import register_routers
 from gateway.container import Container, build_container
 from gateway.core.config import API_KEY_HEADER, API_ROOT, GATEWAY_TOKEN_HEADER, X_API_KEY_HEADER, GatewayConfig
@@ -31,6 +36,7 @@ from gateway.log_config import logger
 from gateway.ports.api_key_format_port import ApiKeyFormatPort
 from gateway.ports.file_storage_port import FileStoragePort
 from gateway.ports.model_provider_port import ModelProviderPort
+from gateway.ports.provider_file_port import ProviderFilePort
 from gateway.ports.telemetry_storage_port import TelemetryStoragePort
 from gateway.rate_limit import RateLimiter
 from gateway.root_page import FAVICON_SVG, ROOT_TUTORIAL_HTML
@@ -40,7 +46,8 @@ from gateway.services.budgets import run_reservation_sweeper
 from gateway.services.catalog_selectors import reset_selector_index
 from gateway.services.code_execution.container_sweeper import run_sandbox_container_sweeper
 from gateway.services.dashboard_session_service import revoke_sessions_on_master_key_change
-from gateway.services.files import run_file_sweeper
+from gateway.services.files import FileBackends, run_file_sweeper
+from gateway.services.inference import run_idempotency_sweeper
 from gateway.services.log_writer import LogWriter, NoopLogWriter, create_log_writer
 from gateway.services.master_key_service import ensure_master_key
 from gateway.services.model_catalog_service import (
@@ -82,7 +89,7 @@ from gateway.services.search_tool_store_service import (
     reset_search_tool_cache,
     run_search_tool_refresher,
 )
-from gateway.services.secret_box import validate_secret_key
+from gateway.services.secret_box import shares_secret_key, validate_secret_key
 from gateway.services.selector_index_service import run_selector_index_refresher
 from gateway.services.tenancy.org_provider_key_service import (
     load_org_provider_keys_at_startup,
@@ -188,8 +195,17 @@ def _start_file_sweeper(config: GatewayConfig, container: Container) -> Coroutin
     """
     if not config.files_enabled or config.files_sweep_interval_sec <= 0:
         return None
-    file_store = container.resolve(FileStoragePort, None)
-    return run_file_sweeper(config.files_sweep_interval_sec, lambda uow: build_file_service(uow, file_store, config))
+    backends = FileBackends(
+        storage=container.resolve(FileStoragePort, None), provider_files=container.resolve(ProviderFilePort, None)
+    )
+    return run_file_sweeper(config.files_sweep_interval_sec, lambda uow: build_file_service(uow, backends, config))
+
+
+def _start_idempotency_sweeper(config: GatewayConfig, _container: Container) -> Coroutine[Any, Any, None]:
+    """Return the idempotency record sweep, which runs even while the header is ignored so stored records expire."""
+    return run_idempotency_sweeper(
+        config.idempotency_sweep_interval_sec, lambda uow: build_idempotency_service(uow, config)
+    )
 
 
 def _start_telemetry_retention_sweeper(config: GatewayConfig, container: Container) -> Coroutine[Any, Any, None] | None:
@@ -275,6 +291,8 @@ _LIFESPAN_WORKERS: tuple[_LifespanWorker, ...] = (
     # The provider reclaims a held sandbox on its own timer; this drops the
     # rows that named it once nobody can resume them.
     _LifespanWorker("sandbox container sweep", _start_container_sweeper),
+    # Stored responses hold generated content, so they go once their retention passes.
+    _LifespanWorker("idempotency sweep", _start_idempotency_sweeper),
 )
 
 
@@ -369,6 +387,52 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             vary_values.add("Authorization")
             response.headers["Vary"] = ", ".join(sorted(vary_values))
         return response
+
+
+def _validate_metrics_support(config: GatewayConfig) -> None:
+    """Refuse to start when metrics are asked for but the extra is not installed.
+
+    ``prometheus-client`` is an optional extra, and without it the metric objects
+    in :mod:`gateway.metrics` fall back to no-ops. Registering ``/metrics`` on top
+    of those would answer a scrape with an empty body, which reads as a broken
+    exporter rather than a missing install, so say which it is here instead.
+    """
+    if not config.enable_metrics:
+        return
+
+    from gateway.metrics import PROMETHEUS_AVAILABLE
+
+    if not PROMETHEUS_AVAILABLE:
+        msg = (
+            "enable_metrics is set but prometheus-client is not installed. "
+            "Install it with: pip install gateway[metrics]"
+        )
+        raise ValueError(msg)
+
+
+def _validate_provider_account_pepper(config: GatewayConfig) -> None:
+    """Refuse to start a deployment that makes provider copies without its own pepper.
+
+    The pepper keys the digest that names a provider account, so it must be set
+    and must share no value with another secret. A shared value would let a leak
+    of one secret expose the other, and tie their rotations together.
+    """
+    makes_copies = config.files_enabled and config.files_provider_upload_enabled
+    if not makes_copies or config.is_hybrid_mode or config.is_hosted_mode:
+        return
+    pepper = config.provider_account_pepper
+    if pepper is None:
+        msg = (
+            "OTARI_PROVIDER_ACCOUNT_PEPPER must be set while files_provider_upload_enabled is on; "
+            "set it to a random value of at least 32 characters, or turn provider copies off"
+        )
+        raise ValueError(msg)
+    if pepper == config.master_key:
+        msg = "OTARI_PROVIDER_ACCOUNT_PEPPER must differ from the master key"
+        raise ValueError(msg)
+    if shares_secret_key(pepper):
+        msg = "OTARI_PROVIDER_ACCOUNT_PEPPER must differ from every OTARI_SECRET_KEY key"
+        raise ValueError(msg)
 
 
 def _validate_platform_config(config: GatewayConfig) -> None:
@@ -518,6 +582,10 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
                 # Persisted dashboard overrides win over config/env; apply them
                 # before pricing init so default-pricing behavior is consistent.
                 await apply_overrides_from_db(config, session)
+                # Checked when serving starts rather than when the app is built,
+                # so a tool that only reads the schema needs no pepper, and after
+                # the overrides, so it sees the copy setting this process serves.
+                _validate_provider_account_pepper(config)
                 await load_persisted_price_snapshot(session)
                 # Persisted tool/guardrail overrides (service URLs + web-search
                 # knobs) win over config/env too; apply them so the running worker
@@ -575,6 +643,7 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
             # The retention sweep below resolves this same port, so both it and
             # the request path use whatever store this build bound.
             app.state.file_store = container.resolve(FileStoragePort, None)
+            app.state.provider_files = container.resolve(ProviderFilePort, None)
             workers = _start_lifespan_workers(config, container)
             # Workers of the enabled features. Same supervisor as the registry
             # above: created here, cancelled together in ``finally`` under one
@@ -695,6 +764,7 @@ def create_app(config: GatewayConfig) -> FastAPI:
 
     _validate_platform_config(config)
     _warn_if_hosted_has_no_data_plane(config)
+    _validate_metrics_support(config)
     # A set-but-invalid OTARI_SECRET_KEY must not silently pass startup and then
     # break provider-credential storage at request time. Fail fast here instead.
     validate_secret_key()

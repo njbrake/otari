@@ -18,6 +18,7 @@ Otari calls these endpoints, all rooted at the configured platform base URL:
 | `POST {base}/gateway/usage`                 | Report the outcome of an attempt back to the platform |
 | `POST {base}/gateway/mcp-servers/resolve`   | Authorize MCP access and swap workspace-scoped MCP server ids for inline server configs |
 | `POST {base}/gateway/web-search/resolve`    | Resolve the workspace's Web Access policy when a request uses `otari_web_search` or `otari_web_fetch` |
+| `POST {base}/gateway/code-execution/resolve` | Resolve the workspace's code-execution policy when a request declares `otari_code_execution` |
 
 `{base}` means Otari platform `base_url` setting. Otari concatenates literally. The peer service is responsible for including any API-version prefix it exposes its own routes under. For the reference otari deployment that prefix is `/api/v1`, so the base URL is `http://backend:8000/api/v1` and Otari ends up POSTing to `http://backend:8000/api/v1/gateway/provider-keys/resolve`.
 
@@ -362,16 +363,11 @@ no tools. Every requested tool must be in the effective authorization list or
 the request fails with `403`. Fetch always requires an explicit `"web_fetch"`
 entry, so a legacy response denies Fetch-only and combined Search/Fetch requests.
 
-Recognized domain-list fields must be lists of valid strings. A malformed
-recognized field fails closed with `502` instead of being coerced.
+Every recognized field must have its documented type and stay within the limits a stored workspace policy has: `max_results` an integer from 1 to 20, `purpose_hint` a string of at most 2,048 characters, `provider_options` an object with at most 30 keys that serializes to at most 4,096 bytes of JSON, and each domain list at most 100 valid hostnames of at most 253 characters each. A malformed recognized field fails closed with `502` instead of being coerced. A whitespace-only `purpose_hint` reads as absent.
 
-For Search, `max_results`, `allowed_domains`, `blocked_domains`, and
-`purpose_hint` remain workspace defaults where the request supplies no value;
-`provider_options` is shallow-merged with request keys winning. For Fetch,
-allowed and blocked domains form a mandatory policy that request-supplied Search
-filters may only narrow when both tools are declared. Fetch authorization does
-not depend on a Search provider, credential, or backend URL. `provider` is
-informational: the active Search backend is configured on the gateway itself.
+A workspace's `max_results`, `allowed_domains` and `blocked_domains` are a ceiling that a request may narrow and may not widen. The data plane applies the lower of the workspace's `max_results` and the request's own, or the deployment's default where the request names none. It applies the union of the two block-lists. Each allow-list entry is a domain suffix that also covers its subdomains, so the two allow-lists intersect by keeping the narrower entry of each overlapping pair: a request naming `docs.example.com` under a workspace allowing `example.com` keeps `docs.example.com`. A request whose allow-list overlaps the workspace's nowhere is refused with `403`. `purpose_hint` fills the request's hint only where it has none, and `provider_options` is shallow-merged with request keys winning.
+
+For Fetch, allowed and blocked domains form a mandatory policy that request-supplied Search filters may only narrow when both tools are declared. Fetch authorization does not depend on a Search provider, credential, or backend URL. `provider` is informational: the active Search backend is configured on the data plane itself.
 
 ### Failure
 
@@ -386,6 +382,86 @@ informational: the active Search backend is configured on the gateway itself.
 > become the contract of record once the consumer-side fixtures land
 > ([#146](https://github.com/mozilla-ai/otari/issues/146)); until then this
 > document is authoritative.
+
+## Code execution resolution
+
+Called when the deployment has a sandbox and a request declares code
+execution: `otari_code_execution`, or a provider's own code-execution tool. It
+is asked before Otari decides who runs a provider's tool, because the answer's
+`executor` can decide that. It is asked at the same point in every request,
+whether the data plane holds the policy or its control plane does.
+
+### Request
+
+```
+POST /gateway/code-execution/resolve
+X-Gateway-Token: gw_...
+X-User-Token: tk_...
+Content-Type: application/json
+
+{}
+```
+
+The workspace is identified by `X-User-Token`. The body carries nothing: the
+question is what this workspace may do, not what this request asked for.
+
+### Response
+
+```json
+{
+  "enabled": true,
+  "default_purpose_hint": "Data analysis",
+  "max_iterations": 4,
+  "executor": "otari",
+  "tools": ["code_execution"],
+  "exec_timeout_s": 30
+}
+```
+
+`enabled` is the platform's veto and must be a JSON boolean. A workspace that
+may not run code is answered with `200` and `"enabled": false`, not refused, so
+a request whose code would not run here is unaffected by it. A `403` is only for
+a caller the platform does not accept, as on `provider-keys/resolve`.
+
+Every other field is optional, and `null` means the same as absent:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `default_purpose_hint` | string | The hint used when a request gives none. An empty string means none. |
+| `max_iterations` | positive integer | A ceiling on the tool loop's iterations. |
+| `exec_timeout_s` | positive integer | A ceiling on one execution's runtime, in seconds. |
+| `tools` | list of strings | The code-execution tool kinds the workspace may use: `code_execution`, `bash_code_execution`, `text_editor_code_execution`. |
+| `executor` | `auto`, `otari` or `provider` | Who runs a provider's code-execution tool for this workspace. |
+
+Otari applies every field, as it does a policy it holds itself. The two
+ceilings only lower the deployment's own limits, so a larger value changes
+nothing. `tools` intersects the tool kinds the sandbox serves, and a list that
+leaves none is refused with `403`. A field of the wrong type, or an `executor`
+Otari does not know, is a contract break: it fails closed with `502` and no code
+runs.
+
+A policy narrows what the deployment already allows and never widens it. A
+response that resolves to nothing leaves the deployment's own settings in force.
+
+### Failure
+
+| Status | Behavior |
+|---|---|
+| `400`, `401`, `402`, `403`, `404`, `421`, `429` | Status code is forwarded to the client; `429`'s `Retry-After` header is preserved. The `detail` is the platform's JSON `detail` string when present, otherwise the fallback `"Code execution resolution failed"`. |
+| `422`, `5xx`                      | Mapped to `502 Bad Gateway` with `detail = "Authorization service unavailable"`. |
+| Network/timeout                    | Mapped to `502 Bad Gateway`. |
+
+### Where the code runs
+
+This endpoint answers policy only. It returns no sandbox address and no
+credential, because the sandbox is deployment-wide configuration
+(`OTARI_SANDBOX_URL`) rather than a per-workspace fact.
+
+Otari sends the sandbox no caller credential, whatever that setting names. A
+control plane that serves the sandbox itself therefore cannot tell which
+workspace a call is for.
+
+[#1603](https://github.com/mozilla-ai/otari/issues/1603) decided how a data plane will reach the sandbox: with a scoped grant, presented to a front door in front of the backend. This endpoint will then also return the front door's address and a grant, as fields an older data plane ignores. [#1688](https://github.com/mozilla-ai/otari/issues/1688) holds the grant's design, and this section specifies the new fields when they ship.
 
 ## Usage report
 

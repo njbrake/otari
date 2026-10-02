@@ -212,7 +212,10 @@ a request that had none, and can recost or delete the imported rows the filters
 match. On a phone the log is a list, with sort and filters in one sheet.
 
 Use Prometheus at `/metrics` for process-level monitoring when
-`enable_metrics` is enabled.
+`enable_metrics` is enabled. The scrape needs the `metrics` extra
+(`pip install gateway[metrics]`); the Docker image installs it, and a
+source install that sets `enable_metrics` without it refuses to start rather
+than serving an empty scrape.
 
 ## Organization
 
