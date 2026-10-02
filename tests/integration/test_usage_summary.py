@@ -1022,7 +1022,7 @@ def test_grouped_series_honors_provider_and_session_filters(
 def test_grouped_series_caps_hourly_buckets(client: TestClient, master_key_header: dict[str, str]) -> None:
     """An hourly grid over a too-wide window is rejected, not ballooned.
 
-    /summary densifies then caps at _MAX_SERIES_POINTS; the grouped series is
+    /summary densifies then caps at MAX_SERIES_POINTS; the grouped series is
     sparse per (bucket, group), so it bounds the bucket grid up front.
     """
     resp = client.get(

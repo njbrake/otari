@@ -11,9 +11,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import Depends, Query
+from fastapi import Depends, HTTPException, Query
 
-from gateway.core.sql import MAX_FILTER_VALUES, match_any
+from gateway.core.series import MAX_SERIES_POINTS, grid_start
+from gateway.core.sql import BUCKET_SECONDS, MAX_FILTER_VALUES, UsageBucketGrain, match_any
 from gateway.core.usage_filters import (
     MAX_COST_THRESHOLD,
     MAX_INT32,
@@ -26,10 +27,10 @@ from gateway.core.usage_filters import (
     UsageStatus,
     entity_conditions,
     refinement_conditions,
+    resolve_window,
 )
 from gateway.models.usage import UsageLog
-from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME
-from gateway.services.web_retrieval_backend import WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME
+from gateway.services.usage import GATEWAY_TOOL_NAMES
 
 # How many request groups one call may ask for. The dashboard batches the groups
 # visible on a page of the activity log into a single lookup, so the bound tracks
@@ -37,18 +38,9 @@ from gateway.services.web_retrieval_backend import WEB_FETCH_TOOL_NAME, WEB_SEAR
 # keep a caller from posting an unbounded IN list.
 MAX_REQUEST_GROUPS = 1000
 
-# The gateway-run tools that can be enumerated for a filter or a breakdown. MCP
-# tool names come from a caller-supplied server, so they are unbounded and appear
-# only in a row's own detail, never as a dimension of their own. The ``any``
-# selector still matches them, because it tests the meter namespace itself.
-GATEWAY_TOOL_NAMES: tuple[str, ...] = (
-    WEB_SEARCH_TOOL_NAME,
-    WEB_FETCH_TOOL_NAME,
-    CODE_EXECUTION_TOOL_NAME,
-)
 ToolFilter = Literal["any", "web_search", "web_fetch", "code_execution"]
 
-# Only the summary's own series also takes five minutes; see ``usage.Bucket``.
+# Only the summary's own series also takes five minutes; see ``schemas.usage.Bucket``.
 SUMMARY_BUCKET_DESC = (
     "Time-series granularity: '5min', 'hour' or 'day'. '5min' needs an explicit window of at most "
     "1000 buckets (about 83 hours); the default 30-day window is refused with a 422."
@@ -379,3 +371,34 @@ class UsageCountFilters(UsageListFilters):
     """The list filters as the deployment-wide count publishes them; see :data:`COUNT_COUNTS_DESC`."""
 
     counts_toward_budget: Annotated[bool | None, Query(description=COUNT_COUNTS_DESC)] = None
+
+
+def refuse_wide_grid(start: datetime, end: datetime, bucket: UsageBucketGrain) -> None:
+    """Refuse a window with more than ``MAX_SERIES_POINTS`` buckets of ``bucket``.
+
+    For the series that stay sparse, and for five-minute buckets, which a
+    too-wide window would otherwise turn into a payload of tens of thousands of
+    points. Called before any query runs. Measured from the bucket ``start`` falls
+    in, as the dense series counts its points, so a window that fits is never one
+    point too long for it.
+    """
+    if (end - grid_start(start, bucket)).total_seconds() > MAX_SERIES_POINTS * BUCKET_SECONDS[bucket]:
+        coarser = "hour" if bucket == "5min" else "day"
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"window spans more than {MAX_SERIES_POINTS} {bucket} buckets; use bucket={coarser} or narrow the range"
+            ),
+        )
+
+
+def summary_window(filters: UsageReadFilters, *, grid: UsageBucketGrain | None) -> tuple[datetime, datetime]:
+    """The bounded window a summary or a series reads, refused before any query when ``grid`` cannot fit it.
+
+    The preamble every aggregate read runs, kept in one place so a fix (like the
+    naive-datetime handling in ``resolve_window``) lands once.
+    """
+    start, end = resolve_window(filters.start_date, filters.end_date)
+    if grid is not None:
+        refuse_wide_grid(start, end, grid)
+    return start, end

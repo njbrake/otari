@@ -43,8 +43,8 @@ Reads only. Deleting rows and repricing them stay deployment-wide, as does
 ``/api/v1/usage/in-flight``: its registry entries carry no workspace at all
 (see ``usage.list_in_flight``), so there is nothing there to scope yet.
 
-Every aggregation is the one ``usage.py`` already runs. This module contributes
-route declarations and a scope predicate, and nothing that could compute a
+Every aggregation is the one ``usage.py`` runs, through the same read service.
+This module contributes route declarations and a scope predicate, and nothing that could compute a
 different answer to the same question.
 """
 
@@ -69,28 +69,25 @@ from gateway.api.routes._usage_common import (
     SUMMARY_BUCKET_DESC,
     UsageListFilters,
     UsageReadFilters,
+    summary_window,
 )
-from gateway.api.routes.usage import (
-    Bucket,
-    SeriesGroupBy,
-    SummaryDimension,
-    UsageCount,
-    UsageEntry,
-    UsageGroupedSeries,
-    UsageSummary,
-    _activity_groups_response,
-    _grouped_series_response,
-    _list_usage_entries,
-    _summary_context,
-    _summary_response,
-)
+from gateway.api.routes.usage import UsageCount, UsageEntry
 from gateway.core.sql import UsageBucketGrain
 from gateway.core.surface import Surface
 from gateway.core.usage_filters import MAX_SEARCH_LENGTH, SortOrder, UsageSort, list_window, resolve_window
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
 from gateway.models.usage import UsageLog
-from gateway.schemas.usage import ActivityGroupBy, ActivityGroupOrder, UsageActivityGroups
+from gateway.schemas.usage import (
+    ActivityGroupBy,
+    ActivityGroupOrder,
+    Bucket,
+    SeriesGroupBy,
+    SummaryDimension,
+    UsageActivityGroups,
+    UsageGroupedSeries,
+    UsageSummary,
+)
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import (
     has_workspace_management_access,
@@ -203,7 +200,8 @@ async def list_organization_usage(
     scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
     start_date, end_date = list_window(filters.start_date, filters.end_date, q=filters.q, sort=sort)
     conditions = filters.conditions(start_date=start_date, end_date=end_date, scope=scope)
-    return await _list_usage_entries(reads, conditions, scope=scope, skip=skip, limit=limit, sort=sort, order=order)
+    rows = await reads.page(conditions, scope=scope, sort=sort, order=order, skip=skip, limit=limit)
+    return [UsageEntry.from_page_row(row) for row in rows]
 
 
 @router.get("/count")
@@ -248,16 +246,11 @@ async def organization_usage_summary(
     scope, which is the roster they can already read.
     """
     scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
-    start, end, conditions, totals = await _summary_context(
-        db, filters, grid=bucket if bucket == "5min" else None, scope=scope
-    )
-    return await _summary_response(
-        db,
-        reads,
+    start, end = summary_window(filters, grid=bucket if bucket == "5min" else None)
+    return await reads.summary(
         start=start,
         end=end,
-        conditions=conditions,
-        totals=totals,
+        conditions=filters.conditions(start_date=start, end_date=end, scope=scope),
         status=filters.status,
         bucket=bucket,
         dimensions=dimensions,
@@ -269,6 +262,7 @@ async def organization_usage_summary(
 async def organization_usage_series(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
     filters: Annotated[UsageReadFilters, Depends()],
     group_by: SeriesGroupBy = Query(description="Dimension to split the series by"),
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
@@ -281,13 +275,11 @@ async def organization_usage_series(
     ignored would make the stacked chart disagree with the tiles beside it.
     """
     scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
-    start, end, conditions, totals = await _summary_context(db, filters, grid=bucket, scope=scope)
-    return await _grouped_series_response(
-        db,
+    start, end = summary_window(filters, grid=bucket)
+    return await reads.grouped_series(
         start=start,
         end=end,
-        conditions=conditions,
-        totals=totals,
+        conditions=filters.conditions(start_date=start, end_date=end, scope=scope),
         status=filters.status,
         bucket=bucket,
         group_by=group_by,
@@ -314,8 +306,7 @@ async def organization_usage_activity_groups(
     start, end = resolve_window(filters.start_date, filters.end_date)
     scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
     conditions = filters.conditions(start_date=start, end_date=end, scope=scope)
-    return await _activity_groups_response(
-        reads,
+    return await reads.activity_groups(
         group_by=group_by,
         start=start,
         end=end,
