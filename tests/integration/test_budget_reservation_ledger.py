@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -508,3 +508,149 @@ async def test_an_orphan_scope_line_does_not_block_the_release(async_db: AsyncSe
 
     await refund_reservation(async_db, handle)
     assert (await _user(async_db, tenancy.user_id)).reserved == Decimal("0.000000")
+
+
+_TTL = 900
+
+
+async def _orphan_user_hold(db: AsyncSession, user_id: str, *, usd: str, tokens: int, requests: int) -> None:
+    """Raise the user's holds with no row, as a process that died between the two would leave them."""
+    await db.execute(
+        update(User)
+        .where(User.user_id == user_id)
+        .values(
+            reserved=User.reserved + Decimal(usd),
+            reserved_tokens=User.reserved_tokens + tokens,
+            reserved_requests=User.reserved_requests + requests,
+        )
+    )
+    await db.commit()
+
+
+async def _age(db: AsyncSession, model: type[User] | type[ScopedBudget], key: Any, key_value: str) -> None:
+    """Backdate a counter row's last write past the reservation TTL."""
+    await db.execute(
+        update(model).where(key == key_value).values(updated_at=datetime.now(UTC) - timedelta(seconds=2 * _TTL))
+    )
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_user_hold_with_no_active_row_is_reclaimed(async_db: AsyncSession, tenancy: Fixture) -> None:
+    """Counters raised with no row are clamped to the active rows once the user is quiet.
+
+    The expiry sweep reclaims through rows and the period reset leaves holds
+    alone, so before this a hold whose row never committed stayed forever and
+    ``merge_users`` refused the user for good.
+    """
+    await _with_budget(async_db, tenancy, max_budget=100.0)
+    live = await reserve_budget(async_db, tenancy.user_id, 2.0, estimated_tokens=50)
+    assert live.reservation_id is not None
+    await _orphan_user_hold(async_db, tenancy.user_id, usd="18.471508", tokens=19021, requests=3)
+    await _age(async_db, User, User.user_id, tenancy.user_id)
+
+    assert await ledger.reconcile_orphaned_holds(async_db, quiet_sec=_TTL, batch_size=10) == 1
+
+    user = await _user(async_db, tenancy.user_id)
+    # Only the hold the live row records is left.
+    assert user.reserved == Decimal("2.000000")
+    assert user.reserved_tokens == 50
+    assert user.reserved_requests == 1
+    assert await _status(async_db, live.reservation_id) == RESERVATION_ACTIVE
+
+    # Settling the live request releases its own hold and nothing else.
+    await reconcile_reservation(async_db, live, 1.0, actual_tokens=40)
+    user = await _user(async_db, tenancy.user_id)
+    assert user.reserved == Decimal("0.000000")
+    assert user.reserved_tokens == 0
+    assert user.reserved_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_a_recently_written_hold_with_no_row_is_left_alone(async_db: AsyncSession, tenancy: Fixture) -> None:
+    """A hold whose row has not landed yet looks like an orphan and must not be taken.
+
+    The counter write itself stamps ``updated_at``, which is what keeps an
+    in-flight request (a top-up between its hold and ``grow``, or an older
+    gateway writing the row second) out of the reconcile.
+    """
+    await _with_budget(async_db, tenancy)
+    await _orphan_user_hold(async_db, tenancy.user_id, usd="3", tokens=10, requests=1)
+
+    assert await ledger.reconcile_orphaned_holds(async_db, quiet_sec=_TTL, batch_size=10) == 0
+
+    user = await _user(async_db, tenancy.user_id)
+    assert user.reserved == Decimal("3.000000")
+    assert user.reserved_tokens == 10
+    assert user.reserved_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_a_counter_below_its_rows_is_not_raised(async_db: AsyncSession, tenancy: Fixture) -> None:
+    """The reconcile only clamps down; it never adds a hold back."""
+    await _with_budget(async_db, tenancy)
+    await reserve_budget(async_db, tenancy.user_id, 4.0)
+    await async_db.execute(update(User).where(User.user_id == tenancy.user_id).values(reserved=Decimal("1")))
+    await async_db.commit()
+    await _age(async_db, User, User.user_id, tenancy.user_id)
+
+    assert await ledger.reconcile_orphaned_holds(async_db, quiet_sec=_TTL, batch_size=10) == 0
+    assert (await _user(async_db, tenancy.user_id)).reserved == Decimal("1.000000")
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_hold_with_no_active_line_is_reclaimed(async_db: AsyncSession, tenancy: Fixture) -> None:
+    """The scoped holds commit before their row, so a crash there orphans the ceiling the same way."""
+    cap = await _scoped(async_db, scope_type="organization", scope_id=str(tenancy.organization_id), max_budget=50.0)
+    async_db.add(cap)
+    await async_db.commit()
+    cap_id = cap.id
+
+    live = await reserve_budget(async_db, tenancy.user_id, 2.0, estimated_tokens=30, scope=tenancy.scope())
+    assert live.reservation_id is not None
+    await async_db.execute(
+        update(ScopedBudget)
+        .where(ScopedBudget.id == cap_id)
+        .values(
+            reserved_spend=ScopedBudget.reserved_spend + Decimal("5"),
+            reserved_tokens=ScopedBudget.reserved_tokens + 500,
+            reserved_requests=ScopedBudget.reserved_requests + 2,
+        )
+    )
+    await async_db.commit()
+
+    # Not quiet yet: the orphaning write just stamped it.
+    assert await ledger.reconcile_orphaned_holds(async_db, quiet_sec=_TTL, batch_size=10) == 0
+    _, reserved = await _counters(async_db, cap_id)
+    assert reserved == pytest.approx(7.0)
+
+    await _age(async_db, ScopedBudget, ScopedBudget.id, cap_id)
+    assert await ledger.reconcile_orphaned_holds(async_db, quiet_sec=_TTL, batch_size=10) == 1
+
+    async_db.expire_all()
+    row = await async_db.get_one(ScopedBudget, cap_id)
+    assert row.reserved_spend == Decimal("2.000000")
+    assert row.reserved_tokens == 30
+    assert row.reserved_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_row_write_takes_the_user_hold_with_it(async_db: AsyncSession, tenancy: Fixture) -> None:
+    """The per-user hold and its row commit together, and the scoped holds taken before them are given back."""
+    await _with_budget(async_db, tenancy)
+    cap = await _scoped(async_db, scope_type="organization", scope_id=str(tenancy.organization_id), max_budget=10.0)
+    async_db.add(cap)
+    await async_db.commit()
+    cap_id = cap.id
+
+    with (
+        patch.object(ledger, "record", side_effect=SQLAlchemyError("row write failed")),
+        pytest.raises(SQLAlchemyError),
+    ):
+        await reserve_budget(async_db, tenancy.user_id, 3.0, scope=tenancy.scope())
+    await async_db.rollback()
+
+    assert (await _user(async_db, tenancy.user_id)).reserved == Decimal("0.000000")
+    assert await _rows(async_db, tenancy.user_id) == []
+    _, reserved = await _counters(async_db, cap_id)
+    assert reserved == pytest.approx(0.0)

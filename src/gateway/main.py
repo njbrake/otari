@@ -177,6 +177,7 @@ def _start_reservation_sweeper(config: GatewayConfig, _container: Container) -> 
         config.budget_reservation_sweep_interval_sec,
         batch_size=config.budget_reservation_sweep_batch,
         retention_sec=config.budget_reservation_retention_sec,
+        ttl_sec=config.budget_reservation_ttl_sec,
     )
 
 

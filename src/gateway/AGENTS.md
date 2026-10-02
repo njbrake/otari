@@ -139,8 +139,12 @@ later ceiling refuses.
 
 `services/budgets/_ledger.py` gives each request's holds one identity.
 Settlement claims that row before changing counters, making duplicate release a
-no-op. Write the ledger after the holds it records; a top-up grows the existing
-row rather than creating a second independently expiring hold.
+no-op. Never commit a row before the holds it records: the per-user hold and
+its row commit in one transaction, and the scoped holds commit before both. A
+top-up grows the existing row rather than creating a second independently
+expiring hold. The sweep also clamps a counter untouched for the reservation
+TTL down to the sum of its active rows, which returns a hold whose row never
+landed.
 
 Every exit after reservation must settle or refund, including cancellation,
 client disconnect, tool failure, and provider error. Preserve the sweeper and
