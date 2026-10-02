@@ -1548,7 +1548,7 @@ describe("UsagePage API key picker", () => {
     vi.restoreAllMocks()
   })
 
-  it("offers every listed key, the in-window ones first", async () => {
+  it("offers the listed keys, the in-window ones first", async () => {
     const fetchMock = mockApi(summary(), {
       [`${API_ROOT}/keys`]: LISTED_KEYS,
     })
@@ -1576,6 +1576,87 @@ describe("UsagePage API key picker", () => {
         ),
       ).toBe(true),
     )
+  })
+
+  it("searches the server for what is typed, and offers its matches as they come", async () => {
+    const fetchMock = mockApi(summary())
+    const answer = fetchMock.getMockImplementation()!
+    // The server's matching, which the picker must not redo: `gw-Zz9` finds
+    // the key named "nightly-batch" by its fingerprint, not its name.
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "http://x")
+      if (url.pathname === `${API_ROOT}/keys`) {
+        const term = url.searchParams.get("search")
+        const rows = term
+          ? [apiKey({ id: "key-2", key_name: "nightly-batch" })]
+          : LISTED_KEYS.slice(0, 2)
+        return new Response(JSON.stringify(rows), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      return answer(input, init)
+    })
+    const user = userEvent.setup()
+    renderPage(<UsagePage />)
+    await screen.findByText("$1,240.50")
+
+    const keyReads = () =>
+      fetchMock.mock.calls
+        .map(([u]) => new URL(String(u), "http://x"))
+        .filter((u) => u.pathname === `${API_ROOT}/keys`)
+    await waitFor(() => expect(keyReads().length).toBeGreaterThan(0))
+    // Bounded, and never the whole list.
+    expect(keyReads().every((u) => u.searchParams.get("limit") === "20")).toBe(
+      true,
+    )
+
+    await user.click(screen.getByPlaceholderText("All keys"))
+    await user.keyboard("gw-Zz9")
+    // The in-window key does not match the term, so only the server's match is left.
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("option").map((option) => option.textContent),
+      ).toEqual(["nightly-batch"]),
+    )
+    // Debounced: one read for the settled term rather than one per keystroke.
+    const searched = keyReads().filter((u) => u.searchParams.has("search"))
+    expect(searched.map((u) => u.searchParams.get("search"))).toEqual([
+      "gw-Zz9",
+    ])
+
+    await user.click(screen.getByRole("option", { name: "nightly-batch" }))
+    await user.keyboard("{Escape}")
+    // The chip keeps the name once the search has been cleared.
+    expect(
+      await screen.findByRole("button", {
+        name: "Remove API key filter nightly-batch",
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("names a key a link picked by looking it up by id", async () => {
+    const fetchMock = mockApi(summary(), {
+      [`${API_ROOT}/keys`]: [
+        apiKey({ id: "key-2", key_name: "nightly-batch" }),
+      ],
+    })
+    renderPage(<UsagePage />, { url: "/usage?api_key_id=key-2" })
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Remove API key filter nightly-batch",
+      }),
+    ).toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.some(([u]) => {
+        const url = new URL(String(u), "http://x")
+        return (
+          url.pathname === `${API_ROOT}/keys` &&
+          url.searchParams.get("search") === "key-2"
+        )
+      }),
+    ).toBe(true)
   })
 
   it("keeps the in-window keys when the viewer may not list keys", async () => {

@@ -31,7 +31,10 @@ credential. Dashboard sessions authenticate browser requests, but deployment-wid
 operations also require operator authority. Where a tenant needs one of those
 operations, a separately scoped endpoint serves it to the caller's own
 organization: `/api/v1/organizations/me/usage` for usage, and
-`/api/v1/organizations/me/keys` for a member's own API keys.
+`/api/v1/organizations/me/keys` for a member's own API keys. The usage
+endpoint returns every member's requests in the workspaces the caller manages
+(as an organization or workspace owner or admin) and only the caller's own
+requests elsewhere.
 
 In hybrid mode, the generation APIs and the `/api/v1/mcp` and `/api/v1/hooks`
 endpoints accept an otari.ai user token in the same header forms. Local API

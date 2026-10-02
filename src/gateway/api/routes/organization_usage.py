@@ -25,10 +25,15 @@ reading of the same rows:
   member or viewer reads the ones they actively belong to. A member who belongs
   to no workspace gets an empty page, not a refusal: the surface is theirs and
   simply has nothing in it yet.
-* **Whose requests** follows the same split: an owner, an admin or a superuser
-  reads everyone's, and a member or viewer reads only the rows billed to them
+* **Whose requests** follows the workspace management rule
+  (``has_workspace_management_access``): in a workspace the caller manages, as
+  an owner or admin of the organization or of that workspace, they read
+  everyone's rows, and anywhere else only the rows billed to them
   (``users.user_id`` is their identity's id, the row their own keys bill
-  through), even in a workspace they share with other people.
+  through), even in a workspace they share with other people. Managing one
+  workspace widens that workspace and no other, so a workspace admin reading
+  across the organization sees the rest of it as a member does. A superuser
+  reads everyone's rows in a workspace they name.
 * **``workspace_id`` still narrows, and cannot widen.** It is put through
   ``resolve_workspace_in_organization``, the same resolver every other
   workspace-scoped read uses, so a workspace outside the caller's scope answers
@@ -38,8 +43,8 @@ Reads only. Deleting rows and repricing them stay deployment-wide, as does
 ``/api/v1/usage/in-flight``: its registry entries carry no workspace at all
 (see ``usage.list_in_flight``), so there is nothing there to scope yet.
 
-Every aggregation is the one ``usage.py`` already runs. This module contributes
-route declarations and a scope predicate, and nothing that could compute a
+Every aggregation is the one ``usage.py`` runs, through the same read service.
+This module contributes route declarations and a scope predicate, and nothing that could compute a
 different answer to the same question.
 """
 
@@ -47,7 +52,7 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import ColumnElement, and_, false, func, select
+from sqlalchemy import ColumnElement, and_, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
@@ -64,30 +69,29 @@ from gateway.api.routes._usage_common import (
     SUMMARY_BUCKET_DESC,
     UsageListFilters,
     UsageReadFilters,
+    summary_window,
 )
-from gateway.api.routes.usage import (
-    Bucket,
-    SeriesGroupBy,
-    SummaryDimension,
-    UsageCount,
-    UsageEntry,
-    UsageGroupedSeries,
-    UsageSummary,
-    _activity_groups_response,
-    _grouped_series_response,
-    _list_usage_entries,
-    _summary_context,
-    _summary_response,
-)
+from gateway.api.routes.usage import UsageCount, UsageEntry
 from gateway.core.sql import UsageBucketGrain
 from gateway.core.surface import Surface
 from gateway.core.usage_filters import MAX_SEARCH_LENGTH, SortOrder, UsageSort, list_window, resolve_window
-from gateway.models.tenancy import MANAGEMENT_ROLES, Workspace
 from gateway.models.tenancy import User as TenancyUser
+from gateway.models.tenancy import Workspace
 from gateway.models.usage import UsageLog
-from gateway.schemas.usage import ActivityGroupBy, ActivityGroupOrder, UsageActivityGroups
+from gateway.schemas.usage import (
+    ActivityGroupBy,
+    ActivityGroupOrder,
+    Bucket,
+    SeriesGroupBy,
+    SummaryDimension,
+    UsageActivityGroups,
+    UsageGroupedSeries,
+    UsageSummary,
+)
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import (
+    has_workspace_management_access,
+    resolve_managed_workspace_ids,
     resolve_visible_workspace_scope,
     resolve_workspace_in_organization,
 )
@@ -104,18 +108,6 @@ router = APIRouter(
 
 # Hosted only: on standalone the organization is the deployment, so ``usage`` already shows it.
 SURFACE = Surface("organization_usage", standalone=False)
-
-
-async def _reads_everyones_requests(
-    user: TenancyUser,
-    organization_id: uuid.UUID,
-    organizations: OrganizationService,
-) -> bool:
-    """Whether this caller reads every person's requests in their scope, or only their own."""
-    if user.is_superuser:
-        return True
-    membership = await organizations.members.get_active_by_organization_and_user(organization_id, user.id)
-    return membership is not None and membership.role in MANAGEMENT_ROLES
 
 
 def _own_requests(user: TenancyUser) -> ColumnElement[bool]:
@@ -156,7 +148,7 @@ async def _scope_condition(
         # from the same parameter, and that is deliberate: the scope has to be
         # sufficient on its own, so a later change to how the filter is applied
         # cannot leave a request scoped by nothing.
-        await resolve_workspace_in_organization(
+        workspace = await resolve_workspace_in_organization(
             db,
             user=user,
             workspace_id=workspace_id,
@@ -164,7 +156,9 @@ async def _scope_condition(
             organizations=organizations,
         )
         workspace_rows = col(UsageLog.workspace_id) == workspace_id
-        if await _reads_everyones_requests(user, organization.id, organizations):
+        if user.is_superuser or await has_workspace_management_access(
+            db, user=user, workspace=workspace, organizations=organizations
+        ):
             return workspace_rows
         return and_(workspace_rows, _own_requests(user))
 
@@ -177,8 +171,13 @@ async def _scope_condition(
         # Belongs to no workspace yet. An empty result, and deliberately not a
         # 403: nothing was refused, there is simply nothing here.
         return false()
-    # Not the management arm above, so a member: their own requests, in their workspaces.
-    return and_(col(UsageLog.workspace_id).in_(scope.workspace_ids), _own_requests(user))
+    # Not the management arm above, so a member of the organization: everyone's
+    # requests in the workspaces they manage, and their own in the rest of theirs.
+    visible = col(UsageLog.workspace_id).in_(scope.workspace_ids)
+    managed = await resolve_managed_workspace_ids(db, user=user, scope=scope)
+    if not managed:
+        return and_(visible, _own_requests(user))
+    return and_(visible, or_(col(UsageLog.workspace_id).in_(managed), _own_requests(user)))
 
 
 @router.get("")
@@ -201,7 +200,8 @@ async def list_organization_usage(
     scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
     start_date, end_date = list_window(filters.start_date, filters.end_date, q=filters.q, sort=sort)
     conditions = filters.conditions(start_date=start_date, end_date=end_date, scope=scope)
-    return await _list_usage_entries(reads, conditions, scope=scope, skip=skip, limit=limit, sort=sort, order=order)
+    rows = await reads.page(conditions, scope=scope, sort=sort, order=order, skip=skip, limit=limit)
+    return [UsageEntry.from_page_row(row) for row in rows]
 
 
 @router.get("/count")
@@ -246,16 +246,11 @@ async def organization_usage_summary(
     scope, which is the roster they can already read.
     """
     scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
-    start, end, conditions, totals = await _summary_context(
-        db, filters, grid=bucket if bucket == "5min" else None, scope=scope
-    )
-    return await _summary_response(
-        db,
-        reads,
+    start, end = summary_window(filters, grid=bucket if bucket == "5min" else None)
+    return await reads.summary(
         start=start,
         end=end,
-        conditions=conditions,
-        totals=totals,
+        conditions=filters.conditions(start_date=start, end_date=end, scope=scope),
         status=filters.status,
         bucket=bucket,
         dimensions=dimensions,
@@ -267,6 +262,7 @@ async def organization_usage_summary(
 async def organization_usage_series(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
     filters: Annotated[UsageReadFilters, Depends()],
     group_by: SeriesGroupBy = Query(description="Dimension to split the series by"),
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
@@ -279,13 +275,11 @@ async def organization_usage_series(
     ignored would make the stacked chart disagree with the tiles beside it.
     """
     scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
-    start, end, conditions, totals = await _summary_context(db, filters, grid=bucket, scope=scope)
-    return await _grouped_series_response(
-        db,
+    start, end = summary_window(filters, grid=bucket)
+    return await reads.grouped_series(
         start=start,
         end=end,
-        conditions=conditions,
-        totals=totals,
+        conditions=filters.conditions(start_date=start, end_date=end, scope=scope),
         status=filters.status,
         bucket=bucket,
         group_by=group_by,
@@ -312,8 +306,7 @@ async def organization_usage_activity_groups(
     start, end = resolve_window(filters.start_date, filters.end_date)
     scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
     conditions = filters.conditions(start_date=start, end_date=end, scope=scope)
-    return await _activity_groups_response(
-        reads,
+    return await reads.activity_groups(
         group_by=group_by,
         start=start,
         end=end,

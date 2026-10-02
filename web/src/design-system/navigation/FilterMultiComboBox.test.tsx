@@ -140,4 +140,26 @@ describe("FilterMultiComboBox", () => {
     await user.click(remaining)
     expect(onChange).toHaveBeenCalledTimes(1)
   })
+
+  it("hands the typed text to a server search and leaves its matches unfiltered", async () => {
+    const user = userEvent.setup()
+    const onSearchChange = vi.fn()
+    render(
+      <FilterMultiComboBox
+        label="API key"
+        values={[]}
+        onChange={() => {}}
+        // A key the server matched by its fingerprint, which its label does not show.
+        options={[{ value: "key-2", label: "nightly-batch" }]}
+        onSearchChange={onSearchChange}
+      />,
+    )
+
+    await user.click(screen.getByRole("combobox", { name: "API key" }))
+    await user.keyboard("gw-Zz9")
+    expect(onSearchChange).toHaveBeenLastCalledWith("gw-Zz9")
+    expect(
+      screen.getByRole("option", { name: "nightly-batch" }),
+    ).toBeInTheDocument()
+  })
 })

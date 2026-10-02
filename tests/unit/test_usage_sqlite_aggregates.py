@@ -18,12 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlmodel import SQLModel
 
 import gateway.models  # noqa: F401  (registers every table on the shared metadata)
-from gateway.api.routes.usage import _activity_groups_response
 from gateway.core.sql import bucket_expr, canonical_bucket
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import SortOrder, UsageRefinements, refinement_conditions, usage_search_condition
 from gateway.models.usage import UsageLog
-from gateway.repositories.usage import UsageReadRepository
+from gateway.repositories.usage import UsageReadRepository, UsageSummaryRepository
 from gateway.repositories.usage.usage_read_repository import _ordering
 from gateway.services.usage import UsageReadService
 
@@ -33,7 +32,7 @@ WORKSPACE = uuid.uuid4()
 
 def _reads(db: AsyncSession) -> UsageReadService:
     uow = UnitOfWork(db)
-    return UsageReadService(uow, UsageReadRepository(uow))
+    return UsageReadService(uow, UsageReadRepository(uow), UsageSummaryRepository(uow))
 
 
 def _run[T](body: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -156,8 +155,7 @@ def test_activity_groups_aggregate_on_sqlite() -> None:
             ]
         )
         await db.commit()
-        page = await _activity_groups_response(
-            _reads(db),
+        page = await _reads(db).activity_groups(
             group_by="source_label",
             start=T0,
             end=T0 + timedelta(hours=1),

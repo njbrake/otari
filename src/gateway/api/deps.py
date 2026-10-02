@@ -37,7 +37,7 @@ from gateway.repositories.overview.overview_repository import OverviewRepository
 from gateway.repositories.providers import OrgProviderKeyModelRepository
 from gateway.repositories.saved_views import SavedViewRepository
 from gateway.repositories.tenancy import OrganizationGuardrailDefinitionRepository, OrgProviderKeyRepository
-from gateway.repositories.usage import UsageReadRepository
+from gateway.repositories.usage import UsageReadRepository, UsageSummaryRepository
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets import BudgetService, WorkspaceBudgetDefaultService
 from gateway.services.code_execution import SandboxContainerRegistry
@@ -983,7 +983,7 @@ SavedViewServiceDep = Annotated[SavedViewService, Depends(get_saved_view_service
 
 def get_usage_read_service(uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> UsageReadService:
     """Build the request's usage-log read service on the request's Unit of Work."""
-    return UsageReadService(uow, UsageReadRepository(uow))
+    return UsageReadService(uow, UsageReadRepository(uow), UsageSummaryRepository(uow))
 
 
 UsageReadServiceDep = Annotated[UsageReadService, Depends(get_usage_read_service)]

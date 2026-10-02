@@ -13,6 +13,7 @@ export function FilterMultiComboBox({
   maxVisible = 50,
   maxValues = 50,
   allowsCustom = false,
+  onSearchChange,
 }: {
   label: string
   values: string[]
@@ -30,11 +31,19 @@ export function FilterMultiComboBox({
   // enumerable (any model name the log might hold, not just the ones a windowed
   // suggestion list knows) can still be filtered on. The options stay suggestions.
   allowsCustom?: boolean
+  // Set when the caller searches on the server: it receives the typed text, and
+  // `options` are already its matches, so they are not filtered again here (a
+  // key found by its fingerprint would not survive a match on its name).
+  onSearchChange?: (text: string) => void
 }) {
-  const [text, setText] = useState("")
+  const [text, setTextState] = useState("")
+  const setText = (next: string) => {
+    setTextState(next)
+    onSearchChange?.(next)
+  }
 
   const atLimit = values.length >= maxValues
-  const query = text.trim().toLowerCase()
+  const query = onSearchChange ? "" : text.trim().toLowerCase()
   const visible = options
     .filter((option) => !values.includes(option.value))
     .filter(
@@ -70,6 +79,9 @@ export function FilterMultiComboBox({
       menuTrigger="focus"
       inputValue={text}
       onInputChange={setText}
+      // React Aria filters the items against the text on its own, which a
+      // server's matches must skip for the same reason as the filter above.
+      defaultFilter={onSearchChange ? () => true : undefined}
       // Never a committed selection of its own: the picked values live in
       // `values`, so the input stays a search box.
       selectedKey={null}

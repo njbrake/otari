@@ -279,8 +279,11 @@ class WorkspaceMemberRepository:
         *,
         user_id: uuid.UUID,
         organization_id: uuid.UUID,
+        roles: Collection[str] | None = None,
     ) -> list[uuid.UUID]:
         """Every workspace in one organization the user actively belongs to, as ids.
+
+        ``roles`` narrows it to the memberships holding one of those roles.
 
         Unpaged on purpose, unlike :meth:`get_workspaces_for_user` beside it. Its
         caller is the usage scope (``resolve_visible_workspace_scope``), where a
@@ -289,7 +292,7 @@ class WorkspaceMemberRepository:
         than a slow one. Ids only, so the unbounded result stays a set of uuids
         rather than a set of rows.
         """
-        result = await self.db.execute(
+        stmt = (
             select(col(WorkspaceMember.workspace_id))
             .join(Workspace, col(Workspace.id) == col(WorkspaceMember.workspace_id))
             .where(
@@ -298,6 +301,9 @@ class WorkspaceMemberRepository:
                 col(WorkspaceMember.status) == "active",
             )
         )
+        if roles is not None:
+            stmt = stmt.where(col(WorkspaceMember.role).in_(roles))
+        result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
     async def ids_for_workspace(self, workspace_id: uuid.UUID) -> list[uuid.UUID]:

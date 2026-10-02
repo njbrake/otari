@@ -42,7 +42,7 @@ import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { ShareDialog } from "@/features/usage/ShareDialog"
 import { billedTokenTotal, cacheSums } from "@/features/usage/usageTotals"
 import { type UserDisplay, userDisplay } from "@/features/users/userDisplay"
-import { useKeys } from "@/shared/api/apiKeys"
+import { useKeySearch, useKeysById } from "@/shared/api/apiKeys"
 import { ApiError } from "@/shared/api/client"
 import {
   NO_BREAKDOWNS,
@@ -72,6 +72,7 @@ import {
 } from "@/shared/helpers/timeRange"
 import { useUrlState } from "@/shared/helpers/urlState"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
+import { useDebounced } from "@/shared/hooks/useDebounced"
 
 // ---------- formatting ----------
 
@@ -129,6 +130,10 @@ const DEFAULT_PRESET = findPreset(
 ) as RangePreset
 
 const TABLE_TOP_N = 15
+
+// How many listed keys the API key picker asks the server for at once: a picker
+// shows a handful, and typing narrows the rest.
+const KEY_OPTION_LIMIT = 20
 
 // The filters a link can carry, named as the usage API and the Activity page
 // name them, so one query string means the same thing on all three. Each is
@@ -608,11 +613,15 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
   const workspaceFilter = orgWide ? url.get("workspace_id") : ""
   const setWorkspaceFilter = (next: string) => url.patch({ workspace_id: next })
   const workspaces = useWorkspaces(orgWide)
-  // The key picker's roster, in the same scope as the Keys page: the
-  // switcher's workspace here, the workspace filter (or all) on the
-  // organization page. Shares the Keys page's cache.
-  const keys = useKeys(
+  // The key picker searches on the server, in the same scope as the Keys page:
+  // the switcher's workspace here, the workspace filter (or all) on the
+  // organization page. Debounced on the way into the query key.
+  const [keySearch, setKeySearch] = useState("")
+  const keyTerm = useDebounced(keySearch.trim())
+  const keyMatches = useKeySearch(
+    keyTerm,
     orgWide ? workspaceFilter || undefined : workspace?.workspace_id,
+    KEY_OPTION_LIMIT,
   )
   const filters: UsageFilters = useMemo(
     () => ({
@@ -746,40 +755,51 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
       label: name.id ? `${name.label} (${name.id})` : name.label,
     }
   })
-  // API key options: every key the viewer can list, not only the ones with
-  // traffic in the window, so a quiet key can still be picked (and a chip from a
-  // link still reads its name). The in-window keys lead, by spend, then the
-  // rest by name. A caller who may not list keys keeps the in-window list. An
-  // operator's listing is deployment-wide, so the organization page keeps only
-  // the keys in this organization's workspaces.
-  const listedKeys = (keys.data ?? []).filter(
-    (apiKey) =>
-      !orgWide ||
-      !workspaces.data ||
-      workspaces.data.some(
-        (orgWorkspace) => orgWorkspace.id === apiKey.workspace_id,
-      ),
-  )
-  const listedKeyName = new Map(
-    listedKeys.map((apiKey) => [apiKey.id, apiKeyLabel(apiKey)]),
-  )
+  // API key options: the in-window keys by spend, then the server's matches for
+  // what is typed among every key the viewer can list, so a quiet key can still
+  // be picked. A typed term narrows the in-window keys too, here, because those
+  // are already loaded and include keys the viewer may not list. A caller who
+  // may not list keys keeps the in-window list. An operator's listing is
+  // deployment-wide, so the organization page keeps only the keys in this
+  // organization's workspaces.
+  const inOrganization = (apiKey: ApiKey) =>
+    !orgWide ||
+    !workspaces.data ||
+    workspaces.data.some(
+      (orgWorkspace) => orgWorkspace.id === apiKey.workspace_id,
+    )
+  const matchedKeys = (keyMatches.data ?? []).filter(inOrganization)
   const inWindowKeys = realGroups(entitySuggest.data?.by_api_key).map(
     (group) => {
       const id = group.key as string
-      return {
-        value: id,
-        label: group.label ?? listedKeyName.get(id) ?? shortId(id),
-      }
+      return { value: id, label: group.label ?? shortId(id) }
     },
   )
   const inWindowKeyIds = new Set(inWindowKeys.map((option) => option.value))
+  const keyQuery = keyTerm.toLowerCase()
   const keyOptions = [
-    ...inWindowKeys,
-    ...listedKeys
+    ...inWindowKeys.filter(
+      (option) =>
+        !keyQuery ||
+        option.value.toLowerCase() === keyQuery ||
+        option.label.toLowerCase().includes(keyQuery),
+    ),
+    ...matchedKeys
       .filter((apiKey) => !inWindowKeyIds.has(apiKey.id))
       .map((apiKey) => ({ value: apiKey.id, label: apiKeyLabel(apiKey) }))
       .sort((a, b) => a.label.localeCompare(b.label)),
   ]
+  // A picked key keeps its name on its chip once the search has moved on, and
+  // one a link named reads by name too: each is looked up by id unless the
+  // window already names it.
+  const pickedKeys = useKeysById(
+    apiKeyFilters.filter((id) => !inWindowKeyIds.has(id)),
+  )
+  const keyLabel = (id: string) => {
+    const picked = pickedKeys.find((apiKey) => apiKey.id === id)
+    if (picked) return apiKeyLabel(picked)
+    return labelFor(keyOptions, id)
+  }
   // Just the in-window models: a picked one needs no place in this list, because
   // the picker hides what is already selected and the chips carry the raw name.
   const modelOptionList = modelOptions.map((model) => ({
@@ -889,13 +909,7 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
       (value) => value,
       setModelFilters,
     ),
-    ...valueChips(
-      "key",
-      "API key",
-      apiKeyFilters,
-      (value) => labelFor(keyOptions, value),
-      setApiKeyFilters,
-    ),
+    ...valueChips("key", "API key", apiKeyFilters, keyLabel, setApiKeyFilters),
   ]
 
   // Distinguish "this gateway has never served a request" from "no rows match
@@ -1347,6 +1361,7 @@ export function UsagePage({ scope = "caller" }: { scope?: UsageScope } = {}) {
           values={apiKeyFilters}
           onChange={setApiKeyFilters}
           options={keyOptions}
+          onSearchChange={setKeySearch}
           allowsCustom
           placeholder="All keys"
         />

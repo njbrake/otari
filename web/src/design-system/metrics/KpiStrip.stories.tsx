@@ -138,3 +138,13 @@ export const FiveColumns: Story = {
     </KpiStrip>
   ),
 }
+
+/**
+ * Five cells on a phone, where the strip wraps to two columns and then three
+ * from `sm`. A rule stands only between two cells on the same row: none at the
+ * end of a wrapped row, and none beside the cell left alone on the last one.
+ */
+export const Wrapped: Story = {
+  ...FiveColumns,
+  globals: { viewport: { value: "mobile2", isRotated: false } },
+}
