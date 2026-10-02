@@ -6836,7 +6836,7 @@ export interface components {
         };
         /**
          * CatalogCredential
-         * @description Who may price a catalog offering.
+         * @description Whose key serves a catalog offering, which also says who may price it.
          * @enum {string}
          */
         CatalogCredential: "deployment" | "organization" | "hosted";
@@ -7062,7 +7062,7 @@ export interface components {
         CatalogOffering: {
             /** Context Window */
             context_window?: number | null;
-            /** @description Who may price it: `deployment` for a `providers:` instance the operator configured, `hosted` for a provider the deployment pays for in any workspace of the viewer's organization, `organization` for one the viewer's organization may set its own rate for. A workspace can still call a `hosted` provider with the organization's own key. */
+            /** @description Whose key serves it: `deployment` for a `providers:` instance the operator configured, `hosted` for a provider the deployment pays for in any workspace of the viewer's organization, `organization` for one on the organization's own key, which it may set its own rate for. A workspace can still call a `hosted` provider with the organization's own key. */
             credential: components["schemas"]["CatalogCredential"];
             /**
              * Discovered
@@ -8287,6 +8287,11 @@ export interface components {
             output_tokens: number;
             /** Provider */
             provider: string;
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
             /** Session Label */
             session_label?: string | null;
             /** Source Event Id */
@@ -13307,6 +13312,8 @@ export interface components {
             prompt_tokens: number | null;
             /** Provider */
             provider: string | null;
+            /** Reasoning Tokens */
+            reasoning_tokens?: number | null;
             /** Request Group Id */
             request_group_id?: string | null;
             /** Request Id */
@@ -13737,6 +13744,11 @@ export interface components {
             p95_latency_ms?: number | null;
             /** Prompt Tokens */
             prompt_tokens: number;
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
             /** Request Count */
             request_count: number;
             /** Total Tokens */
@@ -15994,7 +16006,10 @@ export interface operations {
     "chat-chat_completions": {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description A unique value, such as a UUID, that makes a non-streaming request safe to retry. A retry with the same key and body returns the original response, request ID and cost without calling the provider or billing again. A retry while the original is still running is answered 409 with Retry-After. Reusing a key for a different body is refused with 422. Ignored for streaming requests, in hybrid mode, and on a deployment without OTARI_SECRET_KEY, which encrypts the stored response. */
+                "Idempotency-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -16868,7 +16883,10 @@ export interface operations {
     "messages-create_message": {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description A unique value, such as a UUID, that makes a non-streaming request safe to retry. A retry with the same key and body returns the original response, request ID and cost without calling the provider or billing again. A retry while the original is still running is answered 409 with Retry-After. Reusing a key for a different body is refused with 422. Ignored for streaming requests, in hybrid mode, and on a deployment without OTARI_SECRET_KEY, which encrypts the stored response. */
+                "Idempotency-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -20864,7 +20882,10 @@ export interface operations {
     "responses-create_response": {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description A unique value, such as a UUID, that makes a non-streaming request safe to retry. A retry with the same key and body returns the original response, request ID and cost without calling the provider or billing again. A retry while the original is still running is answered 409 with Retry-After. Reusing a key for a different body is refused with 422. Ignored for streaming requests, in hybrid mode, and on a deployment without OTARI_SECRET_KEY, which encrypts the stored response. */
+                "Idempotency-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

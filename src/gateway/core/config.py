@@ -19,6 +19,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from gateway.core.addresses import normalized_address
 from gateway.core.env import otari_env
 from gateway.core.settings.budgets import BudgetSettings
+from gateway.core.settings.inference import InferenceSettings
 from gateway.core.settings.pricing import PricingSettings
 from gateway.core.settings_view import OMITTED, SECRET, SettingsGroup, Shown
 from gateway.log_config import logger
@@ -375,7 +376,7 @@ class RelyingParty(NamedTuple):
 
 # Gotcha: fields are ordered last base first, then this class's own.
 # The settings view keeps that order, so moving a base reorders it.
-class GatewayConfig(BudgetSettings, PricingSettings, BaseSettings):
+class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, BaseSettings):
     """Gateway configuration with support for YAML files and environment variables."""
 
     model_config = SettingsConfigDict(
@@ -393,6 +394,17 @@ class GatewayConfig(BudgetSettings, PricingSettings, BaseSettings):
         default="0.0.0.0", description="Host to bind the server to"
     )  # noqa: S104
     port: Annotated[int, Shown(SettingsGroup.SERVER)] = Field(default=8000, description="Port to bind the server to")
+    forwarded_allow_ips: Annotated[str | None, Shown(SettingsGroup.SERVER)] = Field(
+        default=None,
+        description=(
+            "Comma-separated addresses or networks of the proxies whose X-Forwarded-For and "
+            "X-Forwarded-Proto headers `otari serve` trusts, or '*' for any peer. The per-IP sign-in "
+            "and public-catalog limits key on the address these headers resolve to, so behind a "
+            "proxy that is not listed every visitor shares the proxy's address. Use '*' only where "
+            "the proxy is the sole path to the server, as on Railway. Unset leaves it to uvicorn: "
+            "FORWARDED_ALLOW_IPS if set, otherwise 127.0.0.1."
+        ),
+    )
 
     database_url: Annotated[str, Shown(SettingsGroup.SERVER)] = Field(
         default="sqlite:///./otari.db",
@@ -1057,6 +1069,37 @@ class GatewayConfig(BudgetSettings, PricingSettings, BaseSettings):
         description=(
             "How often the background file sweep reclaims the bytes and rows of expired and "
             "deleted files. 0 disables the sweep, leaving cleanup to the operator."
+        ),
+    )
+    files_provider_upload_enabled: Annotated[bool, Shown(SettingsGroup.FILES)] = Field(
+        default=True,
+        description=(
+            "Upload a copy of an attached file to the provider when the provider's own code "
+            "execution needs one to name it. This does not decide whether a file's contents "
+            "reach the provider, which they do either way; it decides whether a copy is stored "
+            "in the provider's account until it expires. When False, a request that asks the "
+            "provider to run code over an attached file is refused."
+        ),
+    )
+    provider_account_pepper: Annotated[str | None, SECRET] = Field(
+        default=None,
+        min_length=32,
+        description=(
+            "Key for the keyed digest that names the provider account a copy of an attached file "
+            "is in. Required while files_provider_upload_enabled is on, and must differ from "
+            "OTARI_SECRET_KEY and the master key. Rotating it only makes the next request copy "
+            "each file again."
+        ),
+    )
+    files_provider_upload_ttl_hours: Annotated[int, Shown(SettingsGroup.FILES)] = Field(
+        default=1,
+        ge=1,
+        le=2160,
+        description=(
+            "Ceiling on how long a copy uploaded to a provider may live before the provider "
+            "expires it. The ceiling is the 90 days Anthropic's Files API accepts, and a copy "
+            "never outlives the file it was made from. Otari reuses a copy that still has time "
+            "left rather than uploading the same file again."
         ),
     )
     file_understanding_enabled: Annotated[bool, Shown(SettingsGroup.VISION)] = Field(

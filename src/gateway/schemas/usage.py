@@ -78,6 +78,7 @@ class UsageTotals(BaseModel):
     cache_read_tokens: int
     cache_write_tokens: int
     cache_write_1h_tokens: int
+    reasoning_tokens: int = 0
     request_count: int
     error_count: int
     avg_latency_ms: float | None

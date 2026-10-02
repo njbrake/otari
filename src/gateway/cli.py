@@ -147,6 +147,7 @@ def serve(
             app,
             host=gateway_config.host,
             port=gateway_config.port,
+            forwarded_allow_ips=gateway_config.forwarded_allow_ips,
         )
     except KeyboardInterrupt:
         logger.info("\nShutting down Otari...")
@@ -224,6 +225,18 @@ def gen_secret_key() -> None:
     from gateway.services.secret_box import generate_secret_key
 
     click.echo(generate_secret_key())
+
+
+@cli.command(name="gen-provider-account-pepper")
+def gen_provider_account_pepper() -> None:
+    """Print a fresh OTARI_PROVIDER_ACCOUNT_PEPPER for naming the provider accounts that hold file copies.
+
+    A deployment that makes provider copies will not start without one. Losing
+    it costs nothing but a fresh copy of each file the next time it is used.
+    """
+    import secrets
+
+    click.echo(secrets.token_urlsafe(32))
 
 
 @cli.group()

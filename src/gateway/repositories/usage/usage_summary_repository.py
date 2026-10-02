@@ -113,6 +113,7 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
                     billed_output_sum(),
                     status_count("absorbed"),
                     imported_cost_sum(),
+                    func.coalesce(func.sum(UsageLog.reasoning_tokens), 0),
                 ).where(*conditions)
             )
         ).one()
@@ -132,6 +133,7 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
             billed_output_tokens=int(row[12]),
             absorbed_count=int(row[13]),
             imported_cost=float(row[14]),
+            reasoning_tokens=int(row[15]),
         )
 
     async def breakdown(
