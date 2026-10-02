@@ -2129,9 +2129,14 @@ main {
  * Button, which is why the hook is narrow enough to be safe.
  *
  * 767px is the shell's own MOBILE_QUERY boundary (`useIsPhone`), so the rule
- * applies exactly where the sidebar has already become a drawer. */
+ * applies exactly where the sidebar has already become a drawer.
+ *
+ * `a.button` is the other half: a router `Link` dressed with `buttonVariants`
+ * carries the class but not the slot, so a link beside a row of buttons came
+ * out 8px shorter than they did. */
 @media (max-width: 767px) {
-  [data-slot="button"] {
+  [data-slot="button"],
+  a.button {
     min-height: 2.75rem;
     min-width: 2.75rem;
   }
@@ -2725,6 +2730,46 @@ main {
 .otari-members-table[data-scrolled="true"] .table__cell[data-key="member"] {
   border-right: 1px solid var(--color-control-border);
 }
+/* The pinned lanes above, body cells only. They were filled with the page
+   canvas, while a body cell's own fill is the surface, so every held lane read
+   as a grey column beside white rows; on a phone, where these tables scroll,
+   it looked like a second table. The header keeps the canvas, which is what it
+   sits on. Listed together so a new pinned lane is one line here, and after
+   every block so source order settles the tie. */
+.otari-breakdown .table__row .table__cell:first-child,
+.otari-providers-table .table__row .table__cell:first-child,
+.otari-routing-table .table__row .table__cell:first-child,
+.otari-budgets-table .table__row .table__cell:first-child,
+.otari-budgets-table .table__cell[data-key="budget"],
+.otari-accounts-table .table__cell[data-key="account"],
+.otari-workspaces-table .table__cell[data-key="name"],
+.otari-provider-keys-table .table__cell[data-key="name"],
+.otari-members-table .table__cell[data-key="member"] {
+  background-color: var(--color-surface);
+}
+.otari-breakdown .table__row:hover .table__cell:first-child,
+.otari-providers-table .table__row:hover .table__cell:first-child,
+.otari-routing-table .table__row:hover .table__cell:first-child,
+.otari-budgets-table .table__row:hover .table__cell:first-child,
+.otari-budgets-table .table__row:hover .table__cell[data-key="budget"],
+.otari-accounts-table .table__row:hover .table__cell[data-key="account"],
+.otari-workspaces-table .table__row:hover .table__cell[data-key="name"],
+.otari-provider-keys-table .table__row:hover .table__cell[data-key="name"],
+.otari-members-table .table__row:hover .table__cell[data-key="member"] {
+  background-color: var(--color-surface-muted);
+}
+/* A held lane narrower than the phone it is held on. Two were sized for a
+   desk, at 300px and 440px, which on a 390px screen left the scroll nothing to
+   reveal: the other columns slid under a lane as wide as the table's window. */
+@media (max-width: 767px) {
+  .otari-accounts-table .table__column[data-key="account"],
+  .otari-accounts-table .table__cell[data-key="account"],
+  .otari-workspaces-table .table__column[data-key="name"],
+  .otari-workspaces-table .table__cell[data-key="name"] {
+    width: 11.25rem;
+    min-width: 11.25rem;
+  }
+}
 /* Key lanes stay fixed while the name absorbs the available width. */
 .otari-keys-table .table__content {
   table-layout: fixed;
@@ -2855,6 +2900,22 @@ main {
 .otari-overview-activity .table__row .table__cell {
   height: 2.8125rem;
   padding-block: 0;
+}
+/* A phone renders three of the six lanes (`RecentActivity`), with the time as
+   a second line under the model, so the model lane gives up its floor and the
+   row grows to hold the two lines. */
+@media (max-width: 767px) {
+  .otari-overview-activity .table__column[data-key="model"] {
+    min-width: 0;
+  }
+  .otari-overview-activity .table__column[data-key="cost"],
+  .otari-overview-activity .table__column[data-key="status"] {
+    width: auto;
+  }
+  .otari-overview-activity .table__row .table__cell {
+    height: auto;
+    padding-block: 0.625rem;
+  }
 }
 
 /* The rail's footprint, published by the shell (`data-rail`) so a fixed overlay

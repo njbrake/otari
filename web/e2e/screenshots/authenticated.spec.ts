@@ -47,14 +47,13 @@ const WORKSPACE_ROUTES: ReadonlyArray<{
   readonly heading: RegExp
 }> = [
   { route: "/", name: "overview", heading: /overview/i },
-  // The one page in this matrix with no page title, which is why its heading
-  // regex names the greeting instead: a chat surface heads with the composer
-  // and its own empty state, not with a title band, and the seeded deployment
-  // serves a mock provider so that state is what renders.
+  // Anchored on the empty conversation's own heading rather than the page
+  // title, which paints before the model list resolves; the seeded deployment
+  // serves a mock provider, so the welcome is what renders.
   {
     route: "/playground",
     name: "playground",
-    heading: /what can i help with/i,
+    heading: /try a prompt/i,
   },
   { route: "/models", name: "models", heading: /models/i },
   {
@@ -255,6 +254,19 @@ test.describe("organization rail", () => {
 })
 
 /**
+ * Open a route as a new document, so a stub registered after `login` is asked.
+ *
+ * `login` has already read the caller's context into the query cache, and
+ * `gotoRoute` from the signed-in page changes only the hash, which is a
+ * same-document navigation: without the reload the page keeps the operator
+ * context it cached and never sends the request the stub answers.
+ */
+async function gotoRouteFresh(page: Page, route: string): Promise<void> {
+  await gotoRoute(page, route)
+  await page.reload()
+}
+
+/**
  * The organization-admin view of Spend & budgets.
  *
  * `/budgets` above captures the deployment-operator page, because `login`
@@ -383,7 +395,7 @@ test.describe("organization member", () => {
         json: { ...context, role: "member", deployment_operator: false },
       })
     })
-    await gotoRoute(page, "/members")
+    await gotoRouteFresh(page, "/members")
     await expect(
       page.getByRole("heading", { name: /^members$/i }).first(),
     ).toBeVisible()
@@ -399,7 +411,7 @@ test.describe("organization admin", () => {
   test("organization spend and budgets", async ({ page }) => {
     await login(page)
     await stubAdminSpendView(page)
-    await gotoRoute(page, "/budgets")
+    await gotoRouteFresh(page, "/budgets")
     await expect(
       page.getByRole("heading", { name: /spend & budgets/i }).first(),
     ).toBeVisible()

@@ -709,7 +709,7 @@ function MemberEditor({
 
       <div className="flex flex-col gap-2">
         <span className="text-body">Workspace access</span>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto overscroll-x-contain">
           <table className="w-full min-w-lg text-sm">
             <thead>
               <tr className="text-left text-xs text-muted">

@@ -17,6 +17,8 @@ import {
 export interface TestRouterOptions {
   /** Where the router starts, query string included. */
   url?: string
+  /** History entries behind `url`, so a test can see where going back lands. */
+  previous?: string[]
   /** Extra destinations, so a test can observe where a navigation landed. */
   routes?: { path: string; element: ReactNode }[]
   /**
@@ -47,6 +49,7 @@ export interface TestRouterOptions {
  */
 export function withRouter({
   url = "/",
+  previous = [],
   routes = [],
   shell,
 }: TestRouterOptions = {}) {
@@ -83,7 +86,10 @@ export function withRouter({
 
   const router = createRouter({
     routeTree: rootRoute.addChildren([subject, ...probes, rest]),
-    history: createMemoryHistory({ initialEntries: [url] }),
+    history: createMemoryHistory({
+      initialEntries: [...previous, url],
+      initialIndex: previous.length,
+    }),
     // The same search codec the app runs on, so a test URL is read (and
     // rewritten) exactly as the browser would read it.
     parseSearch,

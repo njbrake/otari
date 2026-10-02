@@ -43,6 +43,7 @@ import {
 } from "@/shared/helpers/format"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
+import { useIsPhone } from "@/shared/hooks/useIsPhone"
 
 const DAY_MS = 86_400_000
 const PERIOD_DAYS = 30
@@ -1085,14 +1086,31 @@ function SpendChart({
           </div>
           {/* Every fourth day, which lands nine labels across a thirty-day
               window: enough to date a bar, few enough not to become a second
-              row of text under a chart that is not the headline. */}
+              row of text under a chart that is not the headline. A phone's
+              day column is about 10px against a 40px label, so below `md`
+              every eighth: every fourth ran the labels into each other and
+              pushed the last one past the plot. The labels a phone skips are
+              not rendered there rather than hidden, because a hidden label
+              still overflows: the last one spilled past the page and let the
+              whole Overview pan sideways. */}
           <div className="mt-1.5 flex text-mono-micro text-subtle">
             {series.map((point, i) => (
               <span
                 key={point.bucket_start}
                 className="min-w-px flex-1 text-center whitespace-nowrap"
               >
-                {i % 4 === 0 ? shortDate(point.bucket_start) : "\u00a0"}
+                {i % 8 === 0 ? (
+                  shortDate(point.bucket_start)
+                ) : i % 4 === 0 ? (
+                  <>
+                    <span className="hidden md:inline">
+                      {shortDate(point.bucket_start)}
+                    </span>
+                    <span className="md:hidden">{"\u00a0"}</span>
+                  </>
+                ) : (
+                  "\u00a0"
+                )}
               </span>
             ))}
           </div>
@@ -1215,6 +1233,8 @@ function StatusMark({ status }: { status: string }) {
   )
 }
 
+const PHONE_HIDDEN = new Set(["time", "key", "tokens"])
+
 // Newest few requests, as an at-a-glance preview. Rows are read-only; a single
 // "View all" link opens the full Activity log. Cost and tokens are nullable per
 // row, and a failed request has neither, which reads as an em dash rather than
@@ -1228,7 +1248,8 @@ function RecentActivity({
   loading: boolean
   error: unknown
 }) {
-  const columns: DataTableColumn<UsageEntry>[] = [
+  const isPhone = useIsPhone()
+  const allColumns: DataTableColumn<UsageEntry>[] = [
     {
       id: "time",
       header: "Time",
@@ -1245,9 +1266,21 @@ function RecentActivity({
       id: "model",
       header: "Model",
       isRowHeader: true,
-      cell: (entry) => (
-        <span className="text-mono-caption text-foreground">{entry.model}</span>
-      ),
+      cell: (entry) =>
+        isPhone ? (
+          <span className="flex min-w-0 flex-col">
+            <span className="text-mono-caption break-all text-foreground">
+              {entry.model}
+            </span>
+            <span className="text-mono-micro text-subtle">
+              {formatRelative(entry.timestamp)}
+            </span>
+          </span>
+        ) : (
+          <span className="text-mono-caption text-foreground">
+            {entry.model}
+          </span>
+        ),
     },
     {
       id: "key",
@@ -1284,6 +1317,12 @@ function RecentActivity({
       cell: (entry) => <StatusMark status={entry.status} />,
     },
   ]
+  // Six lanes need about 830px, so a phone keeps the three that answer "what
+  // ran, what did it cost, did it work" and moves the time under the model.
+  // The key and the token count are a tap away in Activity.
+  const columns = isPhone
+    ? allColumns.filter((column) => !PHONE_HIDDEN.has(column.id))
+    : allColumns
 
   return (
     <section className="flex flex-col pt-6 lg:pr-6">

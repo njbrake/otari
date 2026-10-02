@@ -470,7 +470,7 @@ function ResetHistory({
     )
   }
   return (
-    <div className="overflow-x-auto px-4 py-3">
+    <div className="overflow-x-auto overscroll-x-contain px-4 py-3">
       <table className="w-full border-collapse text-xs">
         <thead className="text-left text-muted">
           <tr>

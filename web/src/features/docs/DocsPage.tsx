@@ -111,7 +111,7 @@ export const markdownComponents: Components = {
   table: ({ node: _node, ...props }: MdProps<"table">) => (
     // biome-ignore lint/a11y/useSemanticElements: <section> would not make the overflow keyboard-reachable, which is the point
     <div
-      className="my-4 max-w-full overflow-x-auto"
+      className="my-4 max-w-full overflow-x-auto overscroll-x-contain"
       // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be focusable (axe scrollable-region-focusable)
       tabIndex={0}
       role="region"

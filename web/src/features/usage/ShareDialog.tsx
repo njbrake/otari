@@ -4,6 +4,7 @@ import type { UsageGroupRow, UsageSeriesPoint, UsageTotals } from "@/client"
 import { Dialog, DialogSection } from "@/design-system/feedback/Dialog"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
+import { INPUT_CLASS } from "@/design-system/forms/inputClass"
 import {
   canCopyImages,
   copyBlobAsImage,
@@ -351,7 +352,7 @@ export function ShareDialog(props: ShareDialogProps) {
                   value={presentation.title}
                   maxLength={TITLE_MAX}
                   onChange={(event) => set("title", event.target.value)}
-                  className="w-full rounded-md border border-border px-2 py-1 text-sm"
+                  className={`w-full ${INPUT_CLASS}`}
                   aria-label="Card title"
                 />
               </Field>

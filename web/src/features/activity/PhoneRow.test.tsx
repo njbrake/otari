@@ -56,6 +56,15 @@ describe("PhoneRow", () => {
     expect(screen.getByText(/429 Rate limited/)).toBeInTheDocument()
   })
 
+  it("says a subscription paid on the time line, leaving the sender its room", () => {
+    phone({ source: "claude_code" })
+    const subscription = screen.getByText("· Subscription")
+    // The time line, not the sender line: at 375px a chip beside the sender
+    // truncated the name it qualifies.
+    expect(subscription.parentElement).toHaveTextContent(/ago/)
+    expect(subscription.parentElement).not.toHaveTextContent(/Claude Code/)
+  })
+
   it("says unpriced where a served request carries no price", () => {
     phone({ cost: null })
     expect(screen.getByText("unpriced")).toBeInTheDocument()

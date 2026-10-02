@@ -2,6 +2,7 @@ import { Dropdown, Label, Tooltip } from "@heroui/react"
 import { type RefObject, useRef } from "react"
 import { Text } from "react-aria-components"
 import {
+  FiBarChart2,
   FiEdit2,
   FiMoreHorizontal,
   FiPause,
@@ -25,6 +26,7 @@ export function KeyActionsMenu({
   onEdit,
   onRegenerate,
   onDelete,
+  onViewUsage,
 }: {
   apiKey: ApiKey
   triggerRef?: RefObject<HTMLButtonElement | null>
@@ -41,10 +43,27 @@ export function KeyActionsMenu({
   onEdit: () => void
   onRegenerate: () => void
   onDelete: () => void
+  /**
+   * Opens the Usage page filtered to this key. Absent where the deployment
+   * hosts no usage surface, so the menu offers no dead end.
+   */
+  onViewUsage?: () => void
 }) {
   const trigger = useRef<HTMLButtonElement>(null)
   const name = apiKey.key_name ?? "(unnamed)"
   const actions = [
+    ...(onViewUsage
+      ? [
+          {
+            id: "usage",
+            label: "View usage",
+            hint: "Spend and traffic for this key",
+            icon: FiBarChart2,
+            isDisabled: false,
+            run: onViewUsage,
+          },
+        ]
+      : []),
     {
       id: "toggle",
       label: apiKey.is_active ? "Disable" : "Enable",

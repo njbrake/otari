@@ -1162,7 +1162,12 @@ function AppShellChrome() {
             // without adding the region itself to the natural tab order.
             tabIndex={-1}
             inert={backgroundInert}
-            className="flex-1 overflow-y-auto focus:outline-none"
+            // The page scrolls vertically only. `overflow-y-auto` alone makes
+            // the x axis scroll too, so anything a page let spill past the edge
+            // turned the whole page into something a thumb could pan sideways.
+            // Hidden rather than clip, which computes to hidden beside a
+            // scrolling y axis anyway; a wide table keeps its own scroller.
+            className="flex-1 overflow-y-auto overflow-x-hidden overscroll-x-contain focus:outline-none"
           >
             <div className="mx-auto flex max-w-[112.5rem] flex-col gap-6 px-4 py-5 md:px-6 md:py-6">
               {answerIsStillComing ? (

@@ -197,13 +197,22 @@
   }
 }
 
-/* A settings row's phone size, the one part of it that is not a height: 16px,
-   because iOS zooms the page when a field under 16px takes focus and a
-   full-width field is the one shape where that zoom has nowhere to go. The
-   height is declared on the place above; its phone override is below. */
+/* Every field's phone size: 16px, because iOS zooms the page when a field
+   under 16px takes focus, and the zoom stays after the keyboard goes. Every
+   field rather than a place's: a toolbar search, a pager's page number and a
+   dialog's field all sat at 14px and each zoomed. The element is named so this
+   outranks `.otari-machine-field`, which sets a smaller size at one class. */
 @media (max-width: 767px) {
-  .otari-settings .input {
+  input.input,
+  textarea.input,
+  textarea.textarea,
+  input.search-field__input {
     font-size: var(--text-base);
+  }
+  /* HeroUI draws the search box at 36px whatever the place, so on a phone it
+     sat 8px short of the 44px button beside it and under the touch floor. */
+  .search-field__group {
+    height: 2.75rem;
   }
 }
 

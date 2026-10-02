@@ -17,6 +17,13 @@ import { DocsLink } from "../navigation/DocsLink"
  * `pb-5` rather than a gap on the parent, because a page is a stack of bands
  * that set their own rules and spacing, and a column gap would add air above
  * the first rule as well.
+ *
+ * The row is decided by the width of the content pane, not the viewport: a
+ * container query against `<main>`, which the app makes a container for the
+ * band's `100cqw`. On a tablet the rail takes a third of a 768px screen, and a
+ * viewport breakpoint put two actions beside a paragraph squeezed to a
+ * 200px column and pushed the second action past the edge. Where no container
+ * encloses it (a story), the header stays stacked.
  */
 export function PageIntro({
   title,
@@ -41,7 +48,7 @@ export function PageIntro({
   children?: ReactNode
 }) {
   return (
-    <header className="flex flex-col gap-4 pb-5 sm:flex-row sm:items-start sm:justify-between">
+    <header className="flex flex-col gap-4 pb-5 @2xl:flex-row @2xl:items-start @2xl:justify-between">
       <div className="max-w-[38.75rem]">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-display">{title}</h1>

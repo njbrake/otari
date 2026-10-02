@@ -248,7 +248,7 @@ export function ActivityDesk({
           }
         />
 
-        <div className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6">
+        <div className="-mx-4 overflow-x-auto overscroll-x-contain px-4 md:-mx-6 md:px-6">
           <ActivityTable
             columns={columns}
             header={

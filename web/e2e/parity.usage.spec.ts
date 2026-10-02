@@ -1,7 +1,11 @@
 import { expect, type Page, test } from "@playwright/test"
 
+import { API_ROOT } from "@/shared/api/client"
 import {
+  authHeaders,
+  expectOk,
   filterChip,
+  gotoRoute,
   login,
   nav,
   pickOption,
@@ -160,5 +164,61 @@ test.describe("usage & analytics", () => {
     await expect(table(page, "Activity log")).toContainText(
       PARITY.models.unpriced.model,
     )
+  })
+
+  // A key with no traffic at all, which the picker used to leave out because
+  // it offered only the keys spending in the window. Created here and removed
+  // after, like every flow that writes.
+  test("filters by an API key reached from the Keys page, at phone width too", async ({
+    page,
+  }) => {
+    const name = `usage-filter-${Date.now()}`
+    const created = await page.request.post(`${API_ROOT}/keys`, {
+      headers: authHeaders,
+      data: { key_name: name },
+    })
+    await expectOk(created, "create a key for the usage filter")
+    const { id } = (await created.json()) as { id: string }
+    try {
+      await login(page)
+      await gotoRoute(page, "/keys")
+      await page.getByRole("button", { name: `Actions for ${name}` }).click()
+      await page.getByRole("menuitem", { name: /^View usage/ }).click()
+
+      await expect(
+        page.getByRole("heading", { name: "Usage & analytics" }),
+      ).toBeVisible()
+      await expect(filterChip(page, "API key", name)).toBeVisible()
+      expect(page.url()).toContain(`api_key_id=${id}`)
+
+      // The filter is the URL's, so a reload on a phone keeps it.
+      await page.setViewportSize({ width: 375, height: 812 })
+      await page.reload()
+      await expect(filterChip(page, "API key", name)).toBeVisible()
+
+      await page
+        .getByRole("button", { name: `Remove API key filter ${name}` })
+        .click()
+      await expect(filterChip(page, "API key", name)).toBeHidden()
+      await page.getByRole("button", { name: "Add filter" }).click()
+      const picker = page.getByRole("combobox", { name: "API key" })
+      await expect(picker).toBeInViewport({ ratio: 1 })
+      await picker.click()
+      await page.getByRole("option", { name, exact: true }).click()
+      await page.keyboard.press("Escape")
+      await expect(filterChip(page, "API key", name)).toBeVisible()
+      // Nothing on the page is wider than the phone.
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+      ).toBeLessThanOrEqual(375)
+    } finally {
+      await page.request.patch(`${API_ROOT}/keys/${id}`, {
+        headers: authHeaders,
+        data: { is_active: false },
+      })
+      await page.request.delete(`${API_ROOT}/keys/${id}`, {
+        headers: authHeaders,
+      })
+    }
   })
 })
