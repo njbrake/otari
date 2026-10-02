@@ -21,11 +21,12 @@ function Probe() {
   return null
 }
 
-function renderWithProbe(): { client: QueryClient } {
-  // `retryDelay: 0` reaches the liveness probe, which sets its own `retry` but
-  // takes the client's delay, so its retries do not wait out a real backoff.
+function renderWithProbe(retryDelay = 0): { client: QueryClient } {
+  // `retryDelay` reaches the liveness probe, which sets its own `retry` but
+  // takes the client's delay, so by default its retries do not wait out a real
+  // backoff.
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
+    defaultOptions: { queries: { retry: false, retryDelay } },
   })
   const wrap = (children: ReactNode) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -75,12 +76,16 @@ describe("ConnectionStatus", () => {
     // A tab waking from sleep or an edge proxy dropping a pooled connection
     // fails one fetch against a healthy backend. The banner used to show on that
     // alone and hold until the next poll.
-    let calls = 0
+    let dropped = false
     let livenessAnswered = false
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      calls += 1
-      if (calls === 1) throw new TypeError("Failed to fetch")
-      if (!isLiveness(input)) return jsonResponse({ ok: true })
+      if (!isLiveness(input)) {
+        if (!dropped) {
+          dropped = true
+          throw new TypeError("Failed to fetch")
+        }
+        return jsonResponse({ ok: true })
+      }
       livenessAnswered = true
       return jsonResponse("I'm alive!")
     })
@@ -119,6 +124,68 @@ describe("ConnectionStatus", () => {
         expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
       )
       expect(client.getQueryState(["probe"])?.status).toBe("error")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("holds the alert through each recheck while the gateway stays down", async () => {
+    // The probe has never held data, so a recheck puts it back in `pending` for
+    // the length of its retries. A real delay keeps that window open long enough
+    // to see.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      vi.spyOn(globalThis, "fetch").mockRejectedValue(
+        new TypeError("Failed to fetch"),
+      )
+      renderWithProbe(1_000)
+
+      // Past the probe's two retries.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500)
+      })
+      expect(screen.getByRole("alert")).toBeInTheDocument()
+      for (let elapsed = 0; elapsed < 12_000; elapsed += 250) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(250)
+        })
+        expect(screen.getByRole("alert")).toBeInTheDocument()
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("alerts within seconds when the gateway hangs rather than refusing", async () => {
+    // A stalled gateway times requests out instead of failing them, so the
+    // alarm waits on the probe's own deadline, not `apiFetch`'s 30s.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      // `AbortSignal.timeout` runs on a timer fake timers do not reach, so it is
+      // rebuilt on `setTimeout` for the test.
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        const controller = new AbortController()
+        setTimeout(
+          () => controller.abort(new DOMException("", "TimeoutError")),
+          ms,
+        )
+        return controller.signal
+      })
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        (_input, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(init.signal?.reason),
+            )
+          }),
+      )
+      renderWithProbe()
+
+      // The page's own request times out at 30s, then three 5s probe attempts.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000 + 3 * 5_000 + 500)
+      })
+      expect(screen.getByRole("alert")).toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }

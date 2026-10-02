@@ -141,24 +141,43 @@ function useUnreachableSince(): number {
  * success, and keeps re-asking for as long as it fails. It retries before
  * settling on an error (the delay is the client's default), and it runs whatever
  * the browser believes about being online, because an offline browser cannot
- * reach the gateway either and the answer should say so.
+ * reach the gateway either and the answer should say so. Each attempt has a
+ * short deadline of its own rather than `apiFetch`'s 30s: the route does no
+ * I/O, so a gateway that has not answered it in a few seconds is not answering,
+ * and three full-length attempts would hold the alarm back for a minute and a
+ * half while every page spins.
+ *
+ * "Down" is read from the timestamps, not `status`: a query that has never held
+ * data goes back to `pending` on every refetch, so `isError` would drop the
+ * banner for the length of each recheck while the gateway is still down.
  */
+const GATEWAY_LIVENESS_TIMEOUT_MS = 5_000
+
 export function useGatewayUnreachable(): boolean {
   const unreachableSince = useUnreachableSince()
   const liveness = useQuery({
     queryKey: [GATEWAY_LIVENESS],
-    queryFn: () => apiFetch<string>("/health/liveness"),
+    queryFn: () =>
+      apiFetch<string>("/health/liveness", {
+        signal: AbortSignal.timeout(GATEWAY_LIVENESS_TIMEOUT_MS),
+      }),
     enabled: (query) =>
-      query.state.status === "error" ||
-      unreachableSince > query.state.dataUpdatedAt,
+      isDown(query.state) || unreachableSince > query.state.dataUpdatedAt,
     retry: 2,
     networkMode: "always",
     refetchInterval: (query) =>
-      query.state.status === "error" ? GATEWAY_LIVENESS_RECHECK_MS : false,
+      isDown(query.state) ? GATEWAY_LIVENESS_RECHECK_MS : false,
     refetchOnWindowFocus: true,
     staleTime: 0,
   })
-  return liveness.isError
+  return isDown(liveness)
+}
+
+function isDown(state: {
+  errorUpdatedAt: number
+  dataUpdatedAt: number
+}): boolean {
+  return state.errorUpdatedAt > state.dataUpdatedAt
 }
 
 // Every model the configured credentials can reach, per provider. Distinct from
