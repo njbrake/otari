@@ -188,7 +188,9 @@ jobs:
     # would put a catalog live while the check that renders it is still running,
     # so a story that throws would be on the site before anything said so.
     needs: [catalog, render]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Upstream's site only: a fork has no Pages site to deploy to, and this job
+    # would fail on every push to its main.
+    if: github.repository == 'mozilla-ai/otari' && github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     # `pages: write` and `id-token: write` are what deploy-pages needs to claim
     # the deployment; nothing here writes to the repository.
