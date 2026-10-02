@@ -4,7 +4,8 @@ A row gives a hold an identity, an age and a time to live (TTL).
 Release is idempotent, because only the first claim of an active row does the work.
 The sweep reclaims a leaked hold on its own.
 The sweep takes no row lock, and the conditional UPDATE in :func:`try_terminate` decides between two sweepers.
-A row is written after the holds it records, so the sweep never releases an amount that nobody holds.
+A row never commits before the holds it records, so the sweep never releases an amount that nobody holds.
+A hold whose row never landed is reclaimed by clamping its counter to the active rows.
 A claim and the release it authorizes commit in one transaction, so a terminal row never has an outstanding hold.
 This module runs in standalone mode only, because in hybrid mode the platform holds against its own ledger.
 """
@@ -17,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import case, delete, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.orm import Mapped
 
 from gateway.core.database import create_session
@@ -30,6 +31,7 @@ from gateway.models.budgets import (
     BudgetReservation,
     BudgetReservationScope,
     ReservationStatus,
+    ScopedBudget,
 )
 from gateway.models.users import User
 from gateway.services.budgets._scoped_enforcement import release as release_scoped
@@ -68,7 +70,7 @@ def release_reserved_count_expression(column: Mapped[int], amount: int) -> objec
     return case((column - amount < 0, 0), else_=column - amount)
 
 
-async def record(
+def record(
     db: AsyncSession,
     *,
     user_id: str,
@@ -81,7 +83,10 @@ async def record(
     request_estimate: int = 0,
     ttl_seconds: int,
 ) -> str | None:
-    """Write the row for a hold that has already been taken, returning its id.
+    """Add the row for a hold that has already been taken, returning its id.
+
+    **Never commits.** The caller commits the row in the transaction that holds
+    the per-user leg, so neither can land without the other.
 
     Returns ``None`` when the request holds nothing on either mechanism, which
     is the common case for a free model, a budget-exempt key or a user with no
@@ -120,7 +125,6 @@ async def record(
                 request_amount=request_estimate,
             )
         )
-    await db.commit()
     return reservation_id
 
 
@@ -391,6 +395,167 @@ async def sweep_expired(db: AsyncSession, *, batch_size: int) -> int:
     return reclaimed
 
 
+def _clamped(
+    names: Sequence[str], counters: Sequence[Decimal | int], held: Sequence[Decimal | int]
+) -> dict[str, object]:
+    """The counters that exceed what the active rows hold, each brought down to that sum."""
+    return {name: owed for name, counter, owed in zip(names, counters, held, strict=True) if counter > owed}
+
+
+async def _reconcile_user(db: AsyncSession, user_id: str, cutoff: datetime) -> bool:
+    """Clamp one quiet user's holds to the sum of that user's active rows."""
+    counters = (
+        await db.execute(
+            select(User.reserved, User.reserved_tokens, User.reserved_requests)
+            .where(
+                User.user_id == user_id,
+                User.deleted_at.is_(None),
+                or_(User.updated_at.is_(None), User.updated_at < cutoff),
+            )
+            .with_for_update()
+        )
+    ).one_or_none()
+    if counters is None:
+        # Written since it was picked, so it is no longer quiet.
+        await db.commit()
+        return False
+    held = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(BudgetReservation.estimate), ZERO),
+                func.coalesce(func.sum(BudgetReservation.token_estimate), 0),
+                func.coalesce(func.sum(BudgetReservation.request_estimate), 0),
+            ).where(
+                BudgetReservation.user_id == user_id,
+                BudgetReservation.status == RESERVATION_ACTIVE,
+                BudgetReservation.user_reserved.is_(True),
+            )
+        )
+    ).one()
+    values = _clamped(("reserved", "reserved_tokens", "reserved_requests"), tuple(counters), tuple(held))
+    if values:
+        await db.execute(
+            update(User).where(User.user_id == user_id).values(**values).execution_options(synchronize_session=False)
+        )
+        logger.warning(
+            "Reclaimed budget holds with no active reservation for user %s: %s held, %s recorded",
+            user_id,
+            tuple(counters),
+            tuple(held),
+        )
+    await db.commit()
+    return bool(values)
+
+
+async def _reconcile_scoped(db: AsyncSession, scoped_budget_id: str, cutoff: datetime) -> bool:
+    """Clamp one quiet ceiling's holds to the sum of its lines on active rows."""
+    counters = (
+        await db.execute(
+            select(ScopedBudget.reserved_spend, ScopedBudget.reserved_tokens, ScopedBudget.reserved_requests)
+            .where(
+                ScopedBudget.id == scoped_budget_id,
+                or_(ScopedBudget.updated_at.is_(None), ScopedBudget.updated_at < cutoff),
+            )
+            .with_for_update()
+        )
+    ).one_or_none()
+    if counters is None:
+        await db.commit()
+        return False
+    held = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(BudgetReservationScope.amount), ZERO),
+                func.coalesce(func.sum(BudgetReservationScope.token_amount), 0),
+                func.coalesce(func.sum(BudgetReservationScope.request_amount), 0),
+            )
+            .join(BudgetReservation, BudgetReservation.id == BudgetReservationScope.reservation_id)
+            .where(
+                BudgetReservationScope.scoped_budget_id == scoped_budget_id,
+                BudgetReservation.status == RESERVATION_ACTIVE,
+            )
+        )
+    ).one()
+    values = _clamped(("reserved_spend", "reserved_tokens", "reserved_requests"), tuple(counters), tuple(held))
+    if values:
+        await db.execute(
+            update(ScopedBudget)
+            .where(ScopedBudget.id == scoped_budget_id)
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        logger.warning(
+            "Reclaimed budget holds with no active reservation for scoped budget %s: %s held, %s recorded",
+            scoped_budget_id,
+            tuple(counters),
+            tuple(held),
+        )
+    await db.commit()
+    return bool(values)
+
+
+async def reconcile_orphaned_holds(db: AsyncSession, *, quiet_sec: int, batch_size: int) -> int:
+    """Return holds that the counters carry and no active row records, returning how many counters moved.
+
+    :func:`sweep_expired` reclaims through rows, so a hold whose row never
+    committed (the process died after the hold and before the row, or an older
+    gateway that wrote them apart) is invisible to it, and the period reset leaves
+    holds alone. Each counter is clamped down to the sum of its active rows; one
+    below that sum is left as it is.
+
+    A counter is touched only when it has not been written for ``quiet_sec``, the
+    reservation TTL. A request between its hold and its row has written that
+    counter within the TTL, so its hold is never mistaken for an orphan; one
+    stalled longer than the TTL is treated as leaked, the same contract the
+    expiry sweep already applies. Each candidate is re-read under a row lock with
+    the quiet test repeated, so a writer that slipped in after the scan wins, and
+    a settlement mid-flight either commits before the read or blocks behind it
+    with its row still counted as active.
+    """
+    cutoff = datetime.now(UTC) - timedelta(seconds=quiet_sec)
+    user_ids = (
+        (
+            await db.execute(
+                select(User.user_id)
+                .where(
+                    User.deleted_at.is_(None),
+                    or_(User.reserved > ZERO, User.reserved_tokens > 0, User.reserved_requests > 0),
+                    or_(User.updated_at.is_(None), User.updated_at < cutoff),
+                )
+                .limit(batch_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    scoped_ids = (
+        (
+            await db.execute(
+                select(ScopedBudget.id)
+                .where(
+                    or_(
+                        ScopedBudget.reserved_spend > ZERO,
+                        ScopedBudget.reserved_tokens > 0,
+                        ScopedBudget.reserved_requests > 0,
+                    ),
+                    or_(ScopedBudget.updated_at.is_(None), ScopedBudget.updated_at < cutoff),
+                )
+                .limit(batch_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Ends the scan's transaction before the per-counter ones open.
+    await db.commit()
+    moved = 0
+    for user_id in user_ids:
+        moved += await _reconcile_user(db, user_id, cutoff)
+    for scoped_budget_id in scoped_ids:
+        moved += await _reconcile_scoped(db, scoped_budget_id, cutoff)
+    return moved
+
+
 async def prune_terminal(db: AsyncSession, *, older_than_sec: int, batch_size: int) -> int:
     """Delete settled, released and expired rows past the retention window.
 
@@ -447,13 +612,16 @@ async def prune_terminal(db: AsyncSession, *, older_than_sec: int, batch_size: i
 _MAX_SWEEP_PASSES = 10
 
 
-async def run_reservation_sweeper(interval: float, *, batch_size: int, retention_sec: int) -> None:
+async def run_reservation_sweeper(interval: float, *, batch_size: int, retention_sec: int, ttl_sec: int) -> None:
     """Reclaim leaked holds on a timer, forever. Cancelled at shutdown.
 
     :func:`reclaim_expired_for_user` only fires when *that* user next reserves,
     which is enough for a busy user and useless for the case that matters most: a
     user whose one request leaked and who then makes no more. That hold would sit
     against their budget with nothing ever releasing it.
+
+    Then returns holds no active row records (:func:`reconcile_orphaned_holds`),
+    after the expiry pass so a quiet counter's expired rows are released first.
 
     Also prunes terminal rows past ``retention_sec``, since nothing else deletes
     one and the table gains a row per billable request.
@@ -470,6 +638,7 @@ async def run_reservation_sweeper(interval: float, *, batch_size: int, retention
                 for _ in range(_MAX_SWEEP_PASSES):
                     if await sweep_expired(db, batch_size=batch_size) < batch_size:
                         break
+                await reconcile_orphaned_holds(db, quiet_sec=ttl_sec, batch_size=batch_size)
                 # Retention runs on the same tick rather than a timer of its own:
                 # it is the same bounded, best-effort maintenance against the same
                 # table, and a second lifespan task would double the machinery for
@@ -491,6 +660,7 @@ __all__ = [
     "grow",
     "reclaim_expired_for_user",
     "prune_terminal",
+    "reconcile_orphaned_holds",
     "record",
     "run_reservation_sweeper",
     "release_reserved_expression",

@@ -397,23 +397,19 @@ async def _held_handle(
     ttl_seconds: int,
     record_reservation: bool,
 ) -> ReservationHandle:
-    """Build the handle for a hold that has been taken, and ledger it.
+    """Ledger a hold, commit it, and build its handle.
 
-    The row is written here, after every conditional UPDATE has landed, so the
-    ledger never claims a hold the counters do not have. The reverse window (a
-    hold with no row) is the leak the sweep already bounds; this one would have
-    the sweep hand back an amount nobody holds.
-
-    A ledger write that fails does not fail the request. The hold is already live
-    at this point, so raising would leave the caller with no handle to reconcile
-    or refund and guarantee the very leak the ledger exists to prevent. Degrading
-    to an unledgered hold keeps the caller's normal settlement path working,
-    which is exactly the behavior every reservation had before this table existed.
+    The per-user hold is the caller's uncommitted UPDATE, so its row commits in the
+    same transaction: a process that dies between the two can no longer leave the
+    counter raised with nothing recording it. The scoped holds are already
+    committed, one ceiling at a time, so their row still lands after them and
+    never claims a hold the counters do not have. A crash in that gap is what
+    :func:`gateway.services.budgets._ledger.reconcile_orphaned_holds` recovers.
     """
     reservation_id: str | None = None
-    if record_reservation:
-        try:
-            reservation_id = await ledger.record(
+    try:
+        if record_reservation:
+            reservation_id = ledger.record(
                 db,
                 user_id=user_id,
                 estimate=estimate,
@@ -425,17 +421,20 @@ async def _held_handle(
                 request_estimate=request_estimate,
                 ttl_seconds=ttl_seconds,
             )
-        except SQLAlchemyError:
-            # Leave the session usable for the caller's own settlement writes; a
-            # failed commit otherwise poisons it for the rest of the request.
-            with contextlib.suppress(SQLAlchemyError):
-                await db.rollback()
-            logger.warning(
-                "Could not write the reservation ledger row for user %s; the hold is live but "
-                "unledgered, so it settles through the handle and is not reclaimable by the sweep.",
-                user_id,
-                exc_info=True,
+        await db.commit()
+    except SQLAlchemyError:
+        # The per-user hold rolls back with its row. The scoped holds committed
+        # earlier, so give them back too: the caller gets no handle to do it with.
+        with contextlib.suppress(SQLAlchemyError):
+            await db.rollback()
+            await release_scoped(
+                db,
+                [item.budget_id for item in scoped],
+                scoped_estimate,
+                tokens=scoped_token_estimate,
+                requests=request_estimate,
             )
+        raise
     return ReservationHandle(
         user_id=user_id,
         estimate=estimate,
@@ -633,7 +632,6 @@ async def reserve_budget(
             )
             .execution_options(synchronize_session=False)
         )
-        await db.commit()
         return await _held_handle(
             db,
             user_id=user_id,
@@ -684,9 +682,10 @@ async def reserve_budget(
         )
         .execution_options(synchronize_session=False)
     )
-    await db.commit()
 
     if not getattr(result, "rowcount", 0):
+        # Nothing was held; end the empty transaction before the refusal path.
+        await db.commit()
         BUDGET_EXCEEDED.inc()
         # The scoped ceilings admitted this request and are already holding it, so
         # give every axis back before rejecting. Without this the holds would leak

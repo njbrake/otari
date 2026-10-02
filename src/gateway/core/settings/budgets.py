@@ -31,7 +31,9 @@ class BudgetSettings(BaseModel):
             "How long a budget reservation may stay in flight before the sweep treats it as "
             "leaked and returns the hold. It must comfortably exceed the slowest request this "
             "deployment serves, because reclaiming a hold that is still live would let a "
-            "concurrent request past a cap the in-flight one is already spending against."
+            "concurrent request past a cap the in-flight one is already spending against. "
+            "The sweep also uses it as the quiet window before it returns a hold that no "
+            "in-flight reservation records."
         ),
     )
     budget_reservation_sweep_interval_sec: Annotated[int, OMITTED] = Field(
