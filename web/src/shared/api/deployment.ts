@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useCallback, useSyncExternalStore } from "react"
 import type {
   DashboardBuild,
   DeploymentAdminAccess,
@@ -7,12 +8,19 @@ import type {
   GatewayHealth,
   UpdateDeploymentUserRequest,
 } from "@/client"
-import { apiFetch, DASHBOARD_BUILD_PATH, siteFetch } from "@/shared/api/client"
+import {
+  ApiError,
+  apiFetch,
+  DASHBOARD_BUILD_PATH,
+  siteFetch,
+} from "@/shared/api/client"
 import { fetchAllPaged } from "@/shared/api/paging"
 import {
   BUILD,
   BUILD_POLL_MS,
   DEPLOYMENT_ADMIN,
+  GATEWAY_LIVENESS,
+  GATEWAY_LIVENESS_RECHECK_MS,
   HEALTH,
   HEALTH_POLL_MS,
   NO_RETRY,
@@ -58,6 +66,99 @@ export function useGatewayHealth() {
     refetchOnWindowFocus: true,
     staleTime: 0,
   })
+}
+
+// apiFetch normalizes an unreachable gateway to ApiError status 0 ("Network
+// error: could not reach the gateway."). A 401/403 is a different failure: the
+// backend answered, it just rejected the key, and that already bounces to
+// sign-in, so it is not "can't connect".
+function isUnreachable(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 0
+}
+
+// When the newest query that failed to reach the gateway failed, or 0 when none
+// is currently in that state. Scanning the whole cache keeps the answer the same
+// wherever the operator is standing. A failure left on a page they navigated
+// away from stays in the cache until it is collected, which is why this is only
+// a suspicion for the probe to settle rather than the answer itself.
+//
+// The cache is an external store and is read as one. Subscribing in an effect
+// and calling `setState` from the listener does not hold here: the cache emits
+// synchronously when an observer is created, and an observer is created when a
+// component calls `useQuery` during its render, so the listener runs inside
+// another component's render pass. React calls that a bad `setState` in render.
+// `useSyncExternalStore` is the primitive for this shape, and React owns the
+// timing, so the same notification arrives safely.
+function useUnreachableSince(): number {
+  const queryClient = useQueryClient()
+
+  // `useSyncExternalStore` identity-checks `subscribe` and re-subscribes when it
+  // changes, so this is held stable rather than rebuilt every render. That is
+  // the "a reference something else identity-checks" case performance.md keeps,
+  // not memoization by reflex.
+  const subscribe = useCallback(
+    (onStoreChange: () => void) =>
+      queryClient.getQueryCache().subscribe(onStoreChange),
+    [queryClient],
+  )
+
+  // Runs on every notification and more than once per render, so it stays a
+  // scan that returns a number. React compares snapshots with `Object.is`, so
+  // returning anything carrying an identity of its own would loop. The probe's
+  // own failures are left out: they are the verdict, not a new suspicion.
+  const getSnapshot = useCallback(
+    () =>
+      queryClient
+        .getQueryCache()
+        .getAll()
+        .reduce(
+          (newest, query) =>
+            query.queryKey[0] !== GATEWAY_LIVENESS &&
+            query.state.status === "error" &&
+            isUnreachable(query.state.error)
+              ? Math.max(newest, query.state.errorUpdatedAt)
+              : newest,
+          0,
+        ),
+    [queryClient],
+  )
+
+  return useSyncExternalStore(subscribe, getSnapshot)
+}
+
+/**
+ * True once a request has failed to reach the gateway and a liveness probe,
+ * retries included, has failed too. Clears when the probe next succeeds.
+ *
+ * One request failing at the network layer is not evidence the gateway is down:
+ * a laptop waking from sleep, a Wi-Fi or VPN change, or an edge proxy dropping a
+ * pooled connection each fail a single fetch against a healthy backend, and the
+ * build poll every page runs does not retry. So a failed query only starts the
+ * probe, and the probe's answer is the verdict. The liveness route does no I/O,
+ * so it answers whenever the process does.
+ *
+ * The probe runs when the newest unreachable failure is newer than its own last
+ * success, and keeps re-asking for as long as it fails. It retries before
+ * settling on an error (the delay is the client's default), and it runs whatever
+ * the browser believes about being online, because an offline browser cannot
+ * reach the gateway either and the answer should say so.
+ */
+export function useGatewayUnreachable(): boolean {
+  const unreachableSince = useUnreachableSince()
+  const liveness = useQuery({
+    queryKey: [GATEWAY_LIVENESS],
+    queryFn: () => apiFetch<string>("/health/liveness"),
+    enabled: (query) =>
+      query.state.status === "error" ||
+      unreachableSince > query.state.dataUpdatedAt,
+    retry: 2,
+    networkMode: "always",
+    refetchInterval: (query) =>
+      query.state.status === "error" ? GATEWAY_LIVENESS_RECHECK_MS : false,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  })
+  return liveness.isError
 }
 
 // Every model the configured credentials can reach, per provider. Distinct from

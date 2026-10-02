@@ -54,6 +54,7 @@ export const STORED_PROVIDERS = "stored-providers"
 export const METADATA = "model-metadata"
 export const BUILD = "build"
 export const HEALTH = "health"
+export const GATEWAY_LIVENESS = "gateway-liveness"
 export const KEYS = "keys"
 export const BUDGETS = "budgets"
 export const SCOPED_BUDGETS = "scoped-budgets"
@@ -146,6 +147,10 @@ export const BUILD_POLL_MS = 60_000
 // the build check. The gateway bounds its own upstream probe (`resolve_timeout_ms`),
 // so a stalled control plane answers "no" rather than piling up requests.
 export const HEALTH_POLL_MS = 15_000
+// How often the liveness probe behind `useGatewayUnreachable` asks again while
+// the gateway is not answering: often enough that the alarm clears within a few
+// seconds of it coming back.
+export const GATEWAY_LIVENESS_RECHECK_MS = 5_000
 
 // The four queries below are backed by provider or models.dev fan-out
 // gateway-side. That is cached and refreshed in the background now, so they are

@@ -3,26 +3,29 @@ import {
   QueryClientProvider,
   useQuery,
 } from "@tanstack/react-query"
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ConnectionStatus } from "@/app/ConnectionStatus"
-import { API_ROOT, apiFetch } from "@/shared/api/client"
+import { apiFetch } from "@/shared/api/client"
 
 // Drives one management request so the query cache carries a real success/error,
-// exactly what ConnectionStatus watches.
+// exactly what ConnectionStatus watches. No retry, like the build poll every page
+// runs, so a single dropped fetch lands in the cache as an error.
 function Probe() {
   useQuery({
     queryKey: ["probe"],
-    queryFn: () => apiFetch(`${API_ROOT}/settings`),
+    queryFn: () => apiFetch("/settings"),
     retry: false,
   })
   return null
 }
 
 function renderWithProbe(): { client: QueryClient } {
+  // `retryDelay: 0` reaches the liveness probe, which sets its own `retry` but
+  // takes the client's delay, so its retries do not wait out a real backoff.
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
   })
   const wrap = (children: ReactNode) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -45,6 +48,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+function isLiveness(input: RequestInfo | URL): boolean {
+  return String(input).endsWith("/health/liveness")
+}
+
 describe("ConnectionStatus", () => {
   afterEach(() => vi.restoreAllMocks())
 
@@ -56,24 +63,65 @@ describe("ConnectionStatus", () => {
 
     const alert = await screen.findByRole("alert")
     expect(alert).toHaveTextContent(/Can’t reach the gateway/)
+    // One failed request is only the suspicion; the alarm follows the probe and
+    // its retries failing too.
+    const fetchMock = vi.mocked(globalThis.fetch)
+    expect(
+      fetchMock.mock.calls.filter(([url]) => isLiveness(url)),
+    ).toHaveLength(3)
   })
 
-  it("clears itself once the gateway responds again", async () => {
-    let online = false
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-      if (!online) throw new TypeError("Failed to fetch")
-      return jsonResponse({ ok: true })
+  it("stays quiet when one request drops but the gateway answers", async () => {
+    // A tab waking from sleep or an edge proxy dropping a pooled connection
+    // fails one fetch against a healthy backend. The banner used to show on that
+    // alone and hold until the next poll.
+    let calls = 0
+    let livenessAnswered = false
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      calls += 1
+      if (calls === 1) throw new TypeError("Failed to fetch")
+      if (!isLiveness(input)) return jsonResponse({ ok: true })
+      livenessAnswered = true
+      return jsonResponse("I'm alive!")
     })
     const { client } = renderWithProbe()
 
-    await screen.findByRole("alert")
-
-    online = true
-    await client.refetchQueries({ queryKey: ["probe"] })
-
     await waitFor(() =>
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+      expect(client.getQueryState(["probe"])?.status).toBe("error"),
     )
+    await waitFor(() => expect(livenessAnswered).toBe(true))
+    // Let the probe's answer settle into the cache before reading the DOM.
+    await act(async () => {})
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("clears itself once the gateway responds again, without the failed query refetching", async () => {
+    // The failed query stays in the cache in its error state, as one on a page
+    // the operator has left does; recovery is the probe's to report.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let online = false
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        if (!online) throw new TypeError("Failed to fetch")
+        return jsonResponse("I'm alive!")
+      })
+      const { client } = renderWithProbe()
+
+      await screen.findByRole("alert")
+
+      online = true
+      // Past the probe's recheck interval (`GATEWAY_LIVENESS_RECHECK_MS`).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+
+      await waitFor(() =>
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+      )
+      expect(client.getQueryState(["probe"])?.status).toBe("error")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("stays quiet for an error that is not a lost connection", async () => {
@@ -87,5 +135,8 @@ describe("ConnectionStatus", () => {
     await waitFor(() =>
       expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
     )
+    expect(
+      vi.mocked(globalThis.fetch).mock.calls.some(([url]) => isLiveness(url)),
+    ).toBe(false)
   })
 })
