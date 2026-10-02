@@ -493,17 +493,29 @@ describe("ActivityPage", () => {
       ).not.toBeInTheDocument()
     })
 
-    it("reads a workspace admin who is an organization member as a member, as the server does", async () => {
-      mockApi({ rows: [entry()], viewer: "workspaceAdmin" })
+    it("reads a workspace admin who is an organization member as a manager of that workspace, as the server does", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockApi({
+        rows: [entry()],
+        viewer: "workspaceAdmin",
+        members: [
+          organizationMember({
+            user_id: CALLER_IDENTITY,
+            attribution_user_id: "me-attr",
+          }),
+        ],
+      })
       renderPage(<ActivityPage />)
       await rowOf("gpt-4o")
-      expect(screen.getByText("Your requests")).toBeInTheDocument()
+      expect(lastList(calls).get("workspace_id")).toBe(WORKSPACE_ID)
       expect(
-        screen.queryByRole("radio", { name: "You" }),
-      ).not.toBeInTheDocument()
-      expect(
-        screen.queryByRole("columnheader", { name: /Member/ }),
-      ).not.toBeInTheDocument()
+        screen.getByRole("columnheader", { name: /Member/ }),
+      ).toBeInTheDocument()
+
+      await user.click(screen.getByRole("radio", { name: "You" }))
+      await waitFor(() =>
+        expect(lastList(calls).getAll("user_id")).toEqual(["me-attr"]),
+      )
     })
 
     it("marks a budget that has run over", async () => {

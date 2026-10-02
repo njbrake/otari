@@ -174,6 +174,12 @@ not offer the page at all.
 
 Activity is the per-request log. Usage provides aggregates and time series.
 
+Whose requests they show follows workspace management. In a workspace you
+manage, as an owner or admin of the organization or of that workspace itself,
+you see everyone's requests and can narrow to your own; in any other workspace
+you belong to, you see only your own. Managing one workspace widens that
+workspace and no other.
+
 Filter Activity from the log itself: each column header sorts and holds that
 column's filters, a cell in any of the value columns can narrow the log to its
 value or exclude it, and the search box matches a request ID, a model, the name
