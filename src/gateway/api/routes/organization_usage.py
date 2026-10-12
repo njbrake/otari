@@ -113,7 +113,9 @@ router = APIRouter(
     dependencies=[Depends(verify_master_key)],
 )
 
-# Hosted only: on standalone the organization is the deployment, so ``usage`` already shows it.
+# Published by hosted only, and no dashboard page gates on it any more: these routes
+# are mounted on standalone too, where the Usage page's Organization scope reads
+# them, offered by organization role rather than by this surface.
 SURFACE = Surface("organization_usage", standalone=False)
 
 
