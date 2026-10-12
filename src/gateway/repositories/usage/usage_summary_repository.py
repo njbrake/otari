@@ -228,7 +228,7 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         with_span: bool = False,
         rank_by: UsageRankBy = "cost",
     ) -> list[UsageGroupRow]:
-        """Spend/tokens/requests grouped by ``dimension``, biggest spend first, at most ``limit`` groups.
+        """Spend/tokens/requests grouped by ``dimension``, ranked by ``rank_by``, at most ``limit`` groups.
 
         ``tokens`` is the *billed* total (input including both cache buckets, plus
         output, via ``billed_meter``), the same quantity the series composition and
@@ -337,22 +337,28 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         return {_key(key): int(value) for key, value in rows}
 
     async def session_details(
-        self, keys: Collection[str | None], conditions: list[ColumnElement[bool]]
+        self,
+        keys: Collection[str | None],
+        conditions: list[ColumnElement[bool]],
+        *,
+        status_filter: str | None = None,
     ) -> dict[str, SessionDetail]:
         """The provenance source and API key name most of each of these sessions' requests carry.
 
         One grouped pass over the sessions on the page, grouped by session, source and
         key name, so both answers come from the same counts. Requests, not rows: a routed
-        request's abandoned attempts are left out, as the breakdown's counts leave them.
+        request's abandoned attempts are left out, as the breakdown's counts leave them,
+        unless ``status_filter`` asks for exactly those (see ``request_count``).
         """
         named = [key for key in keys if key is not None]
         if not named:
             return {}
+        counted = [] if status_filter == "absorbed" else [UsageLog.status != "absorbed"]
         rows = (
             await self.db.execute(
                 select(UsageLog.source_label, UsageLog.source, APIKey.key_name, func.count())
                 .outerjoin(APIKey, APIKey.id == UsageLog.api_key_id)
-                .where(*conditions, UsageLog.source_label.in_(named), UsageLog.status != "absorbed")
+                .where(*conditions, UsageLog.source_label.in_(named), *counted)
                 .group_by(UsageLog.source_label, UsageLog.source, APIKey.key_name)
             )
         ).all()

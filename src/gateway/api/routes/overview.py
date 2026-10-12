@@ -37,10 +37,13 @@ def _month(value: str | None, now: datetime) -> Month:
 
     if value is None:
         return Month.current(now)
-    month = Month.of(int(value[:4]), int(value[5:]), now)
-    if month.start > now:
+    year, number = int(value[:4]), int(value[5:])
+    # Refused before it is built: a month past year 9999 has no end to build.
+    if (year, number) > (now.year, now.month):
         raise ValueError(f"{value} has not started")
-    return month
+    if year < 1:
+        raise ValueError(f"{value} is not a month")
+    return Month.of(year, number, now)
 
 
 @router.get("")

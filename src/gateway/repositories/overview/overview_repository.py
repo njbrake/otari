@@ -152,9 +152,12 @@ def _ceilings(organization_id: uuid.UUID, scope_type: str) -> Subquery:
 def _near_cap(ranked: Subquery, warn_fraction: float) -> ColumnElement[bool]:
     """A wide filter for a ceiling worth judging: the service decides exactly, against the rolled period."""
 
+    used = ranked.c.cap_spent + ranked.c.cap_reserved
+    # A zero cap with nothing against it passes the fraction test and yields no item.
     return and_(
         ranked.c.cap.is_not(None),
-        ranked.c.cap_spent + ranked.c.cap_reserved >= ranked.c.cap * Decimal(str(warn_fraction)),
+        used >= ranked.c.cap * Decimal(str(warn_fraction)),
+        or_(ranked.c.cap > 0, used > 0),
     )
 
 
