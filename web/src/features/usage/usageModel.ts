@@ -1,6 +1,8 @@
 import type {
+  UsageBreakdownRankBy,
   UsageGroupedSeries,
   UsageRankBy,
+  UsageRankOrder,
   UsageSeriesPoint,
   UsageSummary,
   UsageTotals,
@@ -381,55 +383,45 @@ export function shareFigures(
 
 // ---------- the table's order ----------
 
-function sortValue(
-  row: UsageBreakdownRow,
-  key: SortKey,
-  metric: Metric,
-  withSubscription: boolean,
-  name: string,
-): number | string {
-  switch (key) {
-    case "name":
-      return name.toLowerCase()
-    case "value":
-      return metricOf(row, metric, withSubscription)
-    case "requests":
-      return row.requests
-    case "tokens":
-      return row.tokens
-    case "billed":
-      return billedOf(row)
-    case "subscription":
-      return row.imported_cost
-    case "failed":
-      return row.error_count
-    case "p95":
-      return row.p95_latency_ms ?? -1
-  }
-}
-
 /**
- * The table's rows in the order picked, with the rows that have no value
- * ("No session", "Direct") and the server's fold always last: they explain the
- * rest rather than rank among them.
+ * What the server ranks the breakdown by for the table's sort, so the top N it
+ * keeps are the top N of that column rather than of the share. `value` is the
+ * metric on screen, as the chart ranks it. The server orders `name` by its own
+ * label, or the key where it has none, so where the page names a row otherwise
+ * (a member by attribution label, "You"; a channel by its description) A to Z
+ * can read slightly out of order. Not re-sorted here: these are only the top N.
  */
-export function sortRows(
-  rows: readonly UsageBreakdownRow[],
+export function breakdownRankFor(
   sort: TableSort,
   metric: Metric,
   withSubscription: boolean,
-  nameOf: (row: UsageBreakdownRow) => string,
+): { by: UsageBreakdownRankBy; order: UsageRankOrder } {
+  const by: Record<SortKey, UsageBreakdownRankBy> = {
+    value: rankByFor(metric, withSubscription),
+    name: "name",
+    requests: "requests",
+    tokens: "tokens",
+    billed: "billed",
+    subscription: "imported",
+    failed: "errors",
+    p95: "p95",
+  }
+  return { by: by[sort.key], order: sort.order }
+}
+
+/**
+ * The server's rows in the server's order, except that the rows with no value
+ * ("No session", "Direct") and the fold always come last: they explain the rest
+ * rather than rank among them. A stable partition, so it reorders nothing else.
+ */
+export function placeUnranked(
+  rows: readonly UsageBreakdownRow[],
 ): UsageBreakdownRow[] {
-  const rank = (row: UsageBreakdownRow) =>
-    row.is_other ? 2 : row.key === null ? 1 : 0
-  const direction = sort.order === "asc" ? 1 : -1
-  return [...rows].sort((a, b) => {
-    if (rank(a) !== rank(b)) return rank(a) - rank(b)
-    const left = sortValue(a, sort.key, metric, withSubscription, nameOf(a))
-    const right = sortValue(b, sort.key, metric, withSubscription, nameOf(b))
-    if (left === right) return 0
-    return (left > right ? 1 : -1) * direction
-  })
+  return [
+    ...rows.filter((row) => !row.is_other && row.key !== null),
+    ...rows.filter((row) => !row.is_other && row.key === null),
+    ...rows.filter((row) => row.is_other),
+  ]
 }
 
 /** The order a column sorts in first: names A to Z, figures largest first. */

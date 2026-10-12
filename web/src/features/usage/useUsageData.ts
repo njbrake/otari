@@ -12,7 +12,7 @@ import {
   useUsageSummary,
 } from "@/shared/api/usage"
 import { bucketForWindow, isoAgo } from "@/shared/helpers/timeRange"
-import { rankByFor, readMetric } from "./usageModel"
+import { breakdownRankFor, rankByFor, readMetric } from "./usageModel"
 import {
   DIMENSIONS,
   dimensionsFor,
@@ -117,13 +117,12 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
   const usageScope: "organization" | "caller" =
     scope === "organization" ? "organization" : "caller"
   const def = DIMENSIONS[dimension]
-  const rankBy = rankByFor(metric, withSubscription)
 
   const breakdown = useUsageBreakdown(
     usageFilters,
     bucket,
     def.summary,
-    rankBy,
+    breakdownRankFor(sort, metric, withSubscription),
     { enabled: isReady, usageScope },
   )
   const previous = useUsageSummary(
@@ -137,7 +136,8 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
     usageFilters,
     bucket,
     def.series,
-    rankBy,
+    // The chart ranks by the metric whatever the table's sort.
+    rankByFor(metric, withSubscription),
     isReady,
     usageScope,
   )

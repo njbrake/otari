@@ -263,15 +263,28 @@ export function mockUsageApi(
         if (params.getAll("dimensions").includes("none")) {
           return jsonResponse(opts.previous ?? breakdownSummary())
         }
-        // As the server does: only the breakdowns asked for are filled.
+        // As the server does: only the breakdowns asked for are filled, and
+        // `rank_order=asc` lists them from the other end, the rows with no key
+        // and the fold still last. The fixture's rows are in descending order.
         const asked = new Set(params.getAll("dimensions"))
+        const isAscending = params.get("rank_order") === "asc"
         return jsonResponse(
           Object.fromEntries(
-            Object.entries(summary).map(([field, value]) =>
-              field.startsWith("by_") && !asked.has(field.slice(3))
-                ? [field, []]
-                : [field, value],
-            ),
+            Object.entries(summary).map(([field, value]) => {
+              if (!field.startsWith("by_")) return [field, value]
+              if (!asked.has(field.slice(3))) return [field, []]
+              if (!isAscending || !Array.isArray(value)) return [field, value]
+              const rows = value as UsageBreakdownRow[]
+              const isRanked = (row: UsageBreakdownRow) =>
+                !row.is_other && row.key !== null
+              return [
+                field,
+                [
+                  ...rows.filter(isRanked).reverse(),
+                  ...rows.filter((row) => !isRanked(row)),
+                ],
+              ]
+            }),
           ),
         )
       }

@@ -31,8 +31,8 @@ import {
   foldSeries,
   METRICS,
   nextSort,
+  placeUnranked,
   shareFigures,
-  sortRows,
   valueFormatter,
 } from "./usageModel"
 import {
@@ -342,13 +342,7 @@ export function UsagePage() {
             <BreakdownTable
               key={dimension}
               dimension={dimension}
-              rows={sortRows(
-                data.rows,
-                data.sort,
-                metric,
-                withSubscription,
-                names.labelOf,
-              )}
+              rows={placeUnranked(data.rows)}
               sort={data.sort}
               onSort={(key) => url.patch(sortPatch(nextSort(data.sort, key)))}
               metric={metric}

@@ -254,24 +254,54 @@ describe("UsagePage", () => {
       expect(names[0]).toContain("Claude Code")
     })
 
-    it("sorts by a header, reverses it, then returns to the share", async () => {
+    it("sorts by a header on the server, reverses it, then returns to the share", async () => {
       const user = userEvent.setup()
-      mockUsageApi({ viewer: "member" })
+      const { calls } = mockUsageApi({ viewer: "member" })
       page()
       const grid = await table()
+      const rank = () => [
+        lastBreakdown(calls).get("rank_by"),
+        lastBreakdown(calls).get("rank_order"),
+      ]
+      expect(rank()).toEqual(["cost", "desc"])
       const header = within(grid).getByRole("columnheader", {
         name: /Requests/,
       })
       await user.click(header)
       expect(pageUrl().textContent).toContain("sort=requests")
+      await waitFor(() => expect(rank()).toEqual(["requests", "desc"]))
       const first = () =>
         within(grid).getAllByRole("rowheader")[0].textContent ?? ""
       expect(first()).toContain("claude-opus-5-5")
       await user.click(header)
       expect(pageUrl().textContent).toContain("order=asc")
-      expect(first()).toContain("claude-haiku-4-5")
+      await waitFor(() => expect(rank()).toEqual(["requests", "asc"]))
+      await waitFor(() => expect(first()).toContain("claude-haiku-4-5"))
       await user.click(header)
       expect(pageUrl().textContent).not.toContain("sort=")
+      // The share's first answer is still cached, so it is not read again.
+      await waitFor(() => expect(first()).toContain("claude-opus-5-5"))
+      // The chart ranks by the metric whatever the table's sort.
+      expect(usageReads(calls, "series").at(-1)?.get("rank_by")).toBe("cost")
+    })
+
+    it("lists the rows in the order the server ranked them", async () => {
+      const models = breakdownSummary().by_model
+      mockUsageApi({
+        viewer: "member",
+        // Not in order of requests, which a browser-side sort would impose.
+        summary: breakdownSummary({
+          by_model: [models[2], models[0], models[1]],
+        }),
+      })
+      page("/usage?sort=requests")
+      await rowNamed("claude-haiku-4-5")
+      const names = within(await table())
+        .getAllByRole("rowheader")
+        .map((cell) => cell.textContent ?? "")
+      expect(names[0]).toContain("claude-haiku-4-5")
+      expect(names[1]).toContain("claude-opus-5-5")
+      expect(names[2]).toContain("deepseek-v4-flash")
     })
 
     it("defines the money columns and the p95 under the table, and a subscription figure on its cell", async () => {
