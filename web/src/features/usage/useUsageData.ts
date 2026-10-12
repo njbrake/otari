@@ -37,10 +37,8 @@ import {
 export function useUsageViewer() {
   const viewer = useActivityViewer()
   const context = useOrganizationContext()
-  const canNarrowToOwn = viewer.ownUserId !== undefined
   return {
     ...viewer,
-    canNarrowToOwn,
     canReadOrganization: canManage(context.data),
     memberLabels: useMemberAttributionLabels(),
   }
@@ -54,14 +52,7 @@ type UsageViewer = ReturnType<typeof useUsageViewer>
  * this scope (the rest wait in the URL for a scope that has them).
  */
 export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
-  // A manager whose own requests cannot be told apart reads the workspace only.
-  const scopes = scopesFor(viewer).filter(
-    (scope) =>
-      scope !== "you" ||
-      !viewer.isManager ||
-      viewer.canNarrowToOwn ||
-      viewer.isFindingOwnUserId,
-  )
+  const scopes = scopesFor(viewer)
   const scope = readScope(url, scopes)
   // "You" reads nothing until the roster says which requests are the caller's,
   // or it would read the whole workspace under a label saying otherwise.
