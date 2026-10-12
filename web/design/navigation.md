@@ -8,7 +8,7 @@ Does the choice change what the page shows, as a sibling surface?
 Is it a closed set of alternatives to one value?
  └── Segmented         (24h / 7d / 30d / 90d)
 Does it narrow a list that is already on screen?
- └── FilterChips + FilterSelect / FilterMultiComboBox
+ └── FilterSelect / FilterMultiComboBox, then a DismissChip per applied filter
 Does it change route?
  └── A rail row, from the nav registry. Never a Tab.
 ```
@@ -20,23 +20,12 @@ Tab: { isActive, onPress, children }
 TabRow: { children }
 Segmented: { label, value, size?: "sm" | "md", onChange: (next: string) => void,
   options: { value, label }[] }
-FilterChips: { chips: FilterChip[], children, onClearAll?, start?, end? }
-FilterChip: { key, label, value, clearLabel?, onClear: () => void }
 DismissChip: { value, onDismiss, label?, dismissLabel? }
 ```
 
-`FilterChips` goes **inside** `Toolbar`, and it renders the selects (`children`) and
-the chips they produce together, so a page places one component and not two. `start`
-and `end` are slots on the control row for things that are not filters: a search
-field at the start, a `RefreshButton` at the end.
-
-`onClearAll` is the caller's to pass or omit; the component does not count for you.
-Omit it below two chips.
-
-A `FilterChip` splits the dimension (`label`, "Provider") from the current value
+A `DismissChip` splits the dimension (`label`, "Provider") from the current value
 (`value`, "OpenAI") so the chip can print them at two weights, and its handler is
-`onClear`, not `onRemove`. `FilterChips`'s `children` are the selects themselves: it
-renders the controls and the chips together, so a page does not place both.
+`onDismiss`, not `onRemove`.
 
 ## TabRow
 
@@ -71,11 +60,11 @@ Both sizes keep 44px label targets on mobile.
 <TabRow>{ranges.map((r) => <Tab key={r} isActive={r === range} onPress={…}>{r}</Tab>)}</TabRow>
 ```
 
-## FilterChips
+## Applied filters
 
-Each chip is removable and states its own dimension (`Provider: OpenAI`), so a
-reader can tell why a list is short without opening a menu. `onClearAll` appears
-once there are two. `DismissChip` is the single chip on its own.
+One `DismissChip` per applied filter, in a row the page owns. Each is removable and
+states its own dimension (`Provider: OpenAI`), so a reader can tell why a list is
+short without opening a menu. A "Clear all" belongs beside them once there are two.
 
 ## The rail
 

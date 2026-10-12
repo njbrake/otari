@@ -72,8 +72,8 @@ A table page, in order:
 ```text
 PageIntro          title, sentence, one primary action
 KpiStrip           optional, ruled above and below
-Toolbar            search, filters, refresh. FilterChips goes INSIDE it, and
-                   renders the selects and their chips together
+Toolbar            search, filters, refresh, and a DismissChip per
+                   applied filter
 BulkActionBar      only while a selection exists, and fixed to the viewport
                    rather than in flow, so no row moves under the cursor
 DataTable          the subject
