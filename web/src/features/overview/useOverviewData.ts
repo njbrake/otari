@@ -31,14 +31,7 @@ const FAILURES_SHOWN = 5
  */
 export function useOverviewData(url: OverviewUrl) {
   const viewer = useUsageViewer()
-  // A manager whose own requests cannot be told apart reads the workspace only.
-  const scopes = scopesFor(viewer).filter(
-    (scope) =>
-      scope !== "you" ||
-      !viewer.isManager ||
-      viewer.canNarrowToOwn ||
-      viewer.isFindingOwnUserId,
-  )
+  const scopes = scopesFor(viewer)
   const requested = readScope(url, scopes)
 
   // Taken on mount and on refresh rather than each render, so the month's
