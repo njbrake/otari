@@ -3,7 +3,12 @@ import { useLocation } from "@tanstack/react-router"
 import { render } from "@testing-library/react"
 import type { ReactElement } from "react"
 import { vi } from "vitest"
-import type { SavedView, UsageSummary, UsageTotals } from "@/client"
+import type {
+  SavedView,
+  UsageSummary,
+  UsageTotals,
+  Workspace,
+} from "@/client"
 import { DIMENSIONS } from "@/features/usage/usageQuery"
 import { API_ROOT } from "@/shared/api/client"
 import type { UsageBreakdownRow } from "@/shared/api/usage"
@@ -216,6 +221,8 @@ export function mockUsageApi(
     views?: SavedView[]
     /** False for a manager whose own requests the roster names no id for. */
     hasOwnUserId?: boolean
+    /** Workspaces a read of one by id answers with. */
+    workspaces?: Workspace[]
     /** A promise a read waits on before it answers, to hold one back. */
     hold?: (
       kind: "summary" | "series",
@@ -252,6 +259,10 @@ export function mockUsageApi(
           period_end: "2026-10-01T00:00:00Z",
         })
       }
+      const known = opts.workspaces?.find((one) =>
+        url.endsWith(`/workspaces/${one.id}`),
+      )
+      if (known) return jsonResponse(known)
       if (url.includes("/usage/summary")) {
         await opts.hold?.("summary", params)
         if (params.getAll("dimensions").includes("none")) {

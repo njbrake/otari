@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { UsagePage } from "@/features/usage/UsagePage"
+import { API_ROOT } from "@/shared/api/client"
+import { workspace } from "@/tests/fixtures"
 import {
   breakdownRow,
   breakdownSummary,
@@ -145,6 +147,23 @@ describe("UsagePage", () => {
         name: "Current location",
       })
       expect(location.textContent).toContain("workspace=ws-2")
+    })
+
+    it("names a workspace filter by its workspace under another breakdown", async () => {
+      const { calls } = mockUsageApi({
+        viewer: "owner",
+        workspaces: [workspace({ id: "ws-3", name: "Staging" })],
+      })
+      page("/usage?scope=organization&by=model&workspace_id=ws-3")
+      expect(
+        await screen.findByRole("button", { name: "Remove Workspace Staging" }),
+      ).toBeInTheDocument()
+      // A read of the workspace the chip names, not of the whole list.
+      const paths = calls.map(
+        (call) => new URL(call.url, "http://localhost").pathname,
+      )
+      expect(paths).toContain(`${API_ROOT}/workspaces/ws-3`)
+      expect(paths).not.toContain(`${API_ROOT}/workspaces`)
     })
 
     it("keeps a filter the scope cannot use in the URL, greyed, and does not send it", async () => {
