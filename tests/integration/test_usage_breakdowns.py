@@ -305,6 +305,13 @@ def test_a_session_row_carries_its_span_and_where_it_came_from_when_asked(
     # Only sessions carry them.
     assert "first_at" not in _summary(client, master_key_header, dimensions="model")["by_model"][0]
 
+    # Filtered to the abandoned attempts, those are what the session is made of.
+    absorbed = _rows(
+        _summary(client, master_key_header, dimensions="source_label", session_details="true", status="absorbed"),
+        "by_source_label",
+    )
+    assert absorbed["s-1"]["source"] == "gateway"
+
 
 def test_series_points_carry_their_imported_cost(
     client: TestClient, master_key_header: dict[str, str], db_session: Session

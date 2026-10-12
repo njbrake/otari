@@ -411,8 +411,8 @@ def entity_conditions(
 class LabelJoin(NamedTuple):
     """How to resolve a breakdown key's display name in the same GROUP BY.
 
-    Only the two dimensions whose key is an opaque id need this: a model, source
-    or endpoint already reads as its own name. Resolving it here is what lets a
+    Only the dimensions whose key is an opaque id need this: a model, source or
+    endpoint already reads as its own name. Resolving it here is what lets a
     client offer a user or key filter without holding those whole tables.
     """
 
