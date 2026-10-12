@@ -32429,13 +32429,13 @@
             }
           },
           {
-            "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last.",
+            "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last. 'p95' reads the latency of every group in the window, not just the top N, so it costs the most.",
             "in": "query",
             "name": "rank_by",
             "required": false,
             "schema": {
               "default": "cost",
-              "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last.",
+              "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last. 'p95' reads the latency of every group in the window, not just the top N, so it costs the most.",
               "enum": [
                 "cost",
                 "billed",
@@ -40109,13 +40109,13 @@
             }
           },
           {
-            "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last.",
+            "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last. 'p95' reads the latency of every group in the window, not just the top N, so it costs the most.",
             "in": "query",
             "name": "rank_by",
             "required": false,
             "schema": {
               "default": "cost",
-              "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last.",
+              "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last. 'p95' reads the latency of every group in the window, not just the top N, so it costs the most.",
               "enum": [
                 "cost",
                 "billed",

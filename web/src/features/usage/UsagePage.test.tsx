@@ -629,6 +629,19 @@ describe("UsagePage", () => {
     expect(screen.queryByText(/recorded yet/)).toBeNull()
   })
 
+  it("offers no longer window from the widest one", async () => {
+    mockUsageApi({
+      viewer: "member",
+      summary: breakdownSummary(
+        { by_model: [], series: [], by_tool: [] },
+        { cost: 0, imported_cost: 0, request_count: 0, error_count: 0 },
+      ),
+    })
+    page("/usage?range=12mo")
+    const empty = await screen.findByText(/No usage in the last 12mo\./)
+    expect(empty.textContent).not.toContain("longer window")
+  })
+
   it("explains an empty filtered table and clears back", async () => {
     const user = userEvent.setup()
     mockUsageApi({

@@ -15,7 +15,11 @@ import { usePageViews } from "@/features/savedViews/usePageViews"
 import { useUsageSummary } from "@/shared/api/usage"
 import { formatNumber } from "@/shared/helpers/format"
 import type { DashboardSearch } from "@/shared/helpers/search"
-import { bucketDurationMs, formatWindowLabel } from "@/shared/helpers/timeRange"
+import {
+  bucketDurationMs,
+  formatWindowLabel,
+  USAGE_PRESETS,
+} from "@/shared/helpers/timeRange"
 import { useUrlState } from "@/shared/helpers/urlState"
 import { BreakdownTable } from "./BreakdownTable"
 import { BreakdownTabs } from "./BreakdownTabs"
@@ -77,13 +81,13 @@ export function UsagePage() {
   })
 
   const { dimension, metric, withSubscription, summary } = data
-  // The share card names the top models; the page asks for them only when the
-  // card opens, unless the table already has them.
+  // The share card names the top models by spend, read when the card opens:
+  // the table's own model rows are ranked by whichever column it sorts.
   const shareModels = useUsageSummary(
     data.usageFilters,
     data.bucket,
     ["model"],
-    isSharing && dimension !== "model",
+    isSharing,
     data.usageScope,
   )
   const def = DIMENSIONS[dimension]
@@ -158,9 +162,7 @@ export function UsagePage() {
     isSharing && summary
       ? shareFigures(
           summary,
-          (dimension === "model"
-            ? summary.by_model
-            : shareModels.data?.by_model) ?? [],
+          shareModels.data?.by_model ?? [],
           withSubscription,
         )
       : undefined
@@ -244,7 +246,10 @@ export function UsagePage() {
       {isWindowEmpty ? (
         <EmptyMessage minHeightClass="min-h-[16rem]">
           No usage in the last {data.preset.label}. Requests through the gateway
-          show up here, and a longer window reaches further back.
+          show up here
+          {data.preset.key === USAGE_PRESETS.at(-1)?.key
+            ? "."
+            : ", and a longer window reaches further back."}
         </EmptyMessage>
       ) : (
         <>
