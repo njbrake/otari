@@ -50,7 +50,7 @@ export function UsageScopeBar({
           }))}
         />
       ) : (
-        <span className="flex items-center gap-1.5 text-sm whitespace-nowrap">
+        <span className="flex items-center gap-1.5 text-body whitespace-nowrap">
           {scope === "you" ? (
             <FiUser aria-hidden className="size-3.5 text-muted" />
           ) : (
