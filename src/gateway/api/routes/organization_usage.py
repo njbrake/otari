@@ -67,6 +67,7 @@ from gateway.api.routes._usage_common import (
     ORDER_DESC,
     P95_BY_DESC,
     RANK_BY_DESC,
+    RANK_ORDER_DESC,
     SERIES_GROUP_BY_DESC,
     SERIES_RANK_BY_DESC,
     SESSION_DETAILS_DESC,
@@ -91,6 +92,7 @@ from gateway.schemas.usage import (
     SeriesGroupBy,
     SummaryDimension,
     UsageActivityGroups,
+    UsageBreakdownRankBy,
     UsageGroupedSeries,
     UsageRankBy,
     UsageSummary,
@@ -245,7 +247,8 @@ async def organization_usage_summary(
     include_p95: Annotated[bool, Query(description=INCLUDE_P95_DESC)] = False,
     p95_by: Annotated[BreakdownDimension | None, Query(description=P95_BY_DESC)] = None,
     session_details: Annotated[bool, Query(description=SESSION_DETAILS_DESC)] = False,
-    rank_by: Annotated[UsageRankBy, Query(description=RANK_BY_DESC)] = "cost",
+    rank_by: Annotated[UsageBreakdownRankBy, Query(description=RANK_BY_DESC)] = "cost",
+    rank_order: Annotated[SortOrder, Query(description=RANK_ORDER_DESC)] = "desc",
 ) -> UsageSummary:
     """Aggregate spend, tokens and request volume for the caller's organization.
 
@@ -268,6 +271,7 @@ async def organization_usage_summary(
         p95_by=p95_by,
         session_details=session_details,
         rank_by=rank_by,
+        rank_order=rank_order,
     )
 
 

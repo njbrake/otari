@@ -145,12 +145,20 @@ INCLUDE_ABSORBED_DESC = (
 INCLUDE_P95_DESC = "Also compute 'totals.p95_latency_ms', which sorts the window's latencies."
 P95_BY_DESC = (
     "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or "
-    "'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null."
+    "'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. "
+    "Implied for every breakdown by 'rank_by=p95'."
 )
 RANK_BY_DESC = (
     "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' "
-    "(all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or "
-    "'requests'. Ties fall back to the key."
+    "(all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), "
+    "'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it "
+    "has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then "
+    "carries). A group with no value to rank by comes last; ties fall back to the key, the group with "
+    "no key last."
+)
+RANK_ORDER_DESC = (
+    "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the "
+    "default, largest first) or 'asc'. The 'other' fold stays last."
 )
 SERIES_RANK_BY_DESC = (
     "What picks the groups that get a series of their own before the 'other' fold: 'cost' (all spend, "

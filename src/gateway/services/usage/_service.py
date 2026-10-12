@@ -17,9 +17,11 @@ from gateway.schemas.usage import (
     SummaryDimension,
     UsageActivityGroup,
     UsageActivityGroups,
+    UsageBreakdownRankBy,
     UsageGroupedSeries,
     UsageGroupRow,
     UsageRankBy,
+    UsageSeriesGroup,
     UsageSessionRow,
     UsageSummary,
     UsageToolRow,
@@ -139,7 +141,8 @@ class UsageReadService:
         include_p95: bool = False,
         p95_by: BreakdownDimension | None = None,
         session_details: bool = False,
-        rank_by: UsageRankBy = "cost",
+        rank_by: UsageBreakdownRankBy = "cost",
+        rank_order: SortOrder = "desc",
     ) -> UsageSummary:
         """Totals, the breakdowns asked for and a zero-filled series, over an already-resolved window.
 
@@ -147,7 +150,8 @@ class UsageReadService:
         selects them; ``None`` asks for every one. Two extras cost one more grouped
         pass each, and only when the breakdown they decorate is among them: ``p95_by``
         ranks latency per group in that breakdown, and ``session_details`` names the
-        source and key most of each session's requests carry.
+        source and key most of each session's requests carry. Ranked by ``p95``, every
+        breakdown already carries its groups' p95, so ``p95_by`` adds no pass.
         """
         # ``none`` is dropped rather than rejected: it exists only so a caller can send
         # an empty selection, and it never contributes a dimension of its own.
@@ -161,9 +165,10 @@ class UsageReadService:
                         conditions,
                         limit=cap,
                         status=status,
-                        with_p95=name == p95_by,
+                        with_p95=name == p95_by and rank_by != "p95",
                         with_details=session_details,
                         rank_by=rank_by,
+                        rank_order=rank_order,
                     ),
                     totals,
                     row_type=UsageSessionRow if name == "source_label" else UsageGroupRow,
@@ -214,7 +219,8 @@ class UsageReadService:
         status: str | None,
         with_p95: bool,
         with_details: bool,
-        rank_by: UsageRankBy,
+        rank_by: UsageBreakdownRankBy,
+        rank_order: SortOrder,
     ) -> list[UsageGroupRow]:
         """One breakdown's top groups, with the per-group extras asked for.
 
@@ -223,7 +229,13 @@ class UsageReadService:
         """
         is_session = dimension == "source_label"
         rows = await self._summaries.breakdown(
-            dimension, conditions, limit=limit, status_filter=status, with_span=is_session, rank_by=rank_by
+            dimension,
+            conditions,
+            limit=limit,
+            status_filter=status,
+            with_span=is_session,
+            rank_by=rank_by,
+            rank_order=rank_order,
         )
         keys = [row.key for row in rows]
         if with_p95:
@@ -265,11 +277,13 @@ class UsageReadService:
         dimension = SERIES_BREAKDOWNS[group_by]
         async with self._uow:
             totals = await self._summaries.totals(conditions, status)
+            top = await self._summaries.breakdown(
+                dimension, conditions, limit=SERIES_TOP_N, status_filter=status, rank_by=rank_by
+            )
             groups = with_fold(
-                await self._summaries.breakdown(
-                    dimension, conditions, limit=SERIES_TOP_N, status_filter=status, rank_by=rank_by
-                ),
+                [UsageSeriesGroup.model_validate(row.model_dump(exclude={"p95_latency_ms"})) for row in top],
                 totals,
+                row_type=UsageSeriesGroup,
             )
             points = await self._summaries.grouped_series(
                 dimension,

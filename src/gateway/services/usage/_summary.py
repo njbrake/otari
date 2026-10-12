@@ -1,6 +1,6 @@
 """What the usage summary computes: which breakdowns, how many rows each keeps, and the fold."""
 
-from gateway.schemas.usage import BreakdownDimension, SeriesGroupBy, UsageGroupRow, UsageSeriesPoint, UsageTotals
+from gateway.schemas.usage import BreakdownDimension, SeriesGroupBy, UsageSeriesGroup, UsageSeriesPoint, UsageTotals
 from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME
 from gateway.services.web_retrieval_backend import WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME
 
@@ -63,13 +63,11 @@ SERIES_BREAKDOWNS: dict[SeriesGroupBy, BreakdownDimension] = {
 }
 
 
-def with_fold(
-    rows: list[UsageGroupRow], totals: UsageTotals, *, row_type: type[UsageGroupRow] = UsageGroupRow
-) -> list[UsageGroupRow]:
-    """Append the synthesized ``other`` row the top rows leave out, derived from the grand totals.
+def with_fold[R: UsageSeriesGroup](rows: list[R], totals: UsageTotals, *, row_type: type[R]) -> list[R]:
+    """Append the synthesized ``other`` row for the groups the ranking left out, derived from the grand totals.
 
-    So a capped breakdown always reconciles with the tiles. ``row_type`` builds the
-    fold as the kind of row its breakdown lists.
+    So a capped breakdown always reconciles with the tiles, whichever way it was
+    ranked. ``row_type`` builds the fold as the kind of row its breakdown lists.
     """
     seen_requests = sum(r.requests for r in rows)
     # request_count is an exact integer, so a positive residual is the reliable

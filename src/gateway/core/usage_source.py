@@ -32,7 +32,7 @@ service may not import the API layer (`scripts/check_architecture.py`).
 
 from typing import Any, Literal, cast
 
-from sqlalchemy import ColumnElement, case, or_, select
+from sqlalchemy import ColumnElement, and_, case, or_, select
 
 from gateway.models.api_keys import APIKey
 
@@ -99,30 +99,30 @@ def integration_traffic(endpoint: Any, api_key_id: Any) -> ColumnElement[bool]:
     an integration.
     """
     # A row with no key at all (the standalone Playground writes one, and so does any
-    # session-authorized request) reads a NULL secret here and is left to the endpoint
+    # session-authorized request) holds no minted key and is left to the endpoint
     # half, which is the half that knows about it.
-    return ~playground_traffic(endpoint, key_secret(api_key_id))
+    return ~playground_traffic(endpoint, minted_key(api_key_id))
 
 
-def key_secret(api_key_id: Any) -> Any:
-    """The ``internal_secret`` of a row's API key, as a scalar subquery, for testing one row at a time.
+def minted_key(api_key_id: Any) -> ColumnElement[bool]:
+    """Match rows made under a key this deployment minted for itself (its ``internal_secret`` is set).
 
-    Over an alias of its own, so a query that already joins ``api_keys`` (to name a
-    row's key) does not correlate the lookup away.
+    A set test rather than a lookup per row, so the planner reads the few minted
+    keys once. False, never NULL, for a row with no key, so its negation keeps that row.
     """
-    key = APIKey.__table__.alias("secret_key")
-    return select(key.c.internal_secret).where(key.c.id == api_key_id).correlate_except(key).scalar_subquery()
+    minted = select(APIKey.id).where(APIKey.internal_secret.is_not(None))
+    return and_(api_key_id.is_not(None), api_key_id.in_(minted))
 
 
-def playground_traffic(endpoint: Any, key_secret: Any) -> ColumnElement[bool]:
+def playground_traffic(endpoint: Any, minted: ColumnElement[bool]) -> ColumnElement[bool]:
     """Match rows the dashboard's own Playground made, under either of its two shapes.
 
-    ``key_secret`` is the ``internal_secret`` of the row's API key, however the
-    caller reaches it: a join where the query groups over many rows, a scalar
-    subquery where it tests one. See :func:`integration_traffic` for why the
-    credential is half of the rule.
+    ``minted`` says the row's API key carries an ``internal_secret``, however the
+    caller reaches it: a join where the query groups by it, :func:`minted_key`
+    where it filters. See :func:`integration_traffic` for why the credential is
+    half of the rule.
     """
-    return or_(endpoint == PLAYGROUND_USAGE_ENDPOINT, key_secret.is_not(None))
+    return or_(endpoint == PLAYGROUND_USAGE_ENDPOINT, minted)
 
 
 # The way a request reached the usage log: usage imported through the external-events
@@ -131,16 +131,16 @@ def playground_traffic(endpoint: Any, key_secret: Any) -> ColumnElement[bool]:
 UsageChannel = Literal["imported", "playground", "api"]
 
 
-def usage_channel(source: Any, endpoint: Any, secret: Any) -> ColumnElement[str]:
+def usage_channel(source: Any, endpoint: Any, minted: ColumnElement[bool]) -> ColumnElement[str]:
     """Which :data:`UsageChannel` a row came in by, the one rule the breakdown and the filter share.
 
-    ``secret`` is the row's key ``internal_secret``, reached as :func:`playground_traffic` says.
+    ``minted`` is as :func:`playground_traffic` takes it.
     """
     imported: UsageChannel = "imported"
     playground: UsageChannel = "playground"
     api: UsageChannel = "api"
     return case(
         (not_served_here(source), imported),
-        (playground_traffic(endpoint, secret), playground),
+        (playground_traffic(endpoint, minted), playground),
         else_=api,
     )

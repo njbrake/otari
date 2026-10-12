@@ -12,7 +12,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any, Never
 
-from sqlalchemy import ColumnElement, case, func, null, or_, select
+from sqlalchemy import ColumnElement, String, case, cast, func, null, or_, select
 
 from gateway.core.sql import UsageBucketGrain, bucket_expr, canonical_bucket, dialect_name, utc_bound
 from gateway.core.unit_of_work import UnitOfWork
@@ -22,6 +22,7 @@ from gateway.core.usage_filters import (
     USER_LABEL,
     WORKSPACE_LABEL,
     LabelJoin,
+    SortOrder,
     billed_cache_read_sum,
     billed_cache_write_sum,
     billed_input_sum,
@@ -38,10 +39,10 @@ from gateway.models.usage import UsageLog
 from gateway.repositories.base_repository import BaseRepository
 from gateway.schemas.usage import (
     BreakdownDimension,
+    UsageBreakdownRankBy,
     UsageErrorCodeRow,
     UsageGroupedSeriesPoint,
     UsageGroupRow,
-    UsageRankBy,
     UsageSeriesPoint,
     UsageSessionRow,
     UsageToolRow,
@@ -50,13 +51,14 @@ from gateway.schemas.usage import (
 )
 
 # The row's API key, aliased so it never collides with the key label join, for the
-# credential half of the Playground rule. Joined rather than tested per row by a
-# subquery, because the channel breakdown reads every row in the window; only that
-# breakdown, and the series split by channel, join it.
+# credential half of the Playground rule. The breakdown groups by the channel, so it
+# reads the key through a join, where the channel filter only tests rows and uses
+# the set test ``minted_key``; only the channel breakdown, and the series split by
+# channel, join it.
 _ROW_KEY = APIKey.__table__.alias("row_key")
 
 # Which way a request reached the log, read through the joined key.
-_CHANNEL = usage_channel(UsageLog.source, UsageLog.endpoint, _ROW_KEY.c.internal_secret)
+_CHANNEL = usage_channel(UsageLog.source, UsageLog.endpoint, _ROW_KEY.c.internal_secret.is_not(None))
 
 
 @dataclass(frozen=True)
@@ -103,16 +105,45 @@ def _in_keys(spec: _Breakdown, keys: Collection[str | None]) -> ColumnElement[bo
     return or_(*matches)
 
 
-def _rank(rank_by: UsageRankBy, status_filter: str | None) -> Any:
-    """The aggregate a breakdown's groups are ranked by, for the summary's breakdowns and the series' groups alike."""
+def _p95_latency() -> Any:
+    """A group's nearest-rank 95th-percentile latency over its requests, as a PostgreSQL ordered-set aggregate.
+
+    ``percentile_disc`` skips NULL inputs, so nulling the absorbed attempts leaves
+    them out as :meth:`UsageSummaryRepository.group_p95_latency_ms` does.
+    """
+    return func.percentile_disc(0.95).within_group(case((UsageLog.status != "absorbed", UsageLog.latency_ms)).asc())
+
+
+def _rank(spec: _Breakdown, label: Any, rank_by: UsageBreakdownRankBy, status_filter: str | None) -> Any:
+    """The value a breakdown's groups are ranked by, for the summary's breakdowns and the series' groups alike.
+
+    ``name`` is the group's label where it has one, else its key, ignoring case.
+    ``p95`` is :func:`_p95_latency`, which only PostgreSQL can order by.
+    """
     cost = func.coalesce(func.sum(UsageLog.cost), 0.0)
+    if rank_by == "name":
+        key = cast(spec.column, String)
+        return func.lower(key if spec.label is None else func.coalesce(label, key))
+    if rank_by == "p95":
+        return _p95_latency()
     if rank_by == "billed":
         return cost - imported_cost_sum()
     if rank_by == "tokens":
         return billed_input_sum() + billed_output_sum()
     if rank_by == "requests":
         return request_count(status_filter)
+    if rank_by == "imported":
+        return imported_cost_sum()
+    if rank_by == "errors":
+        return status_count("error")
     return cost
+
+
+def _ranked_by_p95(groups: list[UsageGroupRow], rank_order: SortOrder) -> list[UsageGroupRow]:
+    """``groups`` in the order PostgreSQL's ranking by p95 gives: p95 as asked, then the key, a missing value last."""
+    by_key = sorted(groups, key=lambda group: (group.key is None, group.key or ""))
+    sign = 1 if rank_order == "asc" else -1
+    return sorted(by_key, key=lambda group: (group.p95_latency_ms is None, sign * (group.p95_latency_ms or 0)))
 
 
 def _key(value: Any) -> str | None:
@@ -226,16 +257,20 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         limit: int | None,
         status_filter: str | None = None,
         with_span: bool = False,
-        rank_by: UsageRankBy = "cost",
+        rank_by: UsageBreakdownRankBy = "cost",
+        rank_order: SortOrder = "desc",
     ) -> list[UsageGroupRow]:
         """Spend/tokens/requests grouped by ``dimension``, ranked by ``rank_by``, at most ``limit`` groups.
 
         ``tokens`` is the *billed* total (input including both cache buckets, plus
         output, via ``billed_meter``), the same quantity the series composition and
         the grouped series report, so every analytics surface agrees on what a
-        token count means. ``rank_by`` orders the groups, and so picks the ``limit``
-        that are kept, with the key breaking a tie. ``with_span`` also reads each group's first and last
-        request in the same pass and returns session rows, for ``source_label``.
+        token count means. ``rank_by`` and ``rank_order`` order the groups, and so
+        pick the ``limit`` that are kept; a group with no value to rank by comes
+        last, and a tie falls to the key, the NULL group last, in either direction.
+        Ranked by ``p95``, each row carries its p95. ``with_span`` also reads each
+        group's first and last request in the same pass and returns session rows,
+        for ``source_label``.
         """
         spec = _BREAKDOWNS[dimension]
         column, label_join = spec.column, spec.label
@@ -247,6 +282,10 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         # deleted keeps its row (with a null label) instead of vanishing from a
         # breakdown that must still reconcile against the totals.
         label_column = label_join.label if label_join is not None else null()
+        rank = _rank(spec, label_column, rank_by, status_filter)
+        # SQLite has no percentile aggregate, so there every group is read and ranked
+        # by the p95 the window-function pass computes, before the limit applies.
+        p95_in_python = rank_by == "p95" and dialect_name(self.db) == "sqlite"
         stmt = select(
             column,
             label_column,
@@ -259,31 +298,41 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         )
         if with_span:
             stmt = stmt.add_columns(func.min(UsageLog.timestamp), func.max(UsageLog.timestamp))
+        p95_in_sql = rank_by == "p95" and not p95_in_python
+        if p95_in_sql:
+            stmt = stmt.add_columns(rank)
         stmt = _joined(stmt, spec, with_label=True)
         group_by = (column,) if label_join is None else (column, label_column)
-        stmt = stmt.where(*conditions).group_by(*group_by).order_by(_rank(rank_by, status_filter).desc(), column)
-        if limit is not None:
-            stmt = stmt.limit(limit)
+        stmt = stmt.where(*conditions).group_by(*group_by)
+        if not p95_in_python:
+            direction = rank.asc() if rank_order == "asc" else rank.desc()
+            stmt = stmt.order_by(direction.nulls_last(), column.asc().nulls_last())
+            if limit is not None:
+                stmt = stmt.limit(limit)
         rows = (await self.db.execute(stmt)).all()
-        groups = [
-            UsageGroupRow(
-                key=_key(row[0]),
-                label=row[1],
-                cost=float(row[2]),
-                tokens=int(row[3]),
-                requests=int(row[4]),
-                imported_cost=float(row[5]),
-                error_count=int(row[6]),
-                cache_read_tokens=int(row[7]),
+        p95 = await self._group_p95(spec, conditions) if p95_in_python else {}
+        groups: list[UsageGroupRow] = []
+        for row in rows:
+            key = _key(row[0])
+            figures = {
+                "key": key,
+                "label": row[1],
+                "cost": float(row[2]),
+                "tokens": int(row[3]),
+                "requests": int(row[4]),
+                "imported_cost": float(row[5]),
+                "error_count": int(row[6]),
+                "cache_read_tokens": int(row[7]),
+                "p95_latency_ms": (None if row[-1] is None else int(row[-1])) if p95_in_sql else p95.get(key),
+            }
+            groups.append(
+                UsageSessionRow(**figures, first_at=utc_bound(row[8]), last_at=utc_bound(row[9]))
+                if with_span
+                else UsageGroupRow(**figures)
             )
-            for row in rows
-        ]
-        if not with_span:
-            return groups
-        return [
-            UsageSessionRow(**group.model_dump(), first_at=utc_bound(row[8]), last_at=utc_bound(row[9]))
-            for group, row in zip(groups, rows, strict=True)
-        ]
+        if p95_in_python:
+            groups = _ranked_by_p95(groups, rank_order)[:limit]
+        return groups
 
     async def group_p95_latency_ms(
         self,
@@ -301,12 +350,11 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         if not keys:
             return {}
         spec = _BREAKDOWNS[dimension]
-        measured = [
-            *conditions,
-            UsageLog.status != "absorbed",
-            UsageLog.latency_ms.is_not(None),
-            _in_keys(spec, keys),
-        ]
+        return await self._group_p95(spec, [*conditions, _in_keys(spec, keys)])
+
+    async def _group_p95(self, spec: _Breakdown, conditions: list[ColumnElement[bool]]) -> dict[str | None, int]:
+        """The p95 of every group the conditions leave, for :meth:`group_p95_latency_ms` and the SQLite p95 ranking."""
+        measured = [*conditions, UsageLog.status != "absorbed", UsageLog.latency_ms.is_not(None)]
         if dialect_name(self.db) != "sqlite":
             p95 = func.percentile_disc(0.95).within_group(UsageLog.latency_ms.asc())
             stmt = _joined(select(spec.column, p95), spec, with_label=False).where(*measured).group_by(spec.column)
