@@ -92,6 +92,24 @@ export function resolveExtentWindow(
   return win
 }
 
+// How the gateway marks an absorbed row whose candidate was skipped rather than
+// called (`SKIPPED_ATTEMPT_PREFIX` in `api/routes/_pipeline.py`): a model a
+// per-model rate limit had no room on, so the request moved to the next one.
+const SKIPPED_ATTEMPT_PREFIX = "Skipped: "
+
+/** Whether this row is a candidate the routing walk skipped without calling it. */
+export function isSkippedAttempt(entry: UsageEntry): boolean {
+  return (
+    entry.status === "absorbed" &&
+    (entry.error_message ?? "").startsWith(SKIPPED_ATTEMPT_PREFIX)
+  )
+}
+
+/** Why a skipped candidate was skipped, as the gateway worded it. */
+export function describeSkip(entry: UsageEntry): string {
+  return (entry.error_message ?? "").slice(SKIPPED_ATTEMPT_PREFIX.length)
+}
+
 // Friendly labels for known provenance sources; unknown sources render their slug.
 const SOURCE_LABELS: Record<string, string> = {
   gateway: "Gateway",
@@ -218,6 +236,11 @@ export function rowOutcome(entry: UsageEntry): RowOutcome {
         ? `${formatNumber(entry.absorbed_attempts)} recovered`
         : "",
     }
+  }
+  // A skipped candidate was never called (a per-model rate limit had no room),
+  // so it says why it was passed over rather than reading as a failure.
+  if (isSkippedAttempt(entry)) {
+    return { kind: "recovered", label: "Skipped", note: describeSkip(entry) }
   }
   const kind = entry.status === "absorbed" ? "recovered" : "failed"
   return {
@@ -435,6 +458,7 @@ export function describeSelectionReason(
   if (reason === "static") return "the policy's only target"
   if (reason === "default") return "the policy's default target"
   if (reason === "on_failure") return "a fallback candidate"
+  if (reason === "catalog") return "the catalog's first choice"
   if (reason.startsWith("condition:")) {
     const keys = reason
       .slice("condition:".length)

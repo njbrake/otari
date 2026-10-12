@@ -42,6 +42,7 @@ function summary(): UsageSummary {
     by_policy: [],
     by_workspace: [],
     by_channel: [],
+    by_tag: [],
     errors_by_status_code: [],
     series: [],
   }

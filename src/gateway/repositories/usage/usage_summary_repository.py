@@ -18,9 +18,10 @@ from gateway.core.sql import UsageBucketGrain, bucket_expr, canonical_bucket, di
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import (
     API_KEY_LABEL,
+    CHANNEL,
+    CHANNEL_KEY,
     TOOL_METER_NAMESPACE,
     USER_LABEL,
-    WORKSPACE_LABEL,
     LabelJoin,
     SortOrder,
     billed_cache_read_sum,
@@ -31,12 +32,12 @@ from gateway.core.usage_filters import (
     needs_pricing_condition,
     request_count,
     status_count,
+    tag_expr,
     tool_calls_expr,
 )
-from gateway.core.usage_source import usage_channel
-from gateway.models.api_keys import APIKey
 from gateway.models.usage import UsageLog
 from gateway.repositories.base_repository import BaseRepository
+from gateway.repositories.tenancy.workspace_repository import workspace_label
 from gateway.schemas.usage import (
     BreakdownDimension,
     UsageBreakdownRankBy,
@@ -49,16 +50,6 @@ from gateway.schemas.usage import (
     UsageTotals,
     error_class_for,
 )
-
-# The row's API key, aliased so it never collides with the key label join, for the
-# credential half of the Playground rule. The breakdown groups by the channel, so it
-# reads the key through a join, where the channel filter only tests rows and uses
-# the set test ``minted_key``; only the channel breakdown, and the series split by
-# channel, join it.
-_ROW_KEY = APIKey.__table__.alias("row_key")
-
-# Which way a request reached the log, read through the joined key.
-_CHANNEL = usage_channel(UsageLog.source, UsageLog.endpoint, _ROW_KEY.c.internal_secret.is_not(None))
 
 
 @dataclass(frozen=True)
@@ -82,8 +73,8 @@ _BREAKDOWNS: dict[BreakdownDimension, _Breakdown] = {
     "endpoint": _Breakdown(UsageLog.endpoint),
     "provider": _Breakdown(UsageLog.provider),
     "policy": _Breakdown(UsageLog.policy_name),
-    "workspace": _Breakdown(UsageLog.workspace_id, WORKSPACE_LABEL, is_uuid=True),
-    "channel": _Breakdown(_CHANNEL, reads=((_ROW_KEY, _ROW_KEY.c.id == UsageLog.api_key_id),)),
+    "workspace": _Breakdown(UsageLog.workspace_id, workspace_label(UsageLog.workspace_id), is_uuid=True),
+    "channel": _Breakdown(CHANNEL, reads=((CHANNEL_KEY, CHANNEL_KEY.c.id == UsageLog.api_key_id),)),
 }
 
 
@@ -404,10 +395,10 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         counted = [] if status_filter == "absorbed" else [UsageLog.status != "absorbed"]
         rows = (
             await self.db.execute(
-                select(UsageLog.source_label, UsageLog.source, APIKey.key_name, func.count())
-                .outerjoin(APIKey, APIKey.id == UsageLog.api_key_id)
+                select(UsageLog.source_label, UsageLog.source, API_KEY_LABEL.label, func.count())
+                .outerjoin(API_KEY_LABEL.entity, API_KEY_LABEL.on)
                 .where(*conditions, UsageLog.source_label.in_(named), *counted)
-                .group_by(UsageLog.source_label, UsageLog.source, APIKey.key_name)
+                .group_by(UsageLog.source_label, UsageLog.source, API_KEY_LABEL.label)
             )
         ).all()
         sources: dict[str, Counter[str]] = {}
@@ -419,6 +410,50 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
             label: SessionDetail(source=_most_common(sources[label]), api_key_name=_most_common(key_names[label]))
             for label in sources
         }
+
+    async def tag_breakdown(
+        self,
+        key: str,
+        conditions: list[ColumnElement[bool]],
+        *,
+        limit: int | None,
+        status_filter: str | None = None,
+    ) -> list[UsageGroupRow]:
+        """Spend/tokens/requests grouped by the value of request tag ``key``, biggest spend first.
+
+        Rows that do not carry the tag group under a null key. ``tokens`` is billed, as in :meth:`breakdown`.
+        """
+        value = tag_expr(key)
+        cost_sum = func.coalesce(func.sum(UsageLog.cost), 0.0)
+        stmt = (
+            select(
+                value,
+                cost_sum,
+                billed_input_sum() + billed_output_sum(),
+                request_count(status_filter),
+                imported_cost_sum(),
+                status_count("error"),
+                billed_cache_read_sum(),
+            )
+            .where(*conditions)
+            .group_by(value)
+            .order_by(cost_sum.desc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        rows = (await self.db.execute(stmt)).all()
+        return [
+            UsageGroupRow(
+                key=row[0],
+                cost=float(row[1]),
+                tokens=int(row[2]),
+                requests=int(row[3]),
+                imported_cost=float(row[4]),
+                error_count=int(row[5]),
+                cache_read_tokens=int(row[6]),
+            )
+            for row in rows
+        ]
 
     async def tool_usage(self, tool: str, conditions: list[ColumnElement[bool]]) -> UsageToolRow | None:
         """One tool's calls, failures, spend and requests, or None when the rows never ran it.

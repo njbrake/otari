@@ -213,6 +213,7 @@ function summary(overrides: Partial<UsageSummary> = {}): UsageSummary {
     by_workspace: [],
     by_channel: [],
     by_tool: [],
+    by_tag: [],
     errors_by_status_code: [],
     series: [
       seriesPoint({

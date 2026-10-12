@@ -35,7 +35,7 @@ from gateway.core.metered_pricing import BillableUsage, ChargeLine, billable_usa
 from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
-from gateway.models.usage import UsageLog
+from gateway.models.usage import SERVED_HERE_SLUG, UsageLog
 from gateway.models.users import User
 from gateway.services.pricing_service import (
     OverridePeriod,
@@ -72,30 +72,16 @@ _IDENT_PATTERN = r"^[A-Za-z0-9._:/\-]+$"
 # Cap numeric fields at the usage_logs 32-bit integer column width so absurd
 # counts are a 422, not a database error that fails the whole batch.
 _MAX_TOKENS = 2_147_483_647
-# "gateway" tags rows Otari served itself; an import claiming it would masquerade
-# as native traffic in every provenance breakdown.
-RESERVED_SOURCES = {"gateway"}
-# otari.ai owns this namespace: its backfill stamps the rows it writes `otari-ai:gateway`,
-# `otari-ai:claude_code`, and so on. An import under the same prefix produces lookalike
-# rows that inflate reconciliation totals and read as a mismatch during a cutover.
-RESERVED_SOURCE_PREFIXES = ("otari-ai:",)
 
 
-def reserved_source_reason(value: str) -> str | None:
-    """Why ``value`` may not be used as a provenance slug, or None when it is free.
+def is_reserved_source(value: str) -> bool:
+    """Whether ``value`` claims to be usage Otari served itself, in any case.
 
-    Both ingest doors read this: the batch schema below turns it into a 422, and the
-    OTLP route falls back to its default source rather than 422-ing an exporter.
+    An import under that slug would masquerade as native traffic. Both ingest doors
+    read this: the batch schema below turns it into a 422, and the OTLP route falls
+    back to its default source rather than 422-ing an exporter.
     """
-    lowered = value.lower()
-    if lowered in RESERVED_SOURCES:
-        return f"source '{lowered}' is reserved for usage Otari served itself; pick another slug."
-    for prefix in RESERVED_SOURCE_PREFIXES:
-        if lowered.startswith(prefix.lower()):
-            return (
-                f"source prefix '{prefix}' is reserved for provenance tags otari.ai writes itself; pick another slug."
-            )
-    return None
+    return value.lower() == SERVED_HERE_SLUG
 
 
 class ExternalUsageEvent(BaseModel):
@@ -155,9 +141,10 @@ class ExternalEventsRequest(BaseModel):
     @field_validator("source")
     @classmethod
     def _not_reserved(cls, value: str) -> str:
-        reason = reserved_source_reason(value)
-        if reason is not None:
-            raise ValueError(reason)
+        if is_reserved_source(value):
+            raise ValueError(
+                f"source '{SERVED_HERE_SLUG}' is reserved for usage Otari served itself; pick another slug."
+            )
         return value
 
 

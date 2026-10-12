@@ -216,6 +216,9 @@ export function bootstrap(
     // Not frozen, because a fixture describes a deployment somebody can sign
     // in to; the maintenance-mode tests override it.
     maintenance_mode: false,
+    // On, the setting default: the tests about a deployment that switched
+    // passkeys off say so.
+    passkeys_enabled: true,
     // Off by default, matching a deployment that has not set public_base_url:
     // the passkey tests turn it on rather than every other test turning it off.
     passkeys_ready: false,
@@ -224,7 +227,7 @@ export function bootstrap(
     // clearing a list it does not care about.
     oauth_providers: [],
     mail_ready: false,
-    feedback_enabled: false,
+    feedback_enabled: true,
     // Off by default, matching the config default; the public-catalog tests
     // turn it on.
     public_catalog: false,
@@ -515,6 +518,9 @@ export function apiKey(overrides: Partial<ApiKey> = {}): ApiKey {
     allowed_models: null,
     exclude_from_budget: false,
     reject_user_mismatch: null,
+    is_service_key: false,
+    end_user_budget_id: null,
+    end_user_budget_ids: [],
     metadata: {},
     ...overrides,
   }
@@ -750,6 +756,7 @@ export function orgProviderModel(
     cache_write_1h_price_per_million: null,
     price_source: "defaults",
     pricing_id: null,
+    unit: "tokens",
     enabled: true,
     created_at: "2026-08-24T00:00:00+00:00",
     updated_at: null,
@@ -774,6 +781,9 @@ export function orgProviderKey(
     // The default is a key this deployment can actually read. A test wanting the
     // other case says so, because that is the state the dashboard has to show.
     usable: true,
+    // Never refreshed: the key offers no rows and is unnarrowed.
+    offered_count: 0,
+    serving_count: 0,
     archived_at: null,
     created_at: "2026-08-24T00:00:00+00:00",
     updated_at: null,

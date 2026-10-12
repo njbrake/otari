@@ -65,6 +65,21 @@ class OrganizationMemberAlreadyExistsError(TenancyConflictError):
         super().__init__(f"{identifier} is already an active member of this organization")
 
 
+class OrganizationMemberAddressUnprovenError(TenancyConflictError):
+    """An address another organization vouched for, added or invited by a different one.
+
+    A password chosen through an invitation link is the inviting organization's
+    word for the address, and that organization's admins held the link. Letting a
+    second organization take it as a member would hand them its access.
+    """
+
+    def __init__(self, identifier: object):
+        super().__init__(
+            f"{identifier} was claimed through another organization's invitation and has not proven the address; "
+            "it can be added once it signs in with a provider or resets its password by email"
+        )
+
+
 class OrganizationDomainNotFoundError(TenancyNotFoundError):
     def __init__(self, organization_domain_id: object):
         super().__init__(f"Organization domain {organization_domain_id} not found")
@@ -256,15 +271,18 @@ class InvitationAlreadyUsedError(TenancyValidationError):
 
 
 class InvitationPasswordNotAcceptedError(TenancyValidationError):
-    """A password sent with an accept for an address that already has a way to sign in.
+    """A password sent with an accept for an address the link may not claim.
 
-    Refused rather than applied: an invitation link can be handed over by hand,
-    so letting it replace an existing credential would let whoever holds a
-    forwarded link take over the account it names.
+    Either the address already has a way to sign in, or another organization
+    knows the identity. Refused rather than applied: the inviter holds the link
+    too, so letting it set a credential there would let any admin take over the
+    account it names.
     """
 
     def __init__(self) -> None:
-        super().__init__("This address can already sign in; accept without a password and sign in as usual")
+        super().__init__(
+            "This link cannot set a password for this address; accept without one, then sign in or reset your password"
+        )
 
 
 class WorkspaceActivationUnavailableError(TenancyConflictError):
@@ -288,6 +306,13 @@ class WorkspaceAlreadyActivatedError(TenancyConflictError):
         super().__init__("This workspace has already served a successful request")
 
 
+class SignupRegistrationUnresolvedError(TenancyError):
+    """The identity that took an address during a registration cannot be found."""
+
+    def __init__(self) -> None:
+        super().__init__("A signup address was released while it was being registered")
+
+
 __all__ = [
     "ForeignTenancyError",
     "InvalidRoleError",
@@ -304,12 +329,14 @@ __all__ = [
     "OrganizationDomainClaimedHereError",
     "OrganizationDomainNotFoundError",
     "OrganizationDomainNotVerifiedError",
+    "OrganizationMemberAddressUnprovenError",
     "OrganizationMemberAlreadyExistsError",
     "OrganizationMemberNotFoundError",
     "OrganizationNameRequiredError",
     "OrganizationNotFoundError",
     "OrganizationSlugUnavailableError",
     "PublicEmailDomainError",
+    "SignupRegistrationUnresolvedError",
     "TooManyOrganizationDomainsError",
     "UnregistrableDomainError",
     "WorkspaceActivationUnavailableError",

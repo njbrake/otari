@@ -115,6 +115,37 @@ afterEach(() => {
 })
 
 describe("AccountMenu", () => {
+  it("ends the appearance row in an empty chevron-width slot, so its value lines up with a row that ends in a chevron", async () => {
+    // A guard on the structure: the row an edition adds under the account (the
+    // data region) ends in a 16px chevron, and the value of this row has to stop
+    // where that one does. jsdom measures nothing, so the slot is what is pinned.
+    mockCaller(OPERATOR)
+    await openMenu()
+
+    const row = await screen.findByRole("button", { name: /^Appearance:/ })
+    const slot = row.lastElementChild
+    expect(slot).toHaveAttribute("aria-hidden", "true")
+    expect(slot).toHaveClass("size-4", "shrink-0", "-ml-0.5")
+    expect(slot).toBeEmptyDOMElement()
+    expect(row).toHaveTextContent(/Light|Dark/)
+  })
+
+  it("draws the icon of the theme the row names, and swaps it with the value", async () => {
+    mockCaller(OPERATOR)
+    await openMenu()
+
+    const row = await screen.findByRole("button", { name: /^Appearance:/ })
+    // Sun is the only one of the two with a circle in it.
+    const isSun = () => row.querySelector("svg circle") !== null
+    const wasLight = /Light/.test(row.textContent ?? "")
+    expect(isSun()).toBe(wasLight)
+
+    await userEvent.setup().click(row)
+    const after = await screen.findByRole("button", { name: /^Appearance:/ })
+    expect(/Light/.test(after.textContent ?? "")).toBe(!wasLight)
+    expect(after.querySelector("svg circle") !== null).toBe(!wasLight)
+  })
+
   it("keeps Playground reachable on mobile before Documentation", async () => {
     mockCaller(OPERATOR)
     await openMenu()

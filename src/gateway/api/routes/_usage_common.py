@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 
 from fastapi import Depends, HTTPException, Query
 
+from gateway.api.routes._request_tags import MAX_TAG_KEY_LENGTH
 from gateway.core.series import MAX_SERIES_POINTS, grid_start
 from gateway.core.sql import BUCKET_SECONDS, MAX_FILTER_VALUES, UsageBucketGrain, match_any
 from gateway.core.usage_filters import (
@@ -23,14 +24,15 @@ from gateway.core.usage_filters import (
     MAX_SEARCH_LENGTH,
     MAX_STATUSES,
     NullableUsageField,
+    UsageChannel,
     UsageCondition,
     UsageRefinements,
     UsageStatus,
     entity_conditions,
     refinement_conditions,
     resolve_window,
+    tag_conditions,
 )
-from gateway.core.usage_source import UsageChannel
 from gateway.models.usage import UsageLog
 from gateway.services.usage import GATEWAY_TOOL_NAMES
 
@@ -62,6 +64,15 @@ ENDPOINT_DESC = "Filter to a single endpoint (e.g. '/v1/chat/completions')"
 PROVIDER_DESC = "Filter to a single provider (e.g. 'openai')"
 SOURCE_DESC = "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')"
 SOURCE_LABEL_DESC = "Filter to a single session/project label (the source_label carried by imported usage)"
+TAG_DESC = (
+    "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: "
+    "values for the same key match any of them, and different keys must all match. "
+    f"At most {MAX_FILTER_VALUES} per call."
+)
+GROUP_BY_TAG_DESC = (
+    "A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key."
+)
+GroupByTag = Annotated[str | None, Query(min_length=1, max_length=MAX_TAG_KEY_LENGTH, description=GROUP_BY_TAG_DESC)]
 REQUEST_GROUP_DESC = (
     "Filter to the rows of one or more request groups; repeatable "
     "(request_group_id=a&request_group_id=b). A routed request writes one row per "
@@ -303,6 +314,17 @@ def usage_refinements(
     )
 
 
+def parse_tag_filters(tag: list[str]) -> dict[str, list[str]]:
+    """Group ``key:value`` tag filters by key, refusing one without a key or a separator."""
+    by_key: dict[str, list[str]] = {}
+    for item in tag:
+        key, sep, value = item.partition(":")
+        if not sep or not key:
+            raise HTTPException(status_code=422, detail="A tag filter must be written key:value")
+        by_key.setdefault(key, []).append(value)
+    return by_key
+
+
 @dataclass
 class UsageReadFilters:
     """The filters every usage read takes, as query parameters (``Annotated[..., Depends()]``)."""
@@ -318,6 +340,7 @@ class UsageReadFilters:
     provider: Annotated[str | None, Query(description=PROVIDER_DESC)] = None
     source: Annotated[str | None, Query(description=SOURCE_DESC)] = None
     source_label: Annotated[str | None, Query(description=SOURCE_LABEL_DESC)] = None
+    tag: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=TAG_DESC)] = None
     api_key_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=API_KEY_MULTI_DESC)] = None
     priced: Annotated[bool | None, Query(description=PRICED_DESC)] = None
     tool: Annotated[ToolFilter | None, Query(description=TOOL_DESC)] = None
@@ -373,6 +396,8 @@ class UsageReadFilters:
                 conditions.append(UsageLog.status == "error")
         if self.counts_toward_budget is not None:
             conditions.append(UsageLog.counts_toward_budget.is_(self.counts_toward_budget))
+        if self.tag:
+            conditions.extend(tag_conditions(parse_tag_filters(self.tag)))
         conditions.extend(refinement_conditions(self.refine))
         return conditions
 

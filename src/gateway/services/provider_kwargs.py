@@ -22,6 +22,12 @@ organization-scoped keys, by construction: the two addressing schemes occupy
 disjoint selector shapes rather than one layering over the other. See
 ``services/tenancy/org_provider_key_service.py`` for the overlay this reads.
 
+A third source sits ahead of both for the completion routes alone: an
+endpoint the caller's workspace or the caller owns, reached as
+``<name>:<model>`` (``services/providers``). It is consulted only when a caller
+asks for it with ``owned_endpoints=True``, because what reaches one must skip
+budgets and re-check its address before dispatch, and only those routes do.
+
 ``workspace_id`` is per-request, not per-deployment: which organization's keys
 a master-key request's bare selector can reach is the default workspace's
 organization, not every organization the gateway holds. See
@@ -33,30 +39,96 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from any_llm import AnyLLM, LLMProvider
-from any_llm.exceptions import AnyLLMError
+from any_llm.exceptions import AnyLLMError, MissingApiKeyError
 
 from gateway.auth.vertex_auth import setup_vertex_environment
-from gateway.core.config import API_ROOT, KEYLESS_SELF_HOSTED_PROVIDERS, GatewayConfig, provider_credential_env_names
+from gateway.core.config import (
+    API_ROOT,
+    KEYLESS_SELF_HOSTED_PROVIDERS,
+    PROVIDER_TYPE_ALIASES,
+    RESERVED_PROVIDER_INSTANCE_NAMES,
+    GatewayConfig,
+    provider_credential_env_names,
+)
+from gateway.core.error_codes import PROVIDER_NOT_CONFIGURED
+from gateway.core.provider_params import FORBIDDEN_ENDPOINT_DEFAULTS
 from gateway.log_config import logger
 from gateway.services.alias_service import resolve_effective_alias
-from gateway.services.catalog_selectors import resolve_catalog_selector
+from gateway.services.catalog import resolve_catalog_offerings, resolve_catalog_selector, resolve_undated_selector
 from gateway.services.policy_store import resolve_effective_policy
 from gateway.services.tenancy.org_provider_key_service import cached_org_provider_kwargs
 from gateway.types.provider_account import ProviderAccount, ResolvedCredential
 
+if TYPE_CHECKING:
+    from gateway.services.providers import OwnedEndpoint
+
 # Keys that describe an instance to otari but are not credentials any-llm
 # understands, so they must be stripped before the provider call.
-_INSTANCE_META_KEYS = ("provider_type", "models", "session_affinity")
+_INSTANCE_META_KEYS = ("provider_type", "models", "session_affinity", "max_retries")
 
 # Baseten routes requests carrying the same value to the same replica, which is
 # what makes its automatic prefix cache hit reliably.
 SESSION_AFFINITY_HEADER = "x-session-affinity"
+
+# Providers whose any-llm client is built by an SDK that takes ``max_retries``
+# in its constructor (OpenAI's, Anthropic's and the SDKs generated the same
+# way). Every other SDK rejects the keyword or ignores it, so the setting is
+# translated for Google's clients below and left out for the rest.
+# ``tests/unit/test_provider_retries.py`` builds each one to keep this list true
+# of the installed any-llm. ``otari`` builds its own client and is left out.
+_MAX_RETRIES_CLIENT_PROVIDERS: frozenset[LLMProvider] = frozenset(
+    {
+        LLMProvider.ANTHROPIC,
+        LLMProvider.AZUREANTHROPIC,
+        LLMProvider.VERTEXAIANTHROPIC,
+        LLMProvider.OPENAI,
+        LLMProvider.AZUREOPENAI,
+        LLMProvider.ATLASCLOUD,
+        LLMProvider.CASCADIA,
+        LLMProvider.CEREBRAS,
+        LLMProvider.DASHSCOPE,
+        LLMProvider.DATABRICKS,
+        LLMProvider.DEEPINFRA,
+        LLMProvider.DEEPSEEK,
+        LLMProvider.EDENAI,
+        LLMProvider.FIREWORKS,
+        LLMProvider.GITHUB,
+        LLMProvider.GMI,
+        LLMProvider.GROQ,
+        LLMProvider.INCEPTION,
+        LLMProvider.KENARI,
+        LLMProvider.LLAMA,
+        LLMProvider.LLAMACPP,
+        LLMProvider.LLAMAFILE,
+        LLMProvider.META,
+        LLMProvider.MINIMAX,
+        LLMProvider.MOONSHOT,
+        LLMProvider.MZAI,
+        LLMProvider.NEBIUS,
+        LLMProvider.NEOSANTARA,
+        LLMProvider.OPENROUTER,
+        LLMProvider.PERPLEXITY,
+        LLMProvider.PORTKEY,
+        LLMProvider.QINIU,
+        LLMProvider.REQUESTY,
+        LLMProvider.SAMBANOVA,
+        LLMProvider.TELNYX,
+        LLMProvider.TOGETHER,
+        LLMProvider.VLLM,
+        LLMProvider.ZAI,
+    }
+)
+
+# google-genai counts attempts rather than retries, through
+# ``http_options.retry_options``, and by default makes one attempt.
+_GOOGLE_RETRY_PROVIDERS: frozenset[LLMProvider] = frozenset({LLMProvider.GEMINI, LLMProvider.VERTEXAI})
 
 # any-llm rejects a keyless call to most providers (openai, anthropic, ...) with
 # MissingApiKeyError, but a self-hosted OpenAI-/Anthropic-compatible backend
@@ -76,6 +148,12 @@ _KEYLESS_PLACEHOLDER_API_KEY = "otari-no-key-required"
 # The self-hosted ones are ``KEYLESS_SELF_HOSTED_PROVIDERS``; this set is drift-guarded
 # alongside it in ``tests/unit/test_provider_instances.py``.
 #
+# Selector prefixes that name a provider whatever the deployment configures, so
+# an owned endpoint never resolves under one.
+_PROVIDER_NAMES: frozenset[str] = frozenset(
+    {provider.value for provider in LLMProvider} | set(PROVIDER_TYPE_ALIASES) | RESERVED_PROVIDER_INSTANCE_NAMES
+)
+
 # Providers authenticating from cloud SDK credentials this gateway cannot see:
 # an EC2 instance profile, an SSO session, or an ambient boto3 chain. They are
 # the same category as Vertex AI's application default credentials, which
@@ -147,8 +225,10 @@ def _warn_undeclared_env_provider(config: GatewayConfig, provider: LLMProvider) 
         "not listed meanwhile. Declare it in config.yml (providers: {%s: {api_key: ${%s}}}) or on the "
         "dashboard's Providers page.",
         provider.value,
+        # codeql[py/clear-text-logging-sensitive-data]
         env_name,
         provider.value,
+        # codeql[py/clear-text-logging-sensitive-data]
         env_name,
     )
 
@@ -225,6 +305,102 @@ def otari_gateway_origin(api_base: Any) -> Any:
     return api_base
 
 
+# Instances already reported as ignored, so the warning is logged once per
+# instance per process rather than on every overlay refresh.
+_uncredentialed_warned: set[str] = set()
+
+
+def uncredentialed_env_names(config: GatewayConfig, instance: str, entry: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """The variables a ``providers:`` entry could have taken its credential from, or ``None``.
+
+    ``None`` means the entry can be called as it stands: it carries a credential
+    or an ``api_base`` (which takes the keyless placeholder), its provider needs
+    no key, the provider's own variable is set, or the provider cannot be
+    inspected at all. A tuple means the entry declares nothing a call could
+    authenticate with: ``api_key: ${VAR}`` with ``VAR`` set but empty is the
+    usual way to get here.
+    """
+    try:
+        provider = LLMProvider(config.provider_instance_type(instance))
+    except ValueError:
+        return None
+    env_names = provider_credential_env_names(provider.value)
+    if not env_names:
+        return None
+    if _entry_declares_a_credential(entry):
+        return None
+    # Asked with no kwargs: the entry contributes nothing that authenticates, so
+    # the provider's own rules (keyless, ambient credentials, its variable being
+    # set) decide whether the call could still go out.
+    if not credential_ladder_exhausted(provider, {}):
+        return None
+    return tuple(env_names)
+
+
+# Field names that hold something a call can authenticate with. An entry's other
+# fields are call options (``temperature``, ``timeout``), which a request would
+# carry upstream without ever being let in.
+_CREDENTIAL_FIELD = re.compile(r"key|token|secret|credential|password|auth", re.IGNORECASE)
+
+
+def _entry_declares_a_credential(entry: Mapping[str, Any]) -> bool:
+    """Whether a ``providers:`` entry holds anything a call could authenticate with.
+
+    A non-empty credential-named field does, and so does an ``api_base`` (which
+    takes the keyless placeholder) or ``client_args`` carrying a credential-named
+    field, such as an ``Authorization`` default header.
+    """
+    for key, value in entry.items():
+        if key in _INSTANCE_META_KEYS or not value:
+            continue
+        if key == "api_base" or _CREDENTIAL_FIELD.search(key):
+            return True
+        if key == "client_args" and isinstance(value, Mapping) and _mapping_declares_a_credential(value):
+            return True
+    return False
+
+
+def _mapping_declares_a_credential(mapping: Mapping[str, Any]) -> bool:
+    for key, value in mapping.items():
+        if not value:
+            continue
+        if _CREDENTIAL_FIELD.search(str(key)):
+            return True
+        if isinstance(value, Mapping) and _mapping_declares_a_credential(value):
+            return True
+    return False
+
+
+def prune_uncredentialed_providers(config: GatewayConfig) -> dict[str, tuple[str, ...]]:
+    """Drop every ``providers:`` entry that declares no credential, and say so once.
+
+    A hollow entry is worse than no entry: an ``instance:model`` selector that
+    matches it never consults an organization's own key for the same provider,
+    and a bare ``provider:model`` selector is gated and priced as if the
+    deployment served it, so the credential an operator stored on the dashboard
+    goes unused while every request fails upstream. Returns what was dropped,
+    keyed by instance, with the variables that would have filled each.
+    """
+    pruned = {
+        instance: env_names
+        for instance, entry in config.providers.items()
+        if isinstance(entry, Mapping) and (env_names := uncredentialed_env_names(config, instance, entry)) is not None
+    }
+    for instance, env_names in pruned.items():
+        del config.providers[instance]
+        if instance in _uncredentialed_warned:
+            continue
+        _uncredentialed_warned.add(instance)
+        logger.warning(
+            "providers.%s declares no credential and none of %s is set, so the entry is ignored. A credential "
+            "stored for the provider through the dashboard serves its requests instead.",
+            instance,
+            # codeql[py/clear-text-logging-sensitive-data]
+            ", ".join(env_names),
+        )
+    return pruned
+
+
 def get_provider_kwargs(
     config: GatewayConfig,
     provider: LLMProvider,
@@ -264,15 +440,17 @@ def get_provider_kwargs(
             vertex_project = provider_config.get("project")
             vertex_location = provider_config.get("location")
 
-            kwargs.update(
-                setup_vertex_environment(
+            # Credentials, project and location configure the genai client, so they
+            # go in client_args: any-llm passes every other kwarg to the completion
+            # call, where GenerateContentConfig rejects them.
+            kwargs["client_args"] = {
+                **setup_vertex_environment(
                     credentials=vertex_creds,
                     project=vertex_project,
                     location=vertex_location,
-                )
-            )
-            if "client_args" in provider_config:
-                kwargs["client_args"] = provider_config["client_args"]
+                ),
+                **provider_config.get("client_args", {}),
+            }
         else:
             kwargs = {k: v for k, v in provider_config.items() if k != "client_args"}
             if "client_args" in provider_config:
@@ -282,6 +460,23 @@ def get_provider_kwargs(
 
     if provider == LLMProvider.OTARI and kwargs.get("api_base"):
         kwargs["api_base"] = otari_gateway_origin(kwargs["api_base"])
+
+    # boto3 reads AWS_DEFAULT_REGION, while some AWS runtimes expose only AWS_REGION.
+    if provider == LLMProvider.BEDROCK:
+        region = (os.getenv("AWS_REGION") or "").strip()
+        default_region = (os.getenv("AWS_DEFAULT_REGION") or "").strip()
+        client_args = kwargs.get("client_args")
+        if region and not default_region:
+            if client_args is None:
+                kwargs["client_args"] = {"region_name": region}
+            elif isinstance(client_args, dict) and "region_name" not in client_args:
+                kwargs["client_args"] = {**client_args, "region_name": region}
+
+    max_retries = raw_config.get("max_retries") if raw_config is not None else None
+    if max_retries is None:
+        max_retries = config.provider_max_retries
+    if max_retries is not None:
+        kwargs = with_provider_retries(provider, kwargs, max_retries)
 
     placeholder = keyless_placeholder_api_key(provider, kwargs.get("api_base"), kwargs.get("api_key"))
     if placeholder is not None:
@@ -310,6 +505,57 @@ def with_session_affinity(call_kwargs: dict[str, Any], config: GatewayConfig, in
     client_args = dict(call_kwargs.get("client_args") or {})
     client_args["default_headers"] = {**(client_args.get("default_headers") or {}), SESSION_AFFINITY_HEADER: key}
     return {**call_kwargs, "client_args": client_args}
+
+
+def _client_retries_set(provider: LLMProvider, client_args: Mapping[str, Any]) -> bool:
+    """Whether ``client_args`` already says how often ``provider``'s client retries."""
+    if provider in _GOOGLE_RETRY_PROVIDERS:
+        http_options = client_args.get("http_options")
+        if isinstance(http_options, Mapping):
+            return http_options.get("retry_options") is not None
+        return getattr(http_options, "retry_options", None) is not None
+    return "max_retries" in client_args
+
+
+def with_provider_retries(provider: LLMProvider, kwargs: dict[str, Any], max_retries: int) -> dict[str, Any]:
+    """``kwargs`` with a client that retries a failed call ``max_retries`` times.
+
+    Returns ``kwargs`` unchanged when the provider's SDK has no retry setting
+    Otari knows how to pass, or when the instance's own ``client_args`` already
+    set one, which is the most specific statement an operator can make. The
+    ``client_args`` dict is copied, never mutated, because it can be the one
+    held by the deployment's config.
+    """
+    if provider not in _MAX_RETRIES_CLIENT_PROVIDERS and provider not in _GOOGLE_RETRY_PROVIDERS:
+        return kwargs
+    client_args = kwargs.get("client_args")
+    if client_args is None:
+        client_args = {}
+    elif not isinstance(client_args, Mapping):
+        return kwargs
+    if _client_retries_set(provider, client_args):
+        return kwargs
+    if provider in _MAX_RETRIES_CLIENT_PROVIDERS:
+        return {**kwargs, "client_args": {**client_args, "max_retries": max_retries}}
+    http_options = client_args.get("http_options")
+    if http_options is not None and not isinstance(http_options, Mapping):
+        # An HttpOptions object came from code rather than config; it is left as built.
+        return kwargs
+    retry_options = {"attempts": max_retries + 1}
+    return {
+        **kwargs,
+        "client_args": {**client_args, "http_options": {**(http_options or {}), "retry_options": retry_options}},
+    }
+
+
+def with_failover_retries(provider: LLMProvider, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """``kwargs`` for one candidate of a plan that can fall over, with no client retries by default.
+
+    A provider SDK that retries a 429 and honors its ``Retry-After`` spends seconds
+    before the walk may try the next candidate, which is the remedy the policy
+    already names. A retry count the instance or the deployment configured wins.
+    """
+    return with_provider_retries(provider, kwargs, 0)
 
 
 def effective_credential(provider: LLMProvider, kwargs: Mapping[str, Any]) -> ResolvedCredential:
@@ -362,6 +608,7 @@ class ProviderAccounts:
             provider=provider,
             instance=instance,
             workspace_id=self._workspace_id,
+            # codeql[py/weak-sensitive-data-hashing]
             identity=hmac.new(self._pepper, canonical.encode(), hashlib.sha256).hexdigest(),
         )
 
@@ -384,6 +631,11 @@ class ResolvedProvider:
     ``None`` for an ordinary selector. When set, response ``model`` fields are
     relabeled to this so the underlying provider/model stays hidden; pricing,
     budgets, and usage logs still key on the resolved target.
+    """
+    owned_endpoint: "OwnedEndpoint | None" = None
+    """The caller's own endpoint when the selector named one, else ``None``.
+
+    Its owner pays the upstream, so such a request never counts toward a budget.
     """
 
     @property
@@ -421,12 +673,105 @@ def split_selector(model_selector: str) -> tuple[str, str] | None:
     return prefix, remainder
 
 
+def owned_endpoint_kwargs(endpoint: "OwnedEndpoint") -> dict[str, Any]:
+    """The any-llm kwargs for an owned endpoint: its base URL and its key.
+
+    With no key of its own it gets the keyless placeholder unconditionally. The
+    provider's environment variable is never a fallback here, because that is the
+    operator's key and the base URL is somebody else's server.
+    """
+    return {"api_base": endpoint.api_base, "api_key": endpoint.api_key or _KEYLESS_PLACEHOLDER_API_KEY}
+
+
+def apply_endpoint_defaults(call_kwargs: dict[str, Any], resolved: ResolvedProvider) -> dict[str, Any]:
+    """Add an owned endpoint's default request fields beneath the ones the call already sets.
+
+    They travel as ``extra_body``, which the provider SDKs merge into the JSON
+    body, so a field any-llm does not model (vLLM's ``chat_template_kwargs``)
+    reaches the server too. A default is dropped when the call already carries
+    that field, because the body merge would otherwise put it over the caller's.
+    """
+    endpoint = resolved.owned_endpoint
+    if endpoint is None or not endpoint.default_params:
+        return call_kwargs
+    defaults = {
+        key: value
+        for key, value in endpoint.default_params.items()
+        if key not in call_kwargs and key not in FORBIDDEN_ENDPOINT_DEFAULTS
+    }
+    if not defaults:
+        return call_kwargs
+    return {**call_kwargs, "extra_body": {**defaults, **(call_kwargs.get("extra_body") or {})}}
+
+
+def _resolve_owned_endpoint(
+    config: GatewayConfig,
+    split: tuple[str, str] | None,
+    user_id: str | None,
+    workspace_id: uuid.UUID | None,
+) -> tuple[str, "OwnedEndpoint", str] | None:
+    """``(name, endpoint, model)`` when the selector's prefix names one of the caller's endpoints.
+
+    A prefix that already names an instance or a provider keeps that meaning.
+    Saving an endpoint refuses such names too, but an instance added at runtime
+    or a provider a later any-llm adds would otherwise be taken over by an
+    endpoint saved before it.
+    """
+    if split is None or workspace_id is None or not config.provider_endpoints_enabled:
+        return None
+    name, model = split
+    if name in config.providers or name in _PROVIDER_NAMES:
+        return None
+    # Imported here: the providers package imports this module through model discovery.
+    from gateway.services.providers import cached_owned_endpoint
+
+    endpoint = cached_owned_endpoint(name, workspace_id=workspace_id, user_id=user_id)
+    return (name, endpoint, model) if endpoint is not None else None
+
+
+def resolve_catalog_fallback(
+    config: GatewayConfig,
+    model_selector: str,
+    user_id: str | None = None,
+    *,
+    workspace_id: uuid.UUID | None = None,
+) -> tuple[str, ...]:
+    """Every offering a catalog ID stands for, best first, or an empty tuple.
+
+    Empty when an alias or a static policy claims the name, because both come before a catalog spelling.
+    """
+    if _claimed_target(config, model_selector, user_id, workspace_id) is not None:
+        return ()
+    return resolve_catalog_offerings(model_selector, workspace_id=workspace_id)
+
+
+def _claimed_target(
+    config: GatewayConfig, model_selector: str, user_id: str | None, workspace_id: uuid.UUID | None
+) -> str | None:
+    """The target an alias or a static routing policy gives a name, or ``None``."""
+    alias = resolve_effective_alias(config, model_selector, user_id, workspace_id=workspace_id)
+    if alias is not None:
+        return alias
+    # A *static* routing policy is an alias in everything but spelling: one
+    # name, one target. Resolving it here is what makes "an alias is a
+    # one-target policy" true on every model-taking surface (pricing, the
+    # catalog, embeddings, batches) and not only on the completion routes.
+    #
+    # A dynamic policy is deliberately left unresolved. Its candidate depends
+    # on request state that this synchronous path cannot see, so there is no
+    # honest answer to give; picking its default anyway would silently serve a
+    # different model than the policy describes. The completion routes compile
+    # it properly; everywhere else it surfaces as an unknown model.
+    return resolve_static_policy_target(config, model_selector, user_id, workspace_id=workspace_id)
+
+
 def resolve_provider_selector(
     config: GatewayConfig,
     model_selector: str,
     user_id: str | None = None,
     *,
     workspace_id: uuid.UUID | None = None,
+    owned_endpoints: bool = False,
 ) -> ResolvedProvider:
     """Resolve a request model selector into instance, implementation, and kwargs.
 
@@ -454,34 +799,43 @@ def resolve_provider_selector(
     resolution, which then reads the deployment's default workspace's aliases
     and policies.
 
+    ``owned_endpoints`` lets a ``<name>:<model>`` selector reach an endpoint the
+    caller or its workspace owns, ahead of every other source. Only a caller that
+    exempts the request from budgets and re-checks the endpoint's address before
+    dispatch may pass it; everywhere else such a name is an unknown provider.
+
     Raises ``ValueError`` / ``AnyLLMError`` (from any-llm) for a selector that
     names neither a configured instance nor a known provider, mirroring the
     prior ``AnyLLM.split_model_provider`` behavior.
     """
-    alias = resolve_effective_alias(config, model_selector, user_id, workspace_id=workspace_id)
+    alias = _claimed_target(config, model_selector, user_id, workspace_id)
     if alias is None:
-        # A *static* routing policy is an alias in everything but spelling: one
-        # name, one target. Resolving it here is what makes "an alias is a
-        # one-target policy" true on every model-taking surface (pricing, the
-        # catalog, embeddings, batches) and not only on the completion routes.
-        #
-        # A dynamic policy is deliberately left unresolved. Its candidate depends
-        # on request state that this synchronous path cannot see, so there is no
-        # honest answer to give; picking its default anyway would silently serve a
-        # different model than the policy describes. The completion routes compile
-        # it properly; everywhere else it surfaces as an unknown model.
-        alias = resolve_static_policy_target(config, model_selector, user_id, workspace_id=workspace_id)
-    if alias is None:
-        # The catalog's own spellings: a catalog id for the model's cheapest
-        # offering, or ``instance:<catalog id>`` to pin the instance. Consulted last and only
+        # The catalog's own spellings: a catalog id for the first of the model's
+        # offerings, or ``instance:<catalog id>`` to pin the instance. Consulted last and only
         # for a selector that names no offering already, so nothing a caller
         # sends verbatim is ever rewritten; the workspace picks which
         # organization's own offerings may answer. Relabeled like an alias: the
         # caller sees the spelling they sent, and pricing keys on the target.
         alias = resolve_catalog_selector(model_selector, workspace_id=workspace_id)
+    if alias is None and (written := split_selector(model_selector)) is not None and written[0] not in config.providers:
+        # An organization key serves only the ids it offers, so a provider's
+        # undated name reaches its one dated build there. A ``providers:``
+        # instance sends any id as written and is never rewritten.
+        alias = resolve_undated_selector(model_selector, workspace_id=workspace_id)
     selector = alias if alias is not None else model_selector
 
     split = split_selector(selector)
+    owned = _resolve_owned_endpoint(config, split, user_id, workspace_id) if owned_endpoints else None
+    if owned is not None:
+        name, endpoint, model = owned
+        return ResolvedProvider(
+            instance=name,
+            provider=LLMProvider(endpoint.provider),
+            model=model,
+            kwargs=owned_endpoint_kwargs(endpoint),
+            alias=model_selector if alias is not None else None,
+            owned_endpoint=endpoint,
+        )
     if split is not None and split[0] in config.providers:
         instance, model = split
         provider = LLMProvider(config.provider_instance_type(instance))
@@ -564,3 +918,50 @@ def is_deployment_instance_key(config: GatewayConfig, model_key: str) -> bool:
     """
     split = split_selector(model_key)
     return split is not None and split[0] in config.providers
+
+
+@dataclass(frozen=True)
+class MissingCredential:
+    """A call any-llm refused locally because no credential resolved for its provider.
+
+    Nothing reached the provider, so the failure is the deployment's
+    configuration rather than the provider's, and it is named in Otari's terms.
+    The variable is a name, never a value, so it is safe to show.
+
+    Answered with a 424 rather than a 502: clients retry a 5xx, and no retry can
+    supply a key. ``code`` lets a caller tell it from a provider's own 424.
+    """
+
+    provider: str
+    env_var: str | None
+    status_code: ClassVar[int] = 424
+    code: ClassVar[str] = PROVIDER_NOT_CONFIGURED
+
+    @property
+    def detail(self) -> str:
+        detail = (
+            f"No credential is configured for provider '{self.provider}'. "
+            "Add one in config.yml or through the dashboard"
+        )
+        return f"{detail}, or set {self.env_var}." if self.env_var else f"{detail}."
+
+
+def missing_credential(exc: BaseException) -> MissingCredential | None:
+    """The missing credential behind ``exc``, read through its ``original_exception`` chain."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, MissingApiKeyError):
+            return MissingCredential(provider=current.provider_name or "unknown", env_var=current.env_var_name)
+        current = getattr(current, "original_exception", None)
+    return None
+
+
+def no_candidate_configured_detail(missing: Sequence[MissingCredential]) -> str:
+    """Why a request failed when every candidate it could use lacked a credential."""
+    names = ", ".join(sorted({entry.provider for entry in missing})) or "unknown"
+    return (
+        f"No credential is configured for any provider this request could use ({len(missing)} attempts: {names}). "
+        "Add one in config.yml or through the dashboard."
+    )

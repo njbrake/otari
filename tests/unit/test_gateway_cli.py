@@ -209,3 +209,47 @@ def test_gen_provider_account_pepper_prints_a_pepper_the_gateway_accepts() -> No
     pepper = first.output.strip()
     assert GatewayConfig(provider_account_pepper=pepper).provider_account_pepper == pepper
     assert pepper != second.output.strip()
+
+
+_SECRET_DATABASE_URL = "postgresql+psycopg://u:sekret@h:5432/db?password=alsosekret&sslpassword=pem123"
+
+
+def test_init_db_does_not_echo_database_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("gateway.db.init_db", lambda config: None)
+
+    result = CliRunner().invoke(gateway_cli.cli, ["init-db", "--database-url", _SECRET_DATABASE_URL])
+
+    assert result.exit_code == 0, result.output
+    assert "Initializing database: postgresql+psycopg://u:***@h:5432/db?password=***&sslpassword=***" in result.output
+    for secret in ("sekret", "alsosekret", "pem123"):
+        assert secret not in result.output
+
+
+def test_migrate_does_not_echo_database_secrets_but_passes_them_to_alembic(monkeypatch: pytest.MonkeyPatch) -> None:
+    alembic_env: dict[str, str] = {}
+
+    def fake_run(args: list[str], *, env: dict[str, str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        alembic_env.update(env)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/alembic")
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    result = CliRunner().invoke(gateway_cli.cli, ["migrate", "--database-url", _SECRET_DATABASE_URL])
+
+    assert result.exit_code == 0, result.output
+    assert "Running migrations on: postgresql+psycopg://u:***@h:5432/db?password=***&sslpassword=***" in result.output
+    for secret in ("sekret", "alsosekret", "pem123"):
+        assert secret not in result.output
+    assert alembic_env["OTARI_DATABASE_URL"] == _SECRET_DATABASE_URL
+
+
+def test_init_db_redacts_a_database_url_with_a_malformed_port_instead_of_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("gateway.db.init_db", lambda config: None)
+
+    result = CliRunner().invoke(gateway_cli.cli, ["init-db", "--database-url", "postgresql://u:sekret@h:bad/db"])
+
+    assert result.exit_code == 0, result.output
+    assert "Initializing database: postgresql://u:***@h:bad/db" in result.output

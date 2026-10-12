@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from conftest import InstallControlPlane
 from gateway.api.deps import reset_config
+from gateway.api.routes._platform import all_attempts_rejected_detail
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.database import reset_db
 from gateway.services.control_plane import UNAVAILABLE_DETAIL
@@ -493,7 +494,10 @@ def test_hybrid_mode_falls_through_on_provider_400(
     monkeypatch: pytest.MonkeyPatch,
     control_plane_transport: InstallControlPlane,
 ) -> None:
-    """A provider 400 advances to the next candidate like every pre-lock-in failure."""
+    """A provider 400 advances to the next candidate like every pre-lock-in failure.
+
+    Every attempt rejected the request alike, so the caller gets that rejection.
+    """
     calls: list[dict[str, Any]] = []
     usage_reports: list[dict[str, Any]] = []
 
@@ -537,9 +541,10 @@ def test_hybrid_mode_falls_through_on_provider_400(
         headers={"Authorization": "Bearer user_test_token"},
     )
 
-    assert response.status_code == 502
-    assert response.json() == {
-        "detail": {"type": "error", "error": {"type": "api_error", "message": "All upstream providers failed"}}
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": all_attempts_rejected_detail(2)},
     }
     assert len(calls) == 2
     assert sorted((r["correlation_id"], r["is_final_attempt"], r.get("error_class")) for r in usage_reports) == [
@@ -860,7 +865,7 @@ def test_hybrid_mode_tool_loop_streaming_sets_correlation_id_and_reports_usage(
     # streaming_generator triggers _on_complete.
     from unittest.mock import AsyncMock, patch
 
-    from any_llm.types.messages import MessageDelta, MessageDeltaEvent, MessageDeltaUsage
+    from any_llm.types.messages import MessageDelta, MessageDeltaEvent, MessageDeltaUsage, MessageStopEvent
 
     async def fake_loop_stream(**_kwargs: Any) -> Any:
         yield MessageDeltaEvent(
@@ -874,6 +879,7 @@ def test_hybrid_mode_tool_loop_streaming_sets_correlation_id_and_reports_usage(
                 server_tool_use=None,
             ),
         )
+        yield MessageStopEvent(type="message_stop")
 
     with (
         patch("gateway.api.routes.messages.anthropic_tool_loop_stream", new=fake_loop_stream),
@@ -931,7 +937,7 @@ def test_hybrid_mode_tool_loop_streaming_forwards_session_label(
 
     from unittest.mock import AsyncMock, patch
 
-    from any_llm.types.messages import MessageDelta, MessageDeltaEvent, MessageDeltaUsage
+    from any_llm.types.messages import MessageDelta, MessageDeltaEvent, MessageDeltaUsage, MessageStopEvent
 
     async def fake_loop_stream(**_kwargs: Any) -> Any:
         yield MessageDeltaEvent(
@@ -945,6 +951,7 @@ def test_hybrid_mode_tool_loop_streaming_forwards_session_label(
                 server_tool_use=None,
             ),
         )
+        yield MessageStopEvent(type="message_stop")
 
     with (
         patch("gateway.api.routes.messages.anthropic_tool_loop_stream", new=fake_loop_stream),
@@ -1279,7 +1286,7 @@ def test_hybrid_mode_tool_loop_streaming_falls_through_pre_lock_in(
     yielding any event, so the gateway falls through to the second attempt and
     streams its response (same pre-lock-in semantics as chat, which this
     format previously collapsed to a single attempt)."""
-    from any_llm.types.messages import MessageDelta, MessageDeltaEvent, MessageDeltaUsage
+    from any_llm.types.messages import MessageDelta, MessageDeltaEvent, MessageDeltaUsage, MessageStopEvent
 
     usage_reports: list[dict[str, Any]] = []
 
@@ -1312,6 +1319,7 @@ def test_hybrid_mode_tool_loop_streaming_falls_through_pre_lock_in(
                 server_tool_use=None,
             ),
         )
+        yield MessageStopEvent(type="message_stop")
 
     control_plane_transport(fake_post_platform)
     monkeypatch.setattr("gateway.api.routes._pipeline.MCPClientPool", _FakeMcpPool)

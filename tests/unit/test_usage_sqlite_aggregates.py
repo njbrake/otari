@@ -206,8 +206,8 @@ def test_a_groups_p95_on_sqlite_is_the_nearest_rank_value_postgresql_returns() -
 
 
 def test_the_channel_breakdown_on_sqlite_tells_the_three_channels_apart() -> None:
-    from gateway.core.usage_source import PLAYGROUND_USAGE_ENDPOINT
     from gateway.models.api_keys import APIKey
+    from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT
 
     async def body(db: AsyncSession) -> dict[str | None, int]:
         db.add(APIKey(id="k-forward", key_hash="h", key_name="forward", workspace_id=WORKSPACE, internal_secret="s"))
@@ -325,7 +325,7 @@ def test_ranking_by_failures_on_sqlite_brings_a_cheap_group_into_the_top_n() -> 
 
 def test_a_groups_p95_on_sqlite_by_channel_and_by_workspace() -> None:
     """The channel is a CASE over a joined key and the workspace a UUID column, both partitioned and read back."""
-    from gateway.core.usage_source import PLAYGROUND_USAGE_ENDPOINT
+    from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT
 
     other = uuid.uuid4()
 
@@ -378,8 +378,8 @@ def test_the_summary_on_sqlite_ranks_by_p95_and_fills_p95_by_once() -> None:
 
 
 def test_the_channel_filter_on_sqlite_classifies_rows_as_the_breakdown_does() -> None:
-    from gateway.core.usage_source import PLAYGROUND_USAGE_ENDPOINT
     from gateway.models.api_keys import APIKey
+    from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT
 
     async def body(db: AsyncSession) -> dict[str, set[str]]:
         db.add(APIKey(id="k-forward", key_hash="hf", key_name="forward", workspace_id=WORKSPACE, internal_secret="s"))

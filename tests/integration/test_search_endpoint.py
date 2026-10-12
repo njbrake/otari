@@ -6,6 +6,7 @@ row that makes a search visible in the Activity and Usage views.
 """
 
 import logging
+from collections.abc import Generator
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -13,11 +14,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway.api.deps import reset_config
-from gateway.core.config import API_KEY_HEADER, API_ROOT, GatewayConfig
+from gateway.core.config import API_KEY_HEADER, API_ROOT, GatewayConfig, RateLimitRule
 from gateway.core.database import reset_db
+from gateway.core.settings.pricing import PricingConfig
 from gateway.inflight import InFlightRegistry
 from gateway.main import create_app
 from gateway.services.search_backend import SearchHit, SearchOutcome, SearchProviderError
+from gateway.services.secret_box import generate_secret_key
+
+from .conftest import build_test_client
 
 SEARCH_USAGE_LABEL = "/v1/search"
 
@@ -44,7 +49,7 @@ def test_config(postgres_url: str) -> GatewayConfig:
         auto_migrate=False,
         require_pricing=False,
         search_tools={
-            "exa-search": {"provider": "exa", "api_key": "exa-secret"},
+            "exa-search": {"provider": "exa", "api_key": "exa-secret", "timeout": 7},
             "exa-fast": {"provider": "exa", "api_key": "exa-secret", "options": {"type": "fast"}},
         },
     )
@@ -464,6 +469,40 @@ def test_search_is_budget_enforced(
     assert resp.status_code == 403
 
 
+@pytest.fixture
+def config_priced_client(test_config: GatewayConfig) -> Generator[TestClient]:
+    """A client whose search rate comes from the config file's ``pricing`` section."""
+    pricing = {"exa:exa-search": PricingConfig(input_price_per_million=5000.0, output_price_per_million=0.0)}
+    yield from build_test_client(test_config.model_copy(update={"pricing": pricing}))
+
+
+def test_a_config_priced_search_is_reserved_before_it_runs(
+    config_priced_client: TestClient, master_key_header: dict[str, str]
+) -> None:
+    """The config rate is held up front, so a search that would overshoot the cap never reaches the provider."""
+    client = config_priced_client
+    budget = client.post(f"{API_ROOT}/budgets", json={"max_budget": 0.001}, headers=master_key_header).json()
+    client.post(
+        f"{API_ROOT}/users",
+        json={"user_id": "near-cap-user", "budget_id": budget["budget_id"]},
+        headers=master_key_header,
+    )
+    key = client.post(
+        f"{API_ROOT}/keys",
+        json={"key_name": "near-cap-key", "user_id": "near-cap-user"},
+        headers=master_key_header,
+    ).json()
+
+    with _mock_search() as run_search:
+        resp = client.post(
+            f"{API_ROOT}/search/exa-search",
+            json=SEARCH_PAYLOAD,
+            headers={API_KEY_HEADER: f"Bearer {key['key']}"},
+        )
+    assert resp.status_code == 403, resp.text
+    run_search.assert_not_awaited()
+
+
 def test_search_is_not_registered_in_hybrid_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """Search is a standalone-mode surface: hybrid has no local search config."""
     monkeypatch.setenv("OTARI_AI_TOKEN", "gw_test_token")
@@ -510,3 +549,195 @@ def test_search_is_tracked_while_its_provider_call_runs(client: TestClient, api_
     assert entry.policy_name is None
     # And it is gone afterwards, so the panel cannot accumulate a ghost.
     assert len(registry) == 0
+
+
+def test_a_service_key_bills_search_to_the_end_user_it_names(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """``user`` on a service key's search names an end user, created with the key's end-user budget."""
+    budget = client.post(
+        f"{API_ROOT}/budgets", json={"request_limit": 1, "budget_duration_sec": 86400}, headers=master_key_header
+    ).json()
+    key = client.post(
+        f"{API_ROOT}/keys",
+        json={
+            "key_name": "mlpa-search",
+            "user_id": "mlpa-search",
+            "is_service_key": True,
+            "end_user_budget_id": budget["budget_id"],
+        },
+        headers=master_key_header,
+    ).json()
+    headers = {API_KEY_HEADER: f"Bearer {key['key']}"}
+    body = {**SEARCH_PAYLOAD, "user": "fxa-123:search"}
+
+    with _mock_search():
+        first = client.post(f"{API_ROOT}/search/exa-search", json=body, headers=headers)
+        second = client.post(f"{API_ROOT}/search/exa-search", json=body, headers=headers)
+        other = client.post(
+            f"{API_ROOT}/search/exa-search", json={**SEARCH_PAYLOAD, "user": "fxa-456:search"}, headers=headers
+        )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 403, second.text
+    assert other.status_code == 200, other.text
+    users = client.get(f"{API_ROOT}/users", params={"parent_user_id": "mlpa-search"}, headers=master_key_header).json()
+    end_user = next(user for user in users if user["external_id"] == "fxa-123:search")
+    assert end_user["budget_id"] == budget["budget_id"]
+    assert len(_search_rows(client, master_key_header, end_user["user_id"])) >= 1
+
+
+def _rules_client(test_config: GatewayConfig, rules: list[dict[str, Any]]) -> Generator[TestClient]:
+    config = test_config.model_copy(update={"rate_limits": [RateLimitRule(**rule) for rule in rules]})
+    yield from build_test_client(config)
+
+
+def _keyed(client: TestClient, master_key_header: dict[str, str], user_id: str) -> dict[str, str]:
+    assert client.post(f"{API_ROOT}/users", json={"user_id": user_id}, headers=master_key_header).status_code == 200
+    key = client.post(f"{API_ROOT}/keys", json={"key_name": user_id, "user_id": user_id}, headers=master_key_header)
+    assert key.status_code == 200, key.text
+    return {API_KEY_HEADER: f"Bearer {key.json()['key']}"}
+
+
+@pytest.fixture
+def per_key_client(test_config: GatewayConfig) -> Generator[TestClient]:
+    yield from _rules_client(test_config, [{"name": "keys", "per": "key", "rpm": 1}])
+
+
+@pytest.fixture
+def per_tool_client(test_config: GatewayConfig) -> Generator[TestClient]:
+    yield from _rules_client(test_config, [{"name": "exa-cap", "per": "model", "models": ["exa:exa-search"], "rpm": 1}])
+
+
+def test_a_search_refused_before_the_reservation_uses_no_rate_limit_slot(
+    per_key_client: TestClient, master_key_header: dict[str, str]
+) -> None:
+    headers = _keyed(per_key_client, master_key_header, "rules-search")
+
+    with _mock_search():
+        unknown = per_key_client.post(f"{API_ROOT}/search/no-such-tool", json=SEARCH_PAYLOAD, headers=headers)
+        first = per_key_client.post(f"{API_ROOT}/search/exa-search", json=SEARCH_PAYLOAD, headers=headers)
+        second = per_key_client.post(f"{API_ROOT}/search/exa-search", json=SEARCH_PAYLOAD, headers=headers)
+
+    assert unknown.status_code == 400, unknown.text
+    assert first.status_code == 200, first.text
+    assert second.status_code == 429, second.text
+
+
+def test_a_per_model_rule_limits_the_search_tool_it_names(
+    per_tool_client: TestClient, master_key_header: dict[str, str]
+) -> None:
+    headers = _keyed(per_tool_client, master_key_header, "rules-tool")
+
+    with _mock_search():
+        first = per_tool_client.post(f"{API_ROOT}/search/exa-search", json=SEARCH_PAYLOAD, headers=headers)
+        second = per_tool_client.post(f"{API_ROOT}/search/exa-search", json=SEARCH_PAYLOAD, headers=headers)
+        other = per_tool_client.post(f"{API_ROOT}/search/exa-fast", json=SEARCH_PAYLOAD, headers=headers)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 429, second.text
+    assert "exa-cap" in second.json()["detail"]
+    assert other.status_code == 200, other.text
+
+
+def test_a_service_key_starts_a_search_end_user_on_the_budget_it_names(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """``Otari-End-User-Budget`` picks the new end user's budget on search as it does on chat."""
+    for budget_id in ("search-default", "search-memories"):
+        put = client.put(f"{API_ROOT}/budgets/{budget_id}", json={"request_limit": 5}, headers=master_key_header)
+        assert put.status_code == 201, put.text
+    key = client.post(
+        f"{API_ROOT}/keys",
+        json={
+            "user_id": "mlpa-multi",
+            "is_service_key": True,
+            "end_user_budget_ids": ["search-default", "search-memories"],
+            "end_user_budget_id": "search-default",
+        },
+        headers=master_key_header,
+    ).json()
+    headers = {API_KEY_HEADER: f"Bearer {key['key']}", "Otari-End-User-Budget": "search-memories"}
+
+    with _mock_search():
+        named = client.post(
+            f"{API_ROOT}/search/exa-search", json={**SEARCH_PAYLOAD, "user": "fxa-1:memories"}, headers=headers
+        )
+        refused = client.post(
+            f"{API_ROOT}/search/exa-search",
+            json={**SEARCH_PAYLOAD, "user": "fxa-2:memories"},
+            headers={**headers, "Otari-End-User-Budget": "not-listed"},
+        )
+
+    assert named.status_code == 200, named.text
+    assert named.headers["Otari-End-User-Budget"] == "search-memories"
+    assert refused.status_code == 403
+    assert refused.json()["code"] == "end_user_budget_not_allowed"
+    assert refused.headers["Otari-Error-Code"] == "end_user_budget_not_allowed"
+
+
+def _add_org_search_key(client: TestClient, headers: dict[str, str], api_key: str) -> str:
+    created = client.post(
+        f"{API_ROOT}/organizations/me/web-search-keys",
+        json={"provider": "tavily", "name": "ours", "api_key": api_key},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    key_id: str = created.json()["id"]
+    return key_id
+
+
+@pytest.fixture
+def _secret_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OTARI_SECRET_KEY", generate_secret_key())
+
+
+@pytest.mark.usefixtures("_secret_key")
+def test_search_uses_the_workspaces_own_key(
+    client: TestClient, master_key_header: dict[str, str], api_key_header: dict[str, str]
+) -> None:
+    """A workspace whose organization brought a search key searches with it, as the named tool."""
+    _add_org_search_key(client, master_key_header, "tvly-org-secret")
+    keyed = AsyncMock(return_value=SearchOutcome(results=_HITS))
+    deployment = AsyncMock(return_value=SearchOutcome(results=_HITS))
+    with (
+        patch("gateway.api.routes.search.run_keyed_search", keyed),
+        patch("gateway.api.routes.search.run_search", deployment),
+    ):
+        resp = client.post(f"{API_ROOT}/search/exa-search", json=SEARCH_PAYLOAD, headers=api_key_header)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["search_tool"] == "exa-search"
+    deployment.assert_not_called()
+    credential = keyed.call_args.args[0]
+    assert (credential.provider, credential.api_key) == ("tavily", "tvly-org-secret")
+    # The key changes who pays, not how long the named tool may take.
+    assert keyed.call_args.kwargs["timeout_s"] == 7
+
+
+@pytest.mark.usefixtures("_secret_key")
+def test_search_without_a_usable_key_uses_the_named_tool(
+    client: TestClient, master_key_header: dict[str, str], api_key_header: dict[str, str]
+) -> None:
+    """A key the workspace turned off leaves its searches on the deployment's tool."""
+    key_id = _add_org_search_key(client, master_key_header, "tvly-org-secret")
+    workspace_id = client.get(f"{API_ROOT}/workspaces", headers=master_key_header).json()["data"][0]["id"]
+    turned_off = client.patch(
+        f"{API_ROOT}/workspaces/{workspace_id}/web-search-keys/{key_id}",
+        json={"disabled": True},
+        headers=master_key_header,
+    )
+    assert turned_off.status_code == 200, turned_off.text
+    keyed = AsyncMock(return_value=SearchOutcome(results=_HITS))
+    deployment = AsyncMock(return_value=SearchOutcome(results=_HITS))
+    with (
+        patch("gateway.api.routes.search.run_keyed_search", keyed),
+        patch("gateway.api.routes.search.run_search", deployment),
+    ):
+        resp = client.post(f"{API_ROOT}/search/exa-search", json=SEARCH_PAYLOAD, headers=api_key_header)
+
+    assert resp.status_code == 200, resp.text
+    keyed.assert_not_called()
+    assert deployment.call_args.args[0].name == "exa-search"

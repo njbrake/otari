@@ -21,13 +21,21 @@ import {
   priceSourceLabel,
 } from "@/features/models/catalog"
 import {
+  formatPricedRate,
+  type PricingUnit,
+  pricingUnitOf,
+} from "@/features/models/pricingUnit"
+import {
   publicCatalogHref,
   rememberModel,
 } from "@/features/models/publicCatalog"
 import { UseModelDrawer } from "@/features/models/UseModelDrawer"
-import { canManage, isDeploymentOperator } from "@/features/organization/roles"
+import { canManage } from "@/features/organization/roles"
 import { useCatalogModel } from "@/shared/api/models"
-import { useOrganizationContext } from "@/shared/api/organizations"
+import {
+  useDeploymentOperator,
+  useOrganizationContext,
+} from "@/shared/api/organizations"
 import { ProviderMark } from "@/shared/components/marks/BrandMark"
 import {
   formatContext,
@@ -36,6 +44,7 @@ import {
 } from "@/shared/helpers/format"
 import { providerDisplayName } from "@/shared/helpers/providers"
 import { useDeployment } from "@/shared/hooks/useDeployment"
+import { providerModelId } from "./modelKey"
 
 // One model, on a page of its own: the header with its facts, then every
 // offering of the model this viewer may call, cheapest first, with the price
@@ -124,10 +133,23 @@ export function listPriceNote(
 function RateCell({
   metered,
   listed,
+  unit,
+  tokenOnly = false,
 }: {
   metered: number | null | undefined
   listed: number | null | undefined
+  /** What the offering's price is per; a non-token rate names its unit. */
+  unit: PricingUnit
+  /** A rate only a token price has (output), shown as a dash on any other unit. */
+  tokenOnly?: boolean
 }) {
+  if (unit !== "tokens") {
+    return (
+      <span className="text-mono-caption">
+        {tokenOnly || metered == null ? "—" : formatPricedRate(metered, unit)}
+      </span>
+    )
+  }
   const note = listPriceNote(metered, listed)
   return (
     <span className="flex flex-col items-end">
@@ -210,8 +232,8 @@ function offeringColumns({
       isRowHeader: true,
       allowsSorting: true,
       cell: ({ offering: row }) => (
-        // One line: the selector, which is as long as the provider makes it,
-        // opens under the row instead of setting every row's height.
+        // The provider's own model ID sits on a second line, so two offerings on
+        // one provider (Bedrock's regional profiles) read apart at a glance.
         <span className="text-body flex items-center gap-2 whitespace-nowrap">
           {/* Keyed on the type rather than the instance, which is what the
               instance is named after until an operator renames it. The name
@@ -221,16 +243,21 @@ function offeringColumns({
             providerId={row.provider_type || row.provider}
             label={providerDisplayName(row.provider)}
           />
-          <span>
-            {providerDisplayName(row.provider)}
-            <span className="text-caption">
-              {" · "}
-              {row.provider_type !== row.provider
-                ? `${providerDisplayName(row.provider_type)} · `
-                : ""}
-              {credentialLabel(row.credential)}
-              {row.quantization ? ` · ${row.quantization}` : ""}
+          <span className="flex flex-col">
+            <span>
+              {providerDisplayName(row.provider)}
+              <span className="text-caption">
+                {" · "}
+                {row.provider_type !== row.provider
+                  ? `${providerDisplayName(row.provider_type)} · `
+                  : ""}
+                {credentialLabel(row.credential)}
+                {row.quantization ? ` · ${row.quantization}` : ""}
+              </span>
             </span>
+            <code className="text-caption font-mono">
+              {providerModelId(row.selector)}
+            </code>
           </span>
         </span>
       ),
@@ -244,6 +271,7 @@ function offeringColumns({
         <RateCell
           metered={row.input}
           listed={row.offering.metadata_input_price_per_million}
+          unit={pricingUnitOf(row.offering.pricing?.unit)}
         />
       ),
     },
@@ -256,6 +284,8 @@ function offeringColumns({
         <RateCell
           metered={row.output}
           listed={row.offering.metadata_output_price_per_million}
+          unit={pricingUnitOf(row.offering.pricing?.unit)}
+          tokenOnly
         />
       ),
     },
@@ -352,7 +382,8 @@ export function ModelDetailView({
   // Not a pricing authority here: rates are set per model on Providers, which
   // answers to the organization role. It decides the two hints below that point
   // at deployment-wide pages.
-  const isOperator = !publicView && isDeploymentOperator(organization.data)
+  const operator = useDeploymentOperator(!publicView)
+  const isOperator = !publicView && operator.isOperator
   // Includes an operator: on a standalone deployment they are also the single
   // organization's owner, and excluding them would leave the one caller who can
   // set a rate without the link to set it.

@@ -101,7 +101,7 @@ def _no_background_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     ``TestClient(create_app(...))``). Scoping this to ``tests/integration`` left
     every one of those making live models.dev fetches on CI, which is both wrong
     on its own terms and what surfaced the unbounded-shutdown bug that
-    ``_stop_refresher`` now guards against. A test that wants the real refresher
+    ``_stop_refreshers`` now guards against. A test that wants the real refresher
     calls it directly rather than through the lifespan.
     """
 
@@ -110,6 +110,28 @@ def _no_background_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("gateway.main.run_discovery_refresher", _noop)
     monkeypatch.setattr("gateway.main.run_catalog_refresher", _noop)
+
+
+@pytest.fixture(autouse=True)
+def _no_models_dev_fetch(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    """Answer every models.dev fetch as unreachable unless the test patches in a catalog.
+
+    The model listing joins models.dev, and with the refresher suppressed above
+    its cache starts empty, so every listing read would otherwise fetch the live
+    catalog: an outbound call from any test that lists a model, and limits that
+    move whenever models.dev does. A test that wants metadata patches
+    ``model_catalog_service._fetch`` itself. The cache is cleared on both sides,
+    so one test's answer, a failure included, is never the next one's.
+    """
+    from gateway.services import model_catalog_service
+
+    async def _unreachable() -> None:
+        return None
+
+    model_catalog_service.clear_catalog_cache()
+    monkeypatch.setattr(model_catalog_service, "_fetch", _unreachable)
+    yield
+    model_catalog_service.clear_catalog_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -235,6 +257,8 @@ class TaskGroupMcpTransport:
         self.close_error: BaseException | None = None
         self.entered_in: asyncio.Task[Any] | None = None
         self.exited_in: list[asyncio.Task[Any] | None] = []
+        # What the transport's block exited with, ``None`` for a clean exit.
+        self.exited_with: list[BaseException | None] = []
 
     async def _pass(self, gate: asyncio.Event) -> None:
         while True:
@@ -250,7 +274,12 @@ class TaskGroupMcpTransport:
         await self._pass(self.may_open)
         async with anyio.create_task_group():
             self.entered_in = asyncio.current_task()
-            yield object(), object(), object()
+            try:
+                yield object(), object(), object()
+            except BaseException as exc:
+                self.exited_with.append(exc)
+                raise
+            self.exited_with.append(None)
             await self._pass(self.may_close)
             self.exited_in.append(asyncio.current_task())
         if self.close_error is not None:

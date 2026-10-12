@@ -44,7 +44,7 @@ async function summary(text: string) {
 
 function planTable() {
   return screen.getByRole("table", {
-    name: "Routing plan for policy cheap-first",
+    name: "Routing plan for cheap-first",
   })
 }
 
