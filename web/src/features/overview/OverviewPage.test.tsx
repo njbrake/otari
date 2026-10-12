@@ -158,6 +158,8 @@ interface Bodies {
   holdOrganization?: Promise<void>
   /** Held open for the summaries whose window starts on this day. */
   holdSummaryFrom?: { day: string; until: Promise<void> }
+  /** Held open for the workspace's own month, read beside a manager's at You. */
+  holdWorkspace?: Promise<void>
   /** The overview summary per scope asked for, over `overview`. */
   overviewByScope?: Partial<Record<string, Partial<OverviewSummary>>>
   /** The first day of the month the page reads, if not October. */
@@ -256,6 +258,9 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
       }
       if (params.get("start_date")?.startsWith(b.monthStart ?? "2026-10-01")) {
         if (b.workspace && !params.get("user_id")) {
+          if (b.holdWorkspace && !url.includes("/organizations/me/")) {
+            await b.holdWorkspace
+          }
           return jsonResponse(summary(b.workspace, b.workspaceSeries))
         }
         return jsonResponse(summary(b.month, b.series))
@@ -1057,6 +1062,51 @@ describe("the budget chart", () => {
       ),
     )
     expect(screen.getByText("Rest of workspace")).toBeInTheDocument()
+  })
+  it("holds the organization's chart until the workspace beside a manager's own lands", async () => {
+    let release = () => {}
+    const holdWorkspace = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    mockApi({
+      context: TWO_WORKSPACES,
+      members: [
+        {
+          user_id: "33333333-3333-3333-3333-333333333333",
+          attribution_user_id: "gw-user-1",
+        },
+      ],
+      spend: BUDGET,
+      series: daily(12, 5),
+      workspace: { cost: 300 },
+      workspaceSeries: daily(12, 25),
+      holdWorkspace,
+    })
+    const user = userEvent.setup()
+    renderPage(<OverviewIndex />, {
+      url: "/overview?scope=organization",
+      workspace: WORKSPACE_A,
+    })
+
+    await screen.findByRole("heading", { name: "Workspaces" })
+    await user.click(screen.getByRole("radio", { name: "You" }))
+    // Everything but the workspace's own month has answered by now.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(
+      screen.getByRole("heading", { name: "Billed spend, October" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("heading", {
+        name: "Billed spend vs budget, October",
+      }),
+    ).toBeNull()
+
+    release()
+    expect(
+      await screen.findByRole("heading", {
+        name: "Billed spend vs budget, October",
+      }),
+    ).toBeInTheDocument()
   })
 })
 

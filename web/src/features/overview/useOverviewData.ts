@@ -113,7 +113,7 @@ export function useOverviewData(url: OverviewUrl) {
     summary.isPlaceholderData ||
     previous.isPlaceholderData ||
     failures.isPlaceholderData ||
-    (readsWorkspaceToo && workspace.isPlaceholderData)
+    (readsWorkspaceToo && (workspace.isPlaceholderData || workspace.isPending))
   const [shown, setShown] = useState({
     scope,
     monthKey: month.key,
