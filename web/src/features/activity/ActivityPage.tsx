@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { TextButton } from "@/design-system/actions/TextButton"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
+import { pricingUnitForEndpoint } from "@/features/models/pricingUnit"
 import type { ManualRates } from "@/features/models/SetPriceDialog"
 import { SavedViewsMenu } from "@/features/savedViews/SavedViewsMenu"
 import { useSetPricing } from "@/shared/api/pricing"
@@ -86,7 +87,12 @@ export function ActivityPage() {
   const recost = useSetUsagePrice()
   const setModelPrice = useSetPricing()
   const onPriceModel = viewer.isOperator
-    ? (modelKey: string) => setDialog({ kind: "price", modelKey })
+    ? (modelKey: string, endpoint: string) =>
+        setDialog({
+          kind: "price",
+          modelKey,
+          unit: pricingUnitForEndpoint(endpoint),
+        })
     : undefined
 
   const empty = (
@@ -160,6 +166,7 @@ export function ActivityPage() {
                 rates.cache_read_price_per_million ?? null,
               cache_write_price_per_million:
                 rates.cache_write_price_per_million ?? null,
+              unit: rates.unit ?? "tokens",
             },
             { onSuccess: () => setDialog(undefined) },
           )

@@ -2,16 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
   AliasResponse,
   CreateAliasRequest,
-  ExplainPolicyRequest,
-  ExplainPolicyResponse,
-  RankCandidatesRequest,
-  RankCandidatesResponse,
   RouterStatus,
   RoutingPolicyResponse,
   SetRoutingPolicyRequest,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
-import { useOrganizationContext } from "@/shared/api/organizations"
+import { useDeploymentOperator } from "@/shared/api/organizations"
 import {
   ALIASES,
   CATALOG,
@@ -26,20 +22,20 @@ import {
 // deployment; the `/organizations/me/*` two answer the same shapes for the
 // caller's own organization (otari-ai#1942, otari-ai#1969). The bases are part
 // of every query key they feed, so a demotion cannot serve the wider list from
-// cache, and an errored context falls through to the narrower surface.
+// cache, and an errored context takes the wider one, as every operator gate
+// does (`useDeploymentOperator`).
 export function useRoutingScope(): {
   policies: string
   aliases: string
   isReady: boolean
 } {
-  const context = useOrganizationContext()
-  const isDeploymentWide = context.data?.deployment_operator === true
+  const { isOperator: isDeploymentWide, isSettled } = useDeploymentOperator()
   return {
     policies: isDeploymentWide
       ? "/routing/policies"
       : "/organizations/me/routing-policies",
     aliases: isDeploymentWide ? "/aliases" : "/organizations/me/aliases",
-    isReady: context.isSuccess || context.isError,
+    isReady: isSettled,
   }
 }
 
@@ -220,20 +216,6 @@ export function useDeleteOrganizationAlias() {
   })
 }
 
-/** Compile a policy (saved or draft) without dispatching anything.
- *
- *  A mutation rather than a query: it is an explicit "check this now" action on
- *  inputs the operator is editing, not cacheable server state. */
-export function useExplainPolicy() {
-  return useMutation({
-    mutationFn: (body: ExplainPolicyRequest) =>
-      apiFetch<ExplainPolicyResponse>("/routing/policies/explain", {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
-  })
-}
-
 // --- Learned routing ------------------------------------------------------
 
 /** How warm a user's routing memory is.
@@ -252,23 +234,6 @@ export function useRouterStatus(userId: string | null) {
       ),
     enabled: userId !== null && userId !== "",
     staleTime: 30_000,
-  })
-}
-
-/** Record how well each candidate did, which is what the router later votes over. */
-export function useRankCandidates() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (body: RankCandidatesRequest) =>
-      apiFetch<RankCandidatesResponse>("/routing/preferences/rank", {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
-    onSuccess: () => {
-      // One more example may have crossed the seed count, which changes whether
-      // the policy routes at all.
-      void queryClient.invalidateQueries({ queryKey: [ROUTER_STATUS] })
-    },
   })
 }
 

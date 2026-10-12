@@ -44,8 +44,15 @@ class ReservationInFlightError(UserMergeError):
 class NameCollisionError(UserMergeError):
     def __init__(self, names: list[str]) -> None:
         super().__init__(
-            "Both users have a per-user alias or routing policy with the same name in one workspace: "
-            + ", ".join(sorted(names))
+            "Both users have a per-user alias, routing policy or provider endpoint with the same name in one "
+            "workspace: " + ", ".join(sorted(names))
+        )
+
+
+class EndUserCollisionError(UserMergeError):
+    def __init__(self, external_ids: list[str]) -> None:
+        super().__init__(
+            "Both users' service keys bill an end user with the same id: " + ", ".join(sorted(external_ids))
         )
 
 
@@ -70,6 +77,9 @@ async def merge_users(uow: UnitOfWork, repo: UserMergeRepository, *, source: Use
     collisions = await repo.named_collisions(source.user_id, target.user_id)
     if collisions:
         raise NameCollisionError(collisions)
+    end_user_collisions = await repo.end_user_collisions(source.user_id, target.user_id)
+    if end_user_collisions:
+        raise EndUserCollisionError(end_user_collisions)
 
     async with uow:
         moved = await repo.reassign(source.user_id, target.user_id)

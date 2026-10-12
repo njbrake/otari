@@ -16,15 +16,57 @@ from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, and_, case, func, or_, select
 
 from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
-from gateway.core.usage_source import UsageChannel, minted_key, not_served_here, usage_channel
 from gateway.models.api_keys import APIKey
 from gateway.models.money import MAX_USD_LIMIT
-from gateway.models.tenancy import Workspace
-from gateway.models.usage import UsageLog
+from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT, SERVED_HERE_SLUG, UsageLog
 from gateway.models.users import User
 
 # One WHERE condition over ``usage_logs``, as the reads pass them through the usage service.
 UsageCondition = ColumnElement[bool]
+
+# The way a request reached the usage log: usage imported through the external-events
+# ingest (rows this deployment did not serve), a message typed in the dashboard's
+# Playground, or a call to the API from somebody's own code.
+UsageChannel = Literal["imported", "playground", "api"]
+
+
+def minted_key(api_key_id: Any) -> ColumnElement[bool]:
+    """Match rows made under a key this deployment minted for itself (its ``internal_secret`` is set).
+
+    A set test rather than a lookup per row, so the planner reads the few minted
+    keys once. False, never NULL, for a row with no key, so its negation keeps that row.
+    """
+    minted = select(APIKey.id).where(APIKey.internal_secret.is_not(None))
+    return and_(api_key_id.is_not(None), api_key_id.in_(minted))
+
+
+def playground_traffic(endpoint: Any, minted: ColumnElement[bool]) -> ColumnElement[bool]:
+    """Match rows the dashboard's own Playground made, under either of its two shapes.
+
+    Where this deployment runs the completion itself, the row carries
+    ``PLAYGROUND_USAGE_ENDPOINT``. Where a hosted control plane forwards to its
+    data-plane gateway, the row is labeled like every other usage report and only
+    the credential tells it apart: ``minted`` says the row's key carries an
+    ``internal_secret``, however the caller reaches it (a join where the query
+    groups by it, :func:`minted_key` where it filters).
+    """
+    return or_(endpoint == PLAYGROUND_USAGE_ENDPOINT, minted)
+
+
+def usage_channel(source: Any, endpoint: Any, minted: ColumnElement[bool]) -> ColumnElement[str]:
+    """Which :data:`UsageChannel` a row came in by, the one rule the breakdown and the filter share.
+
+    ``minted`` is as :func:`playground_traffic` takes it.
+    """
+    imported: UsageChannel = "imported"
+    playground: UsageChannel = "playground"
+    api: UsageChannel = "api"
+    return case(
+        (source != SERVED_HERE_SLUG, imported),
+        (playground_traffic(endpoint, minted), playground),
+        else_=api,
+    )
+
 
 # The key ``UsageLog.billing_meters`` nests every tool meter under. Tool meters sit
 # under one reserved key rather than flat beside the token meters: MCP tool names
@@ -127,6 +169,16 @@ def tool_calls_expr(tool: str) -> Any:
     return UsageLog.billing_meters[(TOOL_METER_NAMESPACE, tool, "billed")].as_integer()
 
 
+def tag_expr(key: str) -> Any:
+    """The value of request tag ``key`` on a row, or null when the row does not carry it."""
+    return UsageLog.tags[key].as_string()
+
+
+def tag_conditions(tags: dict[str, list[str]]) -> list[ColumnElement[bool]]:
+    """One condition per tag key: values for one key match any of them, and different keys must all match."""
+    return [match_any(tag_expr(key), values) for key, values in tags.items()]
+
+
 def tool_used_condition(tool: str) -> ColumnElement[bool]:
     """Rows of requests that ran this gateway tool, or any tool for :data:`ANY_TOOL`.
 
@@ -214,7 +266,7 @@ def status_count(status: str) -> Any:
 
 def imported_cost_sum() -> Any:
     """The cost of the rows in scope this deployment did not serve: imported usage, never charged to a budget."""
-    return func.coalesce(func.sum(case((not_served_here(UsageLog.source), UsageLog.cost), else_=0)), 0.0)
+    return func.coalesce(func.sum(case((UsageLog.source != SERVED_HERE_SLUG, UsageLog.cost), else_=0)), 0.0)
 
 
 # The orders a page of usage rows can be read in, and which way.
@@ -423,7 +475,16 @@ class LabelJoin(NamedTuple):
 
 USER_LABEL = LabelJoin(entity=User, on=User.user_id == UsageLog.user_id, label=User.alias)
 API_KEY_LABEL = LabelJoin(entity=APIKey, on=APIKey.id == UsageLog.api_key_id, label=APIKey.key_name)
-WORKSPACE_LABEL = LabelJoin(entity=Workspace, on=Workspace.id == UsageLog.workspace_id, label=Workspace.name)
+
+# The row's API key, aliased so it never collides with the key label join, for the
+# credential half of the Playground rule. The channel breakdown groups by the channel,
+# so it reads the key through this join, where the channel filter only tests rows and
+# uses the set test ``minted_key``; only the channel breakdown, and the series split
+# by channel, join it.
+CHANNEL_KEY = APIKey.__table__.alias("row_key")
+
+# Which way a request reached the log, read through ``CHANNEL_KEY``.
+CHANNEL = usage_channel(UsageLog.source, UsageLog.endpoint, CHANNEL_KEY.c.internal_secret.is_not(None))
 
 
 # The aggregate reads are range-bounded, unlike the raw list. Absent a start_date

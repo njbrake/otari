@@ -753,6 +753,14 @@ describe("AppShell entitlement gating", () => {
       await screen.findByText("Deployment providers is not available here"),
     ).toBeInTheDocument()
     expect(screen.queryByText("PAGE CONTENT")).toBeNull()
+    // The sidebar is behind a menu on a phone, so the panel carries its own way
+    // out and its copy names the menu.
+    expect(
+      screen.getByText(/Choose another page from the menu/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Go to Overview" }),
+    ).toBeInTheDocument()
   })
 
   it("leaves an operator-only route to the page, whichever way the gate answers", async () => {
@@ -1142,13 +1150,15 @@ describe("AppShell entitlement gating", () => {
     // Shut to start. The panel stays mounted so it has a height to animate from,
     // but it is `hidden` and `aria-hidden` while shut, so its rows are reachable
     // by neither tab nor a screen reader until the group opens.
-    expect(screen.queryByRole("link", { name: "Web search" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Web search, Beta" })).toBeNull()
     expect(screen.getByText("Web search").closest("[hidden]")).not.toBeNull()
 
     await user.click(screen.getByRole("button", { name: "Tools" }))
-    expect(screen.getByRole("link", { name: "Web search" })).toBeInTheDocument()
     expect(
-      screen.getByRole("link", { name: "Code execution" }),
+      screen.getByRole("link", { name: "Web search, Beta" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: "Code execution, Beta" }),
     ).toBeInTheDocument()
   })
 
@@ -1161,7 +1171,9 @@ describe("AppShell entitlement gating", () => {
     expect(
       await screen.findByRole("button", { name: "Tools", expanded: true }),
     ).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Web search" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: "Web search, Beta" }),
+    ).toBeInTheDocument()
   })
 
   it("signs out from the account menu rather than the page header", async () => {
@@ -1426,10 +1438,10 @@ describe("AppShell entitlement gating", () => {
     await user.click(screen.getByRole("button", { name: "Tools" }))
 
     expect(
-      await screen.findByRole("link", { name: "Web search" }),
+      await screen.findByRole("link", { name: "Web search, Beta" }),
     ).toHaveAttribute("href", "/tools/web-search")
     expect(
-      screen.getByRole("link", { name: "Code execution" }),
+      screen.getByRole("link", { name: "Code execution, Beta" }),
     ).toBeInTheDocument()
   })
 

@@ -48,6 +48,7 @@ export function entry(overrides: Partial<UsageEntry> = {}): UsageEntry {
     status_code: null,
     latency_ms: 842,
     ttft_ms: null,
+    provider_latency_ms: null,
     source: "gateway",
     source_label: null,
     counts_toward_budget: true,

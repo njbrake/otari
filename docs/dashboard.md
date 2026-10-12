@@ -85,11 +85,7 @@ created. Set `activation_guide: false` to disable the flow for the deployment.
 The workspace view contains day-to-day gateway operations:
 
 - Overview, Activity, and Usage
-- Playground, Models, and Routing. Models is the catalog grouped by model: a
-  list of cards with a rail of filters beside it, and a page per model where
-  every offering of it is compared, one per provider, each with its own limits
-  and the price your organization is charged. It is read-only; a rate is set on
-  Providers.
+- Playground, Models, and Routing. Models is the catalog grouped by model: a list of cards with a rail of filters beside it, and a page per model where every offering of it is compared, each with its own limits and the price your organization is charged. Each row shows the provider's own model ID under the provider, which tells apart two offerings on one provider, such as Bedrock's regional inference profiles. It is read-only; a rate is set on Providers.
 - Tools
 - API keys and workspace members
 
@@ -105,13 +101,18 @@ The organization view contains tenant-wide administration:
   the runtime serves it. Each is priced by the first rung that answers, which is
   the order a request is metered by: this organization's own rate, then the
   deployment price list, then the community defaults. A model nothing prices is
-  offered and left unserved. Deployment providers is the process-wide credential
-  list, which a deployment operator manages and which is served to every
-  organization; it appears in standalone mode only.
+  offered and left unserved. Each key's row counts how many of its offered
+  models are serving, and a key serving none of them is marked, because every
+  request through it is refused until a switch is on. Deployment providers is
+  the process-wide credential list, which a deployment operator manages and
+  which is served to every organization; it appears in standalone mode only.
 
 Settings shows the effective non-secret configuration. Some values can be changed
 at runtime and others require a restart. The server marks that distinction in the
 settings response.
+Its Rate limit rules card adds, edits and removes limits on requests per minute,
+tokens per minute and requests in flight; rules from config.yml are listed there
+read-only.
 
 What a page shows can also depend on who is signed in, not only on the
 deployment. Spend and budgets is the clearest case: an organization owner or
@@ -128,6 +129,14 @@ and settles its upstream bill, so its rate is the deployment price list's, which
 is `/api/v1/pricing` and has no page of its own. The genai-prices defaults are
 likewise kept current through `/api/v1/pricing/refresh` rather than from the
 dashboard.
+
+A rate is per million tokens, per request, or per image, and the rate form asks
+which. A request or image rate is entered per 1,000, the way providers publish
+one: $2 per 1,000 searches for a rerank model is entered as 2 and stored as 2000
+per million, which is how every rate travels on the wire. The model lists name
+such a rate by its unit, for example "$0.002 per request". The same choice is on
+Activity's "Price this model", which opens per request for a rerank request and
+per image for an image generation.
 
 Exact page names and availability can change with deployment mode and installed
 extensions. The running dashboard is the source of truth.
@@ -150,6 +159,17 @@ talk to it, or put two side by side and record which answered better. Requests
 run through the same path as any other completion, so routing policies,
 guardrails, budgets and the tool loop all apply, and every request appears in
 Activity and Usage.
+
+A question can carry files. Attach them with the paperclip in the composer or
+drop them anywhere on the page; each uploads at once and shows as a chip with
+its name and size until the question is sent. The model reads them the way an
+API request's [uploaded files](files.md) are read, so a text-only local model is
+given their extracted text. When comparing, both models get the same files. A
+saved conversation remembers which files each question carried. Removing a
+chip takes the file off that question and keeps the upload: the Files dialog
+lists everything you uploaded in the workspace, to attach again or to delete.
+These controls appear only where the deployment stores files: not when file
+uploads are off, and not on a hosted control plane.
 
 Two things are worth knowing about how it is billed and what it stores.
 
@@ -240,13 +260,7 @@ workspace roles. Deployment-wide operations require an operator. See
 
 ## Authentication options
 
-Password sign-in is tied to an existing identity, unless the deployment sets
-`open_signup: true`, which lets an unknown address register itself with an
-organization of its own. Optional passkeys, Google OAuth, and GitHub OAuth add
-ways for an existing identity to sign in; they do not make an unknown account a
-member. OAuth requires `public_base_url` plus the
-provider's client ID and secret. Passkeys can instead use `public_base_url`, or
-an explicit `webauthn_rp_id` and `webauthn_allowed_origins` pair.
+Password sign-in works for an existing account. Optional passkeys, Google OAuth and GitHub OAuth add more ways to sign in. Set `passkeys_enabled: false` (`OTARI_PASSKEYS_ENABLED`) to switch passkeys off entirely. When the deployment sets `open_signup: true`, a new address can also create an account with its own organization, through the signup form or a Google or GitHub sign-in. A passkey never creates an account. OAuth requires `public_base_url` plus the provider's client ID and secret. Passkeys can instead use `public_base_url`, or an explicit `webauthn_rp_id` and `webauthn_allowed_origins` pair.
 
 Signing in *can* add a membership in one case. If an organization has claimed and
 proven the email domain that the identity's verified address belongs to, the
@@ -255,8 +269,8 @@ the three credentials they used. It is the only path that grants membership
 without somebody deciding about the person, and it is fenced accordingly: see
 [Email-domain auto-join](access-control.md#email-domain-auto-join).
 
-Mail is optional. Inviting a member always gives you an accept link to share,
-and an invitee who has never signed in chooses a password on the page it opens,
+Mail is optional. When an invitation email does not go out, you get the accept link to share,
+and an invitee new to the deployment chooses a password on the page it opens,
 so a deployment without SMTP can still bring people in. See [Configuration](configuration.md#mail).
 For an account that already exists, an operator can generate a password instead:
 **Accounts**, then **Set password**, shows it once to hand over.

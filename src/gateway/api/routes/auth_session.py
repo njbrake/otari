@@ -48,13 +48,21 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import get_config, get_db, is_valid_master_key, record_auth_failure
+from gateway.api.deps import (
+    MembershipListenerDep,
+    UnitOfWorkDep,
+    WorkspaceListenerDep,
+    get_config,
+    get_db,
+    is_valid_master_key,
+    record_auth_failure,
+)
 from gateway.core.config import GatewayConfig
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.identity_exceptions import EmailNotVerifiedError, InvalidCredentialsError
 from gateway.log_config import logger
 from gateway.models.tenancy import User as TenancyUser
 from gateway.rate_limit import RateLimiter
-from gateway.services.budgets import WorkspaceBudgetDefaultService
 from gateway.services.dashboard_session_service import (
     SESSION_COOKIE_NAME,
     apply_session_cookie,
@@ -66,9 +74,11 @@ from gateway.services.dashboard_session_service import (
 from gateway.services.maintenance_mode_service import is_maintenance_mode
 from gateway.services.password_service import MAX_PASSWORD_BYTES
 from gateway.services.tenancy.email_address import MAX_EMAIL_LENGTH
+from gateway.services.tenancy.membership_listener import MembershipListener
 from gateway.services.tenancy.organization_domain_service import OrganizationDomainService
 from gateway.services.tenancy.provisioning_service import ensure_bootstrap_identity
 from gateway.services.tenancy.user_service import authenticate, operator_has_password
+from gateway.services.tenancy.workspace_listener import WorkspaceListener
 
 router = APIRouter(prefix="/auth/session", tags=["auth"])
 
@@ -200,7 +210,14 @@ def _check_login_rate_limit(request: Request) -> None:
 
 
 async def _sign_in_with_master_key(
-    master_key: str, request: Request, db: AsyncSession, config: GatewayConfig
+    master_key: str,
+    request: Request,
+    db: AsyncSession,
+    config: GatewayConfig,
+    *,
+    uow: UnitOfWork,
+    membership_listener: MembershipListener,
+    workspace_listener: WorkspaceListener,
 ) -> TenancyUser:
     """Bootstrap sign-in: verify the master key and resolve the operator identity.
 
@@ -226,7 +243,12 @@ async def _sign_in_with_master_key(
     # Provisions the tenancy root on a first-ever sign-in, and resolves the same
     # operator every time after that. It commits its own work, which is why it
     # runs before the session row is staged rather than beside it.
-    return await ensure_bootstrap_identity(db, membership_listener=WorkspaceBudgetDefaultService(db))
+    return await ensure_bootstrap_identity(
+        db,
+        uow=uow,
+        membership_listener=membership_listener,
+        workspace_listener=workspace_listener,
+    )
 
 
 async def _sign_in_with_password(email: str, password: str, request: Request, db: AsyncSession) -> TenancyUser:
@@ -261,6 +283,9 @@ async def create_session(
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
+    uow: UnitOfWorkDep,
+    membership_listener: MembershipListenerDep,
+    workspace_listener: WorkspaceListenerDep,
 ) -> SessionResponse:
     """Verify a sign-in credential and set the HttpOnly session cookie.
 
@@ -303,7 +328,15 @@ async def create_session(
             detail=MAINTENANCE_MODE_REFUSAL,
         )
     if body.master_key is not None:
-        identity = await _sign_in_with_master_key(body.master_key, request, db, config)
+        identity = await _sign_in_with_master_key(
+            body.master_key,
+            request,
+            db,
+            config,
+            uow=uow,
+            membership_listener=membership_listener,
+            workspace_listener=workspace_listener,
+        )
     else:
         assert body.email is not None and body.password is not None  # guaranteed by the model validator
         identity = await _sign_in_with_password(body.email, body.password, request, db)

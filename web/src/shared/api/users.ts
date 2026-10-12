@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
-  CreateUserRequest,
   MergeUserRequest,
   MergeUserResult,
   UpdateUserRequest,
@@ -31,18 +30,6 @@ function invalidateUserViews(
   void queryClient.invalidateQueries({ queryKey: [BUDGETS] })
 }
 
-export function useCreateUser() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (body: CreateUserRequest) =>
-      apiFetch<User>("/users", {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
-    onSuccess: () => invalidateUserViews(queryClient),
-  })
-}
-
 export function useUpdateUser() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -52,21 +39,6 @@ export function useUpdateUser() {
         body: JSON.stringify(body),
       }),
     onSuccess: () => invalidateUserViews(queryClient),
-  })
-}
-
-export function useDeleteUser() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (id: string) =>
-      apiFetch<void>(`/users/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      }),
-    onSuccess: () => {
-      invalidateUserViews(queryClient)
-      // Deleting a user deactivates its keys server-side.
-      void queryClient.invalidateQueries({ queryKey: [KEYS] })
-    },
   })
 }
 

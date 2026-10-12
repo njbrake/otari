@@ -1,5 +1,7 @@
 """OpenAI-compatible audio transcription and speech endpoints."""
 
+import io
+import mimetypes
 from decimal import Decimal
 from typing import Annotated, Any
 
@@ -41,6 +43,21 @@ _SPEECH_CONTENT_TYPES: dict[str | None, str] = {
 }
 
 
+def _named_audio(data: bytes, upload: UploadFile) -> io.BytesIO:
+    """Wrap an upload so providers see its file name and type.
+
+    OpenAI-style upstreams infer the audio format from the multipart file name;
+    bare bytes arrive nameless and are rejected as an unsupported format.
+    """
+    name = upload.filename
+    if not name:
+        extension = mimetypes.guess_extension(upload.content_type or "") or ".mp3"
+        name = f"audio{extension}"
+    named = io.BytesIO(data)
+    named.name = name
+    return named
+
+
 @router.post("/audio/transcriptions", response_model=None)
 async def create_transcription(
     raw_request: Request,
@@ -75,7 +92,7 @@ async def create_transcription(
 
         transcription_kwargs: dict[str, Any] = {
             "model": resolved.model,
-            "file": file_bytes,
+            "file": _named_audio(file_bytes, file),
             "provider": resolved.provider,
             **resolved.kwargs,
         }
@@ -118,6 +135,16 @@ async def create_transcription(
         model=model,
         user=user,
         call_provider=call_provider,
+        request_params=[
+            name
+            for name, value in (
+                ("language", language),
+                ("prompt", prompt),
+                ("response_format", response_format),
+                ("temperature", temperature),
+            )
+            if value is not None
+        ],
         lookup_pricing=True,
         pricing_use_defaults=False,
         reserve_before_resolve=True,
@@ -220,6 +247,7 @@ async def create_speech(
         model=request.model,
         user=request.user,
         call_provider=call_provider,
+        request_params=request.model_fields_set,
         lookup_pricing=True,
         pricing_use_defaults=False,
         reserve_before_resolve=True,

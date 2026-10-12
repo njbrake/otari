@@ -55,6 +55,26 @@ def test_transcription_with_api_key(
     assert data["text"] == "Hello, world!"
 
 
+def test_transcription_forwards_file_name(
+    client: TestClient,
+    api_key_header: dict[str, str],
+) -> None:
+    """The provider receives the upload's name and bytes, not anonymous bytes."""
+    mock = AsyncMock(return_value=_mock_transcription_response())
+    with patch("gateway.api.routes.audio.atranscription", mock):
+        resp = client.post(
+            f"{API_ROOT}/audio/transcriptions",
+            files={"file": ("clip.m4a", b"audio-data", "audio/mp4")},
+            data={"model": "openai:whisper-1"},
+            headers=api_key_header,
+        )
+    assert resp.status_code == 200
+    assert mock.await_args is not None
+    sent = mock.await_args.kwargs["file"]
+    assert sent.name == "clip.m4a"
+    assert sent.read() == b"audio-data"
+
+
 def test_transcription_master_key_requires_user(
     client: TestClient,
     master_key_header: dict[str, str],
@@ -553,3 +573,27 @@ def test_transcription_ignores_genai_prices_defaults(
     assert latest["cost"] == 0.0
     assert latest["billing_meters"] is None
     assert latest["pricing_breakdown"] is None
+
+
+@pytest.mark.parametrize(("form", "expected_status"), [({"language": "en"}, 400), ({}, 502)])
+def test_transcription_param_the_provider_sdk_refuses(
+    client: TestClient,
+    api_key_header: dict[str, str],
+    form: dict[str, str],
+    expected_status: int,
+) -> None:
+    """A form field the caller sent and the SDK refuses is named in a 400; the same refusal of a field the
+    caller never sent stays the gateway's 502."""
+    with patch(
+        "gateway.api.routes.audio.atranscription",
+        new_callable=AsyncMock,
+        side_effect=TypeError("transcribe() got an unexpected keyword argument 'language'"),
+    ):
+        resp = client.post(
+            f"{API_ROOT}/audio/transcriptions",
+            files={"file": ("test.mp3", b"audio-data", "audio/mpeg")},
+            data={"model": "openai:whisper-1", **form},
+            headers=api_key_header,
+        )
+    assert resp.status_code == expected_status
+    assert ("'language'" in resp.json()["detail"]) is (expected_status == 400)

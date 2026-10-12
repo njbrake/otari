@@ -65,6 +65,7 @@ from gateway.services.secret_box import (
 )
 from gateway.services.tenancy import authorization
 from gateway.services.tenancy.organization_service import OrganizationService
+from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 from gateway.services.url_safety import UnsafeURLError, redact_url_secrets, validate_mcp_url
 
 # What a workspace may configure. A resolved request opens a session to every
@@ -213,7 +214,7 @@ class WorkspaceMcpServersPublic(BaseModel):
 async def _validate_url(url: str, *, has_token: bool) -> None:
     """Run the same SSRF/TLS check a request-body MCP server faces, at write time.
 
-    Checked here as well as on the request path (`_validate_mcp_server_urls`)
+    Checked here as well as on the request path (`services/tools/_mcp_admission.py`)
     rather than instead of it: this catches an operator's mistake at the moment
     they make it, and the request-path check is what still holds when DNS moves
     under a URL that was safe when it was stored.
@@ -306,7 +307,7 @@ async def resolve_workspace_mcp_server(
     disabled server instead of skipping it, because a disabled server is a
     named 404 here rather than one entry quietly missing from a list; and it
     returns the id, so a revision can be derived over the configuration that
-    was actually resolved (R-RES-3).
+    was actually resolved.
 
     ``None`` means no such server *in this workspace*, which covers an id
     belonging to another one: the same non-oracle answer the plural resolver
@@ -343,7 +344,9 @@ class WorkspaceMcpServerService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.organizations = OrganizationService(db, membership_listener=None)
+        self.organizations = OrganizationService(
+            db, membership_listener=None, workspace_listener=NullWorkspaceListener()
+        )
 
     async def _require_management(self, user: User, workspace_id: uuid.UUID) -> uuid.UUID:
         """Resolve the workspace and confirm the caller may manage it.

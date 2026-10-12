@@ -23,28 +23,32 @@ execution path and the gateway has nothing to dispatch against.
 from __future__ import annotations
 
 import json
-import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from any_llm import aresponses
-from openai.types.responses import ResponseCodeInterpreterToolCall
-from openai.types.responses.response_code_interpreter_tool_call import OutputImage, OutputLogs
 from openai.types.responses.response_output_item_added_event import ResponseOutputItemAddedEvent
 from openai.types.responses.response_output_item_done_event import ResponseOutputItemDoneEvent
 
 from gateway.log_config import logger
-from gateway.services._tool_loop import StreamAction, run_tool_loop, run_tool_loop_stream
-from gateway.services.files import guess_mime_type
+from gateway.services._tool_loop import (
+    StreamAction,
+    log_tool_failure,
+    run_tool_loop,
+    run_tool_loop_stream,
+    tool_failure_detail,
+)
+from gateway.services.inference import call_responses
 from gateway.services.mcp_loop import (
     DEFAULT_MAX_TOOL_ITERATIONS,
     MAX_TOOL_ITERATIONS_CAP,
     MaxToolIterationsExceeded,
     ToolBackend,
 )
-from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME, CodeExecution
+from gateway.services.providers import aresponses
 from gateway.services.tool_format import openai_to_responses_tools
+from gateway.services.tool_usage import is_tool_error
 from gateway.services.tools import (
     MAX_USES_EXCEEDED_ERROR,
     Dialect,
@@ -95,24 +99,28 @@ async def _execute_function_calls(
     items: list[Any],
     *,
     budget: ToolUseBudget | None = None,
-    refused_call_ids: set[str] | None = None,
+    native_items: list[Any] | None = None,
+    tools: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Run each owned function_call and return the Responses function_call_output items.
 
     Tool failures convert to a ``[tool error] ...`` string in the output so the
     model can recover. Only cancellation-class exceptions escape; same idiom
     as :func:`gateway.services.mcp_loop._execute_mcp_calls`. A call past ``budget``
-    is refused as one of those errors. When supplied, ``refused_call_ids`` records
-    that decision at its source, so a tool announces a refused call the way its own
-    rendering says to rather than as one that ran.
+    is refused as one of those errors.
+
+    When ``native_items`` is given, each call appends the native items announcing it
+    right after it ran, so they keep the order the calls ran in and a rendering that
+    reads a backend's buffer reads only that call's entries.
     """
     out: list[dict[str, Any]] = []
     for item in items:
         args = _parsed_arguments(item.arguments)
+        call = NativeCall(str(item.name or ""), str(item.call_id or ""), args)
         capped = is_capped_call(budget, pool, item.name)
         if capped and budget is not None and budget.exhausted():
-            if refused_call_ids is not None:
-                refused_call_ids.add(str(item.call_id))
+            if native_items is not None:
+                native_items.extend(_native_items(call, pool, tools, refused=True))
             out.append({"type": "function_call_output", "call_id": item.call_id, "output": MAX_USES_EXCEEDED_ERROR})
             continue
         try:
@@ -120,11 +128,14 @@ async def _execute_function_calls(
         except MaxToolIterationsExceeded:
             raise
         except Exception as exc:  # noqa: BLE001 — see docstring
-            logger.warning("MCP tool %s execution failed: %s", item.name, exc)
-            text = f"[tool error] {exc}"
+            detail = tool_failure_detail(pool, item.name)
+            log_tool_failure(item.name, detail, exc)
+            text = f"[tool error] {detail}"
         else:
             if capped and budget is not None:
                 budget.record(text)
+        if native_items is not None:
+            native_items.extend(_native_items(replace(call, failed=is_tool_error(text)), pool, tools, refused=False))
         out.append({"type": "function_call_output", "call_id": item.call_id, "output": text})
     return out
 
@@ -202,58 +213,6 @@ def _reoutput_indexed(event: Any, visible_index: int) -> Any:
     return event.model_copy(update={"output_index": visible_index})
 
 
-# The gateway's own ``code_interpreter_call`` item ids. OpenAI issues ``ci_``
-# ids, so a reserved prefix is what lets an echoed item be told apart from one
-# describing a run OpenAI's own interpreter did (see ``routes/responses.py``).
-CODE_INTERPRETER_CALL_ID_PREFIX = "otari_ci_"
-
-
-def _produced_image_outputs(execution: CodeExecution, files_base_url: str | None) -> list[OutputImage]:
-    """``image`` outputs for the images a run produced, in the caller's vocabulary.
-
-    OpenAI's only shape for a produced file here is a URL, so an image is
-    announced as the address Otari serves it from and anything else is left to
-    the files API, where every produced file is listed and downloadable by id.
-    """
-    if not files_base_url:
-        return []
-    return [
-        OutputImage(type="image", url=f"{files_base_url}/{file_id}/content")
-        for filename, file_id in execution.file_ids.items()
-        if guess_mime_type(filename).startswith("image/")
-    ]
-
-
-def _code_interpreter_call_item(
-    execution: CodeExecution, container_id: str, files_base_url: str | None = None
-) -> ResponseCodeInterpreterToolCall:
-    """The Responses API's native "the server ran code" output item, for one gateway execution.
-
-    Emitted for a caller that declared ``code_interpreter`` and whose request the
-    gateway's sandbox ran instead. ``outputs`` carries the run's logs, which is
-    what OpenAI's interpreter reports too, and an ``image`` entry per produced
-    image (see :func:`_produced_image_outputs`).
-    """
-    outputs: list[OutputLogs | OutputImage] | None = None
-    status: str = "failed"
-    if execution.result is not None:
-        result = execution.result.content
-        logs = "".join(part for part in (result.stdout, result.stderr) if part)
-        outputs = [OutputLogs(type="logs", logs=logs)] if logs else None
-        images = _produced_image_outputs(execution, files_base_url)
-        if images:
-            outputs = [*(outputs or []), *images]
-        status = "completed" if result.return_code in (None, 0) else "failed"
-    return ResponseCodeInterpreterToolCall(
-        id=f"{CODE_INTERPRETER_CALL_ID_PREFIX}{uuid.uuid4().hex}",
-        code=execution.code,
-        container_id=container_id,
-        outputs=outputs,
-        status=status,  # type: ignore[arg-type]
-        type="code_interpreter_call",
-    )
-
-
 def _parsed_arguments(raw: Any) -> dict[str, Any]:
     """The call's arguments, empty where the model sent something unusable."""
     try:
@@ -276,40 +235,6 @@ def _native_items(call: NativeCall, pool: ToolBackend, tools: frozenset[str], *,
     if rendering is None:
         return []
     return rendering.refused(call) if refused else rendering.ran(call, pool)
-
-
-def _native_items_for(
-    owned: list[Any],
-    pool: ToolBackend,
-    refused_call_ids: set[str] | None = None,
-    *,
-    tools: frozenset[str] = frozenset(),
-) -> list[Any]:
-    """Native items for the gateway-run calls among ``owned`` whose tool ``tools`` names.
-
-    ``code_execution`` maps to a ``code_interpreter_call``, read off the executions the
-    sandbox backend kept for the calls just awaited rather than off the calls themselves.
-    """
-    items: list[Any] = []
-    for item in owned:
-        call = NativeCall(
-            str(getattr(item, "name", "") or ""),
-            str(getattr(item, "call_id", "") or ""),
-            _parsed_arguments(getattr(item, "arguments", "")),
-        )
-        items.extend(_native_items(call, pool, tools, refused=bool(refused_call_ids and call.id in refused_call_ids)))
-    items.extend(_code_interpreter_items(pool, emit=CODE_EXECUTION_TOOL_NAME in tools))
-    return items
-
-
-def _code_interpreter_items(pool: ToolBackend, *, emit: bool) -> list[ResponseCodeInterpreterToolCall]:
-    """``code_interpreter_call`` items for the executions the backend kept, when asked."""
-    take_executions = getattr(pool, "take_executions", None)
-    if not emit or take_executions is None:
-        return []
-    container_id = str(getattr(pool, "container_id", "") or "")
-    files_base_url = getattr(pool, "files_base_url", None)
-    return [_code_interpreter_call_item(execution, container_id, files_base_url) for execution in take_executions()]
 
 
 def _compaction_items(output: list[Any]) -> list[Any]:
@@ -355,14 +280,14 @@ async def _execute_stream_owned(
         except MaxToolIterationsExceeded:
             raise
         except Exception as exc:  # noqa: BLE001 (same tool-error-as-message idiom as the non-stream loop)
-            logger.warning("MCP tool %s execution failed: %s", call.name, exc)
-            text = f"[tool error] {exc}"
+            detail = tool_failure_detail(pool, call.name)
+            log_tool_failure(call.name, detail, exc)
+            text = f"[tool error] {detail}"
         else:
             if capped and budget is not None:
                 budget.record(text)
-        state.native_items.extend(_native_items(call, pool, tools, refused=False))
+        state.native_items.extend(_native_items(replace(call, failed=is_tool_error(text)), pool, tools, refused=False))
         results.append({"type": "function_call_output", "call_id": call.id, "output": text})
-    state.code_interpreter_items.extend(_code_interpreter_items(pool, emit=CODE_EXECUTION_TOOL_NAME in tools))
     return results
 
 
@@ -375,38 +300,35 @@ def _hidden_call_ids(state: "_ResponsesStreamState") -> set[str]:
     }
 
 
-def _without_output_items(event: Any, call_ids: set[str]) -> Any:
-    """Return a ``response.completed`` event with the named function calls removed."""
-    response_obj = getattr(event, "response", None)
-    output = getattr(response_obj, "output", None)
-    if response_obj is None or not output:
-        return event
-    kept = [
-        item
-        for item in output
-        if not (getattr(item, "type", None) == "function_call" and getattr(item, "call_id", None) in call_ids)
-    ]
-    if len(kept) == len(output):
-        return event
-    try:
-        return event.model_copy(update={"response": response_obj.model_copy(update={"output": kept})})
-    except (AttributeError, TypeError):
-        logger.warning("Could not filter gateway function_call items from response.completed")
-        return event
+def _with_output_as_shown(event: Any, state: "_ResponsesStreamState", shown: dict[int, Any]) -> Any:
+    """Return a terminal response whose ``output`` is what the stream showed, in ``output_index`` order.
 
-
-def _prepend_output_items(event: Any, items: list[Any]) -> Any:
-    """Prepend hidden-iteration output items to a terminal response."""
-    if not items:
-        return event
+    The final round's items keep the upstream response's own objects, placed at the
+    index each was shown under: an item's ``output_index`` is its position in that
+    response's ``output``. The gateway's own calls stay out, and an item the stream
+    never showed goes after the rest.
+    """
     response_obj = getattr(event, "response", None)
     if response_obj is None:
         return event
+    hidden_call_ids = _hidden_call_ids(state)
+    placed = dict(shown)
+    unshown: list[Any] = []
+    for raw_index, item in enumerate(getattr(response_obj, "output", None) or []):
+        if raw_index in state.hidden_output_indices or (
+            getattr(item, "type", None) == "function_call" and getattr(item, "call_id", None) in hidden_call_ids
+        ):
+            continue
+        visible_index = state.visible_output_index.get(raw_index)
+        if visible_index is None:
+            unshown.append(item)
+        else:
+            placed[visible_index] = item
+    output = [item for _, item in sorted(placed.items())] + unshown
     try:
-        output = list(items) + list(getattr(response_obj, "output", None) or [])
         return event.model_copy(update={"response": response_obj.model_copy(update={"output": output})})
     except (AttributeError, TypeError):
-        logger.warning("Could not add hidden Responses output items to response.completed")
+        logger.warning("Could not set the shown Responses output items on response.completed")
         return event
 
 
@@ -422,7 +344,6 @@ class _ResponsesStreamState:
         # Native items for this iteration's gateway-run calls, minted right after
         # each call ran and drained by ``synthetic_events``.
         self.native_items: list[Any] = []
-        self.code_interpreter_items: list[ResponseCodeInterpreterToolCall] = []
         # Output items the gateway runs itself. Their events are swallowed: the
         # client can never be sent a ``function_call_output`` for a call the
         # gateway consumed, so showing it the call is a dead end.
@@ -459,7 +380,7 @@ class _ResponsesToolLoopStrategy:
     # ---- non-streaming hooks ----
 
     async def call(self, kwargs: dict[str, Any]) -> Response:
-        result: Response = await aresponses(**kwargs)  # type: ignore[assignment]
+        result: Response = await call_responses(aresponses, kwargs)
         return result
 
     def new_usage_accumulator(self) -> dict[str, Any]:
@@ -502,11 +423,13 @@ class _ResponsesToolLoopStrategy:
         # Mixed-batch exit: the owned subset runs for its side effects. Collect
         # its native items too, since ``fold_usage`` runs on that path and
         # prepends them, so the caller still sees the search or run it paid for.
-        refused_call_ids: set[str] = set()
-        outputs = await _execute_function_calls(pool, owned, budget=self._budget, refused_call_ids=refused_call_ids)
-        if acc is not None:
-            acc["native_items"].extend(_native_items_for(owned, pool, refused_call_ids, tools=self._native_tools))
-        return outputs
+        return await _execute_function_calls(
+            pool,
+            owned,
+            budget=self._budget,
+            native_items=acc["native_items"] if acc is not None else None,
+            tools=self._native_tools,
+        )
 
     def filter_owned(self, result: Response, owned: list[Any], pool: ToolBackend) -> None:
         # Mixed batch: the owned subset was executed for its side effects;
@@ -542,22 +465,21 @@ class _ResponsesToolLoopStrategy:
         # compaction item on every continuation.
         output = list(result.output or [])
         transcript.extend(_items_to_dicts(_replay_items(output, owned)))
-        refused_call_ids: set[str] = set()
         outputs = await _execute_function_calls(
             pool,
             owned,
             budget=self._budget,
-            refused_call_ids=refused_call_ids,
+            native_items=acc["native_items"] if acc is not None else None,
+            tools=self._native_tools,
         )
         transcript.extend(outputs)
         if acc is not None:
             acc["compactions"].extend(_compaction_items(output))
-            acc["native_items"].extend(_native_items_for(owned, pool, refused_call_ids, tools=self._native_tools))
 
     # ---- streaming hooks ----
 
     async def open_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[ResponseStreamEvent]:
-        stream: AsyncIterator[ResponseStreamEvent] = await aresponses(**kwargs)  # type: ignore[assignment]
+        stream: AsyncIterator[ResponseStreamEvent] = await call_responses(aresponses, kwargs)
         return stream
 
     def new_stream_state(self) -> _ResponsesStreamState:
@@ -582,10 +504,12 @@ class _ResponsesToolLoopStrategy:
             "started": 0,
             "next_sequence": 0,
             "next_output_index": 0,
-            "compactions": [],
-            # The native items announced mid-stream, kept so the terminal
-            # ``response.completed`` lists what the client already saw.
-            "native_items": [],
+            # Every item the client was shown, by the output index it was shown at,
+            # and whether the loop changed the stream at all. The terminal
+            # ``response.completed`` lists the shown items in that order, so it agrees
+            # with the item events the client already accumulated.
+            "shown_items": {},
+            "rewritten": False,
         }
 
     def observe(
@@ -657,7 +581,12 @@ class _ResponsesToolLoopStrategy:
             return StreamAction.DEFER, event
         visible = event
         if isinstance(raw_index, int):
-            visible = _reoutput_indexed(event, self._visible_output_for(state, acc, raw_index))
+            visible_index = self._visible_output_for(state, acc, raw_index)
+            visible = _reoutput_indexed(event, visible_index)
+            shown = getattr(event, "item", None)
+            if shown is not None and etype in {"response.output_item.added", "response.output_item.done"}:
+                # The done event's item replaces the added snapshot.
+                acc["shown_items"][visible_index] = shown
         return StreamAction.FORWARD, self._resequenced(visible, acc)
 
     @staticmethod
@@ -721,9 +650,12 @@ class _ResponsesToolLoopStrategy:
         # the gateway's own function_call items even though their item events were
         # hidden. Left in, ``get_final_response()`` would contradict the stream the
         # client just accumulated, and hand it a call it cannot dispatch.
-        hidden = _hidden_call_ids(state)
-        folded = _without_output_items(state.deferred_completed, hidden) if hidden else state.deferred_completed
-        folded = _prepend_output_items(folded, [*acc["compactions"], *acc.get("native_items", [])])
+        if acc["rewritten"] or state.hidden_output_indices:
+            # Earlier rounds' items and the native items were shown at the indices the
+            # client holds them under, which the final upstream response knows nothing of.
+            folded = _with_output_as_shown(state.deferred_completed, state, acc["shown_items"])
+        else:
+            folded = state.deferred_completed
         folded = _maybe_fold_response_completed_usage(folded, acc["output_tokens"])
         # The terminal event is the last thing the client sees, so it continues the
         # same sequence as the events forwarded before it.
@@ -732,12 +664,12 @@ class _ResponsesToolLoopStrategy:
     def accumulate_stream_usage(self, acc: dict[str, Any], state: _ResponsesStreamState) -> None:
         # All-owned continuation: fold this iteration's output_tokens from the
         # dropped ``response.completed`` event into the running total.
+        acc["rewritten"] = True
         if state.deferred_completed is not None:
             iter_response = getattr(state.deferred_completed, "response", None)
             iter_usage = getattr(iter_response, "usage", None) if iter_response is not None else None
             if iter_usage is not None:
                 acc["output_tokens"] += getattr(iter_usage, "output_tokens", 0) or 0
-        acc["compactions"].extend(state.compaction_items[index] for index in sorted(state.compaction_items))
 
     def synthetic_events(self, state: _ResponsesStreamState, acc: dict[str, Any]) -> list[ResponseStreamEvent]:
         """Announce this iteration's gateway-run calls in the Responses API's own vocabulary.
@@ -747,13 +679,13 @@ class _ResponsesToolLoopStrategy:
         minted where the calls ran, since this hook holds no backend to read them from.
         """
         events: list[ResponseStreamEvent] = []
-        items = [*state.native_items, *state.code_interpreter_items]
+        items = state.native_items
         state.native_items = []
-        state.code_interpreter_items = []
-        acc.setdefault("native_items", []).extend(items)
         for item in items:
             output_index = acc["next_output_index"]
             acc["next_output_index"] += 1
+            acc["shown_items"][output_index] = item
+            acc["rewritten"] = True
             for event_cls, event_type in (
                 (ResponseOutputItemAddedEvent, "response.output_item.added"),
                 (ResponseOutputItemDoneEvent, "response.output_item.done"),

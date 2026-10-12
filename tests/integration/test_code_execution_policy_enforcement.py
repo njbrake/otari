@@ -27,6 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from gateway.core.config import API_ROOT
+from gateway.services.tools import WorkspaceCodeExecutionPolicies
 
 _SANDBOX_URL = "http://127.0.0.1:9999/sandbox"
 _REQUEST = {
@@ -416,10 +417,7 @@ def test_a_policy_read_that_fails_releases_the_budget_reservation(
     async def failing_resolve(*_args: Any, **_kwargs: Any) -> None:
         raise SQLAlchemyError("connection lost mid-admission")
 
-    monkeypatch.setattr(
-        "gateway.api.routes._pipeline.resolve_workspace_code_execution_policy",
-        failing_resolve,
-    )
+    monkeypatch.setattr(WorkspaceCodeExecutionPolicies, "resolve", failing_resolve)
     # TestClient re-raises a server exception rather than rendering a 500, so the
     # failure arrives here; what matters is the state it left behind.
     with pytest.raises(SQLAlchemyError):
@@ -446,7 +444,7 @@ def test_an_unresolvable_workspace_refuses_rather_than_running_the_sandbox(
     this, and `resolve_workspace_id` always answers, falling back to the default
     workspace. It is pinned anyway because the arm guards a veto, so falling
     through would hand code execution to a workspace whose row refuses it, with
-    nothing to notice. `_resolve_mcp_server_ids` refuses at the same condition.
+    nothing to notice. The MCP server adapter's `resolve_many` refuses at the same condition.
     """
     monkeypatch.setenv("OTARI_SANDBOX_URL", _SANDBOX_URL)
 

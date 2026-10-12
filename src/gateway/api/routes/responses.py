@@ -2,7 +2,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any
 
-from any_llm import AnyLLM, LLMProvider, aresponses
+from any_llm import LLMProvider
 from any_llm.types.completion import CompletionUsage
 from any_llm.types.responses import Response as ResponsesResponse
 from any_llm.types.responses import ResponsesParams, ResponseStreamEvent
@@ -14,11 +14,9 @@ from pydantic import ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
-    CodeExecutionPortDep,
-    McpServerPortDep,
     ModelProviderPortDep,
     OptionalFileServiceDep,
-    WebSearchPolicyPortDep,
+    ToolPortsDep,
     build_sandbox_container_registry,
     build_sandbox_file_bridge,
     get_config,
@@ -31,7 +29,6 @@ from gateway.api.routes._idempotency import IdempotencyGuardDep, IdempotentRepla
 from gateway.api.routes._normalize import normalize_request_messages, sandbox_requested
 from gateway.api.routes._pipeline import (
     NO_RESOLVABLE_PROVIDER_DETAIL,
-    PROVIDER_ERROR_DETAIL,
     DeclaredTools,
     ErrorKind,
     ToolBackends,
@@ -40,6 +37,7 @@ from gateway.api.routes._pipeline import (
     classify_provider_error,
     prepare_gateway_tools,
     provider_error_headers,
+    provider_failure_detail,
     raise_all_streaming_attempts_failed,
     release_reservation,
     resolve_dispatch_provider,
@@ -49,28 +47,37 @@ from gateway.api.routes._pipeline import (
     run_standalone_non_stream,
     run_streaming_with_fallback,
     scope_prompt_cache_key,
+    stream_error_code,
+    stream_error_message,
 )
-from gateway.api.routes._platform import ResolvedAttempt, SettledCost, build_attempt_client_args
+from gateway.api.routes._platform import ResolvedAttempt, SettledCost, build_attempt_client_args, with_retry_hint
+from gateway.api.routes._request_tags import RequestMetadata, forwarded_metadata, request_tags
 from gateway.api.routes._schema_derive import SESSION_LABEL_DESC, SESSION_LABEL_MAX_LENGTH, derive_request_base
-from gateway.api.routes._tools import CODE_EXECUTION_HEADER, WEB_SEARCH_HEADER, _strip_gateway_fields
+from gateway.api.routes._tools import _strip_gateway_fields
 from gateway.core.config import GatewayConfig
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage import GatewayUsage
-from gateway.log_config import logger
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
 from gateway.services.files import StagedFile
+from gateway.services.inference import call_responses, serves_responses, strip_gateway_minted_items
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import ToolBackend
 from gateway.services.mcp_loop_responses import (
-    CODE_INTERPRETER_CALL_ID_PREFIX,
     MAX_TOOL_ITERATIONS_CAP,
     responses_tool_loop,
     responses_tool_loop_stream,
 )
+from gateway.services.provider_kwargs import apply_endpoint_defaults
+from gateway.services.providers import aresponses
 from gateway.services.tool_format import inject_purpose_hints_responses, openai_to_responses_tools
-from gateway.services.tools import Dialect, ToolUseBudget
-from gateway.streaming import RESPONSES_STREAM_FORMAT, StreamFormat
+from gateway.services.tools import (
+    CODE_EXECUTION_HEADER,
+    WEB_SEARCH_HEADER,
+    Dialect,
+    ToolUseBudget,
+)
+from gateway.streaming import RESPONSES_STREAM_FORMAT, StreamFormat, openai_error_event
 from gateway.types.attempt import Attempt
 from gateway.types.normalization_target import NormalizationTarget
 
@@ -119,6 +126,7 @@ class ResponsesRequest(derive_request_base(ResponsesParams)):  # type: ignore[mi
     tools_header: str | None = None
     max_tool_iterations: int | None = Field(default=None, ge=1, le=MAX_TOOL_ITERATIONS_CAP)
     session_label: str | None = Field(default=None, max_length=SESSION_LABEL_MAX_LENGTH, description=SESSION_LABEL_DESC)
+    metadata: RequestMetadata = None
 
 
 def _responses_input_text(value: Any) -> str:
@@ -188,82 +196,9 @@ def _split_codex_input_metadata(value: Any) -> tuple[Any, bool]:
     return value, False
 
 
-# Output item types the gateway mints itself to describe work it did server-side.
-# They are stripped back off an inbound ``input`` before the provider sees it: the
-# documented way to continue a Responses conversation is to append the previous
-# ``response.output`` to the next ``input``, and the gateway has no
-# ``previous_response_id`` support to do that server-side, so an echoed turn would
-# otherwise ship a ``web_search_call`` to a provider that never declared a
-# web-search tool. A ``code_interpreter_call`` is recognized only when its id
-# carries the gateway's own prefix, because OpenAI's own items are legitimately
-# echoed to OpenAI and must survive.
-_GATEWAY_MINTED_ITEM_TYPES = frozenset({"web_search_call"})
-
-
-def _is_gateway_minted_item(item: Any) -> bool:
-    return isinstance(item, dict) and item.get("type") in _GATEWAY_MINTED_ITEM_TYPES
-
-
-def _is_gateway_minted_code_interpreter_call(item: Any) -> bool:
-    if not isinstance(item, dict) or item.get("type") != "code_interpreter_call":
-        return False
-    return str(item.get("id") or "").startswith(CODE_INTERPRETER_CALL_ID_PREFIX)
-
-
-def _code_interpreter_call_as_message(item: dict[str, Any]) -> dict[str, Any]:
-    """Fold a gateway-minted ``code_interpreter_call`` into an assistant message item.
-
-    Unlike a search, whose results are already in the transcript, an execution's
-    logs exist nowhere else, so dropping the item would make the model forget
-    what its code printed on the previous turn. The Messages route folds its pair
-    the same way (``messages._code_execution_pair_as_text``).
-    """
-    code = str(item.get("code") or "")
-    parts = [f"[code executed]\n```\n{code}\n```"] if code else ["[code executed]"]
-    parts.extend(
-        f"logs:\n{output['logs']}"
-        for output in item.get("outputs") or []
-        if isinstance(output, dict) and output.get("type") == "logs" and output.get("logs")
-    )
-    if item.get("status") == "failed":
-        parts.append("status: failed")
-    return {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "\n".join(parts)}]}
-
-
-def _strip_gateway_minted_items(input_data: Any) -> Any:
-    """Take gateway-minted server-tool items back off an inbound ``input``.
-
-    Only touches a list input, and only the items the gateway itself emits. A
-    ``web_search_call`` is dropped: a caller who genuinely used a provider-native
-    web search still had that run upstream, so its items arrive on a response the
-    gateway passed through untouched; those are indistinguishable here and are
-    dropped too. That is the conservative direction: dropping a descriptive item
-    loses nothing the model needs (the search results themselves are in the
-    transcript), while forwarding one risks a 400 from the provider. A gateway-run
-    interpreter call is told apart by its id prefix, so a provider's own survives,
-    and is folded into a message rather than dropped
-    (:func:`_code_interpreter_call_as_message`).
-    """
-    if not isinstance(input_data, list):
-        return input_data
-    kept: list[Any] = []
-    touched = 0
-    for item in input_data:
-        if _is_gateway_minted_code_interpreter_call(item):
-            kept.append(_code_interpreter_call_as_message(item))
-            touched += 1
-        elif _is_gateway_minted_item(item):
-            touched += 1
-        else:
-            kept.append(item)
-    if touched:
-        logger.debug("Rewrote %d gateway-minted output item(s) on the inbound input", touched)
-    return kept
-
-
 def _codex_extra_body(input_data: Any, client_metadata: Any | None) -> tuple[Any, dict[str, Any] | None]:
     """Prepare Codex metadata for OpenAI's raw Responses request body."""
-    input_data = _strip_gateway_minted_items(input_data)
+    input_data = strip_gateway_minted_items(input_data)
     cleaned_input, input_has_codex_metadata = _split_codex_input_metadata(input_data)
     extra_body: dict[str, Any] = {}
     if input_has_codex_metadata:
@@ -300,8 +235,7 @@ def _usage_to_completion_usage(
 
 
 def _ensure_provider_supports_responses(provider: LLMProvider) -> None:
-    provider_class = AnyLLM.get_provider_class(provider)
-    if not getattr(provider_class, "SUPPORTS_RESPONSES", False):
+    if not serves_responses(provider):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Provider '{provider.value}' does not support the Responses API",
@@ -330,18 +264,27 @@ class _ResponsesAdapter:
     ) -> HTTPException:
         return HTTPException(status_code=status_code, detail=message, headers=headers)
 
-    def provider_error(self, exc: BaseException) -> HTTPException:
-        mapping = classify_provider_error(exc)
+    def provider_error(self, exc: BaseException, model: str | None = None) -> HTTPException:
+        mapping = classify_provider_error(exc, model=model)
         if mapping is not None:
             return HTTPException(
                 status_code=mapping.status_code,
                 detail=mapping.detail,
-                headers=provider_error_headers(exc, mapping.status_code),
+                headers=with_retry_hint(exc, mapping.status_code, provider_error_headers(exc, mapping.status_code)),
             )
         return HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=PROVIDER_ERROR_DETAIL,
+            detail=provider_failure_detail(exc),
+            headers=with_retry_hint(exc, status.HTTP_502_BAD_GATEWAY, None),
         )
+
+    def stream_completion(self) -> Callable[[Any], bool] | None:
+        # Not checked yet: the chat-completions bridge synthesizes the terminal
+        # event whatever the upstream sent, so it cannot tell a cut stream here.
+        return None
+
+    def stream_error_payload(self, exc: BaseException) -> str:
+        return openai_error_event(self.stream_format, stream_error_code(exc), stream_error_message(exc))
 
     def format_chunk(self, chunk: ResponseStreamEvent) -> str:
         return f"event: {chunk.type}\ndata: {chunk.model_dump_json(exclude_none=True)}\n\n"
@@ -382,10 +325,10 @@ class _ResponsesAdapter:
         )
 
     async def call_provider(self, kwargs: dict[str, Any]) -> ResponsesResponse:
-        return await aresponses(**kwargs)  # type: ignore[return-value]
+        return await call_responses(aresponses, kwargs)  # type: ignore[no-any-return]
 
     async def open_provider_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[ResponseStreamEvent]:
-        return await aresponses(**kwargs)  # type: ignore[return-value]
+        return await call_responses(aresponses, kwargs)  # type: ignore[no-any-return]
 
     def prepare_stream_kwargs(
         self,
@@ -524,9 +467,7 @@ async def create_response(
     config: Annotated[GatewayConfig, Depends(get_config)],
     log_writer: Annotated[LogWriter, Depends(get_log_writer)],
     model_provider: ModelProviderPortDep,
-    code_execution_port: CodeExecutionPortDep,
-    mcp_server_port: McpServerPortDep,
-    web_search_policy_port: WebSearchPolicyPortDep,
+    tool_ports: ToolPortsDep,
     idempotency: IdempotencyGuardDep,
 ) -> dict[str, Any] | FastAPIResponse:
     """OpenAI-compatible Responses endpoint.
@@ -594,7 +535,10 @@ async def create_response(
             ),
             normalize_messages=_normalize,
             tools=request_body.tools,
+            code_execution_policies=tool_ports.code_execution_policy,
+            model_provider=model_provider,
             idempotency=None if bool(request_body.stream) else idempotency,
+            tags=request_tags(request_body.metadata),
         )
     except IdempotentReplay as replay:
         return replay.response()
@@ -664,15 +608,13 @@ async def create_response(
             web_search_header=raw_request.headers.get(WEB_SEARCH_HEADER),
         ),
         backends=ToolBackends(
-            code_execution_port=code_execution_port,
-            mcp_server_port=mcp_server_port,
-            web_search_policy_port=web_search_policy_port,
+            ports=tool_ports,
             sandbox_containers=build_sandbox_container_registry(
                 config=config,
                 uow=ctx.uow,
                 user_id=ctx.user_id,
                 workspace_id=ctx.workspace_id,
-                port=code_execution_port,
+                port=tool_ports.code_execution,
             ),
             sandbox_files=build_sandbox_file_bridge(
                 raw_request=raw_request,
@@ -693,6 +635,7 @@ async def create_response(
         remaining_user_tools=tool_ctx.remaining_user_tools,
         web_search_declared_name=tool_ctx.web_search_declared_name,
     )
+    forwarded_metadata(request_fields)
     scope_prompt_cache_key(request_fields, ctx)
     # This is an internal handoff populated below, never a client request field.
     # ``ResponsesRequest`` permits extra fields for OpenAI compatibility, so
@@ -705,12 +648,9 @@ async def create_response(
     input_payload, codex_extra_body = _codex_extra_body(request_fields.pop("input"), client_metadata)
     stream = bool(request_fields.pop("stream", False))
     request_fields.pop("model", None)
+    # The billed user is the gateway's attribution, as on Chat Completions, and
+    # some providers (Cohere) refuse the field.
     request_fields.pop("user", None)
-    # Standalone mode forwards the resolved user_id to the upstream provider
-    # for analytics; hybrid mode handles attribution server-side via the
-    # correlation id.
-    if not ctx.hybrid_mode and ctx.user_id:
-        request_fields["user"] = ctx.user_id
 
     # base_request_fields is what gets merged with per-attempt creds; it
     # includes ``provider`` and ``input_data`` so each attempt has the full
@@ -752,7 +692,9 @@ async def create_response(
                 raise_all_streaming_attempts_failed(_ADAPTER, exc, route)
 
         # Standalone: single attempt streaming.
-        call_kwargs = {**provider_kwargs, **_with_codex_extra_body(base_request_fields, provider), "model": model}
+        call_kwargs = apply_endpoint_defaults(
+            {**provider_kwargs, **_with_codex_extra_body(base_request_fields, provider), "model": model}, resolved
+        )
         return await run_single_attempt_stream(
             adapter=_ADAPTER,
             ctx=ctx,
@@ -785,7 +727,9 @@ async def create_response(
         return result.model_dump(exclude_none=True)
 
     # Standalone non-stream path
-    call_kwargs = {**provider_kwargs, **_with_codex_extra_body(base_request_fields, provider), "model": model}
+    call_kwargs = apply_endpoint_defaults(
+        {**provider_kwargs, **_with_codex_extra_body(base_request_fields, provider), "model": model}, resolved
+    )
     result = await run_standalone_non_stream(
         adapter=_ADAPTER,
         ctx=ctx,

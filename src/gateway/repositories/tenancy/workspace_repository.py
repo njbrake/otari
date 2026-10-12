@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
+from gateway.core.usage_filters import LabelJoin
 from gateway.models.tenancy import (
     User,
     Workspace,
@@ -18,6 +19,11 @@ from gateway.models.tenancy import (
 )
 from gateway.repositories.base_repository import BaseRepository
 from gateway.repositories.tenancy.user_repository import user_alphabetical_order
+
+
+def workspace_label(workspace_id: Any) -> LabelJoin:
+    """Name the workspace ``workspace_id`` holds, in the same GROUP BY as another table's rows."""
+    return LabelJoin(entity=Workspace, on=col(Workspace.id) == workspace_id, label=col(Workspace.name))
 
 
 class WorkspaceRepository(BaseRepository[Workspace, WorkspaceCreate, WorkspaceUpdate]):

@@ -53,7 +53,7 @@ export function ActivityPhone({
   workspaceName: string
   isSheetOpen: boolean
   onSheetOpen: (isOpen: boolean) => void
-  onPriceModel: ((modelKey: string) => void) | undefined
+  onPriceModel: ((modelKey: string, endpoint: string) => void) | undefined
   empty: ReactNode
 }) {
   const { isManager } = log.viewer

@@ -284,13 +284,15 @@ class UsageSummary(BaseModel):
     by_endpoint: list[UsageGroupRow]
     by_provider: list[UsageGroupRow]
     # Routing policy (``key`` None for requests that named a model), workspace (``label``
-    # its name; only the caller's own scope), and channel (see ``core.usage_source.UsageChannel``).
+    # its name; only the caller's own scope), and channel (see ``core.usage_filters.UsageChannel``).
     by_policy: list[UsageGroupRow] = []
     by_workspace: list[UsageGroupRow] = []
     by_channel: list[UsageGroupRow] = []
     # Gateway-run tool spend. Empty when the window has none, and MCP tools are
     # excluded by design (their names are unbounded, see ``GATEWAY_TOOL_NAMES``).
     by_tool: list[UsageToolRow] = []
+    # Spend by the values of the tag ``group_by_tag`` named; empty when it named none.
+    by_tag: list[UsageGroupRow] = []
     # Failures only, so the taxonomy is not swamped by the successes that carry
     # no status code. Counts sum to ``totals.error_count``, unless a window
     # somehow held more than the breakdown cap's distinct codes, in which case

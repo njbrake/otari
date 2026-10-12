@@ -36,6 +36,7 @@ INHERITED_HEADERS = {
     "X-Gateway-Token": "Platform wire contract; the platform must accept a new name first.",
     "X-User-Token": "Platform wire contract; the platform must accept a new name first.",
     "x-session-affinity": "Baseten's replica-routing header, sent to a provider that opts in.",
+    "x-should-retry": "The OpenAI and Anthropic SDKs' retry override, read under this name only.",
 }
 
 # Literals of the same shape that name no header at all.

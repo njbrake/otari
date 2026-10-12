@@ -1,6 +1,11 @@
 """Errors the provider-key surfaces raise, and the HTTP status each carries."""
 
-from gateway.exceptions import TenancyConflictError, TenancyNotFoundError, TenancyValidationError
+from gateway.exceptions import (
+    TenancyConflictError,
+    TenancyForbiddenError,
+    TenancyNotFoundError,
+    TenancyValidationError,
+)
 
 
 class OrgProviderKeyNotFoundError(TenancyNotFoundError):
@@ -146,10 +151,11 @@ class OrgProviderLastModelError(TenancyValidationError):
 class OrgProviderModelUnpricedError(TenancyValidationError):
     """Serving was asked for a model nothing prices.
 
-    The other half of the disabled-until-priced rule. The offer path records such
-    a model unserved so it cannot be billed at nothing; without this the switch
-    would be a way straight past that, putting the model in the catalog and
-    through the dispatch gate with no rate behind it.
+    The other half of the disabled-until-priced rule, which holds while
+    ``require_pricing`` is on. The offer path records such a model unserved so it
+    cannot be billed at nothing; without this the switch would be a way straight
+    past that, putting the model in the catalog and through the dispatch gate
+    with no rate behind it.
     """
 
     def __init__(self, model: str) -> None:
@@ -171,6 +177,33 @@ class OrgProviderModelAlreadyOfferedError(TenancyConflictError):
         super().__init__(f"'{model}' is already offered on this '{provider}' key")
 
 
+class ProviderEndpointsDisabledError(TenancyForbiddenError):
+    """The deployment has not turned owned provider endpoints on."""
+
+    def __init__(self) -> None:
+        super().__init__("Provider endpoints are not enabled on this deployment (provider_endpoints_enabled)")
+
+
+class ProviderEndpointNotFoundError(TenancyNotFoundError):
+    def __init__(self, endpoint_id: object):
+        super().__init__(f"Provider endpoint {endpoint_id} not found")
+
+
+class ProviderEndpointOwnerNotFoundError(TenancyNotFoundError):
+    """The workspace or user named as the owner does not exist, or the user is deactivated."""
+
+
+class ProviderEndpointAlreadyExistsError(TenancyConflictError):
+    """The owner already has an endpoint of this name; the unique constraints are the arbiter."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"An endpoint named '{name}' already exists for this owner")
+
+
+class ProviderEndpointInvalidError(TenancyValidationError):
+    """A name, provider, base URL or default field the endpoint cannot be saved with."""
+
+
 __all__ = [
     "OrgDefaultProviderKeyConflictError",
     "OrgProviderKeyAlreadyExistsError",
@@ -186,5 +219,10 @@ __all__ = [
     "OrgProviderModelNameRequiredError",
     "OrgProviderModelNotFoundError",
     "OrgProviderModelUnpricedError",
+    "ProviderEndpointAlreadyExistsError",
+    "ProviderEndpointInvalidError",
+    "ProviderEndpointNotFoundError",
+    "ProviderEndpointOwnerNotFoundError",
+    "ProviderEndpointsDisabledError",
     "WorkspaceProviderKeyOverrideConflictError",
 ]

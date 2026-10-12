@@ -3,6 +3,8 @@ from typing import Self
 
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.repositories.budgets.budget_repository import BudgetRepository
+from gateway.repositories.budgets.end_user_repository import EndUserRepository
+from gateway.repositories.budgets.reservation_repository import ReservationRepository
 from gateway.repositories.budgets.scoped_budget_repository import ScopedBudgetRepository
 from gateway.repositories.budgets.workspace_budget_default_repository import WorkspaceBudgetDefaultRepository
 
@@ -14,6 +16,8 @@ class BudgetRepositories:
     budgets: BudgetRepository
     ceilings: ScopedBudgetRepository
     member_policies: WorkspaceBudgetDefaultRepository
+    end_users: EndUserRepository
+    reservations: ReservationRepository
 
     @classmethod
     def on(cls, uow: UnitOfWork) -> Self:
@@ -22,4 +26,6 @@ class BudgetRepositories:
             budgets=BudgetRepository(uow),
             ceilings=ScopedBudgetRepository(uow),
             member_policies=WorkspaceBudgetDefaultRepository(uow),
+            end_users=EndUserRepository(uow),
+            reservations=ReservationRepository(uow),
         )

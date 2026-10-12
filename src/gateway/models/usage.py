@@ -12,6 +12,20 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from gateway.models.base import Base
 from gateway.models.money import UsdCost
 
+# Mirrors ``gateway_usage_settlement.pricing_reference`` on the platform.
+PRICING_REFERENCE_MAX_LENGTH = 511
+
+# ``usage_logs.source`` on a row this gateway served itself. Any other value is usage
+# imported through the external-events or OTLP ingest, which reserves this one so an
+# import cannot pass as traffic served here.
+SERVED_HERE_SLUG = "gateway"
+
+# The endpoint label on a usage row the dashboard's own Playground produced. Its
+# rows are still served here, so the label, not the source, tells them apart. An
+# identifier, not a URL: it keeps its value if the route ever moves, exactly as
+# ``chat.USAGE_ENDPOINT`` does.
+PLAYGROUND_USAGE_ENDPOINT = "/v1/playground/chat/completions"
+
 
 class UsageLog(Base):
     """Usage log model for tracking API requests."""
@@ -73,15 +87,16 @@ class UsageLog(Base):
     endpoint: Mapped[str] = mapped_column()
 
     # Provenance. "gateway" for requests Otari served itself; a source slug (e.g.
-    # "claude_code") for usage imported through POST /v1/usage/external-events. A row
-    # backfilled from hosted history keeps its origin's slug behind a legacy prefix
-    # ("otari-ai:gateway", "otari-ai:claude_code"), so asking whether this deployment
-    # served a row means asking about the slug behind that prefix: core/usage_source.
+    # "claude_code") for usage imported through POST /v1/usage/external-events.
     # source_event_id is the upstream event id used for idempotent import (NULL for
     # gateway rows); source_label carries optional session/project attribution.
-    source: Mapped[str] = mapped_column(default="gateway", index=True)
+    source: Mapped[str] = mapped_column(default=SERVED_HERE_SLUG, index=True)
     source_event_id: Mapped[str | None] = mapped_column()
     source_label: Mapped[str | None] = mapped_column()
+    # Caller-supplied tags from the request's ``metadata`` (``purpose``, ``country``,
+    # ...), bounded at intake; see ``api/routes/_request_tags.py``. Null when the
+    # request sent none, and on every row written before the column existed.
+    tags: Mapped[dict[str, str] | None] = mapped_column(JSON)
     # Whether this row's cost participates in budget enforcement. True for normal
     # gateway rows; false for imported usage and for rows from keys flagged
     # exclude_from_budget. False rows are recorded (and appear in cost analytics)
@@ -128,21 +143,23 @@ class UsageLog(Base):
     # ``timestamp`` (when the request ran): usage settled or repriced later moves
     # the two apart.
     #
-    # All nullable with no backfill. The gateway's own settlement does not record
-    # provenance, so these are written by the hosted-usage backfill
-    # (mozilla-ai/otari-ai#1798) from the platform's ``gateway_usage_settlement``
-    # row, and null reads correctly as "not recorded". The lengths mirror that
+    # All nullable with no backfill, so null reads as "not recorded". Rows this
+    # gateway settles (``record_usage``) record them; rows the hosted-usage backfill
+    # (mozilla-ai/otari-ai#1798) copies from the platform's
+    # ``gateway_usage_settlement`` carry the platform's. The lengths mirror that
     # table's columns rather than this file's usual unbounded strings, so a value
     # copied across always fits.
     #
-    # ``pricing_source`` speaks the platform's settlement vocabulary, the values
-    # ``_platform.SettledCost.pricing_source`` already carries on the hybrid wire
-    # (echoed to callers as ``usage.pricing_source``). It is not the same field as
-    # the one on a listed model in ``api/routes/models.py`` ("configured",
-    # "default", "dynamic", "none"), which says where a price list entry came from
-    # in this deployment rather than what settled one row's amount.
+    # ``pricing_source`` therefore speaks one of two vocabularies: this gateway's
+    # ``PriceSource`` ("organization", "deployment", "defaults"), the values it
+    # already echoes to callers as ``usage.pricing_source``, or the platform's on a
+    # backfilled row. Neither is the field on a listed model in
+    # ``api/routes/models.py`` ("configured", "default", "dynamic", "none"), which
+    # says where a price list entry came from rather than what settled one row's
+    # amount. ``pricing_version`` is left null here: no price list this gateway
+    # reads is versioned.
     pricing_source: Mapped[str | None] = mapped_column(String(32))
-    pricing_reference: Mapped[str | None] = mapped_column(String(511))
+    pricing_reference: Mapped[str | None] = mapped_column(String(PRICING_REFERENCE_MAX_LENGTH))
     pricing_effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pricing_version: Mapped[str | None] = mapped_column(String(255))
     calculated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -162,10 +179,12 @@ class UsageLog(Base):
     #
     # `policy_name` is the name the caller sent. `selection_reason` says why this
     # candidate was chosen ("default", "condition:<keys>", "on_failure",
-    # "router:<name>"). `attempt_position` and `attempt_count` locate the row in
+    # "router:<name>", "catalog"). `attempt_position` and `attempt_count` locate the row in
     # the plan, so "served on attempt 2 of 3" is a query rather than a log grep.
     # `request_group_id` ties a request's rows together, which is what makes the
-    # absorbed attempts findable from the row that served.
+    # absorbed attempts findable from the row that served. The gateway writes the
+    # `Otari-Request-ID` it sent the caller here on every row, routed or not, so a
+    # caller can look a request's cost up by that id.
     policy_name: Mapped[str | None] = mapped_column(index=True)
     selection_reason: Mapped[str | None] = mapped_column()
     attempt_position: Mapped[int | None] = mapped_column()
@@ -187,6 +206,13 @@ class UsageLog(Base):
     # historical rows predate the column, and some write paths (batch jobs,
     # provider-never-reached rejections) have no meaningful request duration.
     latency_ms: Mapped[int | None] = mapped_column()
+
+    # Provider-reported server-side compute time, in milliseconds, best-effort
+    # (otari#337): prompt + generation time, excluding model load time where the
+    # provider reports load separately (see _PROVIDER_LATENCY_FIELDS in
+    # gateway.core.usage). Nullable: most providers report nothing here, and an
+    # extraction failure must never block a write.
+    provider_latency_ms: Mapped[int | None] = mapped_column()
 
     # Milliseconds from request start to the first streamed chunk. Nullable:
     # non-streaming requests have no first chunk, historical rows predate the
@@ -216,6 +242,7 @@ class UsageLog(Base):
             "endpoint": self.endpoint,
             "source": self.source,
             "source_label": self.source_label,
+            "tags": self.tags,
             "counts_toward_budget": self.counts_toward_budget,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
@@ -232,6 +259,7 @@ class UsageLog(Base):
             "error_message": self.error_message,
             "status_code": self.status_code,
             "latency_ms": self.latency_ms,
+            "provider_latency_ms": self.provider_latency_ms,
             "policy_name": self.policy_name,
             "selection_reason": self.selection_reason,
             "attempt_position": self.attempt_position,

@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING, Any, Never, cast
 from sqlalchemy import delete, select
 
 from gateway.core.unit_of_work import UnitOfWork
-from gateway.core.usage_source import not_served_here
-from gateway.models.usage import UsageLog
+from gateway.models.usage import SERVED_HERE_SLUG, UsageLog
 from gateway.repositories.base_repository import BaseRepository
 
 if TYPE_CHECKING:
@@ -32,7 +31,7 @@ class UsageRetentionRepository(BaseRepository[UsageLog, Never, Never]):
             select(UsageLog.id)
             .where(
                 UsageLog.timestamp < cutoff,
-                not_served_here(UsageLog.source),
+                UsageLog.source != SERVED_HERE_SLUG,
                 UsageLog.counts_toward_budget.is_(False),
             )
             .limit(limit)

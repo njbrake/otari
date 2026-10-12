@@ -11,6 +11,7 @@ from typing import Any, Literal, cast
 import httpx
 import pytest
 from any_llm import LLMProvider
+from any_llm.exceptions import ContextLengthExceededError
 from fastapi import HTTPException
 
 from gateway.api.routes._attempts import (
@@ -21,6 +22,12 @@ from gateway.api.routes._attempts import (
     classify_local_attempt_error,
     walk_attempts,
 )
+from gateway.api.routes._platform import (
+    all_attempts_rejected_detail,
+    no_attempt_served_detail,
+    prompt_too_long_for_every_attempt_detail,
+)
+from gateway.core.error_codes import ALL_CANDIDATES_REJECTED, CONTEXT_LENGTH_EXCEEDED, error_code_of
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
 from gateway.services.sandbox_backend import SandboxNotReachableError, SandboxUnavailableError
 from gateway.types.attempt import Attempt
@@ -277,6 +284,81 @@ async def test_multi_attempt_exhaustion_is_a_generic_502() -> None:
     assert exc_info.value.detail == ALL_ATTEMPTS_FAILED_DETAIL
 
 
+class _Rejection(Exception):
+    """A provider rejection that carries its status and its own message."""
+
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_where_every_candidate_rejected_the_request_is_a_400_in_the_gateways_words() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await _walk(
+            [_attempt(1, "a"), _attempt(2, "b")],
+            [_Rejection(400, "first rejection"), _Rejection(400, "max_tokens is too large")],
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == all_attempts_rejected_detail(2)
+    assert error_code_of(exc_info.value.headers) == ALL_CANDIDATES_REJECTED
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_where_every_prompt_was_too_long_keeps_that_code() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await _walk(
+            [_attempt(1, "a"), _attempt(2, "b")],
+            [
+                ContextLengthExceededError("too long for a", status_code=400),
+                ContextLengthExceededError("too long for b", status_code=400),
+            ],
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == prompt_too_long_for_every_attempt_detail(2)
+    assert error_code_of(exc_info.value.headers) == CONTEXT_LENGTH_EXCEEDED
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_where_candidates_rejected_for_different_reasons_is_the_generic_rejection() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await _walk(
+            [_attempt(1, "a"), _attempt(2, "b")],
+            [ContextLengthExceededError("too long for a", status_code=400), _Rejection(400, "bad temperature")],
+        )
+    assert exc_info.value.status_code == 400
+    assert error_code_of(exc_info.value.headers) == ALL_CANDIDATES_REJECTED
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_where_no_candidate_knew_the_model_is_a_502() -> None:
+    """The gateway chose the candidates, so a model none of them serves is its fault, not the caller's."""
+    with pytest.raises(HTTPException) as exc_info:
+        await _walk(
+            [_attempt(1, "a"), _attempt(2, "b")],
+            [_Rejection(404, "no such model a"), _Rejection(404, "no such model b")],
+        )
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == no_attempt_served_detail(2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failures",
+    [
+        [_Rejection(400, "bad request"), _Rejection(404, "no such model")],
+        [_Rejection(400, "bad request"), _http_error(503)],
+        [_Rejection(429, "slow down"), _Rejection(429, "slow down")],
+    ],
+)
+async def test_exhaustion_where_candidates_failed_differently_is_a_generic_502(failures: list[Exception]) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await _walk([_attempt(1, "a"), _attempt(2, "b")], failures)
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == ALL_ATTEMPTS_FAILED_DETAIL
+
+
 @pytest.mark.asyncio
 async def test_single_attempt_exhaustion_keeps_the_classified_status() -> None:
     """A one-candidate policy must answer exactly as naming that model directly
@@ -396,6 +478,15 @@ def _request_context(plan: Any) -> Any:
         started_at=time.monotonic(),
         plan=plan,
     )
+
+
+def test_only_a_candidate_past_the_head_is_a_fallback() -> None:
+    from gateway.services.routing import CompiledPlan
+
+    head, second = _attempt(1, "m"), _attempt(2, "n", instance="anthropic")
+    plan = CompiledPlan(policy_name="p", attempts=[head, second])
+    assert not plan.is_fallback(head)
+    assert plan.is_fallback(second)
 
 
 def _ctx_with_guardrails(*guardrails: Any) -> Any:
@@ -643,3 +734,185 @@ async def test_a_failure_is_absorbed_once_another_candidate_is_sent_the_request(
     assert exc is None
     assert [attempt.instance for attempt in absorbed] == ["first"]
     assert terminal == []
+
+
+async def _walk_admitted(
+    attempts: list[Attempt],
+    full: set[str],
+    behaviors: dict[str, Any] | None = None,
+    skipped: list[tuple[str, Any]] | None = None,
+    prepare_kwargs: Any = None,
+    retry_after: dict[str, str] | None = None,
+    terminal: list[str] | None = None,
+    dropped: list[tuple[str, bool]] | None = None,
+) -> tuple[tuple[Attempt, Any], list[str], list[tuple[str, bool]]]:
+    """Walk with every model in ``full`` refused admission.
+
+    Returns the result, the models sent, and each dropped hold with whether its model was sent.
+    """
+    sent: list[str] = []
+    dropped = dropped if dropped is not None else []
+    skipped = skipped if skipped is not None else []
+
+    async def on_skipped(attempt: Attempt, refusal: HTTPException) -> None:
+        skipped.append((attempt.model, refusal.detail))
+
+    async def admit(attempt: Attempt) -> Any:
+        if attempt.model in full:
+            wait = (retry_after or {}).get(attempt.model)
+            headers = {"Retry-After": wait} if wait is not None else None
+            raise CandidateCannotServe(
+                HTTPException(status_code=429, detail=f"{attempt.model} is full", headers=headers)
+            )
+
+        async def drop(was_sent: bool) -> None:
+            dropped.append((attempt.model, was_sent))
+
+        return drop
+
+    async def run_attempt(attempt: Attempt, call_kwargs: dict[str, Any], mark_locked_in: Any) -> Any:
+        sent.append(attempt.model)
+        behavior = (behaviors or {}).get(attempt.model, "ok")
+        if isinstance(behavior, BaseException):
+            raise behavior
+        return behavior
+
+    result = await walk_attempts(
+        attempts=attempts,
+        base_request_fields={"messages": [{"role": "user", "content": "hi"}]},
+        run_attempt=run_attempt,
+        max_tool_iterations=10,
+        prepare_kwargs=prepare_kwargs,
+        admit_attempt=admit,
+        on_skipped=on_skipped,
+        on_terminal=(lambda attempt: terminal.append(attempt.model)) if terminal is not None else None,
+    )
+    return result, sent, dropped
+
+
+@pytest.mark.asyncio
+async def test_a_full_candidate_is_skipped_for_the_next_one_with_room() -> None:
+    (chosen, _), sent, _ = await _walk_admitted([_attempt(1, "a"), _attempt(2, "b")], full={"a"})
+
+    assert chosen.model == "b"
+    assert sent == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_every_candidate_full_answers_with_the_last_refusal() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await _walk_admitted([_attempt(1, "a"), _attempt(2, "b")], full={"a", "b"})
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == "b is full"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_candidate_gives_back_what_it_was_admitted_with() -> None:
+    (chosen, _), sent, dropped = await _walk_admitted(
+        [_attempt(1, "a"), _attempt(2, "b")], full=set(), behaviors={"a": _http_error(503)}
+    )
+
+    assert chosen.model == "b"
+    assert sent == ["a", "b"]
+    assert dropped == [("a", True)]
+
+
+@pytest.mark.asyncio
+async def test_a_skip_is_recorded_once_another_candidate_is_sent_the_request() -> None:
+    skipped: list[tuple[str, Any]] = []
+
+    await _walk_admitted([_attempt(1, "a"), _attempt(2, "b")], full={"a"}, skipped=skipped)
+
+    assert skipped == [("a", "a is full")]
+
+
+@pytest.mark.asyncio
+async def test_a_skip_the_request_ends_on_is_its_outcome_not_a_record() -> None:
+    skipped: list[tuple[str, Any]] = []
+
+    with pytest.raises(HTTPException):
+        await _walk_admitted([_attempt(1, "a"), _attempt(2, "b")], full={"a", "b"}, skipped=skipped)
+
+    assert skipped == []
+
+
+@pytest.mark.asyncio
+async def test_every_candidate_full_answers_with_the_soonest_retry_after() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await _walk_admitted([_attempt(1, "a"), _attempt(2, "b")], full={"a", "b"}, retry_after={"a": "5", "b": "40"})
+
+    assert exc_info.value.detail == "a is full"
+    assert exc_info.value.headers == {"Retry-After": "5"}
+
+
+@pytest.mark.asyncio
+async def test_an_all_full_refusal_is_reported_on_the_candidate_whose_refusal_answers() -> None:
+    terminal: list[str] = []
+
+    with pytest.raises(HTTPException):
+        await _walk_admitted(
+            [_attempt(1, "a"), _attempt(2, "b")],
+            full={"a", "b"},
+            retry_after={"a": "5", "b": "40"},
+            terminal=terminal,
+        )
+
+    assert terminal == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_before_the_provider_answers_gives_back_the_models_request() -> None:
+    """A refused reservation top-up is terminal, and the model was never called for it."""
+    dropped: list[tuple[str, bool]] = []
+    with pytest.raises(HTTPException) as exc_info:
+        await _walk_admitted(
+            [_attempt(1, "a")],
+            full=set(),
+            behaviors={"a": HTTPException(status_code=402, detail="top-up refused")},
+            dropped=dropped,
+        )
+
+    assert exc_info.value.status_code == 402
+    assert dropped == [("a", False)]
+
+
+@pytest.mark.asyncio
+async def test_a_full_candidate_is_not_prepared_for() -> None:
+    prepared: list[str] = []
+
+    async def prepare(instance: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+        prepared.append(kwargs["model"].rsplit(":", 1)[-1])
+        return kwargs
+
+    await _walk_admitted([_attempt(1, "a"), _attempt(2, "b")], full={"a"}, prepare_kwargs=prepare)
+
+    assert prepared == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_a_candidate_that_cannot_be_prepared_keeps_nothing_it_was_admitted_with() -> None:
+    async def prepare(instance: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+        if kwargs["model"].rsplit(":", 1)[-1] == "a":
+            raise CandidateCannotServe(HTTPException(status_code=400, detail="cannot hold copies"))
+        return kwargs
+
+    (chosen, _), sent, dropped = await _walk_admitted(
+        [_attempt(1, "a"), _attempt(2, "b")], full=set(), prepare_kwargs=prepare
+    )
+
+    assert chosen.model == "b"
+    assert sent == ["b"]
+    assert dropped == [("a", False)]
+
+
+@pytest.mark.asyncio
+async def test_a_skip_after_the_last_candidate_called_is_recorded_when_the_walk_fails() -> None:
+    skipped: list[tuple[str, Any]] = []
+
+    with pytest.raises(HTTPException):
+        await _walk_admitted(
+            [_attempt(1, "a"), _attempt(2, "b")], full={"b"}, behaviors={"a": _http_error(503)}, skipped=skipped
+        )
+
+    assert skipped == [("b", "b is full")]

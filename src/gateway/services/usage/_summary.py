@@ -2,7 +2,7 @@
 
 from gateway.schemas.usage import BreakdownDimension, SeriesGroupBy, UsageSeriesGroup, UsageSeriesPoint, UsageTotals
 from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME
-from gateway.services.web_retrieval_backend import WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME
+from gateway.services.tools import WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME
 
 # The gateway-run tools that can be enumerated for a filter or a breakdown. MCP
 # tool names come from a caller-supplied server, so they are unbounded and appear

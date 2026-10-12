@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Uuid, text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Uuid, false, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from gateway.models.base import Base
@@ -86,6 +86,24 @@ class APIKey(Base):
     # this column stays unrestricted), [] = deny all, a list = canonical
     # instance:model entries (with instance:* / instance:prefix* wildcards).
     allowed_models: Mapped[list[str] | None] = mapped_column(JSON)
+    # A service key may name end users in a request's ``user`` field. Each one is
+    # a ``users`` row owned by this key's user (``users.parent_user_id``), created
+    # on first use, so a key can only ever bill end users in its owner's scope.
+    # This key's own ceiling (an ``api_token`` scoped budget) is the pool over all
+    # of them.
+    is_service_key: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # The budget an end user this key creates is capped at. NULL leaves end users
+    # uncapped, under the pool alone. Changing it does not move end users already
+    # created; each one keeps the budget it was given, which the users API can
+    # override one at a time.
+    end_user_budget_id: Mapped[str | None] = mapped_column(
+        ForeignKey("budgets.budget_id", ondelete="SET NULL"), index=True
+    )
+    # The budgets a request on this key may start a new end user on, named per
+    # request with ``Otari-End-User-Budget``. NULL means the default alone. Kept
+    # as a list rather than a join table because it is read only when a request
+    # names a budget; deleting a budget removes it from every list.
+    end_user_budget_ids: Mapped[list[str] | None] = mapped_column(JSON)
 
     # Set only on a key this deployment mints for itself and has to present
     # again later, which today is the one the hosted Playground forwards with
@@ -100,6 +118,12 @@ class APIKey(Base):
 
     user = relationship("User", back_populates="api_keys")
     usage_logs = relationship("UsageLog", back_populates="api_key", passive_deletes=True)
+
+    def assignable_end_user_budgets(self) -> list[str]:
+        """The budgets this key may start an end user on: its list, or else its default alone."""
+        if self.end_user_budget_ids is not None:
+            return list(self.end_user_budget_ids)
+        return [self.end_user_budget_id] if self.end_user_budget_id else []
 
     def to_dict(self) -> dict[str, Any]:
         """Convert model to dictionary."""
@@ -117,5 +141,8 @@ class APIKey(Base):
             "reject_user_mismatch": self.reject_user_mismatch,
             "capture_agent_telemetry": self.capture_agent_telemetry,
             "allowed_models": self.allowed_models,
+            "is_service_key": self.is_service_key,
+            "end_user_budget_id": self.end_user_budget_id,
+            "end_user_budget_ids": self.assignable_end_user_budgets(),
             "metadata": self.metadata_,
         }

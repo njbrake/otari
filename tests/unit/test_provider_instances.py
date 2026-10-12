@@ -412,6 +412,52 @@ def test_get_provider_kwargs_strips_provider_type_and_models() -> None:
     assert kwargs == {"api_base": "http://x/v1", "api_key": "k"}
 
 
+def test_bedrock_uses_aws_region_when_default_region_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    kwargs = get_provider_kwargs(GatewayConfig(), LLMProvider.BEDROCK)
+
+    assert kwargs["client_args"] == {"region_name": "us-east-1"}
+
+
+def test_bedrock_region_fallback_preserves_other_client_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    config = GatewayConfig(providers={"bedrock": {"client_args": {"retries": {"max_attempts": 2}}}})
+
+    kwargs = get_provider_kwargs(config, LLMProvider.BEDROCK)
+
+    assert kwargs["client_args"] == {
+        "retries": {"max_attempts": 2},
+        "region_name": "us-east-1",
+    }
+
+
+def test_bedrock_preserves_explicit_region_and_aws_default_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    explicit_config = GatewayConfig(providers={"bedrock": {"client_args": {"region_name": "ap-southeast-2"}}})
+
+    explicit_kwargs = get_provider_kwargs(explicit_config, LLMProvider.BEDROCK)
+
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-1")
+    default_config = GatewayConfig(providers={"bedrock": {"client_args": {"retries": {"max_attempts": 2}}}})
+    default_kwargs = get_provider_kwargs(default_config, LLMProvider.BEDROCK)
+
+    assert explicit_kwargs["client_args"] == {"region_name": "ap-southeast-2"}
+    assert default_kwargs["client_args"] == {"retries": {"max_attempts": 2}}
+
+
+def test_aws_region_fallback_is_limited_to_bedrock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    kwargs = get_provider_kwargs(GatewayConfig(), LLMProvider.OPENAI)
+
+    assert "client_args" not in kwargs
+
+
 # ---------------------------------------------------------------------------
 # get_provider_kwargs: keyless custom-endpoint placeholder (mozilla-ai/otari#421)
 # ---------------------------------------------------------------------------
@@ -642,3 +688,96 @@ def test_undeclared_env_provider_warns_nothing_outside_standalone(
     get_provider_kwargs(GatewayConfig(mode=mode, providers={}), LLMProvider.ANTHROPIC)
 
     assert "not declared" not in undeclared_env_warnings.text
+
+
+# ---------------------------------------------------------------------------
+# A providers: entry that declares no credential is ignored, not shadowing
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def uncredentialed_warnings(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> Iterator[pytest.LogCaptureFixture]:
+    """Capture gateway warnings with the once-per-instance memory cleared and the SDK variables unset."""
+    monkeypatch.setattr(provider_kwargs, "_uncredentialed_warned", set())
+    for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "COHERE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    _capture_gateway_logs(caplog)
+    try:
+        yield caplog
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param({"api_key": ""}, id="empty-string"),
+        pytest.param({"api_key": None}, id="none"),
+        pytest.param({}, id="no-settings"),
+        pytest.param({"client_args": {"timeout": 60}}, id="transport-only"),
+        pytest.param({"provider_type": "openai", "models": ["gpt-4o"]}, id="meta-only"),
+        pytest.param({"api_key": "", "temperature": 0.7}, id="call-options-are-not-credentials"),
+        pytest.param({"api_key": "", "client_args": {"default_headers": {"X-Trace": "1"}}}, id="non-auth-headers"),
+    ],
+)
+def test_entry_without_a_credential_names_the_variables_it_lacks(
+    entry: dict[str, object], uncredentialed_warnings: pytest.LogCaptureFixture
+) -> None:
+    config = GatewayConfig(providers={"openai": entry})
+    assert provider_kwargs.uncredentialed_env_names(config, "openai", entry) == ("OPENAI_API_KEY",)
+
+
+@pytest.mark.parametrize(
+    ("instance", "entry", "env"),
+    [
+        pytest.param("openai", {"api_key": "sk-config"}, {}, id="key-in-config"),
+        pytest.param("openai", {"api_key": ""}, {"OPENAI_API_KEY": "sk-env"}, id="key-in-env"),
+        pytest.param(
+            "home_lab", {"provider_type": "openai", "api_base": "http://models.local/v1"}, {}, id="keyless-base"
+        ),
+        pytest.param("ollama", {}, {}, id="keyless-local-backend"),
+        pytest.param("bedrock", {}, {}, id="ambient-credential"),
+        pytest.param("vertexai", {}, {}, id="no-credential-variable"),
+        pytest.param("mystery", {"provider_type": "not-a-provider"}, {}, id="unknown-type"),
+        pytest.param(
+            "openai",
+            {"api_key": "", "client_args": {"default_headers": {"Authorization": "Bearer t"}}},
+            {},
+            id="auth-header-in-client-args",
+        ),
+        pytest.param("openai", {"azure_ad_token": "t"}, {}, id="other-credential-field"),
+    ],
+)
+def test_entry_that_can_be_called_is_not_uncredentialed(
+    instance: str,
+    entry: dict[str, object],
+    env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    uncredentialed_warnings: pytest.LogCaptureFixture,
+) -> None:
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    config = GatewayConfig.model_construct(providers={instance: entry})
+    assert provider_kwargs.uncredentialed_env_names(config, instance, entry) is None
+
+
+def test_prune_drops_the_hollow_entries_and_warns_once_per_instance(
+    uncredentialed_warnings: pytest.LogCaptureFixture,
+) -> None:
+    config = GatewayConfig(
+        providers={"openai": {"api_key": ""}, "anthropic": {"api_key": "sk-ant-config"}, "ollama": {}}
+    )
+
+    first = provider_kwargs.prune_uncredentialed_providers(config)
+    second = provider_kwargs.prune_uncredentialed_providers(config)
+
+    assert first == {"openai": ("OPENAI_API_KEY",)}
+    assert second == {}
+    assert set(config.providers) == {"anthropic", "ollama"}
+    records = [r for r in uncredentialed_warnings.records if "declares no credential" in r.getMessage()]
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "providers.openai" in message and "OPENAI_API_KEY" in message
+    assert "sk-ant-config" not in message

@@ -29,12 +29,13 @@ The docs are grouped by what you are trying to do.
 
 Running and managing a gateway.
 
-- [Deployment](deployment.md): Docker, Render, Railway, hybrid mode, and optional services.
+- [Deployment](deployment.md): Docker, Railway, hybrid mode, and optional services.
 - [Configuration](configuration.md): configuration sources, precedence, and common settings.
 - [Admin dashboard](dashboard.md): sign-in, setup, and management surfaces.
 - [Access control](access-control.md): identities, organizations, workspaces, keys, and budgets.
 - [Models](models.md): selectors, providers, discovery, aliases, and capabilities.
-- [Routing policies](routing.md): failover, conditions, weighted and learned routing, and mandatory guardrails.
+- [Provider endpoints](provider-endpoints.md): model servers a workspace or a user brings, reached by name and kept out of budgets.
+- [Routing policies](routing.md): failover, conditions, weighted, priority and learned routing, and mandatory guardrails.
 - [OpenAI provider guide](providers/openai.md): configure OpenAI and route your first request through Otari.
 
 ### For integrators
@@ -67,4 +68,5 @@ Calling the gateway from your own code.
 ### For contributors
 
 - [Architecture](../ARCHITECTURE.md): the two-plane model and the extension seam (ports, adapters, and capability lines) that mark what Otari's core ships versus what an overlay can add.
-- [Backend domains](domains.md): what each backend domain owns, and the layer shape each domain moves toward.
+- [Backend domains](../DOMAINS.md): what each backend domain owns, and the layer shape each domain moves toward.
+- [Load test](../loadtest/README.md): compares two builds under load on one machine, route by route, and fails when the second got slower or runs more database statements per request. CI runs it on a PR against its base.

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from gateway.models.budgets import (
     MAX_COUNT_LIMIT,
+    MAX_MINUTE_LIMIT,
     Budget,
     BudgetResetLog,
     ResetAlignment,
@@ -22,12 +23,17 @@ from gateway.models.budgets import (
     WorkspaceBudgetDefault,
 )
 from gateway.models.money import MAX_USD_LIMIT, as_float
+from gateway.models.users import User
 
 _PERIOD_DESCRIPTION = "Seconds between resets, counted from the last one. Mutually exclusive with reset_alignment"
 _ALIGNMENT_DESCRIPTION = (
     "Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way "
     "to express a calendar month. Mutually exclusive with budget_duration_sec"
 )
+
+# An id a caller chooses for a budget: letters, digits, '.', '_' and '-', so it
+# reads the same in a path, a header and a config file.
+BUDGET_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 
 # A blank value matches no provider instance, so a ceiling that stored one would never bind.
 _ProviderKeyId = Annotated[str, Field(min_length=1, max_length=255, pattern=r"^\S+$")]
@@ -49,6 +55,21 @@ class CreateBudgetRequest(BaseModel):
         ge=0,
         le=MAX_COUNT_LIMIT,
         description="Maximum requests over the period. Independent of max_budget; null is unlimited",
+    )
+    rpm_limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_MINUTE_LIMIT,
+        description="Requests per minute for each user on this budget, across replicas; null is unlimited",
+    )
+    tpm_limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_MINUTE_LIMIT,
+        description=(
+            "Tokens per minute for each user on this budget, counted on what requests used: a request is "
+            "admitted while the user's minute is under the limit. Null is unlimited"
+        ),
     )
     budget_duration_sec: int | None = Field(
         default=None, gt=0, description="Budget duration in seconds (e.g., 86400 for daily, 604800 for weekly)"
@@ -78,6 +99,8 @@ class BudgetResponse(BaseModel):
     max_budget: float | None
     token_limit: int | None
     request_limit: int | None
+    rpm_limit: int | None = None
+    tpm_limit: int | None = None
     budget_duration_sec: int | None
     reset_alignment: str | None
     created_at: str
@@ -103,6 +126,8 @@ class BudgetResponse(BaseModel):
             max_budget=as_float(budget.max_budget),
             token_limit=budget.token_limit,
             request_limit=budget.request_limit,
+            rpm_limit=budget.rpm_limit,
+            tpm_limit=budget.tpm_limit,
             budget_duration_sec=budget.budget_duration_sec,
             reset_alignment=budget.reset_alignment,
             created_at=budget.created_at.isoformat(),
@@ -130,8 +155,72 @@ class UpdateBudgetRequest(BaseModel):
         le=MAX_COUNT_LIMIT,
         description="Maximum requests over the period. Independent of max_budget; null is unlimited",
     )
+    rpm_limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_MINUTE_LIMIT,
+        description="Requests per minute for each user on this budget, across replicas; null is unlimited",
+    )
+    tpm_limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_MINUTE_LIMIT,
+        description=(
+            "Tokens per minute for each user on this budget, counted on what requests used: a request is "
+            "admitted while the user's minute is under the limit. Null is unlimited"
+        ),
+    )
     budget_duration_sec: int | None = Field(default=None, gt=0)
     reset_alignment: ResetAlignment | None = Field(default=None)
+
+
+class EndUserPublic(BaseModel):
+    """An end user of a service key, addressed by the id the service named it by."""
+
+    user_id: str
+    external_id: str
+    owner_user_id: str
+    budget_id: str | None
+    blocked: bool
+    spend: float
+    reserved: float
+    current_tokens: int
+    current_requests: int
+    budget_started_at: str | None
+    next_budget_reset_at: str | None
+    created_at: str
+
+    @classmethod
+    def from_model(cls, user: User) -> EndUserPublic:
+        return cls(
+            user_id=user.user_id,
+            external_id=user.external_id or "",
+            owner_user_id=user.parent_user_id or "",
+            budget_id=user.budget_id,
+            blocked=bool(user.blocked),
+            spend=float(user.spend),
+            reserved=float(user.reserved),
+            current_tokens=user.current_tokens,
+            current_requests=user.current_requests,
+            budget_started_at=user.budget_started_at.isoformat() if user.budget_started_at else None,
+            next_budget_reset_at=user.next_budget_reset_at.isoformat() if user.next_budget_reset_at else None,
+            created_at=user.created_at.isoformat(),
+        )
+
+
+class EndUserPut(BaseModel):
+    """Create an end user ahead of its first request, or move one, onto a budget on the key's list."""
+
+    budget_id: str = Field(min_length=1, description="A budget on the key's end_user_budget_ids")
+
+
+class EndUserUpdate(BaseModel):
+    """Block, unblock or move an end user. An omitted field is left as it is."""
+
+    blocked: bool | None = Field(default=None, description="Whether the end user is refused")
+    budget_id: str | None = Field(
+        default=None, min_length=1, description="A budget on the key's end_user_budget_ids to move the end user to"
+    )
 
 
 class BudgetResetLogResponse(BaseModel):
@@ -381,7 +470,8 @@ class OrganizationScopedBudgetCreate(BaseModel):
         default=None,
         description=(
             "Narrow the cap to one provider instance; omit or null to cap spend across every provider. "
-            "Must name a real instance: a blank value would store a ceiling that never binds"
+            "A blank value would store a ceiling that never binds, so it is refused; this does not check "
+            "that the value names a configured provider instance"
         ),
     )
     budget_id: str = Field(
@@ -478,7 +568,8 @@ class WorkspaceMemberBudgetPolicyCreate(BaseModel):
         default=None,
         description=(
             "Narrow the default to one provider instance; omit or null to apply to every provider. "
-            "Must name a real instance: a blank value would materialize ceilings that never bind"
+            "A blank value would materialize ceilings that never bind, so it is refused; this does not check "
+            "that the value names a configured provider instance"
         ),
     )
 
@@ -535,10 +626,14 @@ class WorkspaceMemberBudgetPoliciesPublic(BaseModel):
 
 
 __all__ = [
+    "BUDGET_ID_PATTERN",
     "BudgetResetLogResponse",
     "BudgetResponse",
     "CreateBudgetRequest",
     "CreateScopedBudgetRequest",
+    "EndUserPublic",
+    "EndUserPut",
+    "EndUserUpdate",
     "OrganizationBudgetCreate",
     "OrganizationBudgetPublic",
     "OrganizationBudgetRates",

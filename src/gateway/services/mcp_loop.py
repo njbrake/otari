@@ -23,7 +23,6 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
-from any_llm import acompletion
 from any_llm.types.completion import PromptTokensDetails
 
 from gateway.core.env import otari_env
@@ -32,15 +31,17 @@ from gateway.services._tool_loop import (
     MaxToolIterationsExceeded,
     StreamAction,
     ToolBackend,
+    log_tool_failure,
     run_tool_loop,
     run_tool_loop_stream,
+    tool_failure_detail,
 )
-from gateway.services.tools import MAX_USES_EXCEEDED_ERROR, ToolUseBudget, is_capped_call
+from gateway.services.providers import acompletion
+from gateway.services.tools import MAX_TOOL_ITERATIONS_CAP, MAX_USES_EXCEEDED_ERROR, ToolUseBudget, is_capped_call
 
 if TYPE_CHECKING:
     from any_llm.types.completion import ChatCompletion, ChatCompletionChunk, CompletionUsage
 
-MAX_TOOL_ITERATIONS_CAP = 25
 DEFAULT_MAX_TOOL_ITERATIONS = 10
 
 
@@ -214,8 +215,9 @@ async def _execute_mcp_calls(
         except MaxToolIterationsExceeded:
             raise
         except Exception as exc:  # noqa: BLE001 — see docstring
-            logger.warning("MCP tool %s execution failed: %s", name, exc)
-            text = f"[tool error] {exc}"
+            detail = tool_failure_detail(pool, name)
+            log_tool_failure(name, detail, exc)
+            text = f"[tool error] {detail}"
         else:
             if capped and budget is not None:
                 budget.record(text)
