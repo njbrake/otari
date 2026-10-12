@@ -50,6 +50,12 @@ SummaryDimension = Literal[
 # requests. Ties fall back to the key.
 UsageRankBy = Literal["cost", "billed", "tokens", "requests"]
 
+# What ranks a summary breakdown's groups: any of the above, imported cost, failures,
+# the group's name (its label where it has one, else its key, ignoring case) or its
+# 95th-percentile latency, so a table sorted by any column it shows keeps the groups
+# at the top of that order rather than sorting whichever ones spend kept.
+UsageBreakdownRankBy = Literal["cost", "billed", "tokens", "requests", "imported", "errors", "name", "p95"]
+
 # Coarse display buckets for a failure's status code. A closed Literal rather than
 # a bare str so the set lands in the OpenAPI schema as an enum and a consumer can
 # switch on it exhaustively instead of string-matching whatever the server sent.
@@ -137,8 +143,8 @@ class UsageTotals(BaseModel):
     billed_cache_read_tokens: int = 0
 
 
-class UsageGroupRow(BaseModel):
-    """One breakdown row (a model, a user, an API key, a session, ...).
+class UsageSeriesGroup(BaseModel):
+    """One group of a grouped series, and the figures every breakdown row shares.
 
     ``key`` is None both for the synthesized fold row (``is_other=True``) and for a
     real group whose column was NULL (e.g. usage from a since-deleted user, with
@@ -165,9 +171,15 @@ class UsageGroupRow(BaseModel):
     error_count: int = 0
     # Billed cache-read tokens, part of ``tokens``.
     cache_read_tokens: int = 0
+
+
+class UsageGroupRow(UsageSeriesGroup):
+    """One summary breakdown row (a model, a user, an API key, a session, ...)."""
+
     # Nearest-rank 95th-percentile latency over the group's requests, absorbed attempts
-    # left out as the totals' is. Null unless ``p95_by`` named this breakdown, on the
-    # fold row, and for a group none of whose requests recorded a latency.
+    # left out as the totals' is. Null unless ``p95_by`` named this breakdown or
+    # ``rank_by`` is ``p95``, on the fold row, and for a group none of whose requests
+    # recorded a latency.
     p95_latency_ms: int | None = None
 
 
@@ -291,7 +303,7 @@ class UsageSummary(BaseModel):
 class UsageGroupedSeriesPoint(BaseModel):
     """One (time bucket, group) cell of a grouped series.
 
-    ``key``/``is_other`` follow the ``UsageGroupRow`` convention: ``key=None``
+    ``key``/``is_other`` follow the ``UsageSeriesGroup`` convention: ``key=None``
     with ``is_other=True`` is the fold of groups outside the top N, ``key=None``
     with ``is_other=False`` is a real NULL group (e.g. a deleted user).
     ``tokens`` is the *billed* total (input including cache, plus output), the
@@ -311,7 +323,7 @@ class UsageGroupedSeriesPoint(BaseModel):
 class UsageGroupedSeries(BaseModel):
     """A per-group time series for the dashboard's stacked charts.
 
-    ``groups`` ranks the window's top groups by spend (plus the reconciling
+    ``groups`` ranks the window's top groups by ``rank_by`` (plus the reconciling
     ``other`` fold), in the order a chart should stack and color them; ``points``
     is sparse (only populated cells), keyed by canonical UTC ``bucket_start``.
     """
@@ -320,7 +332,7 @@ class UsageGroupedSeries(BaseModel):
     end_date: str
     bucket: Bucket
     group_by: SeriesGroupBy
-    groups: list[UsageGroupRow]
+    groups: list[UsageSeriesGroup]
     points: list[UsageGroupedSeriesPoint]
 
 

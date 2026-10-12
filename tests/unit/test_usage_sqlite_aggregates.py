@@ -227,3 +227,203 @@ def test_the_channel_breakdown_on_sqlite_tells_the_three_channels_apart() -> Non
         return {row.key: row.requests for row in rows}
 
     assert _run(body) == {"imported": 1, "playground": 2, "api": 2}
+
+
+def _p95_fixture(db: AsyncSession) -> None:
+    """Policies ``slow`` p95 900, ``fast`` 100, ``mid`` 400 (an absorbed attempt left out), ``blind`` none, none 400."""
+    db.add_all(
+        [
+            _log(policy_name="slow", latency_ms=900),
+            _log(policy_name="fast", latency_ms=100),
+            _log(policy_name="mid", latency_ms=400),
+            _log(policy_name="mid", latency_ms=90_000, status="absorbed"),
+            _log(policy_name="blind"),
+            _log(latency_ms=400),
+        ]
+    )
+
+
+def test_ranking_by_p95_on_sqlite_orders_as_postgresql_does() -> None:
+    async def body(db: AsyncSession) -> dict[str, list[tuple[str | None, int | None]]]:
+        _p95_fixture(db)
+        await db.commit()
+        uow = UnitOfWork(db)
+        async with uow:
+            repo = UsageSummaryRepository(uow)
+            ranked = {}
+            for order in ("desc", "asc"):
+                rows = await repo.breakdown("policy", [], limit=None, rank_by="p95", rank_order=order)
+                ranked[order] = [(row.key, row.p95_latency_ms) for row in rows]
+            # The limit applies after the ranking, so it keeps the slowest.
+            rows = await repo.breakdown("policy", [], limit=2, rank_by="p95")
+            ranked["top"] = [(row.key, row.p95_latency_ms) for row in rows]
+        return ranked
+
+    # The unrouted group ties with ``mid`` and comes after it; ``blind`` has nothing to rank.
+    assert _run(body) == {
+        "desc": [("slow", 900), ("mid", 400), (None, 400), ("fast", 100), ("blind", None)],
+        "asc": [("fast", 100), ("mid", 400), (None, 400), ("slow", 900), ("blind", None)],
+        "top": [("slow", 900), ("mid", 400)],
+    }
+
+
+def test_ranking_sessions_by_p95_on_sqlite_keeps_their_span() -> None:
+    async def body(db: AsyncSession) -> list[tuple[str | None, int | None, datetime | None]]:
+        db.add_all(
+            [
+                _log(source_label="s-fast", latency_ms=100, timestamp=T0),
+                _log(source_label="s-slow", latency_ms=800, timestamp=T0 + timedelta(minutes=3)),
+            ]
+        )
+        await db.commit()
+        uow = UnitOfWork(db)
+        async with uow:
+            rows = await UsageSummaryRepository(uow).breakdown(
+                "source_label", [], limit=None, with_span=True, rank_by="p95"
+            )
+        return [(row.key, row.p95_latency_ms, getattr(row, "first_at", None)) for row in rows]
+
+    assert _run(body) == [("s-slow", 800, T0 + timedelta(minutes=3)), ("s-fast", 100, T0)]
+
+
+def test_ranking_by_name_on_sqlite_reads_the_label_and_ignores_case() -> None:
+    from gateway.models.api_keys import APIKey
+
+    async def body(db: AsyncSession) -> dict[str, list[str | None]]:
+        db.add(APIKey(id="k-a", key_hash="ha", key_name="zebra", workspace_id=WORKSPACE))
+        db.add(APIKey(id="k-b", key_hash="hb", key_name="Apple", workspace_id=WORKSPACE))
+        db.add(APIKey(id="k-c", key_hash="hc", key_name="mango", workspace_id=WORKSPACE))
+        db.add_all([_log(api_key_id="k-a"), _log(api_key_id="k-b"), _log(api_key_id="k-c"), _log()])
+        await db.commit()
+        uow = UnitOfWork(db)
+        async with uow:
+            repo = UsageSummaryRepository(uow)
+            orders: tuple[SortOrder, ...] = ("asc", "desc")
+            return {
+                order: [
+                    row.key for row in await repo.breakdown("api_key", [], limit=None, rank_by="name", rank_order=order)
+                ]
+                for order in orders
+            }
+
+    assert _run(body) == {"asc": ["k-b", "k-c", "k-a", None], "desc": ["k-a", "k-c", "k-b", None]}
+
+
+def test_ranking_by_failures_on_sqlite_brings_a_cheap_group_into_the_top_n() -> None:
+    async def body(db: AsyncSession) -> tuple[list[str | None], list[str | None]]:
+        db.add_all([_log(model="dear", cost=5.0), _log(model="flaky", status="error"), _log(model="cheap", cost=0.1)])
+        await db.commit()
+        uow = UnitOfWork(db)
+        async with uow:
+            repo = UsageSummaryRepository(uow)
+            by_cost = await repo.breakdown("model", [], limit=1)
+            by_errors = await repo.breakdown("model", [], limit=1, rank_by="errors")
+        return [row.key for row in by_cost], [row.key for row in by_errors]
+
+    assert _run(body) == (["dear"], ["flaky"])
+
+
+def test_a_groups_p95_on_sqlite_by_channel_and_by_workspace() -> None:
+    """The channel is a CASE over a joined key and the workspace a UUID column, both partitioned and read back."""
+    from gateway.core.usage_source import PLAYGROUND_USAGE_ENDPOINT
+
+    other = uuid.uuid4()
+
+    async def body(db: AsyncSession) -> tuple[dict[str | None, int], dict[str | None, int]]:
+        db.add_all(
+            [
+                _log(source="claude_code", latency_ms=700),
+                _log(endpoint=PLAYGROUND_USAGE_ENDPOINT, latency_ms=300),
+                _log(latency_ms=100),
+                _log(latency_ms=200, workspace_id=other),
+            ]
+        )
+        await db.commit()
+        uow = UnitOfWork(db)
+        async with uow:
+            repo = UsageSummaryRepository(uow)
+            channels = await repo.group_p95_latency_ms("channel", ["imported", "playground", "api"], [])
+            workspaces = await repo.group_p95_latency_ms("workspace", [str(WORKSPACE), str(other)], [])
+        return channels, workspaces
+
+    channels, workspaces = _run(body)
+    assert channels == {"imported": 700, "playground": 300, "api": 200}
+    assert workspaces == {str(WORKSPACE): 700, str(other): 200}
+
+
+def test_the_summary_on_sqlite_ranks_by_p95_and_fills_p95_by_once() -> None:
+    async def body(db: AsyncSession) -> list[tuple[str | None, int | None, bool]]:
+        _p95_fixture(db)
+        await db.commit()
+        summary = await _reads(db).summary(
+            start=T0 - timedelta(hours=1),
+            end=T0 + timedelta(hours=1),
+            conditions=[],
+            status=None,
+            bucket="day",
+            dimensions=["policy"],
+            p95_by="policy",
+            rank_by="p95",
+            rank_order="asc",
+        )
+        return [(row.key, row.p95_latency_ms, row.is_other) for row in summary.by_policy]
+
+    assert _run(body) == [
+        ("fast", 100, False),
+        ("mid", 400, False),
+        (None, 400, False),
+        ("slow", 900, False),
+        ("blind", None, False),
+    ]
+
+
+def test_the_channel_filter_on_sqlite_classifies_rows_as_the_breakdown_does() -> None:
+    from gateway.core.usage_source import PLAYGROUND_USAGE_ENDPOINT
+    from gateway.models.api_keys import APIKey
+
+    async def body(db: AsyncSession) -> dict[str, set[str]]:
+        db.add(APIKey(id="k-forward", key_hash="hf", key_name="forward", workspace_id=WORKSPACE, internal_secret="s"))
+        db.add(APIKey(id="k-app", key_hash="ha", key_name="app", workspace_id=WORKSPACE))
+        db.add_all(
+            [
+                _log(id="imported", source="claude_code"),
+                # Imported under a minted key is still imported: the source decides first.
+                _log(id="imported-keyed", source="claude_code", api_key_id="k-forward"),
+                _log(id="typed", source="gateway", endpoint=PLAYGROUND_USAGE_ENDPOINT),
+                _log(id="forwarded", source="gateway", api_key_id="k-forward"),
+                _log(id="api-keyed", source="gateway", api_key_id="k-app"),
+                _log(id="api-keyless", source="gateway"),
+            ]
+        )
+        await db.commit()
+
+        async def ids(**refine: object) -> set[str]:
+            conditions = refinement_conditions(UsageRefinements.model_validate(refine))
+            return set((await db.execute(select(UsageLog.id).where(*conditions))).scalars())
+
+        return {
+            "imported": await ids(channel="imported"),
+            "playground": await ids(channel="playground"),
+            "api": await ids(channel="api"),
+            "not-api": await ids(exclude_channel="api"),
+            "not-playground": await ids(exclude_channel=["playground"]),
+        }
+
+    assert _run(body) == {
+        "imported": {"imported", "imported-keyed"},
+        "playground": {"typed", "forwarded"},
+        "api": {"api-keyed", "api-keyless"},
+        "not-api": {"imported", "imported-keyed", "typed", "forwarded"},
+        "not-playground": {"imported", "imported-keyed", "api-keyed", "api-keyless"},
+    }
+
+
+def test_the_most_common_value_breaks_a_tie_toward_a_named_value_then_by_name() -> None:
+    from collections import Counter
+
+    from gateway.repositories.usage.usage_summary_repository import _most_common
+
+    assert _most_common(Counter({"b": 2, "a": 2, None: 2})) == "a"
+    assert _most_common(Counter({None: 2, "z": 2})) == "z"
+    assert _most_common(Counter({None: 3, "a": 1})) is None
+    assert _most_common(Counter({"codex": 1, "claude_code": 2})) == "claude_code"
