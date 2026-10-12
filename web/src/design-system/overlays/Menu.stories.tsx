@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { useState } from "react"
 import {
+  FiBarChart2,
   FiChevronDown,
   FiDollarSign,
   FiFilter,
@@ -127,13 +128,14 @@ export const InlineSections: Story = {
 
 /**
  * Choices, then a way elsewhere ruled off below them by an untitled section:
- * the rule says the last row leaves the list rather than picking from it.
+ * the rule says the last row leaves the list rather than picking from it. Only
+ * the first section selects, so the last row is an action, not a choice.
  */
 export const RuledOff: Story = {
   render: () => (
     <div className="w-60 border border-control-border bg-surface">
-      <Menu label="Month" selectionMode="single" selectedKeys={["2026-10"]}>
-        <MenuSection>
+      <Menu label="Month">
+        <MenuSection selectionMode="single" selectedKeys={["2026-10"]}>
           <MenuItem
             id="2026-10"
             trailing={<span className="text-caption text-subtle">October</span>}
@@ -144,7 +146,9 @@ export const RuledOff: Story = {
           <MenuItem id="2026-08">August 2026</MenuItem>
         </MenuSection>
         <MenuSection>
-          <MenuItem id="usage">Other ranges in Usage</MenuItem>
+          <MenuItem id="usage" icon={FiBarChart2}>
+            Other ranges in Usage
+          </MenuItem>
         </MenuSection>
       </Menu>
     </div>

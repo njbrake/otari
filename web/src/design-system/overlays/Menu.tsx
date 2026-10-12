@@ -153,16 +153,29 @@ export function MenuItem({
  * A run of items, ruled off from the run above it. Untitled, it is only the
  * rule: a way out of the list ("Other ranges in Usage") set apart from the
  * choices in it.
+ *
+ * A section may select on its own, in a menu that does not: its items are
+ * then the choices, checked by its `selectedKeys`, while a row in another
+ * section stays a plain action rather than one more choice. Pressing either
+ * still reports through the menu's `onAction`.
  */
 export function MenuSection({
   title,
   children,
+  selectionMode,
+  selectedKeys,
 }: {
   title?: string
   children: ReactNode
+  selectionMode?: SelectionMode
+  selectedKeys?: Iterable<string>
 }) {
   return (
-    <HeroMenu.Section className="not-first:mt-1 not-first:border-t not-first:border-border-subtle not-first:pt-1">
+    <HeroMenu.Section
+      selectionMode={selectionMode}
+      selectedKeys={selectedKeys}
+      className="not-first:mt-1 not-first:border-t not-first:border-border-subtle not-first:pt-1"
+    >
       {title ? (
         <Header className="px-3 pt-2 pb-1 text-overline">{title}</Header>
       ) : null}

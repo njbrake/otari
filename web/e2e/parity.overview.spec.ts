@@ -100,9 +100,7 @@ test.describe("overview", () => {
         name: `Month: ${name} ${previous.getUTCFullYear()}`,
       })
       .click()
-    await page
-      .getByRole("menuitemradio", { name: "Other ranges in Usage" })
-      .click()
+    await page.getByRole("menuitem", { name: "Other ranges in Usage" }).click()
     await expect(page.getByRole("heading", { name: "Usage" })).toBeVisible()
   })
 

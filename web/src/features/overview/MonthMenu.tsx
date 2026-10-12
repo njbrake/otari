@@ -13,7 +13,8 @@ const OTHER_RANGES = "other-ranges"
 
 /**
  * Which calendar month the page reads: this one, or one of the eleven before
- * it. Any other stretch of time is Usage's, which the last row opens.
+ * it. Any other stretch of time is Usage's, which the last row opens: an
+ * action outside the choices, so it is no radio among them.
  */
 export function MonthMenu({
   months,
@@ -32,8 +33,6 @@ export function MonthMenu({
     <MenuButton
       label="Month"
       placement="bottom"
-      selectionMode="single"
-      selectedKeys={[month.key]}
       onAction={(key) => {
         if (key === OTHER_RANGES) void navigate({ to: "/usage" })
         else onMonth(key)
@@ -46,7 +45,7 @@ export function MonthMenu({
         </Button>
       }
     >
-      <MenuSection>
+      <MenuSection selectionMode="single" selectedKeys={[month.key]}>
         {months.map((one) => (
           <MenuItem
             key={one.key}

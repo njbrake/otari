@@ -557,8 +557,12 @@ describe("the Overview's scope and month", () => {
     ).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Month: This month" }))
     const menu = await screen.findByRole("menu")
-    // This month and the eleven before it, then the way out.
-    expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(13)
+    // This month and the eleven before it, then the way out, which is an
+    // action rather than one more choice.
+    expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(12)
+    expect(
+      within(menu).getByRole("menuitem", { name: "Other ranges in Usage" }),
+    ).toBeInTheDocument()
     await user.click(within(menu).getByText("August 2026"))
     expect(
       await screen.findByRole("heading", { name: "Failures in August" }),
