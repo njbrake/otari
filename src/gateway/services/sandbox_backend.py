@@ -61,6 +61,7 @@ __all__ = [
     "CODE_EXECUTION_TOOL_NAME",
     "CODE_EXECUTION_TOOL_NAMES",
     "CONTAINER_ID_PREFIX",
+    "SERVED_TOOL_NAMES",
     "CodeExecution",
     "SandboxBackend",
     "SandboxFiles",
@@ -83,10 +84,15 @@ CODE_EXECUTION_TOOL_NAMES: tuple[str, ...] = (
     "bash_code_execution",
     "text_editor_code_execution",
 )
+# The tool kinds this deployment's sandbox backend actually serves, as opposed to
+# the vocabulary a policy may be written in. One today. A stored list intersects
+# with this, so a list sharing nothing with it narrows to an empty set, which is
+# refused rather than stored (see the workspace code execution policy service).
+SERVED_TOOL_NAMES: tuple[str, ...] = (CODE_EXECUTION_TOOL_NAME,)
 # The execution budget one call gets when nothing narrows it. Public because a
 # workspace code-execution policy floors its own ceiling against this value
 # rather than carrying a second idea of the default (see
-# ``services/tenancy/workspace_code_execution_policy_service.py``).
+# ``services/tools/_code_execution_policy.py``).
 DEFAULT_EXEC_TIMEOUT_S = 60.0
 # Headroom on top of what the calls themselves may spend, for the lease a
 # session is opened with: seeding the uploads and collecting the outputs happen
@@ -511,9 +517,9 @@ class SandboxBackend:
     def take_executions(self) -> list[CodeExecution]:
         """The calls executed since the last take, in order, clearing them.
 
-        Consumed by a loop building native result blocks right after the calls it
-        awaited. Clearing means a later loop round cannot attribute an earlier
-        round's executions to its own calls.
+        Consumed by a loop building native result blocks right after each call it
+        awaited, before it runs the next: a code-execution rendering reads the whole
+        buffer as that one call's, so calls run concurrently would swap results.
         """
         executions, self._executions = self._executions, []
         return executions
@@ -602,7 +608,8 @@ def _flatten_result_block(
         parts.append(f"stderr:\n{content.stderr}")
     if content.return_code not in (None, 0):
         parts.append(f"return_code: {content.return_code}")
-    listed = [ref.filename or "?" for ref in content.content]
+    # A reference with no name was never fetched, so there is nothing the model could do with it.
+    listed = [ref.filename for ref in content.content if ref.filename]
     listed += [name for name in [*produced, *file_ids] if name not in listed]
     if listed:
         names = [f"{name} (file_id: {file_ids[name]})" if name in file_ids else name for name in listed]

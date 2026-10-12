@@ -38,6 +38,7 @@ import { useDirtySnapshot } from "@/design-system/forms/useDirtySnapshot"
 import { Dot } from "@/design-system/indicators/Dot"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
+import { Disclosure } from "@/design-system/navigation/Disclosure"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { budgetLabeler } from "@/features/budgets/budgetLabel"
 import {
@@ -53,6 +54,7 @@ import {
 } from "@/shared/api/budgets"
 import {
   useBulkInviteOrganizationMembers,
+  useDeploymentOperator,
   useInviteOrganizationMember,
   useOrganizationContext,
   useOrganizationMembersPage,
@@ -76,8 +78,7 @@ import { useDeployment } from "@/shared/hooks/useDeployment"
 import {
   asMembershipRole,
   canManage,
-  isDeploymentOperator,
-  MEMBERSHIP_ROLES,
+  MEMBERSHIP_ROLE_OPTIONS,
   memberLabel,
   memberRowKey,
   membershipChangeBlockedReason,
@@ -131,11 +132,6 @@ interface WorkspacePlacement {
 // the same fact are findable from one another.
 const DEPLOYMENT_WIDE_COLUMNS = new Set(["access", "spend"])
 
-const ROLE_OPTIONS = MEMBERSHIP_ROLES.map((role) => ({
-  value: role,
-  label: membershipLabel(role),
-}))
-
 /**
  * The frozen dot-and-word: a square mark, an uppercase word in mono, and ink
  * that says how much to care. No chip, because a chip is a box and this page
@@ -185,10 +181,11 @@ export function parseAddresses(text: string): string[] {
 }
 
 // Adding someone is an address plus a role, and optionally the workspaces to
-// drop them into once they accept. The membership lands `invited`, and every
-// deployment gets an accept link to share: emailed as well where mail can be
-// sent, and the only way in where it cannot, since claiming an identity through
-// signup needs mail and accepting with a password does not.
+// drop them into once they accept. The membership lands `invited`. The accept
+// link is emailed where mail can be sent, and comes back to share only when
+// the email did not go out: the only way in on a deployment without mail,
+// since claiming an identity through signup needs mail and accepting with a
+// password does not.
 function InviteMemberForm({
   isOpen,
   onClose,
@@ -285,6 +282,7 @@ function InviteMemberForm({
         // only here, so the acknowledgement is the way out.
         isDismissable={unsent === 0}
         submitLabel="Done"
+        hideCancel
         onSubmit={onClose}
         isPending={false}
       >
@@ -304,7 +302,7 @@ function InviteMemberForm({
           {invited.map((one) => (
             <li key={one.invitation_id} className="flex flex-col gap-1">
               <strong className="break-all text-sm">{one.email}</strong>
-              {one.mail_sent ? (
+              {one.mail_sent || !one.accept_link ? (
                 <span className="text-xs text-muted">Email sent.</span>
               ) : (
                 <CopyableValue
@@ -323,10 +321,12 @@ function InviteMemberForm({
     )
   }
 
-  // After a successful invite: whether it was emailed, and the link either way,
-  // so an operator can forward it even when the email did go out.
+  // After a successful invite: whether it was emailed, and the link to share
+  // when it was not. A delivered link goes to the invitee's mailbox alone.
   if (result) {
-    const acceptLink = absoluteDashboardLink(result.accept_link)
+    const acceptLink = result.accept_link
+      ? absoluteDashboardLink(result.accept_link)
+      : null
     return (
       <FormDialog
         isOpen={isOpen}
@@ -339,6 +339,7 @@ function InviteMemberForm({
         // the way out rather than one of two.
         isDismissable={result.mail_sent}
         submitLabel="Done"
+        hideCancel
         onSubmit={onClose}
         isPending={false}
       >
@@ -346,8 +347,7 @@ function InviteMemberForm({
           {result.mail_sent ? (
             <>
               An email with an accept link was sent to{" "}
-              <strong>{result.email}</strong>. You can also share the link
-              yourself.
+              <strong>{result.email}</strong>.
             </>
           ) : (
             // Not "mail isn't configured": mail_sent is also false when a
@@ -359,14 +359,18 @@ function InviteMemberForm({
             </>
           )}
         </InfoBanner>
-        <CopyableValue value={acceptLink} label="Accept link">
-          <span className="break-all text-xs">{acceptLink}</span>
-        </CopyableValue>
-        <p className="text-xs text-muted">
-          Whoever opens it can join as {result.email}, and choose its first
-          password if that address has never signed in, so send it only to them.
-          It works once, until {formatDateTime(result.expires_at)}.
-        </p>
+        {acceptLink ? (
+          <>
+            <CopyableValue value={acceptLink} label="Accept link">
+              <span className="break-all text-xs">{acceptLink}</span>
+            </CopyableValue>
+            <p className="text-xs text-muted">
+              Whoever opens it can join as {result.email}, and may choose its
+              first password, so send it only to them. It works once, until{" "}
+              {formatDateTime(result.expires_at)}.
+            </p>
+          </>
+        ) : null}
       </FormDialog>
     )
   }
@@ -377,7 +381,7 @@ function InviteMemberForm({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      title="Invitation"
+      title="Invite member"
       submitLabel={
         addresses.length > 1
           ? `Invite ${addresses.length} members`
@@ -400,7 +404,7 @@ function InviteMemberForm({
           className="sm:col-span-2"
           description={
             mail_ready
-              ? "One or more, separated by commas or new lines. An email with an accept link is sent here, and you get the same link to share. The membership becomes active once they follow it."
+              ? "One or more, separated by commas or new lines. An email with an accept link is sent here. The membership becomes active once they follow it."
               : "One or more, separated by commas or new lines. This deployment sends no mail, so you get an accept link to share with them. The membership becomes active once they follow it."
           }
         />
@@ -408,7 +412,7 @@ function InviteMemberForm({
           label="Role"
           value={role}
           onChange={(value) => setRole(asMembershipRole(value) ?? "member")}
-          options={ROLE_OPTIONS}
+          options={MEMBERSHIP_ROLE_OPTIONS}
           shouldReserveMessage={false}
         />
       </div>
@@ -476,7 +480,7 @@ function MemberEditor({
   defaultByWorkspace: ReadonlyMap<string, WorkspaceBudgetDefault>
   placements: WorkspacePlacement[]
   /**
-   * Whether this caller isOperator the deployment, which two halves of this form
+   * Whether this caller operates the deployment, which two halves of this form
    * need and the rest does not. Model access writes the gateway's own `users`
    * row and a workspace ceiling is a `scoped_budgets` row; both are
    * deployment-wide since #821, while placing somebody in a workspace is the
@@ -753,7 +757,7 @@ function MemberEditor({
                         onChange={(next) =>
                           setRow(workspace.id, { role: next })
                         }
-                        options={ROLE_OPTIONS}
+                        options={MEMBERSHIP_ROLE_OPTIONS}
                         disabled={!row.member}
                       />
                     </td>
@@ -812,7 +816,7 @@ export function OrganizationMembersPage() {
   // (otari#838). What those reads feed is withheld with them rather than left
   // rendering an em dash, which on this table cannot be told apart from "this
   // member has no gateway identity yet".
-  const isOperator = isDeploymentOperator(context.data)
+  const { isOperator } = useDeploymentOperator()
   const updateUser = useUpdateUser()
   // The roster row carries where its member is and what they may spend there,
   // and the operator-only spend figures with it (otari#1381). The page used to
@@ -973,7 +977,7 @@ export function OrganizationMembersPage() {
                 }
                 value={member.role}
                 disabled={Boolean(blocked) || update.isPending}
-                options={ROLE_OPTIONS}
+                options={MEMBERSHIP_ROLE_OPTIONS}
                 onChange={(value) => {
                   const role = asMembershipRole(value)
                   if (member.organization_member_id && role) {
@@ -1191,10 +1195,35 @@ export function OrganizationMembersPage() {
             member's name and the Spend column, neither of which a caller who
             does not operate the deployment is shown, so they are only told to
             one. */}
-        {isOperator
-          ? "Who belongs to this organization and what each of them may do. Roles are fixed: owners and admins manage the organization (its workspaces, provider keys, guardrails, pricing and this roster) and read its usage in full, while members and viewers read the workspaces they belong to. No role set here reaches the deployment's own pages, such as Settings and Accounts, which belong to whoever isOperator the gateway. Budgets and API keys do not attach to this list; they attach to the gateway identity a member is linked to, which is what lets a key be issued to them by name. A member with no such link yet shows no access or spend, and cannot own a key until one exists."
-          : "Who belongs to this organization and what each of them may do. Roles are fixed: owners and admins manage the organization (its workspaces, provider keys, guardrails, pricing and this roster) and read its usage in full, while members and viewers read the workspaces they belong to. No role set here reaches the deployment's own pages, such as Settings and Accounts, which belong to whoever isOperator the gateway."}
+        Who belongs to this organization and what each of them may do. Owners
+        and admins manage it; members and viewers read the workspaces they
+        belong to.
       </PageIntro>
+
+      <div className="-mt-2 mb-4 max-w-[38.75rem]">
+        <Disclosure heading="How roles work">
+          <div className="flex flex-col gap-2 text-sm text-muted">
+            <p>
+              Roles are fixed. Owners and admins manage the organization (its
+              workspaces, provider keys, guardrails, pricing and this roster)
+              and read its usage in full, while members and viewers read the
+              workspaces they belong to. No role set here reaches the
+              deployment's own pages, such as Settings and Accounts, which
+              belong to whoever operates the gateway.
+            </p>
+            {/* Access and Spend are shown only to an operator, so only an
+                operator is told about them. */}
+            {isOperator ? (
+              <p>
+                Budgets and API keys do not attach to this list; they attach to
+                the gateway identity a member is linked to, which is what lets a
+                key be issued to them by name. A member with no such link yet
+                shows no access or spend, and cannot own a key until one exists.
+              </p>
+            ) : null}
+          </div>
+        </Disclosure>
+      </div>
 
       {/* `remove.error`/`revoke.error` are deliberately absent: their confirm
           dialogs render each mutation's error themselves, and listing it here

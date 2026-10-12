@@ -12,7 +12,7 @@ from gateway.models.api_keys import APIKey
 from gateway.models.budgets import BudgetReservation, BudgetResetLog
 from gateway.models.files import FileObject
 from gateway.models.inference import BatchRecord
-from gateway.models.providers import ModelAlias
+from gateway.models.providers import ModelAlias, ProviderEndpoint
 from gateway.models.routing import RouterPreference, RoutingMemory, RoutingPolicy
 from gateway.models.tenancy import User as Identity
 from gateway.models.tools import SandboxContainer
@@ -32,12 +32,13 @@ REFERENCING: tuple[Any, ...] = (
     BudgetResetLog,
     BudgetReservation,
     ModelAlias,
+    ProviderEndpoint,
     RoutingPolicy,
     SandboxContainer,
 )
 # Unique on (workspace_id, name, user_id), so a same-named row on both users
 # would collide once moved.
-_NAMED_PER_USER: tuple[Any, ...] = (ModelAlias, RoutingPolicy)
+_NAMED_PER_USER: tuple[Any, ...] = (ModelAlias, ProviderEndpoint, RoutingPolicy)
 
 
 class UserMergeRepository:
@@ -76,6 +77,16 @@ class UserMergeRepository:
             names.extend(rows.scalars().all())
         return names
 
+    async def end_user_collisions(self, source_id: str, target_id: str) -> list[str]:
+        """External ids both users' service keys bill an end user under."""
+        on_target = aliased(User)
+        rows = await self.db.execute(
+            select(User.external_id)
+            .join(on_target, on_target.external_id == User.external_id)
+            .where(User.parent_user_id == source_id, on_target.parent_user_id == target_id)
+        )
+        return [str(external_id) for external_id in rows.scalars().all()]
+
     async def reassign(self, source_id: str, target_id: str) -> dict[str, int]:
         """Point every referencing row at ``target_id``; returns the rows moved per table."""
         moved: dict[str, int] = {}
@@ -87,6 +98,14 @@ class UserMergeRepository:
                 .execution_options(synchronize_session=False)
             )
             moved[model.__tablename__] = getattr(result, "rowcount", 0) or 0
+        # A service key finds its end users by its own user, so they follow the keys.
+        result = await self.db.execute(
+            update(User)
+            .where(User.parent_user_id == source_id)
+            .values(parent_user_id=target_id)
+            .execution_options(synchronize_session=False)
+        )
+        moved["end_users"] = getattr(result, "rowcount", 0) or 0
         return moved
 
     async def reload(self, user: User) -> None:

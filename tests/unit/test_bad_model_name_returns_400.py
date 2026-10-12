@@ -60,6 +60,7 @@ def _make_ctx(resolved_provider: object = None) -> MagicMock:
     # first) are both no-ops without a session, and are covered end to end in
     # tests/integration/test_gateway_rejection_logging.py.
     ctx.db = None
+    ctx.rate_limit_grant = None
     return ctx
 
 
@@ -86,7 +87,7 @@ class _NoHostedCredential:
 @pytest.mark.asyncio
 async def test_resolve_dispatch_provider_returns_cached() -> None:
     """When ctx.resolved_provider is set it is returned without calling resolve_provider_selector."""
-    cached = MagicMock()
+    cached = MagicMock(owned_endpoint=None)
     ctx = _make_ctx(resolved_provider=cached)
     with patch("gateway.api.routes._pipeline.resolve_provider_selector") as mock_rps:
         result = await resolve_dispatch_provider(
@@ -132,7 +133,7 @@ async def test_resolve_dispatch_provider_unknown_provider_raises_400() -> None:
 async def test_resolve_dispatch_provider_fresh_resolution_succeeds() -> None:
     """When ctx.resolved_provider is None and selector is valid, returns resolved."""
     ctx = _make_ctx(resolved_provider=None)
-    fresh = MagicMock()
+    fresh = MagicMock(owned_endpoint=None)
     with patch(
         "gateway.api.routes._pipeline.resolve_provider_selector",
         return_value=fresh,

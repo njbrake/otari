@@ -3,6 +3,7 @@
 import json
 import os
 from collections.abc import Iterator
+from enum import Enum
 from pathlib import Path
 from unittest import mock
 
@@ -15,7 +16,10 @@ from gateway.core.config import GatewayConfig, load_config
 # Each name is a config.yml key, and OTARI_<NAME> is its environment variable.
 _SETTING_NAMES = frozenset(
     {
+        "accept_incoming_trace_context",
         "activation_guide",
+        "agent_recommender_candidates",
+        "agent_recommender_model",
         "aliases",
         "auto_migrate",
         "bootstrap",
@@ -43,11 +47,13 @@ _SETTING_NAMES = frozenset(
         "db_pool_size",
         "db_pool_timeout",
         "db_statement_timeout_ms",
+        "decision_providers",
         "default_pricing",
         "docs_url",
         "email_verification_expiry_hours",
         "enable_docs",
         "enable_metrics",
+        "fetch_tools",
         "file_understanding_enabled",
         "files_backend",
         "files_enabled",
@@ -55,6 +61,7 @@ _SETTING_NAMES = frozenset(
         "files_max_bytes",
         "files_output_max_bytes",
         "files_output_max_files",
+        "files_provider_copy_max_sec",
         "files_provider_upload_enabled",
         "files_provider_upload_ttl_hours",
         "files_retention_hours",
@@ -92,6 +99,7 @@ _SETTING_NAMES = frozenset(
         "oauth_google_client_id",
         "oauth_google_client_secret",
         "open_signup",
+        "passkeys_enabled",
         "password_reset_expiry_hours",
         "platform",
         "port",
@@ -101,11 +109,16 @@ _SETTING_NAMES = frozenset(
         "privacy_url",
         "provider_account_pepper",
         "provider_allow_private_hosts",
+        "provider_endpoints_enabled",
+        "provider_max_retries",
         "providers",
         "public_base_url",
         "public_catalog",
         "public_catalog_rate_limit_per_minute",
+        "rate_limit_redis_url",
         "rate_limit_rpm",
+        "rate_limit_store",
+        "rate_limits",
         "reject_user_mismatch",
         "require_pricing",
         "router_alpha",
@@ -131,6 +144,7 @@ _SETTING_NAMES = frozenset(
         "smtp_tls",
         "smtp_user",
         "stream_missing_usage_policy",
+        "streaming_first_chunk_hold_ms",
         "streaming_keepalive_interval_ms",
         "telemetry_retention_days",
         "terms_url",
@@ -139,13 +153,16 @@ _SETTING_NAMES = frozenset(
         "vision_describe_max_tokens",
         "vision_describe_model",
         "vision_strategy",
+        "web_fetch_default_tool",
         "web_fetch_enabled",
         "web_retrieval_trust_env_proxy",
         "web_search_allow_private_hosts",
         "web_search_backend_token",
+        "web_search_default_tool",
         "web_search_engines",
         "web_search_extract",
         "web_search_intercept",
+        "web_search_max_calls",
         "web_search_max_results",
         "web_search_provider",
         "web_search_provider_api_key",
@@ -170,7 +187,10 @@ def _isolated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
 
 def _default(name: str) -> object:
     value = GatewayConfig.model_fields[name].get_default(call_default_factory=True)
-    return value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    # As it is written in a config file, which holds the enum's value rather than the member.
+    return value.value if isinstance(value, Enum) else value
 
 
 def _environment_value(value: object) -> str:

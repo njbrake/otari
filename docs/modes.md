@@ -39,7 +39,7 @@ providers from configuration or stored credentials.
 SQLite is useful for evaluation. Use PostgreSQL for a durable deployment.
 
 Standalone supports local aliases and routing policies, including failover,
-weighted routing, conditional selection, and learned routing. Multi-provider
+weighted and priority routing, conditional selection, and learned routing. Multi-provider
 fallback is therefore available without otari.ai when you configure a policy.
 
 ## Hosted
@@ -78,7 +78,9 @@ export OTARI_AI_TOKEN=gw_your_gateway_token
 otari serve
 ```
 
-Hybrid serves health, bootstrap, Chat Completions, Messages, and Responses. It
+Hybrid serves health, bootstrap, Chat Completions, Messages, Responses, direct
+MCP tool execution (`POST /api/v1/mcp/execute`), and the guardrail hook check
+(`POST /api/v1/hooks/check`). It
 does not initialize the local management database or use local provider
 configuration. Clients authenticate with an otari.ai user
 token, accepted in the same header forms as standalone mode

@@ -18,7 +18,7 @@ from being reachable again.
 
 import uuid
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +31,7 @@ from gateway.models.playground import (
     MAX_FAVORITE_MODELS,
     MAX_SAVED_COMPARISONS,
     MAX_SAVED_CONVERSATIONS,
+    PlaygroundAttachment,
     PlaygroundComparison,
     PlaygroundComparisonCreate,
     PlaygroundComparisonSummary,
@@ -45,11 +46,13 @@ from gateway.models.playground import (
     PlaygroundMessagePublic,
 )
 from gateway.models.tenancy import User as TenancyUser
-from gateway.models.tools import WorkspaceCodeExecutionPolicy, WorkspaceMcpServer, WorkspaceWebSearchConfig
+from gateway.models.tools import WorkspaceMcpServer, WorkspaceWebSearchConfig
 from gateway.models.users import User
 from gateway.repositories.users_repository import get_or_create_attribution_user
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import resolve_workspace_in_organization
+from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
+from gateway.services.tools import WorkspaceCodeExecutionPolicies
 from gateway.services.workspace_scope import organization_default_workspace_id
 from gateway.types.session_principal import SessionPrincipal
 
@@ -87,7 +90,7 @@ async def resolve_playground_workspace(
     Every Playground route resolves through here, reads included, so a read and a
     completion can never disagree about which workspace a caller reached.
     """
-    organizations = OrganizationService(db, membership_listener=None)
+    organizations = OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener())
     organization = await organizations.get_active_organization_for_user(identity)
 
     resolved = workspace_id
@@ -208,17 +211,84 @@ class PlaygroundToolAvailability:
 
     web_search: ToolAvailability
     code_execution: ToolAvailability
+    files: ToolAvailability
     mcp_servers: list[McpServerAvailability]
 
 
 _WORKSPACE_DISABLED = "Turned off for this workspace."
+_WORKSPACE_NOT_ENABLED = "Not turned on for this workspace."
 _NOT_CONFIGURED = "No backend is configured on this deployment."
+_FILES_OFF = "File uploads are turned off on this deployment."
+_FILES_NOT_FORWARDED = "This deployment's models run on another gateway, which cannot read files stored here."
+
+
+class PlaygroundToolOffer(Protocol):
+    """What the deployment offers a Playground message before its workspace narrows it.
+
+    Bound per mode where the app is wired, so nothing here reads the mode.
+    """
+
+    def code_execution(self, workspace_enabled: bool | None) -> ToolAvailability:
+        """Code execution, given the workspace's stored switch (``None`` when it stored none)."""
+        ...
+
+    def files(self) -> ToolAvailability:
+        """Whether a message may attach an uploaded file."""
+        ...
+
+
+class LocalToolOffer:
+    """A deployment that runs the Playground's completions itself, with its own sandbox and file store."""
+
+    def __init__(self, config: GatewayConfig) -> None:
+        self._config = config
+
+    def code_execution(self, workspace_enabled: bool | None) -> ToolAvailability:
+        """The same question the request path asks, so the menu cannot hide a tool a request may use."""
+        return _tool_availability(self._config.sandbox_configured(), workspace_enabled)
+
+    def files(self) -> ToolAvailability:
+        """Uploads, unless the deployment turned them off."""
+        if not self._config.files_enabled:
+            return ToolAvailability(configured=False, enabled=False, reason=_FILES_OFF)
+        return ToolAvailability(configured=True, enabled=True)
+
+
+class ForwardedToolOffer:
+    """A hosted control plane, which forwards each Playground completion to its data plane."""
+
+    def __init__(self, config: GatewayConfig) -> None:
+        self._config = config
+
+    def code_execution(self, workspace_enabled: bool | None) -> ToolAvailability:
+        """Code execution, read the way the platform reads it.
+
+        The platform's sandbox behind the data plane runs the code, so this
+        process's own sandbox config says nothing. And there a workspace turns
+        code execution on, so no row means off rather than "no narrowing".
+        """
+        if workspace_enabled is None:
+            return ToolAvailability(configured=True, enabled=False, reason=_WORKSPACE_NOT_ENABLED)
+        if workspace_enabled is False:
+            return ToolAvailability(configured=True, enabled=False, reason=_WORKSPACE_DISABLED)
+        return ToolAvailability(configured=True, enabled=True)
+
+    def files(self) -> ToolAvailability:
+        """No uploads: the data plane resolves a ``file_id`` against its own store, and would not find one stored here.
+
+        So an upload is refused rather than accepted and then lost.
+        """
+        if not self._config.files_enabled:
+            return ToolAvailability(configured=False, enabled=False, reason=_FILES_OFF)
+        return ToolAvailability(configured=False, enabled=False, reason=_FILES_NOT_FORWARDED)
 
 
 async def resolve_tool_availability(
     db: AsyncSession,
     *,
     config: GatewayConfig,
+    offer: PlaygroundToolOffer,
+    code_execution_policies: WorkspaceCodeExecutionPolicies,
     workspace_id: uuid.UUID,
 ) -> PlaygroundToolAvailability:
     """What the caller's workspace may attach to a Playground message.
@@ -231,23 +301,13 @@ async def resolve_tool_availability(
     reachability probe belongs to the request that needs the backend, not to
     drawing a menu.
     """
-    # The same question the request path asks, asked the same way, so the menu
-    # cannot hide a tool a request would then be allowed to use.
-    sandbox_configured = config.sandbox_configured()
-    web_search_configured = config.web_search_configured()
-
     web_search_row = (
         await db.execute(
             select(WorkspaceWebSearchConfig.enabled).where(WorkspaceWebSearchConfig.workspace_id == workspace_id)
         )
     ).scalar_one_or_none()
-    code_execution_row = (
-        await db.execute(
-            select(WorkspaceCodeExecutionPolicy.enabled).where(
-                WorkspaceCodeExecutionPolicy.workspace_id == workspace_id
-            )
-        )
-    ).scalar_one_or_none()
+    code_execution_policy = await code_execution_policies.resolve(workspace_id)
+    code_execution_row = code_execution_policy.enabled if code_execution_policy is not None else None
     servers = (
         (
             await db.execute(
@@ -261,8 +321,9 @@ async def resolve_tool_availability(
     )
 
     return PlaygroundToolAvailability(
-        web_search=_tool_availability(web_search_configured, web_search_row),
-        code_execution=_tool_availability(sandbox_configured, code_execution_row),
+        web_search=_tool_availability(config.web_search_configured(), web_search_row),
+        code_execution=offer.code_execution(code_execution_row),
+        files=offer.files(),
         mcp_servers=[
             McpServerAvailability(
                 id=server.id,
@@ -435,6 +496,7 @@ async def save_conversation(
                 role=message.role,
                 content=message.content,
                 reasoning=message.reasoning,
+                attachments=[attachment.model_dump() for attachment in message.attachments],
             )
         )
     await _prune_oldest(
@@ -485,7 +547,15 @@ async def read_conversation_messages(
         .scalars()
         .all()
     )
-    return [PlaygroundMessagePublic(role=row.role, content=row.content, reasoning=row.reasoning) for row in rows]
+    return [
+        PlaygroundMessagePublic(
+            role=row.role,
+            content=row.content,
+            reasoning=row.reasoning,
+            attachments=[PlaygroundAttachment.model_validate(attachment) for attachment in row.attachments],
+        )
+        for row in rows
+    ]
 
 
 async def delete_conversation(

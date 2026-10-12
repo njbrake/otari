@@ -1447,7 +1447,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"budget_duration_sec\": 0,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"request_limit\": 0,\n  \"reset_alignment\": \"calendar_day\",\n  \"token_limit\": 0\n}"
+              "raw": "{\n  \"budget_duration_sec\": 1,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"request_limit\": 0,\n  \"reset_alignment\": \"calendar_day\",\n  \"rpm_limit\": 1,\n  \"token_limit\": 0,\n  \"tpm_limit\": 1\n}"
             },
             "description": "Create a new budget.",
             "header": [
@@ -1498,6 +1498,47 @@
           }
         },
         {
+          "name": "Put Budget",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"budget_duration_sec\": 1,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"request_limit\": 0,\n  \"reset_alignment\": \"calendar_day\",\n  \"rpm_limit\": 1,\n  \"token_limit\": 0,\n  \"tpm_limit\": 1\n}"
+            },
+            "description": "Create a budget under an id you choose, or replace the one with that id.\n\nEvery field takes the value in the body, and a field left out is cleared, so\nthe same request always leaves the same budget. Answers 201 when it created\nthe budget. Users on a budget it replaces stay on it, and its ceilings follow\na change of reset period. A budget an organization owns is not replaced.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "budgets",
+                ":budget_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/budgets/:budget_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "budget_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Update Budget",
           "request": {
             "body": {
@@ -1507,7 +1548,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"budget_duration_sec\": 0,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"request_limit\": 0,\n  \"reset_alignment\": \"calendar_day\",\n  \"token_limit\": 0\n}"
+              "raw": "{\n  \"budget_duration_sec\": 1,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"request_limit\": 0,\n  \"reset_alignment\": \"calendar_day\",\n  \"rpm_limit\": 1,\n  \"token_limit\": 0,\n  \"tpm_limit\": 1\n}"
             },
             "description": "Update a budget.",
             "header": [
@@ -1541,7 +1582,7 @@
         {
           "name": "Delete Budget",
           "request": {
-            "description": "Delete a budget.\n\nRefused with 409 while anything still names this budget: a workspace handing\nit to its members, or a scoped ceiling enforcing it. Both foreign keys are\n``RESTRICT``, so the database would refuse either anyway, but as an\n``IntegrityError`` reported as \"Database error\" with nothing naming what to\ngo and change. Checked here so the refusal can say which, and where.",
+            "description": "Delete a budget the deployment owns.\n\nRefused with 409 for an organization's budget: the operator may edit one\n(``PATCH`` retimes its ceilings) but deleting it would take a budget the\ntenant defined out from under them.\n\nRefused with 409, too, while anything still names this budget: a workspace\nhanding it to its members, or a scoped ceiling enforcing it. The refusal says\nwhich, and where.\n\nGateway users assigned to the budget are left uncapped, as the dashboard's\nconfirmation says, its reset history is deleted with it, and it is taken off\nevery service key's ``end_user_budget_ids``. A budget that is a key's\n``end_user_budget_id`` is refused (409) until that key's default changes.",
             "header": [],
             "method": "DELETE",
             "url": {
@@ -1636,25 +1677,103 @@
                   "value": ""
                 },
                 {
-                  "description": "Narrow to models whose name, catalog id or any selector contains this text, case-insensitively.",
+                  "description": "Case-insensitive text in a model's name, vendor, id, selectors, or provider instances.",
                   "disabled": true,
                   "key": "search",
                   "value": ""
                 },
                 {
-                  "description": "Number of models to skip",
+                  "description": "Number of matching models to skip.",
                   "disabled": true,
                   "key": "skip",
                   "value": ""
                 },
                 {
-                  "description": "Maximum number of models to return",
+                  "description": "Maximum number of models to return.",
                   "disabled": true,
                   "key": "limit",
                   "value": ""
+                },
+                {
+                  "description": "Match any named provider instance.",
+                  "disabled": true,
+                  "key": "provider",
+                  "value": ""
+                },
+                {
+                  "description": "Match any vendor; an empty value names unknown vendors.",
+                  "disabled": true,
+                  "key": "vendor",
+                  "value": ""
+                },
+                {
+                  "description": "Require every input modality.",
+                  "disabled": true,
+                  "key": "input_modality",
+                  "value": ""
+                },
+                {
+                  "description": "Require every output modality.",
+                  "disabled": true,
+                  "key": "output_modality",
+                  "value": ""
+                },
+                {
+                  "description": "Require every capability.",
+                  "disabled": true,
+                  "key": "capability",
+                  "value": ""
+                },
+                {
+                  "description": "Minimum context window; unknown windows do not match.",
+                  "disabled": true,
+                  "key": "min_context",
+                  "value": ""
+                },
+                {
+                  "description": "Maximum cheapest input price per million tokens; unpriced models do not match.",
+                  "disabled": true,
+                  "key": "max_input",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "pricing",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "source",
+                  "value": ""
+                },
+                {
+                  "description": "Release window ending today (UTC); zero disables it. Unknown and future releases do not match.",
+                  "disabled": true,
+                  "key": "released_within_days",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "sort",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "direction",
+                  "value": ""
+                },
+                {
+                  "description": "Include the filter choices drawn from the whole authorized catalog.",
+                  "disabled": true,
+                  "key": "include_facets",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/catalog/models?at_context=&search=&skip=&limit="
+              "raw": "{{baseUrl}}/api/v1/catalog/models?at_context=&search=&skip=&limit=&provider=&vendor=&input_modality=&output_modality=&capability=&min_context=&max_input=&pricing=&source=&released_within_days=&sort=&direction=&include_facets="
             }
           }
         },
@@ -1752,6 +1871,77 @@
     {
       "item": [
         {
+          "name": "Create Decision",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"model\": \"typesafe:jev-latest\",\n  \"questions\": {\n    \"urgency\": {\n      \"instructions\": \"Does this message express urgency?\",\n      \"type\": \"noul\"\n    }\n  },\n  \"state\": \"The Stripe integration has failed for 3 days and I'm losing sales.\"\n}"
+            },
+            "description": "Answer typed questions (noul, choice, score) about a state.\n\n``model`` is ``<provider>:<model>``, where the provider is a ``decision_providers``\nentry, for example ``typesafe:jev-latest`` or ``openrouter:typesafe/jev-1.13``.\n\nAuthentication modes:\n- Master key: the ``user`` field is required and may name any existing user.\n- API key: usage and spend bind to the key's own user; a ``user`` naming a\n  different user is rejected with 403 unless mismatch rejection is off.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "decisions"
+              ],
+              "raw": "{{baseUrl}}/api/v1/decisions"
+            }
+          }
+        },
+        {
+          "name": "Create Systemone Decision",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"model\": \"typesafe:jev-latest\",\n  \"questions\": {\n    \"urgency\": {\n      \"instructions\": \"Does this message express urgency?\",\n      \"type\": \"noul\"\n    }\n  },\n  \"state\": \"The Stripe integration has failed for 3 days and I'm losing sales.\"\n}"
+            },
+            "description": "Answer typed questions at the path TypeSafe's SDK and llama-server use.\n\nIdentical to ``POST /api/v1/decisions``; point the client's base URL at the gateway's ``/api``.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "systemone"
+              ],
+              "raw": "{{baseUrl}}/api/v1/systemone"
+            }
+          }
+        }
+      ],
+      "name": "decisions"
+    },
+    {
+      "item": [
+        {
           "name": "Create Embedding",
           "request": {
             "body": {
@@ -1763,7 +1953,7 @@
               },
               "raw": "{\n  \"model\": \"string\",\n  \"input\": \"string\"\n}"
             },
-            "description": "OpenAI-compatible embeddings endpoint.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
+            "description": "OpenAI-compatible embeddings endpoint.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user\n\nA priced response carries its cost on `usage` as `cost_usd` (a six-decimal\nUSD string) and `pricing_source`, as a chat completion does; an unpriced one\ncarries neither.",
             "header": [
               {
                 "key": "Content-Type",
@@ -2258,7 +2448,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"allowed_models\": [\n    \"string\"\n  ],\n  \"capture_agent_telemetry\": false,\n  \"exclude_from_budget\": false,\n  \"expires_at\": \"2024-01-01T00:00:00Z\",\n  \"key_name\": \"string\",\n  \"metadata\": {},\n  \"reject_user_mismatch\": false,\n  \"user_id\": \"string\",\n  \"workspace_id\": \"00000000-0000-0000-0000-000000000000\"\n}"
+              "raw": "{\n  \"allowed_models\": [\n    \"string\"\n  ],\n  \"capture_agent_telemetry\": false,\n  \"end_user_budget_id\": \"string\",\n  \"end_user_budget_ids\": [\n    \"string\"\n  ],\n  \"exclude_from_budget\": false,\n  \"expires_at\": \"2024-01-01T00:00:00Z\",\n  \"is_service_key\": false,\n  \"key_name\": \"string\",\n  \"metadata\": {},\n  \"reject_user_mismatch\": false,\n  \"user_id\": \"string\",\n  \"workspace_id\": \"00000000-0000-0000-0000-000000000000\"\n}"
             },
             "description": "Create a new API key in the caller's organization.\n\nRequires master key authentication.\n\nIf user_id is provided, the key will be associated with that user (creates user if it doesn't exist).\nIf user_id is not provided, the key is associated with the shared \"default\" user, which is created\non first use. Keys without an explicit owner therefore share one identity, and so share budget,\nusage, and files.\n\n``workspace_id`` names a workspace in the caller's organization, and omitting\nit mints into that organization's default workspace. A key resolves that\norganization's provider credentials and bills there, so minting into another\norganization's workspace would spend its budget on its credentials.",
             "header": [
@@ -2318,7 +2508,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"allowed_models\": [\n    \"string\"\n  ],\n  \"capture_agent_telemetry\": false,\n  \"exclude_from_budget\": false,\n  \"expires_at\": \"2024-01-01T00:00:00Z\",\n  \"is_active\": false,\n  \"key_name\": \"string\",\n  \"metadata\": {},\n  \"reject_user_mismatch\": false\n}"
+              "raw": "{\n  \"allowed_models\": [\n    \"string\"\n  ],\n  \"capture_agent_telemetry\": false,\n  \"end_user_budget_id\": \"string\",\n  \"end_user_budget_ids\": [\n    \"string\"\n  ],\n  \"exclude_from_budget\": false,\n  \"expires_at\": \"2024-01-01T00:00:00Z\",\n  \"is_active\": false,\n  \"is_service_key\": false,\n  \"key_name\": \"string\",\n  \"metadata\": {},\n  \"reject_user_mismatch\": false\n}"
             },
             "description": "Update an API key in the caller's organization.\n\nRequires master key authentication.",
             "header": [
@@ -2370,6 +2560,136 @@
                 {
                   "description": "path parameter",
                   "key": "key_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get End User",
+          "request": {
+            "description": "Get an end user of a service key by the id the service names it by.\n\nEnd users belong to the key's user, so every service key of one user reaches the same end users.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "keys",
+                ":key_id",
+                "end-users",
+                ":external_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/keys/:key_id/end-users/:external_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "key_id",
+                  "value": ""
+                },
+                {
+                  "description": "path parameter",
+                  "key": "external_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Put End User",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"budget_id\": \"string\"\n}"
+            },
+            "description": "Put an end user of a service key on a budget from the key's list, creating it if it does not exist yet.\n\nAnswers 201 when the end user was created, so one can be placed on a budget before its first request. An end\nuser already on the budget keeps its current period, so repeating the call changes nothing. A budget that is\nnot on the key's ``end_user_budget_ids`` is refused with 403 and ``end_user_budget_not_allowed``.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "keys",
+                ":key_id",
+                "end-users",
+                ":external_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/keys/:key_id/end-users/:external_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "key_id",
+                  "value": ""
+                },
+                {
+                  "description": "path parameter",
+                  "key": "external_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update End User",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"blocked\": false,\n  \"budget_id\": \"string\"\n}"
+            },
+            "description": "Block, unblock or move an end user of a service key.\n\nA move restarts the end user's period on the new budget but keeps what it has spent and used so far, as the users\nAPI does. The budget must be on the key's ``end_user_budget_ids``.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "keys",
+                ":key_id",
+                "end-users",
+                ":external_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/keys/:key_id/end-users/:external_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "key_id",
+                  "value": ""
+                },
+                {
+                  "description": "path parameter",
+                  "key": "external_id",
                   "value": ""
                 }
               ]
@@ -2552,7 +2872,7 @@
         {
           "name": "List Models",
           "request": {
-            "description": "List all available models.\n\nReturns models auto-discovered from configured providers, enriched with\npricing data from the model_pricing table when available. Models that only\nexist in the pricing table are also included for backward compatibility.",
+            "description": "List all available models.\n\nReturns models auto-discovered from configured providers, enriched with\npricing data from the model_pricing table when available, and with each\nmodel's token limits: the context window from models.dev, or from\ngenai-prices where models.dev has none, and the output limit from models.dev\nalone. A limit neither knows is null. Models that only exist in the pricing\ntable are also included for backward compatibility.",
             "header": [],
             "method": "GET",
             "url": {
@@ -3410,7 +3730,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"budget_duration_sec\": 0,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"request_limit\": 0,\n  \"reset_alignment\": \"calendar_day\",\n  \"token_limit\": 0\n}"
+              "raw": "{\n  \"budget_duration_sec\": 1,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"request_limit\": 0,\n  \"reset_alignment\": \"calendar_day\",\n  \"token_limit\": 0\n}"
             },
             "description": "Define a budget owned by this organization. Owners and admins only.",
             "header": [
@@ -3445,7 +3765,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"budget_duration_sec\": 0,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"request_limit\": 0,\n  \"reset_alignment\": \"calendar_day\",\n  \"token_limit\": 0\n}"
+              "raw": "{\n  \"budget_duration_sec\": 1,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"request_limit\": 0,\n  \"reset_alignment\": \"calendar_day\",\n  \"token_limit\": 0\n}"
             },
             "description": "Change a budget's label, figure or period.\n\nEvery ceiling naming it is held to the new figure from here on, which is the\npoint of naming a budget rather than typing an amount per place it applies.",
             "header": [
@@ -5404,6 +5724,40 @@
           }
         },
         {
+          "name": "Recommend Model For Agent",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"agent_type\": \"Explore\",\n  \"description\": \"Find the budget reservation code\",\n  \"harness\": \"claude-code\",\n  \"parent_model\": \"claude-opus-5\",\n  \"prompt\": \"Find where budgets are reserved before dispatch and report the call chain.\",\n  \"session_id\": \"bf05abe2-5ff2-4eb0-8459-ab578d5c9468\",\n  \"tool_use_id\": \"toolu_01Ab3dEfGh\"\n}"
+            },
+            "description": "Recommend the model a subagent about to start should run on.\n\nThe harness sends the facts it holds at spawn time: its own ids for the\nsession and the spawning tool call, the subagent type, the task, the\nparent's model and the model the caller asked for, if any. The recommender\nthis build binds picks one of the candidate models and the answer names it.\nA standalone deployment asks the decision model `agent_recommender_model`\nnames to choose among `agent_recommender_candidates` for Claude Code and\namong the request's own `candidates` for pi; a hosted build may bind a\nrecommender of its own, which the caller never configures. Where\nthe recommender reports them, the answer also carries a one-line reason\nand its probability for each candidate.\n\nAuthentication modes:\n- Master key: the ``user`` field is required and names who the decision is billed to.\n- API key: the decision is billed to the key's own user.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "routing",
+                "recommend"
+              ],
+              "raw": "{{baseUrl}}/api/v1/routing/recommend"
+            }
+          }
+        },
+        {
           "name": "Routing Memory Status",
           "request": {
             "description": "Report how warm one user's routing memory is in one workspace, per pool.\n\n``user_id`` is required rather than optional because there is no aggregate\nanswer: warmth is per user, and a total across users would describe a pool\nthat no request ever votes over. The same holds across workspaces, which is\nwhy ``workspace_id`` narrows rather than aggregating; it merely defaults\ninstead of being required, because a single-workspace deployment has one\nanswer.",
@@ -5545,6 +5899,12 @@
                   "value": ""
                 },
                 {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
                   "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
                   "disabled": true,
                   "key": "api_key_id",
@@ -5695,7 +6055,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage?sort=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage?sort=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -5785,6 +6145,12 @@
                   "value": ""
                 },
                 {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
                   "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
                   "disabled": true,
                   "key": "api_key_id",
@@ -5935,7 +6301,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/count?sort=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/count?sort=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -6049,6 +6415,12 @@
                   "value": ""
                 },
                 {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
                   "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
                   "disabled": true,
                   "key": "api_key_id",
@@ -6175,7 +6547,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/groups?group_by=api_key&search=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/groups?group_by=api_key&search=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -6277,6 +6649,12 @@
                   "value": ""
                 },
                 {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
                   "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
                   "disabled": true,
                   "key": "api_key_id",
@@ -6403,7 +6781,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/series?group_by=model&bucket=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/series?group_by=model&bucket=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -6469,6 +6847,12 @@
                   "value": ""
                 },
                 {
+                  "description": "A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key.",
+                  "disabled": true,
+                  "key": "group_by_tag",
+                  "value": ""
+                },
+                {
                   "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
                   "disabled": true,
                   "key": "start_date",
@@ -6526,6 +6910,12 @@
                   "description": "Filter to a single session/project label (the source_label carried by imported usage)",
                   "disabled": true,
                   "key": "source_label",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
                   "value": ""
                 },
                 {
@@ -6655,12 +7045,379 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&rank_order=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&rank_order=&group_by_tag=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }
       ],
       "name": "organization-usage"
+    },
+    {
+      "item": [
+        {
+          "name": "List Org Web Search Keys",
+          "request": {
+            "description": "List the caller's organization's web search keys. Organization owners and admins only.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "web-search-keys"
+              ],
+              "query": [
+                {
+                  "description": "Include archived keys.",
+                  "disabled": true,
+                  "key": "include_archived",
+                  "value": ""
+                },
+                {
+                  "description": "Number of records to skip",
+                  "disabled": true,
+                  "key": "skip",
+                  "value": ""
+                },
+                {
+                  "description": "Maximum number of records to return",
+                  "disabled": true,
+                  "key": "limit",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/web-search-keys?include_archived=&skip=&limit="
+            }
+          }
+        },
+        {
+          "name": "Create Org Web Search Key",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"api_key\": \"<your Tavily API key>\",\n  \"name\": \"production\",\n  \"provider\": \"tavily\"\n}"
+            },
+            "description": "Add a web search key to the caller's organization. Organization owners and admins only.\n\nA workspace with a usable key searches with it rather than with the deployment's search.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "web-search-keys"
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/web-search-keys"
+            }
+          }
+        },
+        {
+          "name": "Update Org Web Search Key",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"api_key\": \"string\",\n  \"name\": \"string\"\n}"
+            },
+            "description": "Rename a web search key or replace its secret. Organization owners and admins only.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "web-search-keys",
+                ":key_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/web-search-keys/:key_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "key_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Org Web Search Key",
+          "request": {
+            "description": "Delete an archived web search key. Organization owners and admins only.",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "web-search-keys",
+                ":key_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/web-search-keys/:key_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "key_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Archive Org Web Search Key",
+          "request": {
+            "description": "Take a web search key out of use. Organization owners and admins only.",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "web-search-keys",
+                ":key_id",
+                "archive"
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/web-search-keys/:key_id/archive",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "key_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set Org Default Web Search Key",
+          "request": {
+            "description": "Make a web search key its provider's organization default. Organization owners and admins only.",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "web-search-keys",
+                ":key_id",
+                "default"
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/web-search-keys/:key_id/default",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "key_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Restore Org Web Search Key",
+          "request": {
+            "description": "Put an archived web search key back in use. Organization owners and admins only.",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "web-search-keys",
+                ":key_id",
+                "restore"
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/web-search-keys/:key_id/restore",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "key_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Workspace Web Search Keys",
+          "request": {
+            "description": "The organization's web search keys as this workspace sees them, and which one it searches with.\n\nAny member of the workspace may read it. ``is_effective`` is decided across every key, not only this page.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                ":workspace_id",
+                "web-search-keys"
+              ],
+              "query": [
+                {
+                  "description": "Number of records to skip",
+                  "disabled": true,
+                  "key": "skip",
+                  "value": ""
+                },
+                {
+                  "description": "Maximum number of records to return",
+                  "disabled": true,
+                  "key": "limit",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/web-search-keys?skip=&limit=",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "workspace_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set Workspace Web Search Key Override",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"is_default\": true\n}"
+            },
+            "description": "Pin a web search key as this workspace's own, or turn it off for this workspace.\n\nOrganization owners and admins, or this workspace's owners and admins. Answers with the list's first page.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                ":workspace_id",
+                "web-search-keys",
+                ":key_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/web-search-keys/:key_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "path parameter",
+                  "key": "key_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reset Workspace Web Search Key Override",
+          "request": {
+            "description": "Return this workspace to inheriting the key. Idempotent. Answers with the list's first page.",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                ":workspace_id",
+                "web-search-keys",
+                ":key_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/web-search-keys/:key_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "path parameter",
+                  "key": "key_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "web-search-keys"
     },
     {
       "item": [
@@ -7081,6 +7838,110 @@
                 }
               ],
               "raw": "{{baseUrl}}/api/v1/playground/favorite-models?workspace_id="
+            }
+          }
+        },
+        {
+          "name": "List Playground Files",
+          "request": {
+            "description": "The caller's own files in one workspace, newest first, in OpenAI's list shape.\n\nEvery file the caller owns there is listed, including one uploaded with an\nAPI key of theirs in the same workspace, because a message here can attach it.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "playground",
+                "files"
+              ],
+              "query": [
+                {
+                  "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "limit",
+                  "value": ""
+                },
+                {
+                  "description": "",
+                  "disabled": true,
+                  "key": "after",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/playground/files?workspace_id=&limit=&after="
+            }
+          }
+        },
+        {
+          "name": "Upload Playground File",
+          "request": {
+            "description": "Upload a file for the caller, in a workspace they belong to.\n\nThe row is owned by the same principal a Playground completion runs as, so a\n``file_id`` returned here resolves in the caller's own messages and in nobody\nelse's. ``POST /api/v1/files`` takes an API key, which a dashboard session\ndoes not hold; this is the session's way in.",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "playground",
+                "files"
+              ],
+              "query": [
+                {
+                  "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/playground/files?workspace_id="
+            }
+          }
+        },
+        {
+          "name": "Delete Playground File",
+          "request": {
+            "description": "Delete one of the caller's files. Another identity's answers 404, as a nonexistent one does.\n\nA saved transcript that attached the file keeps its record of the\nattachment, but the file is gone, so sending that turn again does not send\nits contents.",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "playground",
+                "files",
+                ":file_id"
+              ],
+              "query": [
+                {
+                  "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/playground/files/:file_id?workspace_id=",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "file_id",
+                  "value": ""
+                }
+              ]
             }
           }
         },
@@ -7762,6 +8623,309 @@
     {
       "item": [
         {
+          "name": "List Provider Endpoints",
+          "request": {
+            "description": "List owned provider endpoints, narrowed by owner when given. Keys are never returned.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "provider-endpoints"
+              ],
+              "query": [
+                {
+                  "description": "Only endpoints this workspace owns.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "Only endpoints this user owns.",
+                  "disabled": true,
+                  "key": "user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Number of records to skip",
+                  "disabled": true,
+                  "key": "skip",
+                  "value": ""
+                },
+                {
+                  "description": "Maximum number of records to return",
+                  "disabled": true,
+                  "key": "limit",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/provider-endpoints?workspace_id=&user_id=&skip=&limit="
+            }
+          }
+        },
+        {
+          "name": "Create Provider Endpoint",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"name\": \"string\",\n  \"provider\": \"string\",\n  \"api_base\": \"string\"\n}"
+            },
+            "description": "Register an endpoint for a workspace, or for one user in it.\n\nIt is reachable as ``<name>:<model>`` by its owner as soon as this returns on\nthis worker, and on the others within 30 seconds.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "provider-endpoints"
+              ],
+              "raw": "{{baseUrl}}/api/v1/provider-endpoints"
+            }
+          }
+        },
+        {
+          "name": "Get Provider Endpoint",
+          "request": {
+            "description": "Read one endpoint. The key is never returned, only its last four characters.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "provider-endpoints",
+                ":endpoint_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/provider-endpoints/:endpoint_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "endpoint_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Provider Endpoint",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"api_base\": \"string\",\n  \"api_key\": \"string\",\n  \"default_params\": {},\n  \"name\": \"string\",\n  \"provider\": \"string\"\n}"
+            },
+            "description": "Change an endpoint's name, provider, base URL, key or default fields. The owner cannot change.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "provider-endpoints",
+                ":endpoint_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/provider-endpoints/:endpoint_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "endpoint_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Provider Endpoint",
+          "request": {
+            "description": "Delete an endpoint. Its name stops resolving at once on this worker, within 30 seconds elsewhere.",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "provider-endpoints",
+                ":endpoint_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/provider-endpoints/:endpoint_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "endpoint_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "provider-endpoints"
+    },
+    {
+      "item": [
+        {
+          "name": "List Rate Limit Rules",
+          "request": {
+            "description": "List every rule in effect: the config.yml rules, then the ones stored here.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rate-limits"
+              ],
+              "raw": "{{baseUrl}}/api/v1/rate-limits"
+            }
+          }
+        },
+        {
+          "name": "Create Rate Limit Rule",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"name\": \"keys\",\n  \"per\": \"key\",\n  \"rpm\": 600,\n  \"tpm\": 200000\n}"
+            },
+            "description": "Add a rule. It applies from the next request on this replica, and on every replica within 30 seconds.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rate-limits"
+              ],
+              "raw": "{{baseUrl}}/api/v1/rate-limits"
+            }
+          }
+        },
+        {
+          "name": "Update Rate Limit Rule",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"rpm\": 1200\n}"
+            },
+            "description": "Change a stored rule. Requests it already counted stay counted. A config.yml rule answers 409.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rate-limits",
+                ":name"
+              ],
+              "raw": "{{baseUrl}}/api/v1/rate-limits/:name",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "name",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Rate Limit Rule",
+          "request": {
+            "description": "Remove a stored rule. A config.yml rule answers 409.",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rate-limits",
+                ":name"
+              ],
+              "raw": "{{baseUrl}}/api/v1/rate-limits/:name",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "name",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "rate-limits"
+    },
+    {
+      "item": [
+        {
           "name": "Create Rerank",
           "request": {
             "body": {
@@ -7773,7 +8937,7 @@
               },
               "raw": "{\n  \"model\": \"string\",\n  \"query\": \"string\",\n  \"documents\": [\n    \"string\"\n  ]\n}"
             },
-            "description": "Rerank documents by relevance to a query.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
+            "description": "Rerank documents by relevance to a query.\n\nBilling: a model priced per request (``unit: requests``) is charged per\nsearch unit the provider reports, or for one unit when it reports none. A\nmodel priced per token is charged on the input tokens the provider reports.\n\n``usage`` carries what the gateway metered: the provider's tokens, the\nsearch units billed when the model is priced per request, and, when the\nrequest was priced, ``cost_usd`` and ``pricing_source`` as a completion's\nusage does. ``meta`` is the provider's own billing report, unchanged.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
             "header": [
               {
                 "key": "Content-Type",
@@ -8027,7 +9191,7 @@
               },
               "raw": "{\n  \"max_results\": 5,\n  \"query\": \"otari llm gateway\"\n}"
             },
-            "description": "Run a search against a configured search tool.\n\nThe tool is taken from ``search_tool_name``, which may be omitted when\nexactly one tool is configured.\n\nAuthentication modes:\n- Master key: the ``user`` field is required and may name any existing user.\n- API key: usage and spend always bind to the key's own user. A ``user``\n  field naming a different user is rejected with 403 (or ignored, when the\n  key's own ``reject_user_mismatch`` is false, or the deployment-wide\n  setting is disabled and the key does not override it); it is never billed\n  to that user.",
+            "description": "Run a search against a configured search tool.\n\nThe tool is taken from ``search_tool_name``, which may be omitted when\nexactly one tool is configured.\n\nAuthentication modes:\n- Master key: the ``user`` field is required and may name any existing user.\n- API key: usage and spend bind to the key's own user. A ``user`` field\n  naming a different user is rejected with 403 (or ignored, when the key's\n  own ``reject_user_mismatch`` is false, or the deployment-wide setting is\n  disabled and the key does not override it); it is never billed to that\n  user.\n- Service key: a ``user`` field names one of the key owner's end users,\n  created on first use on the budget ``Otari-End-User-Budget`` names (or\n  the key's default), and is billed and rate limited as that end user, as\n  on chat completions.",
             "header": [
               {
                 "key": "Content-Type",
@@ -8060,7 +9224,7 @@
               },
               "raw": "{\n  \"max_results\": 5,\n  \"query\": \"otari llm gateway\"\n}"
             },
-            "description": "Run a search against the search tool named in the path.\n\nIdentical to ``POST /api/v1/search`` except that the path names the tool, which\nis the form LiteLLM clients use. Any ``search_tool_name`` in the body is\nignored.\n\nAuthentication modes:\n- Master key: the ``user`` field is required and may name any existing user.\n- API key: usage and spend always bind to the key's own user. A ``user``\n  field naming a different user is rejected with 403 (or ignored, when the\n  key's own ``reject_user_mismatch`` is false, or the deployment-wide\n  setting is disabled and the key does not override it); it is never billed\n  to that user.",
+            "description": "Run a search against the search tool named in the path.\n\nIdentical to ``POST /api/v1/search`` except that the path names the tool, which\nis the form LiteLLM clients use. Any ``search_tool_name`` in the body is\nignored.\n\nAuthentication modes:\n- Master key: the ``user`` field is required and may name any existing user.\n- API key: usage and spend bind to the key's own user. A ``user`` field\n  naming a different user is rejected with 403 (or ignored, when the key's\n  own ``reject_user_mismatch`` is false, or the deployment-wide setting is\n  disabled and the key does not override it); it is never billed to that\n  user.\n- Service key: a ``user`` field names one of the key owner's end users,\n  created on first use on the budget ``Otari-End-User-Budget`` names (or\n  the key's default), and is billed and rate limited as that end user, as\n  on chat completions.",
             "header": [
               {
                 "key": "Content-Type",
@@ -8097,7 +9261,7 @@
         {
           "name": "List All Search Tools",
           "request": {
-            "description": "List every search tool ``POST /api/v1/search`` can name.\n\n``stored`` are the editable rows written through this API; ``config`` are the\nconfig-file entries, which are still honored and are reported so the operator\ncan see the whole set. Keys are never returned, only ``last4``.",
+            "description": "List every search instance ``POST /api/v1/search`` can name, or with ``?kind=fetch`` every fetch instance.\n\n``stored`` are the editable rows written through this API; ``config`` are the\nconfig-file entries, which are still honored and are reported so the operator\ncan see the whole set, ``builtin_fetch`` first among the fetch instances. Keys\nare never returned, only ``last4``.",
             "header": [],
             "method": "GET",
             "url": {
@@ -8109,7 +9273,15 @@
                 "v1",
                 "search-tools"
               ],
-              "raw": "{{baseUrl}}/api/v1/search-tools"
+              "query": [
+                {
+                  "description": "Which instances to list: 'search' (the default) or 'fetch'.",
+                  "disabled": true,
+                  "key": "kind",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools?kind="
             }
           }
         },
@@ -8125,7 +9297,7 @@
               },
               "raw": "{\n  \"api_base\": \"http://searxng:8080\",\n  \"name\": \"local\",\n  \"provider\": \"searxng\"\n}"
             },
-            "description": "Add a search tool at runtime. Storing an API key requires OTARI_SECRET_KEY.",
+            "description": "Add a search or fetch instance at runtime. Storing an API key requires OTARI_SECRET_KEY.\n\nCreating a second search instance, while the first is the in-loop default\nonly because it is the only one, first sets ``web_search_default_tool`` to\nthe first in the same commit, and says so in the response, so that adding\nan instance never turns in-loop search off. That runtime value wins over the\nconfiguration file until it is cleared.",
             "header": [
               {
                 "key": "Content-Type",
@@ -8149,7 +9321,7 @@
         {
           "name": "List Search Providers",
           "request": {
-            "description": "List the search providers this build can dispatch to, for the add-tool form.\n\nReports per provider whether an API key is required and what endpoint a tool\ninherits when it declares none, so the form can ask for exactly what the\nchosen provider needs instead of taking a free-text provider name.",
+            "description": "List the providers a search or fetch tool may name, for the add-tool form.\n\nThe list comes from the metadata any-search and any-fetch publish, so a\nprovider either library adds appears with no change to the gateway. Reports\nper provider whether an API key is required, what endpoint a tool inherits\nwhen it declares none, and the native options a tool may set. Providers that\nexist only for tests are left out, and so is the fetch provider ``builtin``,\nwhich only the implicit ``builtin_fetch`` tool uses.\n\nWhat belongs to this deployment rather than to the libraries, its own tools\non each provider and an endpoint a tool inherits from its settings, is\nshown only to a caller who operates the deployment: the tool settings\nreader withholds the same from anyone else.",
             "header": [],
             "method": "GET",
             "url": {
@@ -8162,7 +9334,15 @@
                 "search-tools",
                 "providers"
               ],
-              "raw": "{{baseUrl}}/api/v1/search-tools/providers"
+              "query": [
+                {
+                  "description": "Which providers to list: search providers (the default) or fetch providers.",
+                  "disabled": true,
+                  "key": "kind",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools/providers?kind="
             }
           }
         },
@@ -8187,6 +9367,40 @@
           }
         },
         {
+          "name": "Test Unsaved Search Tool",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"api_base\": \"http://searxng:8080\",\n  \"name\": \"local\",\n  \"provider\": \"searxng\"\n}"
+            },
+            "description": "Test an instance before saving it, with one search or one fetch.\n\nTakes the create request's fields, held to the create's checks against the\ninstances this worker has loaded, plus ``query`` for a search instance or\n``url`` for a fetch instance. Answers whether the provider answered without\nan error, the error's tag when it did not, and how many hits or characters\ncame back, never the results or the page.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search-tools",
+                "test"
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools/test"
+            }
+          }
+        },
+        {
           "name": "Update Search Tool",
           "request": {
             "body": {
@@ -8196,9 +9410,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"api_base\": \"string\",\n  \"api_key\": \"string\",\n  \"expected_updated_at\": \"string\",\n  \"options\": {},\n  \"provider\": \"string\",\n  \"timeout\": 0\n}"
+              "raw": "{\n  \"api_base\": \"string\",\n  \"api_key\": \"string\",\n  \"expected_updated_at\": \"string\",\n  \"fetch_tool\": \"string\",\n  \"kind\": \"search\",\n  \"options\": {},\n  \"provider\": \"string\",\n  \"timeout\": 1.0\n}"
             },
-            "description": "Update a stored search tool. Omitted fields are left as-is; an explicit ``null`` clears them.\n\n``api_key`` follows the same rule: omit it to keep the stored key, send a new\none to rotate, or send ``null`` to clear it (a keyless SearXNG backend). The\nrow is locked ``FOR UPDATE`` so the ``expected_updated_at`` check and the\nwrite it guards are atomic. The tool as it will be after the update is\nvalidated, so a change that would leave it unusable (clearing the key of a\nprovider that needs one) is refused rather than stored.",
+            "description": "Update a stored search or fetch instance. Omitted fields are left as-is; an explicit ``null`` clears them.\n\n``api_key`` follows the same rule: omit it to keep the stored key, send a new\none to rotate, or send ``null`` to clear it (a keyless SearXNG backend). The\nrow is locked ``FOR UPDATE`` so the ``expected_updated_at`` check and the\nwrite it guards are atomic. The tool as it will be after the update is\nvalidated, so a change that would leave it unusable (clearing the key of a\nprovider that needs one) is refused rather than stored. Its options are\nchecked against the provider's when the update sets them or changes the\nprovider, and ``fetch_tool`` when the update sets it, so rotating the key of\nan instance stored before those rules never trips on them. ``kind`` cannot\nchange, so an instance never moves between the search and fetch maps.",
             "header": [
               {
                 "key": "Content-Type",
@@ -8230,7 +9444,7 @@
         {
           "name": "Delete Stored Search Tool",
           "request": {
-            "description": "Delete a stored search tool. A config-file search tool cannot be deleted here.",
+            "description": "Delete a stored search or fetch instance. A config-file one, or ``builtin_fetch``, cannot be deleted here.",
             "header": [],
             "method": "DELETE",
             "url": {
@@ -8244,6 +9458,48 @@
                 ":name"
               ],
               "raw": "{{baseUrl}}/api/v1/search-tools/:name",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "name",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Test Search Tool",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"query\": \"string\",\n  \"url\": \"string\"\n}"
+            },
+            "description": "Test a configured or stored instance with one search or one fetch.\n\nTakes ``query`` for a search instance or ``url`` for a fetch instance, and\nanswers as ``POST /search-tools/test`` does. ``builtin_fetch`` has no test\nyet, and answers a 400.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search-tools",
+                ":name",
+                "test"
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools/:name/test",
               "variable": [
                 {
                   "description": "path parameter",
@@ -8288,7 +9544,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"budget_estimate_default_output_tokens\": 0,\n  \"default_pricing\": false,\n  \"file_understanding_enabled\": false,\n  \"model_cache_ttl_seconds\": 0,\n  \"model_discovery\": false,\n  \"model_discovery_negative_ttl_seconds\": 0,\n  \"model_discovery_timeout_seconds\": 0,\n  \"models_dev_cache_ttl_seconds\": 0,\n  \"models_dev_metadata\": false,\n  \"pricing_refresh\": \"manual\",\n  \"public_catalog\": false,\n  \"reject_user_mismatch\": false,\n  \"require_pricing\": false,\n  \"stream_missing_usage_policy\": \"estimate\",\n  \"vision_describe_max_tokens\": 0,\n  \"vision_describe_model\": \"string\",\n  \"vision_strategy\": \"describe\"\n}"
+              "raw": "{\n  \"budget_estimate_default_output_tokens\": 0,\n  \"default_pricing\": false,\n  \"file_understanding_enabled\": false,\n  \"model_cache_ttl_seconds\": 0,\n  \"model_discovery\": false,\n  \"model_discovery_negative_ttl_seconds\": 0,\n  \"model_discovery_timeout_seconds\": 1.0,\n  \"models_dev_cache_ttl_seconds\": 0,\n  \"models_dev_metadata\": false,\n  \"pricing_refresh\": \"manual\",\n  \"public_catalog\": false,\n  \"reject_user_mismatch\": false,\n  \"require_pricing\": false,\n  \"stream_missing_usage_policy\": \"estimate\",\n  \"vision_describe_max_tokens\": 1,\n  \"vision_describe_model\": \"string\",\n  \"vision_strategy\": \"describe\"\n}"
             },
             "description": "Persist and apply runtime setting changes.\n\nEach provided field is stored as an override (winning over config/env) and\napplied to the running gateway immediately. Operator-gated: these change\nhow the gateway meters and lists models.",
             "header": [
@@ -8712,6 +9968,12 @@
                   "value": ""
                 },
                 {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
                   "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
                   "disabled": true,
                   "key": "api_key_id",
@@ -8862,7 +10124,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage?sort=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage?sort=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -8966,6 +10228,12 @@
                   "description": "Filter to a single session/project label (the source_label carried by imported usage)",
                   "disabled": true,
                   "key": "source_label",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
                   "value": ""
                 },
                 {
@@ -9119,7 +10387,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/count?sort=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage/count?sort=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -9265,6 +10533,12 @@
                   "value": ""
                 },
                 {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
                   "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
                   "disabled": true,
                   "key": "api_key_id",
@@ -9391,7 +10665,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/groups?group_by=api_key&search=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage/groups?group_by=api_key&search=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -9412,6 +10686,34 @@
                 "in-flight"
               ],
               "raw": "{{baseUrl}}/api/v1/usage/in-flight"
+            }
+          }
+        },
+        {
+          "name": "Get Request Settlement",
+          "request": {
+            "description": "Look up a request's settled cost by the ``Otari-Request-ID`` it was sent (standalone).\n\nThis is how a caller recovers the cost of a request whose response never\ncarried one: a stream that failed or was disconnected mid-response, or a\nrequest that errored. An API key sees only the requests it made; the master\nkey sees any. Returns 404 until the request has settled (its rows are written\nby a background writer, so a lookup made the instant a stream closes can\nprecede them), and for an id that is unknown or belongs to another key, with\nno way to tell those apart. A stream that ended before the provider reported\nusage, and ran no gateway tools, writes no row, so its id stays 404.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "usage",
+                "requests",
+                ":request_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/usage/requests/:request_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "request_id",
+                  "value": ""
+                }
+              ]
             }
           }
         },
@@ -9511,6 +10813,12 @@
                   "value": ""
                 },
                 {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
                   "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
                   "disabled": true,
                   "key": "api_key_id",
@@ -9637,7 +10945,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/series?group_by=model&bucket=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage/series?group_by=model&bucket=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -9735,6 +11043,12 @@
                   "value": ""
                 },
                 {
+                  "description": "A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key.",
+                  "disabled": true,
+                  "key": "group_by_tag",
+                  "value": ""
+                },
+                {
                   "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
                   "disabled": true,
                   "key": "start_date",
@@ -9792,6 +11106,12 @@
                   "description": "Filter to a single session/project label (the source_label carried by imported usage)",
                   "disabled": true,
                   "key": "source_label",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
                   "value": ""
                 },
                 {
@@ -9921,7 +11241,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&rank_order=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&rank_order=&group_by_tag=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }
@@ -9933,7 +11253,7 @@
         {
           "name": "List Users",
           "request": {
-            "description": "List the users the caller's organization can name, with pagination.\n\n``users`` is deployment-global and has no organization column, so which of\nthem this organization can name is derived: a key, usage, or a roster row\nputs one in reach, and one reached from nowhere at all (the shared\n``default`` owner, or a user just created) is shared rather than hidden.\nSee ``repositories.users_repository.in_organization``.",
+            "description": "List the users the caller's organization can name, with pagination.\n\n``users`` is deployment-global and has no organization column, so which of\nthem this organization can name is derived: a key, usage, or a roster row\nputs one in reach, and one reached from nowhere at all (the shared\n``default`` owner, or a user just created) is shared rather than hidden.\nSee ``repositories.users_repository.in_organization``.\n\n``parent_user_id`` with ``external_id`` finds the end user a service key\ncreated for a ``user`` value, which is how a caller maps its own ids to\nOtari's. ``include_total`` adds an ``Otari-Total-Count`` header counting\nevery match, so ``limit=1`` with it counts a service key's end users.",
             "header": [],
             "method": "GET",
             "url": {
@@ -9957,9 +11277,33 @@
                   "disabled": true,
                   "key": "limit",
                   "value": ""
+                },
+                {
+                  "description": "Only the end users of this owner: the user a service key belongs to.",
+                  "disabled": true,
+                  "key": "parent_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Only the end user a service key names with this `user` value.",
+                  "disabled": true,
+                  "key": "external_id",
+                  "value": ""
+                },
+                {
+                  "description": "Only blocked users (true) or only unblocked ones (false).",
+                  "disabled": true,
+                  "key": "blocked",
+                  "value": ""
+                },
+                {
+                  "description": "Also count every matching user, in the Otari-Total-Count response header.",
+                  "disabled": true,
+                  "key": "include_total",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/users?skip=&limit="
+              "raw": "{{baseUrl}}/api/v1/users?skip=&limit=&parent_user_id=&external_id=&blocked=&include_total="
             }
           }
         },
@@ -10103,7 +11447,7 @@
               },
               "raw": "{\n  \"source_user_id\": \"string\"\n}"
             },
-            "description": "Merge another user in the caller's organization into this one.\n\nMoves the source user's API keys, usage history, telemetry, files, batches,\nbudget resets and reservations, per-user aliases and routing policies, and\nrouting memory onto this user, adds its spend, token and request counters to\nthis user's, and soft-deletes it. This user keeps its budget, model access and\nblocked flag. Refused with 409 when the source is a sign-in account's own\nuser, has a budget reservation in flight, or holds a per-user alias or policy\nwhose name this user already uses in the same workspace.",
+            "description": "Merge another user in the caller's organization into this one.\n\nMoves the source user's API keys, usage history, telemetry, files, batches,\nbudget resets and reservations, per-user aliases, routing policies and\nprovider endpoints, routing memory, and the end users its service keys bill\nonto this user, adds its spend, token and request counters to this user's,\nand soft-deletes it. This user keeps its budget, model access and blocked\nflag. Refused with 409 when the source is a sign-in account's own user, has a\nbudget reservation in flight, holds a per-user alias, policy or provider\nendpoint whose name this user already uses in the same workspace, or bills an\nend user under an id this user's keys also bill.",
             "header": [
               {
                 "key": "Content-Type",

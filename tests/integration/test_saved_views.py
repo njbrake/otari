@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.core.config import API_ROOT
-from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.organizations_exceptions import WorkspaceNotFoundError
 from gateway.exceptions.saved_views_exceptions import (
     SavedViewLimitReachedError,
@@ -25,11 +24,10 @@ from gateway.models.tenancy import User, Workspace, WorkspaceMember
 from gateway.repositories.saved_views import SavedViewRepository
 from gateway.repositories.tenancy import WorkspaceMemberRepository
 from gateway.schemas.saved_views import SavedViewCreate, SavedViewUpdate
-from gateway.services.budgets import WorkspaceBudgetDefaultService
 from gateway.services.saved_views import SavedViewService
 from gateway.services.tenancy import WorkspaceService
 
-from .tenancy_helpers import create_member, create_organization, create_workspace
+from .tenancy_helpers import create_member, create_organization, create_workspace, membership_writes
 
 
 class _Team:
@@ -69,10 +67,9 @@ async def _team(db: AsyncSession, *, slug: str) -> _Team:
 
 
 def _service(db: AsyncSession) -> SavedViewService:
-    uow = UnitOfWork(db)
-    return SavedViewService(
-        uow, SavedViewRepository(uow), WorkspaceService(db, membership_listener=WorkspaceBudgetDefaultService(db))
-    )
+    writes = membership_writes(db)
+    uow = writes["uow"]
+    return SavedViewService(uow, SavedViewRepository(uow), WorkspaceService(db, **writes))
 
 
 def _view(name: str = "Failures this week", **overrides: Any) -> SavedViewCreate:

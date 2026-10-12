@@ -54,23 +54,27 @@ native shape happens here: the route never sees a provider payload.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import httpx
 
-from gateway.core.config import (
-    API_ROOT,
+from gateway.core.config import API_ROOT, GatewayConfig
+from gateway.core.settings.tools import (
     SEARCH_PROVIDERS,
     SEARCH_PROVIDERS_REQUIRING_API_KEY,
-    GatewayConfig,
+    default_api_base,
+    shared_parameters,
     validate_search_tool_transport,
 )
+from gateway.services.web_search_providers import WebSearchProviderError, provider_search
+
+if TYPE_CHECKING:
+    from gateway.models.tools import WebSearchCredential
 
 EXA_PROVIDER = "exa"
 SEARXNG_PROVIDER = "searxng"
 
-_DEFAULT_API_BASE = {EXA_PROVIDER: "https://api.exa.ai"}
 _DEFAULT_TIMEOUT_S = 30.0
 
 # Query params the gateway owns on a SearXNG request, so a tool's ``options``
@@ -127,7 +131,22 @@ class SearchToolError(ValueError):
 
 
 class SearchProviderError(RuntimeError):
-    """The search provider could not be reached or returned malformed data."""
+    """The search provider could not be reached or returned malformed data.
+
+    ``tag`` names the failure in the search library's terms (``timeout``,
+    ``network``, ``http_error``, ``invalid_response``), for a caller that reports
+    the failure without the message, which can carry the upstream body.
+    """
+
+    def __init__(self, message: str, *, tag: str = "provider_error") -> None:
+        """Carry the message for the log and the tag for a caller that reports only the tag."""
+        super().__init__(message)
+        self.tag = tag
+
+
+def _transport_tag(exc: httpx.HTTPError | httpx.InvalidURL) -> str:
+    """The tag for a request that never got an answer: it timed out, or it could not be sent."""
+    return "timeout" if isinstance(exc, httpx.TimeoutException) else "network"
 
 
 @dataclass(frozen=True)
@@ -214,10 +233,11 @@ def resolve_search_tool(config: GatewayConfig, name: str | None) -> SearchTool:
     provider = str(entry.get("provider") or name)
     api_key = entry.get("api_key")
     api_base = str(entry.get("api_base") or default_api_base(config, provider) or "").strip().rstrip("/")
-    # Defense in depth: startup validation already guarantees all three, so this
-    # only fires for a config built in-process. Refusing here beats calling an
-    # unknown provider, calling a keyed one unauthenticated, or calling a backend
-    # whose address nothing supplied.
+    # Validation accepts every provider any-search serves, and this client calls
+    # only its own two; for those, it already guarantees the key and the address,
+    # so the rest of this only fires for a config built in-process. Refusing here
+    # beats calling an unknown provider, calling a keyed one unauthenticated, or
+    # calling a backend whose address nothing supplied.
     missing_key = provider in SEARCH_PROVIDERS_REQUIRING_API_KEY and not api_key
     if provider not in SEARCH_PROVIDERS or missing_key or not api_base:
         msg = f"Search tool '{name}' is not configured correctly."
@@ -245,22 +265,6 @@ def resolve_search_tool(config: GatewayConfig, name: str | None) -> SearchTool:
     )
 
 
-def default_api_base(config: GatewayConfig, provider: str) -> str | None:
-    """The base URL a tool inherits when it declares no ``api_base``.
-
-    A ``searxng`` tool falls back to ``web_search_url``, the backend the in-loop
-    ``otari_web_search`` tool already speaks to over the same contract, so a
-    deployment that runs one exposes it on ``POST /v1/search`` with a single
-    ``provider: searxng`` line.
-
-    Public because the dashboard's add-a-search-tool form shows the same value as
-    the placeholder for an omitted ``api_base``.
-    """
-    if provider == SEARXNG_PROVIDER:
-        return (config.web_search_url or "").strip() or None
-    return _DEFAULT_API_BASE.get(provider)
-
-
 async def run_search(tool: SearchTool, query: SearchQuery) -> SearchOutcome:
     """Dispatch one search against the tool's provider."""
     try:
@@ -273,9 +277,38 @@ async def run_search(tool: SearchTool, query: SearchQuery) -> SearchOutcome:
         return await _search_exa(tool, query)
     if tool.provider == SEARXNG_PROVIDER:
         return await _search_searxng(tool, query)
-    # Unreachable via config: startup validation rejects unknown providers.
+    # Unreachable through resolve_search_tool, which refuses a provider this client does not serve.
     msg = f"Unsupported search provider '{tool.provider}'."
     raise SearchProviderError(msg)
+
+
+async def run_keyed_search(credential: WebSearchCredential, query: SearchQuery, *, timeout_s: float) -> SearchOutcome:
+    """Dispatch one search on a workspace's own provider key, in place of the named tool's backend.
+
+    ``timeout_s`` is the named tool's, so the key changes who pays and not how long a search may take.
+    The provider bills the key's owner directly, so no cost is reported and the tool's
+    configured flat rate is what the gateway records, as for the in-loop tool.
+    """
+    limit = _result_limit(query)
+    options: dict[str, Any] = {"max_results": limit}
+    if query.country:
+        options["country"] = query.country
+    try:
+        raw = await provider_search(
+            provider=credential.provider,
+            api_key=credential.api_key or "",
+            query=query.query,
+            options=options,
+            client=get_search_client(),
+            timeout_s=timeout_s,
+        )
+    except (WebSearchProviderError, ValueError) as exc:
+        msg = f"{credential.provider} search request failed: {exc}"
+        raise SearchProviderError(msg) from exc
+    # The hits come back SearXNG-shaped, so they are read and capped like a SearXNG answer.
+    max_chars = max(1, (query.max_tokens_per_page or DEFAULT_MAX_TOKENS_PER_PAGE) * _CHARS_PER_TOKEN)
+    hits = _apply_domain_filter(_searxng_hits({"results": raw}, max_chars), query.domain_filter)
+    return SearchOutcome(results=hits[:limit], cost_usd=None)
 
 
 # --------------------------------------------------------------------------- #
@@ -286,12 +319,12 @@ async def run_search(tool: SearchTool, query: SearchQuery) -> SearchOutcome:
 def build_exa_payload(tool: SearchTool, query: SearchQuery) -> dict[str, Any]:
     """Build Exa's ``POST /search`` body from the neutral request.
 
-    The tool's ``options`` are the base, so an operator can pin Exa-native knobs
-    (``type``, ``category``, ``moderation``) that the LiteLLM-shaped request has
-    no field for. Request-derived fields are layered on top, and ``query`` is
-    written last so no configured option can displace the caller's query.
+    The tool's native ``options``, never its shared parameters, are the base, so an
+    operator can pin Exa-native knobs (``type``, ``category``) the request has no
+    field for. Request fields go on top, and ``query`` last so no option displaces it.
     """
-    payload: dict[str, Any] = dict(tool.options)
+    shared = shared_parameters("search")
+    payload: dict[str, Any] = {key: value for key, value in tool.options.items() if key not in shared}
 
     requested = query.max_results or payload.get("numResults") or DEFAULT_MAX_RESULTS
     payload["numResults"] = max(1, min(int(requested), MAX_RESULTS_CAP))
@@ -357,9 +390,10 @@ async def _search_exa(tool: SearchTool, query: SearchQuery) -> SearchOutcome:
             headers={"x-api-key": tool.api_key},
             timeout=tool.timeout_s,
         )
-    except httpx.HTTPError as exc:
+    # InvalidURL is not an HTTPError: a base URL whose port does not parse, say.
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         msg = f"exa search request failed: {exc}"
-        raise SearchProviderError(msg) from exc
+        raise SearchProviderError(msg, tag=_transport_tag(exc)) from exc
 
     body = _json_object(EXA_PROVIDER, response)
     return SearchOutcome(results=_exa_hits(body), cost_usd=_exa_cost(body))
@@ -369,7 +403,7 @@ def _exa_hits(body: dict[str, Any]) -> list[SearchHit]:
     raw = body.get("results")
     if not isinstance(raw, list):
         msg = "exa search response has no 'results' list"
-        raise SearchProviderError(msg)
+        raise SearchProviderError(msg, tag="invalid_response")
 
     hits: list[SearchHit] = []
     for item in raw:
@@ -463,9 +497,10 @@ async def _search_searxng(tool: SearchTool, query: SearchQuery) -> SearchOutcome
             headers=headers,
             timeout=tool.timeout_s,
         )
-    except httpx.HTTPError as exc:
+    # InvalidURL is not an HTTPError: a base URL whose port does not parse, say.
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         msg = f"searxng search request failed: {exc}"
-        raise SearchProviderError(msg) from exc
+        raise SearchProviderError(msg, tag=_transport_tag(exc)) from exc
 
     body = _json_object(SEARXNG_PROVIDER, response)
     # A backend that fronts a commercial API can put a whole extracted page in
@@ -484,7 +519,7 @@ def _searxng_hits(body: dict[str, Any], max_chars: int) -> list[SearchHit]:
     raw = body.get("results")
     if not isinstance(raw, list):
         msg = "searxng search response has no 'results' list"
-        raise SearchProviderError(msg)
+        raise SearchProviderError(msg, tag="invalid_response")
 
     hits: list[SearchHit] = []
     for item in raw:
@@ -558,16 +593,16 @@ def _json_object(provider: str, response: httpx.Response) -> dict[str, Any]:
     """
     if response.status_code >= 400:
         msg = f"{provider} search returned HTTP {response.status_code}: {response.text[:_ERROR_BODY_CHARS]}"
-        raise SearchProviderError(msg)
+        raise SearchProviderError(msg, tag="http_error")
 
     try:
         body = response.json()
     except ValueError as exc:
         msg = f"{provider} search returned a body that is not JSON"
-        raise SearchProviderError(msg) from exc
+        raise SearchProviderError(msg, tag="invalid_response") from exc
     if not isinstance(body, dict):
         msg = f"{provider} search returned a {type(body).__name__} body, expected an object"
-        raise SearchProviderError(msg)
+        raise SearchProviderError(msg, tag="invalid_response")
     return body
 
 

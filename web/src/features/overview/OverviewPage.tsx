@@ -4,9 +4,12 @@ import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { SetupGuide } from "@/features/onboarding/SetupGuide"
-import { isDeploymentOperator } from "@/features/organization/roles"
+import { canManage } from "@/features/organization/roles"
 import { useModels } from "@/shared/api/models"
-import { useOrganizationContext } from "@/shared/api/organizations"
+import {
+  useDeploymentOperator,
+  useOrganizationContext,
+} from "@/shared/api/organizations"
 import { useProviders } from "@/shared/api/providers"
 import { useUsageLogs } from "@/shared/api/usage"
 import { formatUtcMonthName } from "@/shared/helpers/format"
@@ -40,19 +43,21 @@ import { useOverviewData } from "./useOverviewData"
  *
  * Provider health and the provider list answer 403 to anyone who does not
  * operate the deployment, so the operator's parts mount only for an operator:
- * a component that is not rendered runs none of its queries. Decided from the
- * organization context, where the usage hooks and the nav rail take the same
- * answer, and an errored context is an answer rather than a wait.
+ * a component that is not rendered runs none of its queries. Decided by
+ * `useDeploymentOperator`, the answer the usage hooks and the nav rail take.
+ *
+ * So an errored context lands on the operator page, as it does for every other
+ * operator gate: its panels report their own refusals, where the reverse would
+ * hide the deployment's state from the one caller who owns it. An errored
+ * context is an answer, not a wait: holding the page on a loading state that
+ * no retry clears renders nothing at all.
  */
 export function OverviewIndex() {
-  const context = useOrganizationContext()
-  // `isFetched`, not `isPending`: an errored query goes back to pending on its
-  // next fetch, which a second observer below would ask for, swinging the page
-  // back to this spinner forever.
-  if (!context.isFetched) {
+  const { answer, isSettled } = useDeploymentOperator()
+  if (!isSettled) {
     return <PageLoading />
   }
-  if (!isDeploymentOperator(context.data)) {
+  if (answer === "not-operator") {
     return <OrganizationOverview />
   }
   return <OperatorOverview />
@@ -97,15 +102,37 @@ function OperatorOverview() {
 /**
  * Everyone else's page. Whether a request could succeed is read off the model
  * catalog, which lists the selectors this caller may name, since `/providers`
- * refuses them.
+ * refuses them. An empty catalog and no requests yet is a new account with
+ * nothing to route to, which the setup guide holds back for, so the first-steps
+ * strip says what comes first: an owner or admin adds a provider key, and a
+ * member asks one to.
  */
 function OrganizationOverview() {
   const models = useModels()
+  const context = useOrganizationContext()
+  const managesOrganization = canManage(context.data)
+  const hasNoModels = models.isSuccess && models.data.data.length === 0
+  // Waits for the catalog and the log, so it never flashes in on a set-up account.
+  const anyUsage = useUsageLogs({}, 0, 1, { enabled: hasNoModels })
+  const needsFirstSteps =
+    hasNoModels && anyUsage.isSuccess && anyUsage.data.length === 0
   return (
     <OverviewPage
       isOperator={false}
       setup={
-        <SetupGuide canServeRequests={(models.data?.data.length ?? 0) > 0} />
+        <>
+          <SetupGuide canServeRequests={(models.data?.data.length ?? 0) > 0} />
+          {needsFirstSteps ? (
+            <GetStartedStrip
+              description={
+                managesOrganization
+                  ? "Add a provider key to start serving models, then create an API key and send your first request."
+                  : "Ask an owner or admin of this organization to add a provider key. Once models are available, you can create an API key and send a request."
+              }
+              action={managesOrganization ? "organization-provider-key" : ""}
+            />
+          ) : null}
+        </>
       }
       refreshSetup={() => void models.refetch()}
       setupFetching={models.isFetching}

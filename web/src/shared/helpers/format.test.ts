@@ -8,6 +8,7 @@ import {
   formatCompact,
   formatCost,
   formatDuration,
+  formatFileSize,
   formatLatency,
   formatMultiple,
   formatNumber,
@@ -110,6 +111,16 @@ describe("formatTokens", () => {
     expect(formatTokens(999_999)).toBe("1000.0k")
     expect(formatTokens(1_000_000)).toBe("1.0M")
     expect(formatTokens(12_400_000)).toBe("12.4M")
+  })
+})
+
+describe("formatFileSize", () => {
+  it("names the largest unit the size reaches", () => {
+    expect(formatFileSize(0)).toBe("0 B")
+    expect(formatFileSize(512)).toBe("512 B")
+    expect(formatFileSize(84_213)).toBe("82.2 kB")
+    expect(formatFileSize(5 * 1024 * 1024)).toBe("5 MB")
+    expect(formatFileSize(3 * 1024 ** 3)).toBe("3 GB")
   })
 })
 

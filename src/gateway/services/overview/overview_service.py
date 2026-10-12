@@ -13,7 +13,7 @@ make the API own UI copy and freeze the page's wording into four SDKs.
 
 import calendar
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -26,6 +26,7 @@ from gateway.repositories.overview.overview_repository import (
     Allocation,
     Candidates,
     Ceiling,
+    CeilingRollup,
     KeySpend,
     OverviewRepository,
     WorkspaceSpend,
@@ -186,15 +187,19 @@ def _utilization(row: Allocation) -> float:
     return 1.0 if row.spent > 0 else 0.0
 
 
-def judge(rows: list[Allocation], *, total_count: int) -> AllocationHealth:
-    """Reduce capped rows to counts and the worst of them."""
+def judge(rows: list[Allocation], *, total_count: int, ceilings: CeilingRollup | None = None) -> AllocationHealth:
+    """Reduce capped rows, and any ceilings the database already reduced, to counts and the worst of them."""
 
     scored = [(row, _utilization(row)) for row in rows]
-    worst_row = max(scored, key=lambda pair: pair[1], default=None)
+    if ceilings is not None and ceilings.worst is not None:
+        scored_worst = [*scored, (ceilings.worst, _utilization(ceilings.worst))]
+    else:
+        scored_worst = scored
+    worst_row = max(scored_worst, key=lambda pair: pair[1], default=None)
     return AllocationHealth(
-        over_count=sum(1 for _, pct in scored if pct >= 1),
-        near_count=sum(1 for _, pct in scored if BUDGET_WARN <= pct < 1),
-        capped_count=len(rows),
+        over_count=sum(1 for _, pct in scored if pct >= 1) + (ceilings.over_count if ceilings else 0),
+        near_count=sum(1 for _, pct in scored if BUDGET_WARN <= pct < 1) + (ceilings.near_count if ceilings else 0),
+        capped_count=len(rows) + (ceilings.capped_count if ceilings else 0),
         total_count=total_count,
         worst=(
             WorstAllocation(
@@ -286,16 +291,25 @@ class OverviewService:
 
         budgets = None
         if is_deployment_operator:
+            # The deployment strip judges the deployment's own budgets only. A
+            # budget an organization owns is one of its spend ceilings, judged on
+            # that strip, so no row is counted twice.
             budgets = judge(
-                await self._repository.budget_allocations(),
-                total_count=await self._repository.count_budgets(),
+                await self._repository.budget_allocations(owner_organization_id=None),
+                total_count=await self._repository.count_budgets(owner_organization_id=None),
+                ceilings=await self._repository.ceiling_rollup(
+                    owner_organization_id=None, warn_at=BUDGET_WARN, now=now
+                ),
             )
 
         ceilings = None
         if manages_spend:
             ceilings = judge(
-                [_rolled(row, now) for row in await self._repository.ceiling_allocations(organization.id)],
+                [],
                 total_count=await self._repository.count_ceilings(organization.id),
+                ceilings=await self._repository.ceiling_rollup(
+                    owner_organization_id=organization.id, warn_at=BUDGET_WARN, now=now
+                ),
             )
 
         attention: list[AttentionItem] = []
@@ -551,15 +565,6 @@ def _standing(ceiling: Ceiling, now: datetime) -> _Standing:
         start=utc_bound(start),
         end=utc_bound(end),
     )
-
-
-def _rolled(row: Allocation, now: datetime) -> Allocation:
-    """A ceiling's allocation with its spend read through the roll, as the rail and attention read it."""
-
-    if row.ceiling is None:
-        return row
-    standing = _standing(row.ceiling, now)
-    return replace(row, spent=standing.settled + standing.reserved)
 
 
 def _candidates(now: datetime) -> Candidates:

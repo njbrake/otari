@@ -9,7 +9,7 @@ from gateway.models.tenancy import User
 from gateway.repositories.budgets import BudgetRepositories
 from gateway.schemas.budgets import WorkspaceSpendPublic
 from gateway.services.budgets._periods import effective_period
-from gateway.services.tenancy import WorkspaceService
+from gateway.services.tenancy.authorization import WorkspaceAccess
 
 
 def _window_and_settled(
@@ -37,14 +37,14 @@ def _window_and_settled(
 class _WorkspaceSurface:
     """The workspace ceiling, read by the workspace's own members."""
 
-    def __init__(self, repositories: BudgetRepositories, workspaces: WorkspaceService) -> None:
+    def __init__(self, repositories: BudgetRepositories, workspaces: WorkspaceAccess) -> None:
         self._repositories = repositories
         self._workspaces = workspaces
 
     async def spend(self, *, user: User, workspace_id: uuid.UUID, now: datetime) -> WorkspaceSpendPublic | None:
         # Raises not-found for a workspace the caller cannot see, so this is never
         # an existence oracle.
-        workspace = await self._workspaces.workspace_in_active_organization(user=user, workspace_id=workspace_id)
+        workspace = await self._workspaces.resolve_visible_workspace(user=user, workspace_id=workspace_id)
         found = await self._repositories.ceilings.for_scope(SCOPE_WORKSPACE, str(workspace.id), None)
         if found is None:
             return None

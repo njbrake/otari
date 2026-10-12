@@ -9,8 +9,10 @@ import {
   countToolCalls,
   describeFailure,
   describeRowSource,
+  describeSkip,
   formatElapsed,
   isImported,
+  isSkippedAttempt,
   listToolUsage,
   requestedAlias,
   resolveExtentWindow,
@@ -435,6 +437,24 @@ describe("rowOutcome", () => {
     expect(
       rowOutcome(entry({ status: "absorbed", status_code: null })).label,
     ).toBe("Recovered")
+  })
+
+  it("reads a skipped candidate by why it was skipped, not as a failure", () => {
+    const skipped = entry({
+      status: "absorbed",
+      status_code: 429,
+      error_message: "Skipped: Rate limit 'per-model' is full",
+    })
+    expect(isSkippedAttempt(skipped)).toBe(true)
+    expect(describeSkip(skipped)).toBe("Rate limit 'per-model' is full")
+    expect(rowOutcome(skipped)).toEqual({
+      kind: "recovered",
+      label: "Skipped",
+      note: "Rate limit 'per-model' is full",
+    })
+    expect(
+      isSkippedAttempt(entry({ status: "absorbed", error_message: "boom" })),
+    ).toBe(false)
   })
 
   it("reads a failure with its reason", () => {

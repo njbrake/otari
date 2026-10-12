@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -27,11 +27,12 @@ from gateway.models.money import as_float
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
 from gateway.repositories.tenancy import UserMergeRepository
-from gateway.repositories.users_repository import in_organization
+from gateway.repositories.users_repository import UserFilter, count_users, in_organization, page_users
 from gateway.services.alias_service import refresh_alias_cache
 from gateway.services.budgets import budget_window
 from gateway.services.model_access import validate_allowed_models
 from gateway.services.policy_store import refresh_policy_cache
+from gateway.services.providers import refresh_provider_endpoint_cache
 from gateway.services.tenancy.user_merge import SameUserMergeError, UserMergeError, merge_users
 
 router = APIRouter(
@@ -79,6 +80,10 @@ class UserResponse(BaseModel):
     created_at: str
     updated_at: str
     metadata: dict[str, Any]
+    # Set on an end user a service key created: the key's user, and the id the
+    # service named it by. Null on every other user.
+    parent_user_id: str | None = None
+    external_id: str | None = None
 
     @classmethod
     def from_model(cls, user: User) -> "UserResponse":
@@ -101,6 +106,8 @@ class UserResponse(BaseModel):
             created_at=user.created_at.isoformat(),
             updated_at=user.updated_at.isoformat(),
             metadata=dict(user.metadata_) if user.metadata_ else {},
+            parent_user_id=user.parent_user_id,
+            external_id=user.external_id,
         )
 
 
@@ -146,6 +153,7 @@ class UsageLogResponse(BaseModel):
     status: str
     error_message: str | None
     latency_ms: int | None
+    provider_latency_ms: int | None
 
     @classmethod
     def from_model(cls, log: UsageLog) -> "UsageLogResponse":
@@ -164,6 +172,7 @@ class UsageLogResponse(BaseModel):
             status=log.status,
             error_message=log.error_message,
             latency_ms=log.latency_ms,
+            provider_latency_ms=log.provider_latency_ms,
         )
 
 
@@ -281,12 +290,24 @@ async def create_user(
     return UserResponse.from_model(user)
 
 
+_PARENT_DESC = "Only the end users of this owner: the user a service key belongs to."
+_EXTERNAL_DESC = "Only the end user a service key names with this `user` value."
+_BLOCKED_DESC = "Only blocked users (true) or only unblocked ones (false)."
+_TOTAL_DESC = "Also count every matching user, in the Otari-Total-Count response header."
+TOTAL_COUNT_HEADER = "Otari-Total-Count"
+
+
 @router.get("")
 async def list_users(
+    response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
     organization_id: CallerOrganization,
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    parent_user_id: Annotated[str | None, Query(description=_PARENT_DESC)] = None,
+    external_id: Annotated[str | None, Query(description=_EXTERNAL_DESC)] = None,
+    blocked: Annotated[bool | None, Query(description=_BLOCKED_DESC)] = None,
+    include_total: Annotated[bool, Query(description=_TOTAL_DESC)] = False,
 ) -> list[UserResponse]:
     """List the users the caller's organization can name, with pagination.
 
@@ -295,12 +316,16 @@ async def list_users(
     puts one in reach, and one reached from nowhere at all (the shared
     ``default`` owner, or a user just created) is shared rather than hidden.
     See ``repositories.users_repository.in_organization``.
-    """
-    result = await db.execute(
-        select(User).where(User.deleted_at.is_(None), in_organization(organization_id)).offset(skip).limit(limit)
-    )
-    users = result.scalars().all()
 
+    ``parent_user_id`` with ``external_id`` finds the end user a service key
+    created for a ``user`` value, which is how a caller maps its own ids to
+    Otari's. ``include_total`` adds an ``Otari-Total-Count`` header counting
+    every match, so ``limit=1`` with it counts a service key's end users.
+    """
+    filters = UserFilter(parent_user_id=parent_user_id, external_id=external_id, blocked=blocked)
+    if include_total:
+        response.headers[TOTAL_COUNT_HEADER] = str(await count_users(db, organization_id, filters))
+    users = await page_users(db, organization_id, filters, skip=skip, limit=limit)
     return [UserResponse.from_model(user) for user in users]
 
 
@@ -442,12 +467,14 @@ async def merge_user(
     """Merge another user in the caller's organization into this one.
 
     Moves the source user's API keys, usage history, telemetry, files, batches,
-    budget resets and reservations, per-user aliases and routing policies, and
-    routing memory onto this user, adds its spend, token and request counters to
-    this user's, and soft-deletes it. This user keeps its budget, model access and
-    blocked flag. Refused with 409 when the source is a sign-in account's own
-    user, has a budget reservation in flight, or holds a per-user alias or policy
-    whose name this user already uses in the same workspace.
+    budget resets and reservations, per-user aliases, routing policies and
+    provider endpoints, routing memory, and the end users its service keys bill
+    onto this user, adds its spend, token and request counters to this user's,
+    and soft-deletes it. This user keeps its budget, model access and blocked
+    flag. Refused with 409 when the source is a sign-in account's own user, has a
+    budget reservation in flight, holds a per-user alias, policy or provider
+    endpoint whose name this user already uses in the same workspace, or bills an
+    end user under an id this user's keys also bill.
     """
     target = await _load_user_in_organization(db, user_id, organization_id)
     source = await _load_user_in_organization(db, request.source_user_id, organization_id)
@@ -462,12 +489,12 @@ async def merge_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database error",
         ) from None
-    await _refresh_caches_after_merge(db, moved)
+    await _refresh_caches_after_merge(db, uow, moved)
     return MergeUserResponse(user=UserResponse.from_model(target), moved=moved)
 
 
-async def _refresh_caches_after_merge(db: AsyncSession, moved: dict[str, int]) -> None:
-    """Reload the per-user alias and policy caches a merge changed.
+async def _refresh_caches_after_merge(db: AsyncSession, uow: UnitOfWork, moved: dict[str, int]) -> None:
+    """Reload the per-user alias, policy and provider endpoint caches a merge changed.
 
     The merge is committed, so a refresh failure is logged rather than raised;
     other workers converge on their next background refresh.
@@ -477,6 +504,8 @@ async def _refresh_caches_after_merge(db: AsyncSession, moved: dict[str, int]) -
             await refresh_alias_cache(db)
         if moved.get("routing_policies"):
             await refresh_policy_cache(db)
+        if moved.get("provider_endpoints"):
+            await refresh_provider_endpoint_cache(uow)
     except SQLAlchemyError:
         logger.warning("Cache refresh failed after merging users; converges on the next background refresh")
 

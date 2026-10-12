@@ -10,7 +10,7 @@ for everything that needs a connection to answer, sign-in first among them.
 from fastapi.routing import APIRoute
 
 from gateway.api.routes.otlp import router as otlp_router
-from gateway.api.routes.usage import ingest_router, operator_router
+from gateway.api.routes.usage import key_router, operator_router
 from gateway.core.config import GatewayConfig
 from gateway.core.database import get_db, get_ingest_db, init_db, reset_db
 
@@ -28,8 +28,12 @@ def _routes(router: object) -> list[APIRoute]:
     return [route for route in router.routes if isinstance(route, APIRoute)]  # type: ignore[attr-defined]
 
 
+def _ingest_routes() -> list[APIRoute]:
+    return _routes(otlp_router) + [route for route in _routes(key_router) if route.path.endswith("/external-events")]
+
+
 def test_every_ingest_route_writes_on_the_ingest_pool() -> None:
-    ingest = _routes(otlp_router) + _routes(ingest_router)
+    ingest = _ingest_routes()
     assert ingest, "expected the OTLP and external-events routes to be mounted"
 
     for route in ingest:
@@ -40,7 +44,8 @@ def test_every_ingest_route_writes_on_the_ingest_pool() -> None:
 def test_the_rest_of_the_usage_api_stays_on_the_request_pool() -> None:
     # The ingest pool is a ceiling, so a read that wandered onto it would be
     # capped by it and would take a slot an import is waiting for.
-    for route in _routes(operator_router):
+    ingest = _ingest_routes()
+    for route in _routes(operator_router) + [route for route in _routes(key_router) if route not in ingest]:
         assert get_ingest_db not in _own_dependencies(route), route.path
 
 

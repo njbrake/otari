@@ -161,7 +161,7 @@ def test_each_routed_candidate_uses_its_own_instance_setting() -> None:
     fallback = Attempt(position=2, instance="fallback", provider=LLMProvider.OPENAI, model="gpt")
 
     assert _sent_headers(build(baseten, fields)) == {SESSION_AFFINITY_HEADER: "scoped"}
-    assert "client_args" not in build(fallback, fields)
+    assert "default_headers" not in build(fallback, fields).get("client_args", {})
 
 
 def _completion(stream: bool) -> httpx.Response:

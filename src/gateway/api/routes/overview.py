@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from gateway.api.deps import CurrentIdentity, OverviewServiceDep, verify_master_key
 from gateway.schemas.overview import OverviewScope, OverviewSummaryResponse
-from gateway.services.overview.overview_service import Month
+from gateway.services.overview import Month
 
 # Authentication on the router for the reason ``admin.py`` declares it there:
 # the one handler happens to take an identity today, and one that did not would

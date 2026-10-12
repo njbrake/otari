@@ -2,7 +2,6 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any
 
-from any_llm import acompletion
 from any_llm.types.completion import (
     ChatCompletion,
     ChatCompletionChunk,
@@ -14,11 +13,10 @@ from pydantic import Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
-    CodeExecutionPortDep,
-    McpServerPortDep,
     ModelProviderPortDep,
     OptionalFileServiceDep,
-    WebSearchPolicyPortDep,
+    ToolPorts,
+    ToolPortsDep,
     build_sandbox_container_registry,
     build_sandbox_file_bridge,
     get_config,
@@ -31,7 +29,6 @@ from gateway.api.routes._idempotency import IdempotencyGuard, IdempotencyGuardDe
 from gateway.api.routes._normalize import normalize_request_messages, sandbox_requested
 from gateway.api.routes._pipeline import (
     NO_RESOLVABLE_PROVIDER_DETAIL,
-    PROVIDER_ERROR_DETAIL,
     DeclaredTools,
     ErrorKind,
     ToolBackends,
@@ -40,6 +37,7 @@ from gateway.api.routes._pipeline import (
     log_usage,
     prepare_gateway_tools,
     provider_error_headers,
+    provider_failure_detail,
     raise_all_streaming_attempts_failed,
     rate_limit_headers,
     resolve_dispatch_provider,
@@ -49,22 +47,24 @@ from gateway.api.routes._pipeline import (
     run_standalone_non_stream,
     run_streaming_with_fallback,
     scope_prompt_cache_key,
+    stream_error_code,
+    stream_error_message,
 )
-from gateway.api.routes._platform import ResolvedAttempt, SettledCost
+from gateway.api.routes._platform import ResolvedAttempt, SettledCost, with_retry_hint
+from gateway.api.routes._request_tags import RequestMetadata, request_tags
 from gateway.api.routes._schema_derive import SESSION_LABEL_DESC, SESSION_LABEL_MAX_LENGTH, derive_request_base
-from gateway.api.routes._tools import CODE_EXECUTION_HEADER, WEB_SEARCH_HEADER, _strip_gateway_fields
+from gateway.api.routes._tools import _strip_gateway_fields
 from gateway.core.config import GatewayConfig
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage import GatewayUsage, reasoning_tokens_of
-from gateway.core.usage_source import PLAYGROUND_USAGE_ENDPOINT
 from gateway.log_config import logger
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
-from gateway.ports.code_execution_port import CodeExecutionPort
-from gateway.ports.mcp_server_port import McpServerPort
+from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT
 from gateway.ports.model_provider_port import ModelProviderPort
-from gateway.ports.web_search_policy_port import WebSearchPolicyPort
+from gateway.provider_fields import surface_provider_fields
 from gateway.services.files import FileService, StagedFile
+from gateway.services.inference import is_chat_stream_cost_carrier
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import (
     MAX_TOOL_ITERATIONS_CAP,
@@ -73,8 +73,10 @@ from gateway.services.mcp_loop import (
     mcp_tool_loop,
     mcp_tool_loop_stream,
 )
-from gateway.services.tools import Dialect, ToolUseBudget
-from gateway.streaming import OPENAI_STREAM_FORMAT, StreamFormat
+from gateway.services.provider_kwargs import apply_endpoint_defaults
+from gateway.services.providers import acompletion
+from gateway.services.tools import CODE_EXECUTION_HEADER, WEB_SEARCH_HEADER, Dialect, ToolUseBudget
+from gateway.streaming import OPENAI_STREAM_FORMAT, StreamFormat, openai_error_event
 from gateway.types.attempt import Attempt
 from gateway.types.normalization_target import NormalizationTarget
 from gateway.types.session_principal import SessionPrincipal
@@ -84,10 +86,6 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 # The label written to a usage-log row. An identifier, not a URL: it stays as
 # it is so new rows compare with old ones.
 USAGE_ENDPOINT = "/v1/chat/completions"
-
-# The label a Playground request carries instead, declared in
-# ``core/usage_source`` because the activation guide filters on it and a service
-# may not import this layer. That module says which readers care and why.
 
 __all__ = [
     "ChatCompletionRequest",
@@ -173,6 +171,30 @@ class ChatCompletionRequest(derive_request_base(CompletionParams)):  # type: ign
     )
     max_tool_iterations: int | None = Field(default=None, ge=1, le=MAX_TOOL_ITERATIONS_CAP)
     session_label: str | None = Field(default=None, max_length=SESSION_LABEL_MAX_LENGTH, description=SESSION_LABEL_DESC)
+    # OpenAI's chat field, absent from ``CompletionParams``: read for request tags
+    # and never forwarded, since a provider other than OpenAI would reject it.
+    metadata: RequestMetadata = None
+
+
+def _every_choice_finishes() -> Callable[[ChatCompletionChunk], bool]:
+    """A predicate, for one stream, that holds while every choice seen so far has a ``finish_reason``.
+
+    Every complete chat stream reports one per choice, so with ``n`` above 1 a
+    stream that finishes one choice and cuts another is not complete, in
+    whichever order the choices arrive. A usage-only final chunk has no choices,
+    so it leaves the answer as it was.
+    """
+    seen: set[int] = set()
+    finished: set[int] = set()
+
+    def completes(chunk: ChatCompletionChunk) -> bool:
+        for choice in chunk.choices or ():
+            seen.add(choice.index)
+            if choice.finish_reason:
+                finished.add(choice.index)
+        return bool(finished) and seen <= finished
+
+    return completes
 
 
 class _ChatAdapter:
@@ -202,27 +224,37 @@ class _ChatAdapter:
     ) -> HTTPException:
         return HTTPException(status_code=status_code, detail=message, headers=headers)
 
-    def provider_error(self, exc: BaseException) -> HTTPException:
-        mapping = classify_provider_error(exc)
+    def provider_error(self, exc: BaseException, model: str | None = None) -> HTTPException:
+        mapping = classify_provider_error(exc, model=model)
         if mapping is not None:
             return HTTPException(
                 status_code=mapping.status_code,
                 detail=mapping.detail,
-                headers=provider_error_headers(exc, mapping.status_code),
+                headers=with_retry_hint(exc, mapping.status_code, provider_error_headers(exc, mapping.status_code)),
             )
         return HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=PROVIDER_ERROR_DETAIL,
+            detail=provider_failure_detail(exc),
+            headers=with_retry_hint(exc, status.HTTP_502_BAD_GATEWAY, None),
         )
 
+    def stream_completion(self) -> Callable[[Any], bool] | None:
+        return _every_choice_finishes()
+
+    def stream_error_payload(self, exc: BaseException) -> str:
+        return openai_error_event(self.stream_format, stream_error_code(exc), stream_error_message(exc))
+
     def format_chunk(self, chunk: ChatCompletionChunk) -> str:
-        return f"data: {chunk.model_dump_json()}\n\n"
+        return f"data: {surface_provider_fields(chunk).model_dump_json()}\n\n"
 
     def extract_stream_usage(self, chunk: ChatCompletionChunk) -> CompletionUsage | None:
         if not chunk.usage:
             return None
         details = chunk.usage.prompt_tokens_details
-        return GatewayUsage(
+        # Forward provider extras (streamed timing lands in the final chunk's
+        # usage), as GatewayUsage.from_completion_usage does.
+        fields = GatewayUsage.external_extras(chunk.usage)
+        fields.update(
             prompt_tokens=chunk.usage.prompt_tokens or 0,
             completion_tokens=chunk.usage.completion_tokens or 0,
             total_tokens=chunk.usage.total_tokens or 0,
@@ -230,6 +262,7 @@ class _ChatAdapter:
             cache_read_tokens=(details.cached_tokens or 0) if details is not None else 0,
             reasoning_tokens=reasoning_tokens_of(chunk.usage),
         )
+        return GatewayUsage(**fields)
 
     def extract_usage(self, result: ChatCompletion) -> CompletionUsage | None:
         if result.usage is None:
@@ -252,10 +285,7 @@ class _ChatAdapter:
         return True
 
     def is_stream_cost_carrier(self, chunk: ChatCompletionChunk) -> bool:
-        # OpenAI's include_usage chunk carries usage and no choices. Requiring
-        # the terminal shape prevents usage stamped onto content chunks from
-        # making an early chunk the carrier and buffering the whole stream.
-        return chunk.usage is not None and not chunk.choices
+        return is_chat_stream_cost_carrier(chunk)
 
     async def call_provider(self, kwargs: dict[str, Any]) -> ChatCompletion:
         return await acompletion(**kwargs)  # type: ignore[return-value]
@@ -406,9 +436,7 @@ async def chat_completions(
     config: Annotated[GatewayConfig, Depends(get_config)],
     log_writer: Annotated[LogWriter, Depends(get_log_writer)],
     model_provider: ModelProviderPortDep,
-    code_execution_port: CodeExecutionPortDep,
-    mcp_server_port: McpServerPortDep,
-    web_search_policy_port: WebSearchPolicyPortDep,
+    tool_ports: ToolPortsDep,
     idempotency: IdempotencyGuardDep,
 ) -> ChatCompletion | Response:
     """OpenAI-compatible chat completions endpoint.
@@ -432,9 +460,7 @@ async def chat_completions(
         config=config,
         log_writer=log_writer,
         model_provider=model_provider,
-        code_execution_port=code_execution_port,
-        mcp_server_port=mcp_server_port,
-        web_search_policy_port=web_search_policy_port,
+        tool_ports=tool_ports,
         idempotency=idempotency,
     )
 
@@ -451,9 +477,7 @@ async def run_chat_completion(
     config: GatewayConfig,
     log_writer: LogWriter,
     model_provider: ModelProviderPort,
-    code_execution_port: CodeExecutionPort | None,
-    mcp_server_port: McpServerPort,
-    web_search_policy_port: WebSearchPolicyPort,
+    tool_ports: ToolPorts,
     session_principal: SessionPrincipal | None = None,
     idempotency: IdempotencyGuard | None = None,
 ) -> ChatCompletion | Response:
@@ -471,8 +495,7 @@ async def run_chat_completion(
     endpoint, which keeps its API-key-or-master-key rule exactly as it was; see
     :class:`SessionPrincipal` for what a caller owes before building one. It is
     also what picks the usage row's endpoint label, so a Playground request is
-    countable separately from a customer's; ``PLAYGROUND_USAGE_ENDPOINT`` says
-    who reads that distinction and why.
+    countable separately from a customer's (``PLAYGROUND_USAGE_ENDPOINT``).
     """
     adapter = _PLAYGROUND_ADAPTER if session_principal is not None else _ADAPTER
     if not request.model.strip():
@@ -535,7 +558,10 @@ async def run_chat_completion(
             ),
             normalize_messages=_normalize,
             tools=request.tools,
+            code_execution_policies=tool_ports.code_execution_policy,
+            model_provider=model_provider,
             idempotency=None if request.stream else idempotency,
+            tags=request_tags(request.metadata),
         )
     except IdempotentReplay as replay:
         return replay.response()
@@ -556,15 +582,13 @@ async def run_chat_completion(
             web_search_header=raw_request.headers.get(WEB_SEARCH_HEADER),
         ),
         backends=ToolBackends(
-            code_execution_port=code_execution_port,
-            mcp_server_port=mcp_server_port,
-            web_search_policy_port=web_search_policy_port,
+            ports=tool_ports,
             sandbox_containers=build_sandbox_container_registry(
                 config=config,
                 uow=ctx.uow,
                 user_id=ctx.user_id,
                 workspace_id=ctx.workspace_id,
-                port=code_execution_port,
+                port=tool_ports.code_execution,
             ),
             sandbox_files=build_sandbox_file_bridge(
                 raw_request=raw_request,
@@ -583,6 +607,7 @@ async def run_chat_completion(
         remaining_user_tools=tool_ctx.remaining_user_tools,
         web_search_declared_name=tool_ctx.web_search_declared_name,
     )
+    request_fields.pop("metadata", None)
     scope_prompt_cache_key(request_fields, ctx)
     # Dispatch one cap, under the name any-llm understands and knows how to map to
     # any provider (via BaseOpenAIProvider._convert_completion_params). Popped
@@ -636,7 +661,9 @@ async def run_chat_completion(
         resolved = await resolve_dispatch_provider(
             ctx, config, request.model, adapter=adapter, model_provider=model_provider
         )
-        call_kwargs = {**resolved.kwargs, **request_fields, "model": resolved.dispatch_model}
+        call_kwargs = apply_endpoint_defaults(
+            {**resolved.kwargs, **request_fields, "model": resolved.dispatch_model}, resolved
+        )
         return await run_single_attempt_stream(
             adapter=adapter,
             ctx=ctx,
@@ -661,7 +688,7 @@ async def run_chat_completion(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Internal error: missing route context",
             )
-        return await run_platform_non_stream(
+        platform_result = await run_platform_non_stream(
             adapter=adapter,
             route=route,
             base_request_fields=request_fields,
@@ -672,11 +699,14 @@ async def run_chat_completion(
             rate_limit_info=ctx.rate_limit_info,
             session_label=request.session_label,
         )
+        return surface_provider_fields(platform_result)
 
     resolved = await resolve_dispatch_provider(
         ctx, config, request.model, adapter=adapter, model_provider=model_provider
     )
-    call_kwargs = {**resolved.kwargs, **request_fields, "model": resolved.dispatch_model}
+    call_kwargs = apply_endpoint_defaults(
+        {**resolved.kwargs, **request_fields, "model": resolved.dispatch_model}, resolved
+    )
     result = await run_standalone_non_stream(
         adapter=adapter,
         ctx=ctx,
@@ -688,6 +718,7 @@ async def run_chat_completion(
         display_model=resolved.alias or request.model,
         base_request_fields=request_fields,
     )
+    surface_provider_fields(result)
     if idempotency is not None:
         await idempotency.complete(result, response)
     return result

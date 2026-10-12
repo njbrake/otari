@@ -179,6 +179,7 @@ export function breakdownSummary(
     by_tool: [
       { tool: "web_search", calls: 51, errors: 0, requests: 13, cost: 0 },
     ],
+    by_tag: [],
     errors_by_status_code: [],
     series: DAYS.map((day, index) => ({
       ...seriesPoint({

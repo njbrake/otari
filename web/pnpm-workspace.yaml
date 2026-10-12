@@ -7,3 +7,11 @@
 # Approve a package here only when its build produces something the app needs.
 allowBuilds:
   esbuild: true
+
+# Floors for transitive dependencies with published advisories, until the
+# packages that pull them in require the patched versions themselves.
+overrides:
+  # GHSA-jp82-f5mq-hwhp, via @tanstack/react-router.
+  seroval: ^1.6.3
+  # GHSA-68fv-2mgg-jv7q, via vite's postcss.
+  source-map-js: ^1.2.2

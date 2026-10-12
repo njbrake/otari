@@ -24,7 +24,7 @@ from gateway.models.budgets import ALIGN_MONTH, ALIGN_WEEK, SCOPE_API_TOKEN, SCO
 from gateway.models.tenancy import Organization, User, Workspace
 from gateway.models.usage import UsageLog
 from gateway.models.users import User as ApiUser
-from gateway.repositories.overview.overview_repository import Allocation, OverviewRepository
+from gateway.repositories.overview.overview_repository import OverviewRepository
 from gateway.repositories.tenancy import (
     OrganizationMemberRepository,
     OrganizationRepository,
@@ -32,12 +32,14 @@ from gateway.repositories.tenancy import (
     WorkspaceMemberRepository,
     WorkspaceRepository,
 )
-from gateway.services.budgets import WorkspaceBudgetDefaultService
 from gateway.services.model_discovery_service import ProviderDiscovery, get_model_cache
-from gateway.services.overview.overview_service import Month, OverviewService, OverviewSummary, _rolled
+from gateway.services.overview.overview_service import Month, OverviewService, OverviewSummary
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.organization_service import OrganizationService
+from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 from gateway.services.tenancy.workspace_service import WorkspaceService
+
+from .tenancy_helpers import membership_writes
 
 NOW = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
 JULY = Month.current(NOW)
@@ -153,9 +155,9 @@ def _ceiling(
 def _service(db: AsyncSession, config: GatewayConfig | None = None) -> OverviewService:
     return OverviewService(
         OverviewRepository(db),
-        OrganizationService(db, membership_listener=None),
+        OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener()),
         DeploymentUserService(db),
-        WorkspaceService(db, membership_listener=WorkspaceBudgetDefaultService(db)),
+        WorkspaceService(db, **membership_writes(db)),
         config or GatewayConfig(),
     )
 
@@ -463,12 +465,6 @@ async def test_a_ceiling_on_an_alignment_the_roll_cannot_read_keeps_its_stored_w
 
     row = summary.limits.rows[0]
     assert (row.limit_spent, row.period_end) == (5.0, june_end)
-
-
-def test_an_allocation_without_a_ceiling_is_left_as_it_is() -> None:
-    row = Allocation(name="Deployment", budget_id="b-1", spent=3.0, allocated=10.0)
-
-    assert _rolled(row, NOW) is row
 
 
 @pytest.mark.asyncio

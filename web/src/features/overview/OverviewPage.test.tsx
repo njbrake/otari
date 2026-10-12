@@ -60,6 +60,7 @@ function summary(
     by_policy: [],
     by_workspace: [],
     by_channel: [],
+    by_tag: [],
     errors_by_status_code: [],
     series,
   }
@@ -183,6 +184,8 @@ interface Bodies {
   context?: Parameters<typeof organizationContext>[0]
   activation?: unknown
   models?: string[]
+  /** Answers the catalog with a server error instead of a list. */
+  modelsFail?: boolean
 }
 
 function overviewBody(over: Partial<OverviewSummary> = {}): OverviewSummary {
@@ -247,6 +250,7 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
       )
     }
     if (url.includes(`${API_ROOT}/models`)) {
+      if (b.modelsFail) return jsonResponse({ detail: "catalog down" }, 500)
       return jsonResponse(modelCatalog(b.models ?? ["openai:gpt-4o-mini"]))
     }
     if (url.includes("/usage/summary")) {
@@ -1509,7 +1513,11 @@ describe("OverviewIndex routing", () => {
     )
   })
 
-  it("lands a failed context on the scoped page and settles there", async () => {
+  it("lands a failed context on the operator page, where its tiles read too", async () => {
+    // Every operator gate fails open on a failed read (otari#876), and the page
+    // and the usage hooks behind its tiles take that answer from one place, so
+    // the operator panels never sit above tiles serving the caller's own
+    // organization.
     const requested: string[] = []
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input)
@@ -1517,27 +1525,45 @@ describe("OverviewIndex routing", () => {
       if (url.endsWith(`${API_ROOT}/organizations/me`)) {
         return jsonResponse({ detail: "context exploded" }, 500)
       }
-      if (url.includes(`${API_ROOT}/organizations/me/usage/summary`)) {
+      if (url.includes(`${API_ROOT}/usage/summary`)) {
         return jsonResponse(summary({ cost: 200, request_count: 2000 }))
-      }
-      if (url.includes(`${API_ROOT}/organizations/me/usage`)) {
-        return jsonResponse([])
       }
       if (url.includes(`${API_ROOT}/overview`))
         return jsonResponse(overviewBody())
-      return jsonResponse({ detail: "forbidden" }, 403)
+      if (url.includes(`${API_ROOT}/providers/health`)) {
+        return jsonResponse({
+          providers: [],
+          healthy: 0,
+          degraded: 0,
+          total: 0,
+        })
+      }
+      if (url.includes(`${API_ROOT}/providers`)) {
+        return jsonResponse({ providers: [{ provider: "openai" }] })
+      }
+      return jsonResponse([])
     })
     renderPage(<OverviewIndex />)
 
+    expect(
+      await screen.findByRole("heading", { name: "Providers" }),
+    ).toBeInTheDocument()
     expect((await screen.findAllByText("$200.00")).length).toBeGreaterThan(0)
-    expect(screen.queryByRole("heading", { name: "Providers" })).toBeNull()
+    // Its tiles read the deployment, not the caller's organization.
+    expect(
+      requested.some((url) =>
+        url.includes(`${API_ROOT}/organizations/me/usage`),
+      ),
+    ).toBe(false)
+
+    // And it settled there. The usage hooks observe the same errored context,
+    // and their mount asks it to refetch; a page reading that transient pending
+    // state would flip back to its spinner, unmount them, and ask again
+    // without end.
     expect(
       requested.filter((url) => url.endsWith(`${API_ROOT}/organizations/me`))
         .length,
     ).toBeLessThan(4)
-    expect(
-      requested.some((url) => url.endsWith(`${API_ROOT}/admin/access`)),
-    ).toBe(false)
   })
 })
 
@@ -1611,5 +1637,67 @@ describe("the setup guide on either Overview", () => {
       screen.queryByRole("heading", { name: "Send your first request" }),
     ).toBeNull()
     expect(requested.some((url) => url.includes("/activation"))).toBe(false)
+  })
+})
+
+describe("the first-steps strip on the tenant Overview", () => {
+  const GET_STARTED = "Get started with Otari"
+
+  it("points an admin of a brand-new organization at adding a provider key", async () => {
+    mockApi({ context: TWO_WORKSPACES, models: [] }, { scoped: true })
+    const user = userEvent.setup()
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    expect(await screen.findByText(GET_STARTED)).toBeInTheDocument()
+    await user.click(screen.getByRole("link", { name: "Add a provider key" }))
+    expect(await screen.findByTestId("loc")).toHaveTextContent(
+      "/organization/provider-keys",
+    )
+  })
+
+  it("tells a member who to ask, and offers no link they cannot use", async () => {
+    mockApi(
+      { context: { ...TWO_WORKSPACES, role: "member" }, models: [] },
+      { scoped: true },
+    )
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    expect(await screen.findByText(GET_STARTED)).toBeInTheDocument()
+    expect(screen.getByText(/Ask an owner or admin/)).toBeInTheDocument()
+    expect(
+      screen.queryByRole("link", { name: "Add a provider key" }),
+    ).toBeNull()
+  })
+
+  it("is absent once there is something to route to, where the guide takes over", async () => {
+    mockApi(
+      { context: TWO_WORKSPACES, activation: workspaceActivation() },
+      { scoped: true },
+    )
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await screen.findByRole("heading", { name: "Send your first request" })
+    expect(screen.queryByText(GET_STARTED)).toBeNull()
+  })
+
+  it("is absent when the account already has traffic", async () => {
+    mockApi(
+      { context: TWO_WORKSPACES, models: [], failures: [failure()] },
+      { scoped: true },
+    )
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    expect(await screen.findByText("Provider overloaded")).toBeInTheDocument()
+    expect(screen.queryByText(GET_STARTED)).toBeNull()
+  })
+
+  it("stays out of the way when the catalog cannot be read", async () => {
+    mockApi({ context: TWO_WORKSPACES, modelsFail: true }, { scoped: true })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /refresh/i })).toBeEnabled()
+    })
+    expect(screen.queryByText(GET_STARTED)).toBeNull()
   })
 })
