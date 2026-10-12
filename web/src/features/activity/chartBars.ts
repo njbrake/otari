@@ -119,6 +119,17 @@ export function barIndexAt(
   return Math.max(0, Math.min(count - 1, at))
 }
 
+/**
+ * Where an axis label sits for a point `fraction` of the way along the plot:
+ * the same fraction of the way across the label, so a label is centered mid
+ * plot and flush with the edge at either end rather than spilling past it.
+ * The point stays inside the label's width wherever it is.
+ */
+export function axisLabelPlace(fraction: number) {
+  const percent = `${fraction * 100}%`
+  return { left: percent, transform: `translateX(-${percent})` }
+}
+
 /** One bar further along, held inside the chart: an arrow key's step. */
 export function stepBar(index: number, delta: number, count: number): number {
   return Math.max(0, Math.min(count - 1, index + delta))

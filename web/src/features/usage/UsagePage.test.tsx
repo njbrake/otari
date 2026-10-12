@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { UsagePage } from "@/features/usage/UsagePage"
+import { API_ROOT } from "@/shared/api/client"
+import { workspace } from "@/tests/fixtures"
 import {
   breakdownRow,
   breakdownSummary,
@@ -147,6 +149,23 @@ describe("UsagePage", () => {
       expect(location.textContent).toContain("workspace=ws-2")
     })
 
+    it("names a workspace filter by its workspace under another breakdown", async () => {
+      const { calls } = mockUsageApi({
+        viewer: "owner",
+        workspaces: [workspace({ id: "ws-3", name: "Staging" })],
+      })
+      page("/usage?scope=organization&by=model&workspace_id=ws-3")
+      expect(
+        await screen.findByRole("button", { name: "Remove Workspace Staging" }),
+      ).toBeInTheDocument()
+      // A read of the workspace the chip names, not of the whole list.
+      const paths = calls.map(
+        (call) => new URL(call.url, "http://localhost").pathname,
+      )
+      expect(paths).toContain(`${API_ROOT}/workspaces/ws-3`)
+      expect(paths).not.toContain(`${API_ROOT}/workspaces`)
+    })
+
     it("keeps a filter the scope cannot use in the URL, greyed, and does not send it", async () => {
       const { calls } = mockUsageApi({ viewer: "workspaceAdmin" })
       page("/usage?scope=you&user_id=u-jordan")
@@ -201,9 +220,10 @@ describe("UsagePage", () => {
       await waitFor(() =>
         expect(lastBreakdown(calls).get("p95_by")).toBe("policy"),
       )
+      // A menu trigger, not a toggle: its name says what it holds.
       expect(
         screen.getByRole("button", { name: "More breakdowns, Policy" }),
-      ).toBeInTheDocument()
+      ).not.toHaveAttribute("aria-pressed")
     })
 
     it("shows every column, a cut-down provider path and the p95", async () => {
@@ -234,24 +254,54 @@ describe("UsagePage", () => {
       expect(names[0]).toContain("Claude Code")
     })
 
-    it("sorts by a header, reverses it, then returns to the share", async () => {
+    it("sorts by a header on the server, reverses it, then returns to the share", async () => {
       const user = userEvent.setup()
-      mockUsageApi({ viewer: "member" })
+      const { calls } = mockUsageApi({ viewer: "member" })
       page()
       const grid = await table()
+      const rank = () => [
+        lastBreakdown(calls).get("rank_by"),
+        lastBreakdown(calls).get("rank_order"),
+      ]
+      expect(rank()).toEqual(["cost", "desc"])
       const header = within(grid).getByRole("columnheader", {
         name: /Requests/,
       })
       await user.click(header)
       expect(pageUrl().textContent).toContain("sort=requests")
+      await waitFor(() => expect(rank()).toEqual(["requests", "desc"]))
       const first = () =>
         within(grid).getAllByRole("rowheader")[0].textContent ?? ""
       expect(first()).toContain("claude-opus-5-5")
       await user.click(header)
       expect(pageUrl().textContent).toContain("order=asc")
-      expect(first()).toContain("claude-haiku-4-5")
+      await waitFor(() => expect(rank()).toEqual(["requests", "asc"]))
+      await waitFor(() => expect(first()).toContain("claude-haiku-4-5"))
       await user.click(header)
       expect(pageUrl().textContent).not.toContain("sort=")
+      // The share's first answer is still cached, so it is not read again.
+      await waitFor(() => expect(first()).toContain("claude-opus-5-5"))
+      // The chart ranks by the metric whatever the table's sort.
+      expect(usageReads(calls, "series").at(-1)?.get("rank_by")).toBe("cost")
+    })
+
+    it("lists the rows in the order the server ranked them", async () => {
+      const models = breakdownSummary().by_model
+      mockUsageApi({
+        viewer: "member",
+        // Not in order of requests, which a browser-side sort would impose.
+        summary: breakdownSummary({
+          by_model: [models[2], models[0], models[1]],
+        }),
+      })
+      page("/usage?sort=requests")
+      await rowNamed("claude-haiku-4-5")
+      const names = within(await table())
+        .getAllByRole("rowheader")
+        .map((cell) => cell.textContent ?? "")
+      expect(names[0]).toContain("claude-haiku-4-5")
+      expect(names[1]).toContain("claude-opus-5-5")
+      expect(names[2]).toContain("deepseek-v4-flash")
     })
 
     it("defines the money columns and the p95 under the table, and a subscription figure on its cell", async () => {
@@ -564,7 +614,7 @@ describe("UsagePage", () => {
     })
   })
 
-  it("says a gateway with no usage has none yet", async () => {
+  it("says the window is empty, not that the gateway has never had usage", async () => {
     mockUsageApi({
       viewer: "member",
       summary: breakdownSummary(
@@ -573,7 +623,10 @@ describe("UsagePage", () => {
       ),
     })
     page()
-    expect(await screen.findByText(/No usage recorded yet/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/No usage in the last 30d\./),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/recorded yet/)).toBeNull()
   })
 
   it("explains an empty filtered table and clears back", async () => {

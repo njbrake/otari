@@ -3,7 +3,7 @@ import { useLocation } from "@tanstack/react-router"
 import { render } from "@testing-library/react"
 import type { ReactElement } from "react"
 import { vi } from "vitest"
-import type { SavedView, UsageSummary, UsageTotals } from "@/client"
+import type { SavedView, UsageSummary, UsageTotals, Workspace } from "@/client"
 import { DIMENSIONS } from "@/features/usage/usageQuery"
 import { API_ROOT } from "@/shared/api/client"
 import type { UsageBreakdownRow } from "@/shared/api/usage"
@@ -216,6 +216,8 @@ export function mockUsageApi(
     views?: SavedView[]
     /** False for a manager whose own requests the roster names no id for. */
     hasOwnUserId?: boolean
+    /** Workspaces a read of one by id answers with. */
+    workspaces?: Workspace[]
     /** A promise a read waits on before it answers, to hold one back. */
     hold?: (
       kind: "summary" | "series",
@@ -252,20 +254,37 @@ export function mockUsageApi(
           period_end: "2026-10-01T00:00:00Z",
         })
       }
+      const known = opts.workspaces?.find((one) =>
+        url.endsWith(`/workspaces/${one.id}`),
+      )
+      if (known) return jsonResponse(known)
       if (url.includes("/usage/summary")) {
         await opts.hold?.("summary", params)
         if (params.getAll("dimensions").includes("none")) {
           return jsonResponse(opts.previous ?? breakdownSummary())
         }
-        // As the server does: only the breakdowns asked for are filled.
+        // As the server does: only the breakdowns asked for are filled, and
+        // `rank_order=asc` lists them from the other end, the rows with no key
+        // and the fold still last. The fixture's rows are in descending order.
         const asked = new Set(params.getAll("dimensions"))
+        const isAscending = params.get("rank_order") === "asc"
         return jsonResponse(
           Object.fromEntries(
-            Object.entries(summary).map(([field, value]) =>
-              field.startsWith("by_") && !asked.has(field.slice(3))
-                ? [field, []]
-                : [field, value],
-            ),
+            Object.entries(summary).map(([field, value]) => {
+              if (!field.startsWith("by_")) return [field, value]
+              if (!asked.has(field.slice(3))) return [field, []]
+              if (!isAscending || !Array.isArray(value)) return [field, value]
+              const rows = value as UsageBreakdownRow[]
+              const isRanked = (row: UsageBreakdownRow) =>
+                !row.is_other && row.key !== null
+              return [
+                field,
+                [
+                  ...rows.filter(isRanked).reverse(),
+                  ...rows.filter((row) => !isRanked(row)),
+                ],
+              ]
+            }),
           ),
         )
       }

@@ -435,3 +435,158 @@ def test_the_series_top_groups_follow_rank_by(
 
     assert "pricey" in kept("cost")
     assert kept("requests") == {f"busy-{index}" for index in range(8)}
+
+
+def _sortable_fixture(db: Session) -> None:
+    """Four models every sortable column of the Usage table orders differently.
+
+    ``alpha``: one failure, p95 200 (an absorbed attempt that took far longer left
+    out). ``Beta``: all imported, p95 300, capitalized so a case-sensitive name order
+    would put it first. ``gamma``: two failures, p95 900. ``delta``: no latency at all.
+    """
+    _row(db, model="alpha", cost=0.1, latency_ms=100)
+    _row(db, model="alpha", cost=None, status="error", latency_ms=200)
+    _row(db, model="alpha", cost=None, status="absorbed", latency_ms=99_999)
+    _row(db, model="Beta", cost=0.5, source="claude_code", latency_ms=300)
+    _row(db, model="gamma", cost=0.2, latency_ms=50)
+    _row(db, model="gamma", cost=None, status="error", latency_ms=900)
+    _row(db, model="gamma", cost=None, status="error", latency_ms=900)
+    _row(db, model="delta", cost=0.05, latency_ms=None)
+    db.commit()
+
+
+@pytest.mark.parametrize(
+    ("rank_by", "rank_order", "order"),
+    [
+        ("imported", "desc", ["Beta", "alpha", "delta", "gamma"]),
+        ("imported", "asc", ["alpha", "delta", "gamma", "Beta"]),
+        ("errors", "desc", ["gamma", "alpha", "Beta", "delta"]),
+        ("errors", "asc", ["Beta", "delta", "alpha", "gamma"]),
+        ("name", "asc", ["alpha", "Beta", "delta", "gamma"]),
+        ("name", "desc", ["gamma", "delta", "Beta", "alpha"]),
+        # A group with no latency to rank comes last whichever way the rest go.
+        ("p95", "desc", ["gamma", "Beta", "alpha", "delta"]),
+        ("p95", "asc", ["alpha", "Beta", "gamma", "delta"]),
+        ("cost", "asc", ["delta", "alpha", "gamma", "Beta"]),
+    ],
+)
+def test_rank_by_and_rank_order_order_a_breakdown_by_any_column_the_table_sorts(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session: Session,
+    rank_by: str,
+    rank_order: str,
+    order: list[str],
+) -> None:
+    _sortable_fixture(db_session)
+    body = _summary(client, master_key_header, dimensions="model", rank_by=rank_by, rank_order=rank_order)
+    assert [row["key"] for row in body["by_model"]] == order
+
+
+def test_ranking_by_p95_carries_each_rows_p95_in_every_breakdown(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    _sortable_fixture(db_session)
+    body = _summary(client, master_key_header, dimensions=["model", "provider"], rank_by="p95", p95_by="provider")
+    assert {row["key"]: row["p95_latency_ms"] for row in body["by_model"]} == {
+        "alpha": 200,
+        "Beta": 300,
+        "gamma": 900,
+        "delta": None,
+    }
+    assert _rows(body, "by_provider")["openai"]["p95_latency_ms"] == 900
+
+
+def test_a_group_the_spend_ranking_folds_comes_back_ranked_by_failures(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    from gateway.services.usage._summary import BREAKDOWN_TOP_N
+
+    for index in range(BREAKDOWN_TOP_N):
+        _row(db_session, model=f"spender-{index:03}", cost=1.0)
+    _row(db_session, model="flaky", cost=None, status="error")
+    db_session.commit()
+
+    by_cost = _summary(client, master_key_header, dimensions="model")["by_model"]
+    assert "flaky" not in {row["key"] for row in by_cost}
+    assert by_cost[-1]["is_other"] and by_cost[-1]["error_count"] == 1
+
+    by_errors = _summary(client, master_key_header, dimensions="model", rank_by="errors")["by_model"]
+    assert by_errors[0]["key"] == "flaky"
+    assert by_errors[0]["error_count"] == 1
+    assert by_errors[-1]["is_other"] and by_errors[-1]["error_count"] == 0
+
+
+def test_ascending_keeps_the_bottom_of_the_ranking_and_folds_the_rest(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from gateway.services.usage import _summary as summary_rules
+
+    monkeypatch.setitem(summary_rules.SUMMARY_BREAKDOWNS, "model", 2)
+    _ranked_fixture(db_session)
+
+    by_model = _summary(client, master_key_header, dimensions="model", rank_by="cost", rank_order="asc")["by_model"]
+    assert [(row["key"], row["is_other"]) for row in by_model] == [("busy", False), ("chatty", False), (None, True)]
+    assert by_model[-1]["cost"] == pytest.approx(5.0)
+
+
+@pytest.mark.parametrize("rank_order", ["desc", "asc"])
+def test_a_tie_puts_the_group_with_no_key_last_in_either_direction(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session, rank_order: str
+) -> None:
+    _key(db_session, "k-app", "app")
+    _row(db_session, api_key_id="k-app")
+    _row(db_session)
+    db_session.commit()
+
+    body = _summary(client, master_key_header, dimensions="api_key", rank_order=rank_order)
+    assert [row["key"] for row in body["by_api_key"]] == ["k-app", None]
+
+
+@pytest.mark.parametrize(("rank_order", "order"), [("asc", ["k-b", "k-a", None]), ("desc", ["k-a", "k-b", None])])
+def test_ranking_by_name_reads_a_groups_label_where_it_has_one(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session, rank_order: str, order: list[Any]
+) -> None:
+    """``k-a`` is named "zebra" and ``k-b`` "Apple", so the name order is the reverse of the key's."""
+    _key(db_session, "k-a", "zebra")
+    _key(db_session, "k-b", "Apple")
+    _row(db_session, api_key_id="k-a")
+    _row(db_session, api_key_id="k-b")
+    _row(db_session)
+    db_session.commit()
+
+    body = _summary(client, master_key_header, dimensions="api_key", rank_by="name", rank_order=rank_order)
+    assert [row["key"] for row in body["by_api_key"]] == order
+
+
+def test_an_unknown_rank_is_refused(client: TestClient, master_key_header: dict[str, str]) -> None:
+    for params in ({"rank_by": "latency"}, {"rank_order": "up"}):
+        assert client.get(SUMMARY, params={**WINDOW, **params}, headers=master_key_header).status_code == 422
+
+
+def test_the_series_groups_carry_no_p95(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    _row(db_session, latency_ms=100)
+    db_session.commit()
+
+    response = client.get(SERIES, params={**WINDOW, "group_by": "model"}, headers=master_key_header)
+    assert response.status_code == 200, response.text
+    assert all("p95_latency_ms" not in group for group in response.json()["groups"])
+
+
+@pytest.mark.parametrize("rank_by", ["imported", "errors", "name", "p95"])
+@pytest.mark.parametrize("rank_order", ["desc", "asc"])
+def test_every_breakdown_ranks_by_every_column(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session, rank_by: str, rank_order: str
+) -> None:
+    """The channel's CASE, the workspace's UUID and the labeled keys all order and group in one pass."""
+    _key(db_session, "k-app", "app")
+    _row(db_session, api_key_id="k-app", source_label="s1", latency_ms=100, policy_name="p")
+    _row(db_session, source="claude_code", latency_ms=300)
+    _row(db_session, endpoint=PLAYGROUND_USAGE_ENDPOINT, status="error", cost=None)
+    db_session.commit()
+
+    body = _summary(client, master_key_header, rank_by=rank_by, rank_order=rank_order)
+    for field in ("by_model", "by_api_key", "by_source_label", "by_policy", "by_workspace", "by_channel"):
+        assert sum(row["requests"] for row in body[field]) == 3, field

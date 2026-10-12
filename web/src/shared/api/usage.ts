@@ -12,6 +12,7 @@ import type {
   SummaryDimension,
   UsageActivityGroupBy,
   UsageActivityGroups,
+  UsageBreakdownRankBy,
   UsageBucket,
   UsageCount,
   UsageDeleteResult,
@@ -22,6 +23,7 @@ import type {
   UsageGroupRow,
   UsageMutationSelection,
   UsageRankBy,
+  UsageRankOrder,
   UsageSessionRow,
   UsageSetPriceRequest,
   UsageSetPriceResult,
@@ -727,13 +729,13 @@ export type UsageBreakdownRow = UsageGroupRow &
 
 // The Usage page's one summary: the totals and series, the breakdown on screen
 // with its per-group p95 (and a session's origin, for the session breakdown),
-// ranked by the metric on screen, and the tools the page lists under it. No
-// other dimension, since each one is a GROUP BY over the window.
+// ranked and ordered by the table's sort, and the tools the page lists under
+// it. No other dimension, since each one is a GROUP BY over the window.
 export function useUsageBreakdown(
   filters: UsageFilters,
   bucket: UsageBucket,
   dimension: SummaryDimension,
-  rankBy: UsageRankBy,
+  rank: { by: UsageBreakdownRankBy; order: UsageRankOrder },
   { enabled = true, usageScope = "caller" as UsageScope } = {},
 ) {
   const scope = useUsageScope(usageScope)
@@ -745,7 +747,8 @@ export function useUsageBreakdown(
       scope.base,
       filters,
       bucket,
-      rankBy,
+      rank.by,
+      rank.order,
       dimension,
     ],
     queryFn: async () => {
@@ -755,7 +758,8 @@ export function useUsageBreakdown(
         params.append("dimensions", one)
       }
       params.set("p95_by", dimension)
-      params.set("rank_by", rankBy)
+      params.set("rank_by", rank.by)
+      params.set("rank_order", rank.order)
       if (dimension === "source_label") params.set("session_details", "true")
       const summary = await apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
@@ -765,7 +769,8 @@ export function useUsageBreakdown(
     enabled: enabled && scope.isReady,
     // The previous result stands in while the next loads, tagged with the
     // breakdown it answers: its totals hold, and its rows are listed only
-    // under that breakdown, never read as another's.
+    // under that breakdown, never read as another's. A new sort keeps the
+    // last order's rows on screen until the server's arrive.
     placeholderData: keepPreviousData,
     staleTime: 30_000,
   })

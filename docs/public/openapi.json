@@ -17488,7 +17488,7 @@
         "type": "object"
       },
       "UsageGroupRow": {
-        "description": "One breakdown row (a model, a user, an API key, a session, ...).\n\n``key`` is None both for the synthesized fold row (``is_other=True``) and for a\nreal group whose column was NULL (e.g. usage from a since-deleted user, with\n``is_other=False``). ``is_other`` disambiguates the two so the UI does not\nmislabel deleted-user usage as the fold.",
+        "description": "One summary breakdown row (a model, a user, an API key, a session, ...).",
         "properties": {
           "cache_read_tokens": {
             "default": 0,
@@ -17566,7 +17566,7 @@
         "type": "object"
       },
       "UsageGroupedSeries": {
-        "description": "A per-group time series for the dashboard's stacked charts.\n\n``groups`` ranks the window's top groups by spend (plus the reconciling\n``other`` fold), in the order a chart should stack and color them; ``points``\nis sparse (only populated cells), keyed by canonical UTC ``bucket_start``.",
+        "description": "A per-group time series for the dashboard's stacked charts.\n\n``groups`` ranks the window's top groups by ``rank_by`` (plus the reconciling\n``other`` fold), in the order a chart should stack and color them; ``points``\nis sparse (only populated cells), keyed by canonical UTC ``bucket_start``.",
         "properties": {
           "bucket": {
             "enum": [
@@ -17597,7 +17597,7 @@
           },
           "groups": {
             "items": {
-              "$ref": "#/components/schemas/UsageGroupRow"
+              "$ref": "#/components/schemas/UsageSeriesGroup"
             },
             "title": "Groups",
             "type": "array"
@@ -17626,7 +17626,7 @@
         "type": "object"
       },
       "UsageGroupedSeriesPoint": {
-        "description": "One (time bucket, group) cell of a grouped series.\n\n``key``/``is_other`` follow the ``UsageGroupRow`` convention: ``key=None``\nwith ``is_other=True`` is the fold of groups outside the top N, ``key=None``\nwith ``is_other=False`` is a real NULL group (e.g. a deleted user).\n``tokens`` is the *billed* total (input including cache, plus output), the\nsame quantity the ungrouped series' composition fields sum to.",
+        "description": "One (time bucket, group) cell of a grouped series.\n\n``key``/``is_other`` follow the ``UsageSeriesGroup`` convention: ``key=None``\nwith ``is_other=True`` is the fold of groups outside the top N, ``key=None``\nwith ``is_other=False`` is a real NULL group (e.g. a deleted user).\n``tokens`` is the *billed* total (input including cache, plus output), the\nsame quantity the ungrouped series' composition fields sum to.",
         "properties": {
           "bucket_start": {
             "title": "Bucket Start",
@@ -17816,6 +17816,73 @@
           "latency_ms"
         ],
         "title": "UsageLogResponse",
+        "type": "object"
+      },
+      "UsageSeriesGroup": {
+        "description": "One group of a grouped series, and the figures every breakdown row shares.\n\n``key`` is None both for the synthesized fold row (``is_other=True``) and for a\nreal group whose column was NULL (e.g. usage from a since-deleted user, with\n``is_other=False``). ``is_other`` disambiguates the two so the UI does not\nmislabel deleted-user usage as the fold.",
+        "properties": {
+          "cache_read_tokens": {
+            "default": 0,
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cost": {
+            "title": "Cost",
+            "type": "number"
+          },
+          "error_count": {
+            "default": 0,
+            "title": "Error Count",
+            "type": "integer"
+          },
+          "imported_cost": {
+            "default": 0.0,
+            "title": "Imported Cost",
+            "type": "number"
+          },
+          "is_other": {
+            "default": false,
+            "title": "Is Other",
+            "type": "boolean"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "cost",
+          "tokens",
+          "requests"
+        ],
+        "title": "UsageSeriesGroup",
         "type": "object"
       },
       "UsageSeriesPoint": {
@@ -32320,7 +32387,7 @@
             }
           },
           {
-            "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null.",
+            "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. Implied for every breakdown by 'rank_by=p95'.",
             "in": "query",
             "name": "p95_by",
             "required": false,
@@ -32345,7 +32412,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null.",
+              "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. Implied for every breakdown by 'rank_by=p95'.",
               "title": "P95 By"
             }
           },
@@ -32362,20 +32429,40 @@
             }
           },
           {
-            "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key.",
+            "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last.",
             "in": "query",
             "name": "rank_by",
             "required": false,
             "schema": {
               "default": "cost",
-              "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key.",
+              "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last.",
               "enum": [
                 "cost",
                 "billed",
                 "tokens",
-                "requests"
+                "requests",
+                "imported",
+                "errors",
+                "name",
+                "p95"
               ],
               "title": "Rank By",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+            "in": "query",
+            "name": "rank_order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Rank Order",
               "type": "string"
             }
           },
@@ -39911,7 +39998,7 @@
     },
     "/api/v1/usage/summary": {
       "get": {
-        "description": "Aggregate spend, tokens, and request volume for the dashboard Usage page.\n\nRange-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``\nlist, every aggregate is scoped to a bounded window so it stays served by the\ntimestamp index. Returns grand totals, breakdowns by model / user / API key /\nsource / session (``source_label``) / endpoint / provider / routing policy /\nworkspace / channel (top rows plus a reconciling ``other`` fold; each row with its\nbilled tokens and cache reads, imported cost and failures, a session's with its span),\nthe error taxonomy grouped by failure status code, and a UTC-bucketed time series\ncarrying each bucket's error count, imported cost and billed token composition\n(input incl. cache, cache read/write, output).\n\nEach breakdown is its own ``GROUP BY`` pass, so a caller that reads only the\ntotals or the series should narrow ``dimensions`` rather than pay for every one\n(the dashboard's tiles, timeline context, and model typeahead all do). Omitting\nthe parameter keeps the full set. ``p95_by`` (latency per group in one breakdown)\nand ``session_details`` (each session's source and key name) cost one more pass each.\n\n``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match\nany of them, so one chart can compare a handful of models, users, or keys.",
+        "description": "Aggregate spend, tokens, and request volume for the dashboard Usage page.\n\nRange-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``\nlist, every aggregate is scoped to a bounded window so it stays served by the\ntimestamp index. Returns grand totals, breakdowns by model / user / API key /\nsource / session (``source_label``) / endpoint / provider / routing policy /\nworkspace / channel (top rows plus a reconciling ``other`` fold; each row with its\nbilled tokens and cache reads, imported cost and failures, a session's with its span),\nthe error taxonomy grouped by failure status code, and a UTC-bucketed time series\ncarrying each bucket's error count, imported cost and billed token composition\n(input incl. cache, cache read/write, output).\n\nEach breakdown is its own ``GROUP BY`` pass, so a caller that reads only the\ntotals or the series should narrow ``dimensions`` rather than pay for every one\n(the dashboard's tiles, timeline context, and model typeahead all do). Omitting\nthe parameter keeps the full set. ``p95_by`` (latency per group in one breakdown)\nand ``session_details`` (each session's source and key name) cost one more pass each.\n``rank_by`` and ``rank_order`` pick which groups each breakdown keeps and list them\nin that order, so a table sorted by any column it shows needs no client-side sort.\n\n``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match\nany of them, so one chart can compare a handful of models, users, or keys.",
         "operationId": "usage-usage_summary",
         "parameters": [
           {
@@ -39980,7 +40067,7 @@
             }
           },
           {
-            "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null.",
+            "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. Implied for every breakdown by 'rank_by=p95'.",
             "in": "query",
             "name": "p95_by",
             "required": false,
@@ -40005,7 +40092,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null.",
+              "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. Implied for every breakdown by 'rank_by=p95'.",
               "title": "P95 By"
             }
           },
@@ -40022,20 +40109,40 @@
             }
           },
           {
-            "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key.",
+            "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last.",
             "in": "query",
             "name": "rank_by",
             "required": false,
             "schema": {
               "default": "cost",
-              "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key.",
+              "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last.",
               "enum": [
                 "cost",
                 "billed",
                 "tokens",
-                "requests"
+                "requests",
+                "imported",
+                "errors",
+                "name",
+                "p95"
               ],
               "title": "Rank By",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+            "in": "query",
+            "name": "rank_order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Rank Order",
               "type": "string"
             }
           },

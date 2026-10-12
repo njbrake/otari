@@ -197,7 +197,9 @@ with how much came from cache. Each compares with the window before it. One
 choice of breakdown (model, API key, session, channel, provider, policy, member
 at Workspace scope, workspace at Organization scope) drives both the stacked
 chart and the table under it, and the table sorts by any column, its 95th
-percentile latency included. A row's cell narrows the page to its value or
+percentile latency included. The gateway does the sorting, so on a breakdown
+with more groups than the table lists, the rows kept are the top of that
+column rather than of the share. A row's cell narrows the page to its value or
 leaves it out, dragging across the chart narrows it to a stretch of dates, and
 clicking a row opens its requests in Activity with the same filters and window;
 from Organization scope Activity opens on that row's workspace. The

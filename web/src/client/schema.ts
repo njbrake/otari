@@ -4853,6 +4853,8 @@ export interface paths {
          *     (the dashboard's tiles, timeline context, and model typeahead all do). Omitting
          *     the parameter keeps the full set. ``p95_by`` (latency per group in one breakdown)
          *     and ``session_details`` (each session's source and key name) cost one more pass each.
+         *     ``rank_by`` and ``rank_order`` pick which groups each breakdown keeps and list them
+         *     in that order, so a table sorted by any column it shows needs no client-side sort.
          *
          *     ``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match
          *     any of them, so one chart can compare a handful of models, users, or keys.
@@ -13523,12 +13525,7 @@ export interface components {
         };
         /**
          * UsageGroupRow
-         * @description One breakdown row (a model, a user, an API key, a session, ...).
-         *
-         *     ``key`` is None both for the synthesized fold row (``is_other=True``) and for a
-         *     real group whose column was NULL (e.g. usage from a since-deleted user, with
-         *     ``is_other=False``). ``is_other`` disambiguates the two so the UI does not
-         *     mislabel deleted-user usage as the fold.
+         * @description One summary breakdown row (a model, a user, an API key, a session, ...).
          */
         UsageGroupRow: {
             /**
@@ -13568,7 +13565,7 @@ export interface components {
          * UsageGroupedSeries
          * @description A per-group time series for the dashboard's stacked charts.
          *
-         *     ``groups`` ranks the window's top groups by spend (plus the reconciling
+         *     ``groups`` ranks the window's top groups by ``rank_by`` (plus the reconciling
          *     ``other`` fold), in the order a chart should stack and color them; ``points``
          *     is sparse (only populated cells), keyed by canonical UTC ``bucket_start``.
          */
@@ -13586,7 +13583,7 @@ export interface components {
              */
             group_by: "model" | "user_id" | "api_key_id" | "source" | "source_label" | "channel" | "provider" | "policy" | "workspace";
             /** Groups */
-            groups: components["schemas"]["UsageGroupRow"][];
+            groups: components["schemas"]["UsageSeriesGroup"][];
             /** Points */
             points: components["schemas"]["UsageGroupedSeriesPoint"][];
             /** Start Date */
@@ -13596,7 +13593,7 @@ export interface components {
          * UsageGroupedSeriesPoint
          * @description One (time bucket, group) cell of a grouped series.
          *
-         *     ``key``/``is_other`` follow the ``UsageGroupRow`` convention: ``key=None``
+         *     ``key``/``is_other`` follow the ``UsageSeriesGroup`` convention: ``key=None``
          *     with ``is_other=True`` is the fold of groups outside the top N, ``key=None``
          *     with ``is_other=False`` is a real NULL group (e.g. a deleted user).
          *     ``tokens`` is the *billed* total (input including cache, plus output), the
@@ -13657,6 +13654,47 @@ export interface components {
             total_tokens: number | null;
             /** User Id */
             user_id: string | null;
+        };
+        /**
+         * UsageSeriesGroup
+         * @description One group of a grouped series, and the figures every breakdown row shares.
+         *
+         *     ``key`` is None both for the synthesized fold row (``is_other=True``) and for a
+         *     real group whose column was NULL (e.g. usage from a since-deleted user, with
+         *     ``is_other=False``). ``is_other`` disambiguates the two so the UI does not
+         *     mislabel deleted-user usage as the fold.
+         */
+        UsageSeriesGroup: {
+            /**
+             * Cache Read Tokens
+             * @default 0
+             */
+            cache_read_tokens: number;
+            /** Cost */
+            cost: number;
+            /**
+             * Error Count
+             * @default 0
+             */
+            error_count: number;
+            /**
+             * Imported Cost
+             * @default 0
+             */
+            imported_cost: number;
+            /**
+             * Is Other
+             * @default false
+             */
+            is_other: boolean;
+            /** Key */
+            key: string | null;
+            /** Label */
+            label?: string | null;
+            /** Requests */
+            requests: number;
+            /** Tokens */
+            tokens: number;
         };
         /**
          * UsageSeriesPoint
@@ -19962,12 +20000,14 @@ export interface operations {
                 dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "policy" | "workspace" | "channel" | "status_code" | "tool" | "none")[] | null;
                 /** @description Also compute 'totals.p95_latency_ms', which sorts the window's latencies. */
                 include_p95?: boolean;
-                /** @description Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. */
+                /** @description Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. Implied for every breakdown by 'rank_by=p95'. */
                 p95_by?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "policy" | "workspace" | "channel") | null;
                 /** @description Also name the provenance source and API key name most of each session's requests carry, on 'by_source_label' rows, when 'source_label' is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over the sessions listed. */
                 session_details?: boolean;
-                /** @description What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key. */
-                rank_by?: "cost" | "billed" | "tokens" | "requests";
+                /** @description What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last. */
+                rank_by?: "cost" | "billed" | "tokens" | "requests" | "imported" | "errors" | "name" | "p95";
+                /** @description Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last. */
+                rank_order?: "asc" | "desc";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22655,12 +22695,14 @@ export interface operations {
                 dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "policy" | "workspace" | "channel" | "status_code" | "tool" | "none")[] | null;
                 /** @description Also compute 'totals.p95_latency_ms', which sorts the window's latencies. */
                 include_p95?: boolean;
-                /** @description Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. */
+                /** @description Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. Implied for every breakdown by 'rank_by=p95'. */
                 p95_by?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "policy" | "workspace" | "channel") | null;
                 /** @description Also name the provenance source and API key name most of each session's requests carry, on 'by_source_label' rows, when 'source_label' is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over the sessions listed. */
                 session_details?: boolean;
-                /** @description What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key. */
-                rank_by?: "cost" | "billed" | "tokens" | "requests";
+                /** @description What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last. */
+                rank_by?: "cost" | "billed" | "tokens" | "requests" | "imported" | "errors" | "name" | "p95";
+                /** @description Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last. */
+                rank_order?: "asc" | "desc";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */

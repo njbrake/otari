@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import type { UsageSeriesPoint } from "@/client"
 import {
   arrowDelta,
+  axisLabelPlace,
   barIndexAt,
   barMax,
   barSpanMs,
@@ -151,5 +152,20 @@ describe("bar geometry", () => {
     expect(stepBar(0, -1, 3)).toBe(0)
     expect(stepBar(1, 1, 3)).toBe(2)
     expect(stepBar(2, 1, 3)).toBe(2)
+  })
+
+  it("places an axis label on its point, flush with the plot at either end", () => {
+    expect(axisLabelPlace(0)).toEqual({
+      left: "0%",
+      transform: "translateX(-0%)",
+    })
+    expect(axisLabelPlace(0.5)).toEqual({
+      left: "50%",
+      transform: "translateX(-50%)",
+    })
+    expect(axisLabelPlace(1)).toEqual({
+      left: "100%",
+      transform: "translateX(-100%)",
+    })
   })
 })
