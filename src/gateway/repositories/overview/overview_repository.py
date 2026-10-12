@@ -319,18 +319,6 @@ class OverviewRepository:
 
         return int(await self.db.scalar(select(func.count()).select_from(Budget)) or 0)
 
-    async def workspace_organization(self, workspace_id: uuid.UUID) -> uuid.UUID | None:
-        """Which organization owns this workspace, or None where none does.
-
-        The caller names the workspace, so without this the counts above would
-        report another organization's rail to anyone who guessed an id.
-        """
-
-        owner: uuid.UUID | None = await self.db.scalar(
-            select(col(Workspace.organization_id)).where(col(Workspace.id) == workspace_id)
-        )
-        return owner
-
     async def keys_with_spend(
         self,
         *,
