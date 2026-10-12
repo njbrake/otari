@@ -18,7 +18,7 @@ import { SpendMeter } from "@/design-system/metrics/SpendMeter"
 import { TrendChip } from "@/design-system/metrics/TrendChip"
 import { scopeLabel } from "@/features/budgets/organizationBudget"
 import { SetupGuide } from "@/features/onboarding/SetupGuide"
-import { canManage, isDeploymentOperator } from "@/features/organization/roles"
+import { canManage } from "@/features/organization/roles"
 import {
   allocationStrip,
   type BudgetHealth,
@@ -26,7 +26,10 @@ import {
   providerHealthStatus,
 } from "@/features/overview/overview"
 import { useModels } from "@/shared/api/models"
-import { useOrganizationContext } from "@/shared/api/organizations"
+import {
+  useDeploymentOperator,
+  useOrganizationContext,
+} from "@/shared/api/organizations"
 import { useOverviewSummary } from "@/shared/api/overview"
 import { useProviderHealth, useProviders } from "@/shared/api/providers"
 import {
@@ -332,24 +335,20 @@ function UsageKpiCells({
  * neighbor and each query happy with its own. It also costs no request, since
  * the shell reads this context before it paints.
  *
- * So it fails toward the scoped page, the direction the hooks behind those tiles
- * already fail in: the narrower surface understates rather than refusing, and
- * reports its own error where this page can show it. An errored context is an
- * answer, not a wait, for `useUsageScope`'s reason: holding the page on a
- * loading state that no retry clears renders nothing at all.
+ * So an errored context lands on the operator page, as it does for the usage
+ * hooks behind its tiles and for every other operator gate
+ * (`useDeploymentOperator`): its panels report their own refusals, where the
+ * reverse would hide the deployment's state from the one caller who owns it.
+ * An errored context is an answer, not a wait: holding the page on a loading
+ * state that no retry clears renders nothing at all.
  */
 export function OverviewIndex() {
-  const context = useOrganizationContext()
+  const { answer, isSettled } = useDeploymentOperator()
 
-  // `isFetched`, not `isPending`: a query that errored with no data goes back to
-  // pending on its next fetch, and the page below this line mounts a second
-  // observer of the same context (the usage hooks), whose mount is what asks for
-  // that fetch. Reading the transient state would swing the page back to this
-  // spinner, unmount the observer, and start the round again forever.
-  if (!context.isFetched) {
+  if (!isSettled) {
     return <PageLoading />
   }
-  if (!isDeploymentOperator(context.data)) {
+  if (answer === "not-operator") {
     return <OrganizationOverview />
   }
   return <OperatorOverviewIndex />
@@ -369,7 +368,7 @@ export function OverviewIndex() {
  *
  * Two things the operator page has are deliberately absent. The attention strip
  * reads provider health and the deployment's budgets, neither of which is this
- * caller's to see. And there is no `isDeploymentOperator` anywhere below this
+ * caller's to see. And there is no `useDeploymentOperator` anywhere below this
  * line: this *is* the non-operator branch, so asking again is how otari-ai#2080
  * happened.
  */
@@ -425,6 +424,12 @@ function OrganizationOverview() {
   const activeKeys = summary.data?.active_keys ?? 0
   const activeMembers = summary.data?.active_members ?? 0
 
+  const needsFirstSteps =
+    models.isSuccess &&
+    models.data.data.length === 0 &&
+    recent.isSuccess &&
+    (recent.data?.length ?? 0) === 0
+
   // Recent activity is excluded for the operator page's reason: it renders its
   // own inline banner, so including it here would double-report. The previous
   // window is included: its only reader is the trend chips, so its failure
@@ -465,6 +470,20 @@ function OrganizationOverview() {
       {/* Offered to whoever manages the workspace, which on a multi-tenant
           deployment is this caller. It decides for itself whether to render. */}
       <SetupGuide canServeRequests={(models.data?.data.length ?? 0) > 0} />
+
+      {/* The guide holds back until a request could succeed; without this a new
+          account with nothing to route to has no next step. Waits for the
+          catalog and the log so it never flashes in on a set-up account. */}
+      {needsFirstSteps ? (
+        <GetStartedStrip
+          description={
+            managesSpend
+              ? "Add a provider key to start serving models, then create an API key and send your first request."
+              : "Ask an owner or admin of this organization to add a provider key. Once models are available, you can create an API key and send a request."
+          }
+          action={managesSpend ? "organization-provider-key" : null}
+        />
+      ) : null}
 
       <ErrorBanner error={loadError} />
 
@@ -608,6 +627,17 @@ export function OverviewPage({
   const budget = allocationStrip(summary.data?.budgets, {
     none: "No budgets configured",
     noneCapped: "No capped budgets",
+    // A deployment budget enforced through a scoped budget is named after what
+    // it caps when nobody named it, the way the ceilings strip names its rows.
+    // No roster is loaded here, and a deployment budget can cap any tenant's
+    // organization, so the labels stay generic rather than naming the caller's.
+    nameOf: (worst) =>
+      worst.scope_type
+        ? scopeLabel(
+            { scope_type: worst.scope_type, scope_id: worst.scope_id ?? "" },
+            { organizationName: "An organization", workspaces: [] },
+          )
+        : undefined,
   })
   const providerHealth = providerHealthStatus(health.data)
 
@@ -719,7 +749,9 @@ export function OverviewPage({
               : isEmpty
                 ? "NO BUDGETS SET"
                 : summary.data?.budgets
-                  ? "no budgets set"
+                  ? summary.data.budgets.total_count === 0
+                    ? "no budgets set"
+                    : "no budget caps spend"
                   : "no data"
           }
           // `SpendMeter`, not the plain accent `Meter`: a one-color bar would
@@ -799,13 +831,13 @@ function OverviewHeader({
 // both provider pages and this prefers the deployment's own, which is not the
 // obvious answer once there are two. It is the right one because of who reaches
 // this button: `OverviewIndex` hands a caller who does not operate the
-// deployment to `OrganizationOverview`, which draws no getting-started strip, so
-// the only person who can press this is the operator, and `/providers` is where
-// a fresh gateway is set up and carries the first-run panel that continues the
-// flow. Gating on the caller here too would restate a rule already guaranteed
-// one level up. Hosted and a control plane report no `providers` surface, so
-// naming it unconditionally would point an operator at the shell's "not
-// available here" panel.
+// deployment to `OrganizationOverview`, which links to the organization's
+// provider-key page, so the only person who can press this is the operator, and
+// `/providers` is where a fresh gateway is set up and carries the first-run
+// panel that continues the flow. Gating on the caller here too would restate a
+// rule already guaranteed one level up. Hosted and a control plane report no
+// `providers` surface, so naming it unconditionally would point an operator at
+// the shell's "not available here" panel.
 //
 // Only correct for *adding* one, which is why provider health does not use it:
 // `/providers/health` reports on `config.providers`, the process-global
@@ -817,7 +849,14 @@ function useAddProviderRoute(): "/providers" | "/organization/provider-keys" {
   return serves("providers") ? "/providers" : "/organization/provider-keys"
 }
 
-function GetStartedStrip() {
+function GetStartedStrip({
+  description = "Add a provider to begin serving models. Once it is configured, this page will show your gateway\u2019s traffic, spend, and health.",
+  action = "provider",
+}: {
+  description?: string
+  /** The button, or none for a caller who may not act on it. */
+  action?: "provider" | "organization-provider-key" | null
+}) {
   const navigate = useNavigate()
   const addProviderRoute = useAddProviderRoute()
 
@@ -833,19 +872,27 @@ function GetStartedStrip() {
         <Dot className="mt-2.5 bg-accent" />
         <div>
           <h2 className="text-display-sub">Get started with Otari</h2>
-          <p className="mt-1 text-sm text-muted">
-            Add a provider to begin serving models. Once it is configured, this
-            page will show your gateway&rsquo;s traffic, spend, and health.
-          </p>
+          <p className="mt-1 text-sm text-muted">{description}</p>
         </div>
       </div>
-      <Button
-        variant="primary"
-        className="shrink-0"
-        onPress={() => navigate({ to: addProviderRoute })}
-      >
-        Add your first provider
-      </Button>
+      {action === null ? null : (
+        <Button
+          variant="primary"
+          className="shrink-0"
+          onPress={() =>
+            navigate({
+              to:
+                action === "provider"
+                  ? addProviderRoute
+                  : "/organization/provider-keys",
+            })
+          }
+        >
+          {action === "provider"
+            ? "Add your first provider"
+            : "Add a provider key"}
+        </Button>
+      )}
     </Section>
   )
 }

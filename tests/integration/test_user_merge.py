@@ -23,7 +23,7 @@ from sqlmodel import col
 from gateway.core.config import API_ROOT
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import BudgetReservation
-from gateway.models.providers import ModelAlias
+from gateway.models.providers import ModelAlias, ProviderEndpoint
 from gateway.models.tenancy import OrganizationMember, Workspace
 from gateway.models.tenancy import User as Identity
 from gateway.models.usage import UsageLog
@@ -232,3 +232,73 @@ def test_an_unknown_source_is_not_found(client: TestClient, master_key_header: d
     response = _merge(client, master_key_header, target=world.account, source="nobody-by-this-id")
 
     assert response.status_code == status.HTTP_404_NOT_FOUND, response.text
+
+
+def _add(session_factory: Callable[[], Session], *rows: Any) -> None:
+    session = session_factory()
+    try:
+        session.add_all(rows)
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_a_merge_moves_the_end_users_a_service_key_bills(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    """A service key finds its end users by its own user, so they follow the key to the target."""
+    _add(db_session_factory, User(user_id="end-1", parent_user_id=LEGACY, external_id="customer-1", blocked=True))
+
+    response = _merge(client, master_key_header, target=world.account, source=LEGACY)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json()["moved"]["end_users"] == 1
+    end_user = _user(db_session_factory, "end-1")
+    assert end_user.parent_user_id == world.account
+    assert end_user.blocked
+
+
+def test_an_end_user_both_users_bill_refuses_the_merge(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    _add(
+        db_session_factory,
+        User(user_id="end-legacy", parent_user_id=LEGACY, external_id="customer-1"),
+        User(user_id="end-account", parent_user_id=world.account, external_id="customer-1"),
+    )
+
+    response = _merge(client, master_key_header, target=world.account, source=LEGACY)
+
+    assert response.status_code == status.HTTP_409_CONFLICT, response.text
+    assert "customer-1" in response.json()["detail"]
+    assert _user(db_session_factory, "end-legacy").parent_user_id == LEGACY
+
+
+def test_a_merge_moves_a_users_own_provider_endpoint(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    _add(
+        db_session_factory,
+        ProviderEndpoint(
+            workspace_id=world.workspace_id,
+            user_id=LEGACY,
+            name="homelab",
+            provider="openai",
+            api_base="https://llm.example.com/v1",
+        ),
+    )
+
+    response = _merge(client, master_key_header, target=world.account, source=LEGACY)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json()["moved"]["provider_endpoints"] == 1
+    assert _owners(db_session_factory, ProviderEndpoint) == [world.account]

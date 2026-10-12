@@ -1,5 +1,6 @@
 import type { UsageMutationSelection } from "@/client"
 import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
+import type { PricingUnit } from "@/features/models/pricingUnit"
 import {
   type ManualRates,
   SetPriceDialog,
@@ -7,7 +8,7 @@ import {
 import { formatNumber } from "@/shared/helpers/format"
 
 export type ActivityDialog =
-  | { kind: "price"; modelKey: string }
+  | { kind: "price"; modelKey: string; unit: PricingUnit }
   | {
       kind: "recost" | "delete"
       count: number
@@ -55,6 +56,8 @@ export function ActivityDialogs({
         submitLabel="Set price"
         collectModelKey
         initialModelKey={dialog.modelKey}
+        chooseUnit
+        initialUnit={dialog.unit}
         title="Set model price"
         description={() =>
           "Requests from now on are costed at these rates and count toward budgets. Rows already logged keep their cost."

@@ -14,26 +14,20 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import case, delete, func, or_, select, update
+from sqlalchemy import case, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped
 
 from gateway.core.database import create_session
 from gateway.log_config import logger
-from gateway.models.budgets import (
-    RESERVATION_ACTIVE,
-    RESERVATION_EXPIRED,
-    RESERVATION_RELEASED,
-    RESERVATION_SETTLED,
-    BudgetReservation,
-    BudgetReservationScope,
-    ReservationStatus,
-    ScopedBudget,
-)
+from gateway.models.budgets import RESERVATION_EXPIRED, ReservationStatus
 from gateway.models.users import User
+from gateway.repositories.budgets import HeldAmounts, ReservationRepository, ScopedBudgetRepository
 from gateway.services.budgets._scoped_enforcement import release as release_scoped
 
 if TYPE_CHECKING:
@@ -41,16 +35,10 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from gateway.models.budgets import BudgetReservation
     from gateway.services.budgets._scoped_enforcement import ApplicableBudget
 
 ZERO = Decimal(0)
-
-# The three a row can rest in. Written out as a set the retention query can ask
-# for by equality: ``status != ACTIVE`` reads the same but is an inequality on
-# the leading column of ``ix_budget_reservations_status_expires_at``, which the
-# planner cannot use, so it degenerated into a full scan of a table that gains a
-# row per billable request.
-TERMINAL_STATUSES = (RESERVATION_SETTLED, RESERVATION_RELEASED, RESERVATION_EXPIRED)
 
 
 def release_reserved_expression(estimate: Decimal) -> object:
@@ -70,62 +58,74 @@ def release_reserved_count_expression(column: Mapped[int], amount: int) -> objec
     return case((column - amount < 0, 0), else_=column - amount)
 
 
-def record(
+async def record(
     db: AsyncSession,
     *,
     user_id: str,
-    estimate: Decimal,
     user_reserved: bool,
+    user_held: HeldAmounts,
     scoped_budgets: Sequence[ApplicableBudget],
-    scoped_estimate: Decimal,
-    token_estimate: int = 0,
-    scoped_token_estimate: int = 0,
-    request_estimate: int = 0,
+    ceiling_held: HeldAmounts,
     ttl_seconds: int,
+    commit: bool = True,
 ) -> str | None:
-    """Add the row for a hold that has already been taken, returning its id.
+    """Write the row for a hold that has already been taken, returning its id.
 
-    **Never commits.** The caller commits the row in the transaction that holds
-    the per-user leg, so neither can land without the other.
+    ``commit=False`` stages the row in the caller's transaction for it to commit.
 
     Returns ``None`` when the request holds nothing on either mechanism, which
     is the common case for a free model, a budget-exempt key or a user with no
     budget row: there is no hold to make reclaimable, so a row would be pure
     write amplification on the hot path.
 
-    Every amount is per leg, as the caller knows them: ``token_estimate`` is what
-    the per-user leg holds and ``scoped_token_estimate`` what each ceiling does,
-    and the two diverge whenever a top-up grows one and not the other. The request
-    count takes one figure because it never grows, so both legs hold what they
-    held at admission; the row records it only when that leg holds at all.
+    ``user_held`` is what the per-user leg holds and ``ceiling_held`` what each ceiling does,
+    and the two diverge whenever a top-up grows one and not the other.
+    The row records the per-user leg's request count only when that leg holds at all.
     """
     if not user_reserved and not scoped_budgets:
         return None
 
     reservation_id = str(uuid.uuid4())
-    db.add(
-        BudgetReservation(
-            id=reservation_id,
-            user_id=user_id,
-            estimate=estimate,
-            token_estimate=token_estimate,
-            request_estimate=request_estimate if user_reserved else 0,
-            user_reserved=user_reserved,
-            status=RESERVATION_ACTIVE,
-            expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds),
-        )
+    await ReservationRepository(db).add(
+        reservation_id,
+        user_id=user_id,
+        user_reserved=user_reserved,
+        user_held=user_held if user_reserved else replace(user_held, requests=0),
+        ceiling_held=ceiling_held,
+        scoped_budget_ids=[applicable.budget_id for applicable in scoped_budgets],
+        expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds),
     )
-    for applicable in scoped_budgets:
-        db.add(
-            BudgetReservationScope(
-                reservation_id=reservation_id,
-                scoped_budget_id=applicable.budget_id,
-                amount=scoped_estimate,
-                token_amount=scoped_token_estimate,
-                request_amount=request_estimate,
-            )
-        )
+    if commit:
+        await db.commit()
     return reservation_id
+
+
+async def release_unrecorded(
+    db: AsyncSession,
+    reservation_id: str,
+    *,
+    user_id: str,
+    scoped_budget_ids: Sequence[str],
+    held: HeldAmounts,
+) -> bool:
+    """Give back the ceilings' holds of a row whose commit reported failure, unless it landed.
+
+    A released row under the same id fences the two outcomes. If the row
+    committed, this insert is a duplicate and the sweep owns the holds; if its
+    transaction is still resolving, the insert waits for it. The fence commits
+    with the release, so the holds are given back at most once. Returns whether
+    this call gave them back.
+    """
+    try:
+        await ReservationRepository(db).add_released(reservation_id, user_id=user_id)
+        await release_scoped(
+            db, scoped_budget_ids, held.amount, tokens=held.tokens, requests=held.requests, commit=False
+        )
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        return False
+    return True
 
 
 async def grow(
@@ -133,6 +133,7 @@ async def grow(
     reservation_id: str | None,
     *,
     user_delta: Decimal,
+    user_grew: bool,
     scoped_delta: Decimal,
     token_delta: int = 0,
     scoped_token_delta: int = 0,
@@ -143,6 +144,7 @@ async def grow(
     because the top-up belongs to a request the ceiling has already counted. Each
     token delta is the one its own leg took: the ceilings grow whenever the
     request has any, and the per-user leg only when it has a budget to grow.
+    ``user_grew`` says the per-user leg took its first hold in this top-up, which the row must then record.
 
     ``increase_reservation`` grows the counters in place, so the ledger grows the
     same row rather than opening a second one: two rows for one request would
@@ -158,40 +160,17 @@ async def grow(
     """
     if reservation_id is None:
         return True
-    result = await db.execute(
-        update(BudgetReservation)
-        .where(
-            BudgetReservation.id == reservation_id,
-            BudgetReservation.status == RESERVATION_ACTIVE,
-        )
-        .values(
-            estimate=BudgetReservation.estimate + user_delta,
-            # Gated on the row's own record of whether the per-user leg holds, not
-            # on the dollar delta: a top-up can grow tokens alone (a model priced
-            # at zero, an expanded prompt), and reading ``user_delta > 0`` as "the
-            # user leg grew" would drop exactly that hold.
-            token_estimate=BudgetReservation.token_estimate
-            + case((BudgetReservation.user_reserved, token_delta), else_=0),
-        )
-        .execution_options(synchronize_session=False)
-    )
-    if not getattr(result, "rowcount", 0):
+    # The row and its lines grow in one transaction, so the lines cannot grow against a row that turned terminal.
+    if not await ReservationRepository(db).grow(
+        reservation_id,
+        user_delta=user_delta,
+        user_grew=user_grew,
+        scoped_delta=scoped_delta,
+        token_delta=token_delta,
+        scoped_token_delta=scoped_token_delta,
+    ):
         # A rollback here would expire every ORM instance in the session and force sync IO on the caller's next read.
         return False
-    if scoped_delta > ZERO or scoped_token_delta > 0:
-        # In the same transaction as the guarded UPDATE above, so the lines cannot
-        # grow against a row that turned terminal between the two statements. Each
-        # axis grows only by what it was actually given, so a token-only top-up
-        # leaves the dollar amount alone and a dollar-only one leaves the tokens.
-        await db.execute(
-            update(BudgetReservationScope)
-            .where(BudgetReservationScope.reservation_id == reservation_id)
-            .values(
-                amount=BudgetReservationScope.amount + scoped_delta,
-                token_amount=BudgetReservationScope.token_amount + scoped_token_delta,
-            )
-            .execution_options(synchronize_session=False)
-        )
     await db.commit()
     return True
 
@@ -218,16 +197,7 @@ async def try_terminate(db: AsyncSession, reservation_id: str | None, status: Re
     """
     if reservation_id is None:
         return True
-    result = await db.execute(
-        update(BudgetReservation)
-        .where(
-            BudgetReservation.id == reservation_id,
-            BudgetReservation.status == RESERVATION_ACTIVE,
-        )
-        .values(status=status)
-        .execution_options(synchronize_session=False)
-    )
-    return bool(getattr(result, "rowcount", 0))
+    return await ReservationRepository(db).try_terminate(reservation_id, status)
 
 
 async def try_settle_reclaimed(db: AsyncSession, reservation_id: str | None) -> bool:
@@ -245,16 +215,7 @@ async def try_settle_reclaimed(db: AsyncSession, reservation_id: str | None) -> 
     """
     if reservation_id is None:
         return False
-    result = await db.execute(
-        update(BudgetReservation)
-        .where(
-            BudgetReservation.id == reservation_id,
-            BudgetReservation.status == RESERVATION_EXPIRED,
-        )
-        .values(status=RESERVATION_SETTLED)
-        .execution_options(synchronize_session=False)
-    )
-    return bool(getattr(result, "rowcount", 0))
+    return await ReservationRepository(db).try_settle_reclaimed(reservation_id)
 
 
 async def _release_holds(db: AsyncSession, reservation: BudgetReservation) -> None:
@@ -265,35 +226,12 @@ async def _release_holds(db: AsyncSession, reservation: BudgetReservation) -> No
     releases together, so a row can never end up terminal with its hold still
     outstanding.
     """
-    lines = (
-        (
-            await db.execute(
-                select(
-                    BudgetReservationScope.scoped_budget_id,
-                    BudgetReservationScope.amount,
-                    BudgetReservationScope.token_amount,
-                    BudgetReservationScope.request_amount,
-                ).where(BudgetReservationScope.reservation_id == reservation.id)
-            )
-        )
-        .tuples()
-        .all()
-    )
     # ``release_scoped`` takes one figure per axis for a set of ceilings, so the lines group by their amounts.
-    by_amounts: dict[tuple[Decimal, int, int], list[str]] = {}
-    for scoped_budget_id, amount, token_amount, request_amount in lines:
-        if amount > ZERO or token_amount > 0 or request_amount > 0:
-            by_amounts.setdefault((amount, token_amount, request_amount), []).append(scoped_budget_id)
-    for (amount, token_amount, request_amount), budget_ids in by_amounts.items():
-        await release_scoped(
-            db,
-            budget_ids,
-            amount,
-            tokens=token_amount,
-            requests=request_amount,
-            commit=False,
-        )
-
+    by_amounts: dict[HeldAmounts, list[str]] = {}
+    for line in await ReservationRepository(db).list_lines(reservation.id):
+        if line.held.amount > ZERO or line.held.tokens > 0 or line.held.requests > 0:
+            by_amounts.setdefault(line.held, []).append(line.scoped_budget_id)
+    # The user's row first, the ceilings last, the order every settlement locks them in.
     if reservation.user_reserved:
         values: dict[str, object] = {}
         if reservation.estimate > ZERO:
@@ -313,6 +251,16 @@ async def _release_holds(db: AsyncSession, reservation: BudgetReservation) -> No
                 .values(**values)
                 .execution_options(synchronize_session=False)
             )
+
+    for held, budget_ids in by_amounts.items():
+        await release_scoped(
+            db,
+            budget_ids,
+            held.amount,
+            tokens=held.tokens,
+            requests=held.requests,
+            commit=False,
+        )
 
 
 async def _reclaim(db: AsyncSession, expired: Sequence[BudgetReservation]) -> int:
@@ -340,22 +288,7 @@ async def reclaim_expired_for_user(db: AsyncSession, user_id: str, *, limit: int
     residue. Bounded by ``limit`` so a pathological backlog cannot turn one
     request into an unbounded scan; the scheduled sweep drains the rest.
     """
-    expired = (
-        (
-            await db.execute(
-                select(BudgetReservation)
-                .where(
-                    BudgetReservation.user_id == user_id,
-                    BudgetReservation.status == RESERVATION_ACTIVE,
-                    BudgetReservation.expires_at < datetime.now(UTC),
-                )
-                .order_by(BudgetReservation.expires_at)
-                .limit(limit)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    expired = await ReservationRepository(db).list_expired(limit=limit, user_id=user_id)
     if not expired:
         return 0
     reclaimed = await _reclaim(db, expired)
@@ -372,21 +305,7 @@ async def sweep_expired(db: AsyncSession, *, batch_size: int) -> int:
     ever releasing it. This drains those. Returns how many it reclaimed; a caller
     working through a backlog loops while the count equals ``batch_size``.
     """
-    expired = (
-        (
-            await db.execute(
-                select(BudgetReservation)
-                .where(
-                    BudgetReservation.status == RESERVATION_ACTIVE,
-                    BudgetReservation.expires_at < datetime.now(UTC),
-                )
-                .order_by(BudgetReservation.expires_at)
-                .limit(batch_size)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    expired = await ReservationRepository(db).list_expired(limit=batch_size)
     if not expired:
         return 0
     reclaimed = await _reclaim(db, expired)
@@ -395,11 +314,10 @@ async def sweep_expired(db: AsyncSession, *, batch_size: int) -> int:
     return reclaimed
 
 
-def _clamped(
-    names: Sequence[str], counters: Sequence[Decimal | int], held: Sequence[Decimal | int]
-) -> dict[str, object]:
+def _clamped(names: Sequence[str], counters: Sequence[Decimal | int], held: HeldAmounts) -> dict[str, object]:
     """The counters that exceed what the active rows hold, each brought down to that sum."""
-    return {name: owed for name, counter, owed in zip(names, counters, held, strict=True) if counter > owed}
+    owed: tuple[Decimal | int, ...] = (held.amount, held.tokens, held.requests)
+    return {name: cap for name, counter, cap in zip(names, counters, owed, strict=True) if counter > cap}
 
 
 async def _reconcile_user(db: AsyncSession, user_id: str, cutoff: datetime) -> bool:
@@ -419,20 +337,8 @@ async def _reconcile_user(db: AsyncSession, user_id: str, cutoff: datetime) -> b
         # Written since it was picked, so it is no longer quiet.
         await db.commit()
         return False
-    held = (
-        await db.execute(
-            select(
-                func.coalesce(func.sum(BudgetReservation.estimate), ZERO),
-                func.coalesce(func.sum(BudgetReservation.token_estimate), 0),
-                func.coalesce(func.sum(BudgetReservation.request_estimate), 0),
-            ).where(
-                BudgetReservation.user_id == user_id,
-                BudgetReservation.status == RESERVATION_ACTIVE,
-                BudgetReservation.user_reserved.is_(True),
-            )
-        )
-    ).one()
-    values = _clamped(("reserved", "reserved_tokens", "reserved_requests"), tuple(counters), tuple(held))
+    held = await ReservationRepository(db).active_user_held(user_id)
+    values = _clamped(("reserved", "reserved_tokens", "reserved_requests"), tuple(counters), held)
     if values:
         await db.execute(
             update(User).where(User.user_id == user_id).values(**values).execution_options(synchronize_session=False)
@@ -441,7 +347,7 @@ async def _reconcile_user(db: AsyncSession, user_id: str, cutoff: datetime) -> b
             "Reclaimed budget holds with no active reservation for user %s: %s held, %s recorded",
             user_id,
             tuple(counters),
-            tuple(held),
+            held,
         )
     await db.commit()
     return bool(values)
@@ -449,46 +355,20 @@ async def _reconcile_user(db: AsyncSession, user_id: str, cutoff: datetime) -> b
 
 async def _reconcile_scoped(db: AsyncSession, scoped_budget_id: str, cutoff: datetime) -> bool:
     """Clamp one quiet ceiling's holds to the sum of its lines on active rows."""
-    counters = (
-        await db.execute(
-            select(ScopedBudget.reserved_spend, ScopedBudget.reserved_tokens, ScopedBudget.reserved_requests)
-            .where(
-                ScopedBudget.id == scoped_budget_id,
-                or_(ScopedBudget.updated_at.is_(None), ScopedBudget.updated_at < cutoff),
-            )
-            .with_for_update()
-        )
-    ).one_or_none()
+    ceilings = ScopedBudgetRepository(db)
+    counters = await ceilings.lock_quiet_holds(scoped_budget_id, quiet_before=cutoff)
     if counters is None:
         await db.commit()
         return False
-    held = (
-        await db.execute(
-            select(
-                func.coalesce(func.sum(BudgetReservationScope.amount), ZERO),
-                func.coalesce(func.sum(BudgetReservationScope.token_amount), 0),
-                func.coalesce(func.sum(BudgetReservationScope.request_amount), 0),
-            )
-            .join(BudgetReservation, BudgetReservation.id == BudgetReservationScope.reservation_id)
-            .where(
-                BudgetReservationScope.scoped_budget_id == scoped_budget_id,
-                BudgetReservation.status == RESERVATION_ACTIVE,
-            )
-        )
-    ).one()
-    values = _clamped(("reserved_spend", "reserved_tokens", "reserved_requests"), tuple(counters), tuple(held))
+    held = await ReservationRepository(db).active_ceiling_held(scoped_budget_id)
+    values = _clamped(("reserved_spend", "reserved_tokens", "reserved_requests"), counters, held)
     if values:
-        await db.execute(
-            update(ScopedBudget)
-            .where(ScopedBudget.id == scoped_budget_id)
-            .values(**values)
-            .execution_options(synchronize_session=False)
-        )
+        await ceilings.clamp_holds(scoped_budget_id, values)
         logger.warning(
             "Reclaimed budget holds with no active reservation for scoped budget %s: %s held, %s recorded",
             scoped_budget_id,
-            tuple(counters),
-            tuple(held),
+            counters,
+            held,
         )
     await db.commit()
     return bool(values)
@@ -528,24 +408,7 @@ async def reconcile_orphaned_holds(db: AsyncSession, *, quiet_sec: int, batch_si
         .scalars()
         .all()
     )
-    scoped_ids = (
-        (
-            await db.execute(
-                select(ScopedBudget.id)
-                .where(
-                    or_(
-                        ScopedBudget.reserved_spend > ZERO,
-                        ScopedBudget.reserved_tokens > 0,
-                        ScopedBudget.reserved_requests > 0,
-                    ),
-                    or_(ScopedBudget.updated_at.is_(None), ScopedBudget.updated_at < cutoff),
-                )
-                .limit(batch_size)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    scoped_ids = await ScopedBudgetRepository(db).list_quiet_held(quiet_before=cutoff, limit=batch_size)
     # Ends the scan's transaction before the per-counter ones open.
     await db.commit()
     moved = 0
@@ -580,28 +443,13 @@ async def prune_terminal(db: AsyncSession, *, older_than_sec: int, batch_size: i
     """
     if older_than_sec <= 0:
         return 0
-    cutoff = datetime.now(UTC) - timedelta(seconds=older_than_sec)
-    ids = (
-        (
-            await db.execute(
-                select(BudgetReservation.id)
-                .where(
-                    BudgetReservation.status.in_(TERMINAL_STATUSES),
-                    BudgetReservation.expires_at < cutoff,
-                )
-                .limit(batch_size)
-            )
-        )
-        .scalars()
-        .all()
+    reservations = ReservationRepository(db)
+    ids = await reservations.list_terminal_ids(
+        expired_before=datetime.now(UTC) - timedelta(seconds=older_than_sec), limit=batch_size
     )
     if not ids:
         return 0
-    await db.execute(
-        delete(BudgetReservation)
-        .where(BudgetReservation.id.in_(list(ids)))
-        .execution_options(synchronize_session=False)
-    )
+    await reservations.delete_by_ids(ids)
     await db.commit()
     return len(ids)
 
@@ -664,7 +512,6 @@ __all__ = [
     "record",
     "run_reservation_sweeper",
     "release_reserved_expression",
-    "TERMINAL_STATUSES",
     "sweep_expired",
     "try_settle_reclaimed",
     "try_terminate",

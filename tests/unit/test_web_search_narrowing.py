@@ -5,7 +5,7 @@ Everything a request could shed if they were only defaults is pinned here,
 because shedding it is how a guardrail fails open.
 
 The two ceilings the dashboard card repeats as literals are pinned at the
-bottom, the same drift `test_code_execution_policy_limits.py` catches next door.
+bottom, so the form and the API cannot disagree about which values are acceptable.
 """
 
 from __future__ import annotations
@@ -19,15 +19,16 @@ import pytest
 from gateway.exceptions.tools_exceptions import WorkspaceWebSearchDomainsExcludedError
 from gateway.models.tools import ResolvedWebSearchConfig
 from gateway.services.tenancy.workspace_web_search_service import (
-    _MAX_DOMAINS,
     _MAX_RESULTS,
     InvalidStoredWebSearchDomainError,
     _normalize_domains,
     _stored_domains,
-    narrow_web_search_tool_entry,
     read_web_search_policy,
 )
-from gateway.services.web_retrieval_policy import canonicalize_domain_rule
+from gateway.services.tools._web_access import narrow_web_search_tool_entry
+from gateway.services.tools._web_admission import _canonicalize_web_search_request_domains
+from gateway.services.web_retrieval_backend import MAX_RESULTS_CAP
+from gateway.services.web_retrieval_policy import MAX_WEB_SEARCH_DOMAINS, canonicalize_domain_rule
 
 
 def _config(**overrides: object) -> ResolvedWebSearchConfig:
@@ -91,7 +92,7 @@ def test_empty_stored_domain_list_remains_unconfigured(value: list[str] | None) 
     assert _stored_domains(value) is None
 
 
-_TOO_MANY = [f"d{i}.example" for i in range(_MAX_DOMAINS + 1)]
+_TOO_MANY = [f"d{i}.example" for i in range(MAX_WEB_SEARCH_DOMAINS + 1)]
 
 
 @pytest.mark.parametrize(
@@ -110,15 +111,29 @@ def test_every_source_refuses_the_same_domain_list(value: list[Any]) -> None:
         _stored_domains(value)
     with pytest.raises(ValueError):
         read_web_search_policy({"enabled": True, "allowed_domains": value})
+    with pytest.raises(ValueError):
+        _canonicalize_web_search_request_domains({"allowed_domains": value})
 
 
 def test_every_source_reads_the_same_domain_list() -> None:
-    value = [".Docs.Python.org", "docs.python.org", "bücher.example"]
+    value = [".Docs.Python.org", " docs.python.org ", "bücher.example"]
     expected = ("docs.python.org", "xn--bcher-kva.example")
+    request_entry: dict[str, Any] = {"allowed_domains": value, "blocked_domains": value}
 
     assert tuple(_normalize_domains(value) or ()) == expected
     assert _stored_domains(value) == expected
     assert read_web_search_policy({"enabled": True, "allowed_domains": value}).allowed_domains == expected
+    _canonicalize_web_search_request_domains(request_entry)
+    assert tuple(request_entry["allowed_domains"]) == expected
+    assert tuple(request_entry["blocked_domains"]) == expected
+
+
+def test_a_request_keeps_an_empty_domain_list_empty() -> None:
+    request_entry: dict[str, Any] = {"allowed_domains": [], "blocked_domains": None}
+
+    _canonicalize_web_search_request_domains(request_entry)
+
+    assert request_entry == {"allowed_domains": [], "blocked_domains": None}
 
 
 def test_a_blank_entry_is_refused_unless_a_caller_wrote_it() -> None:
@@ -204,7 +219,7 @@ def test_allow_list_intersection_canonicalizes_each_unique_rule_once(monkeypatch
         return canonicalize_domain_rule(value)
 
     monkeypatch.setattr(
-        "gateway.services.tenancy.workspace_web_search_service.canonicalize_domain_rule",
+        "gateway.services.tools._web_access.canonicalize_domain_rule",
         counted,
     )
     _narrow(
@@ -383,7 +398,7 @@ def test_a_whitespace_only_hint_from_the_control_plane_reads_as_absent() -> None
         pytest.param({"enabled": True, "allowed_domains": ["https://example.com/path"]}, id="domain-not-host"),
         pytest.param({"enabled": True, "blocked_domains": [".".join(["a" * 60] * 5)]}, id="domain-too-long"),
         pytest.param(
-            {"enabled": True, "allowed_domains": [f"d{i}.example" for i in range(_MAX_DOMAINS + 1)]},
+            {"enabled": True, "allowed_domains": [f"d{i}.example" for i in range(MAX_WEB_SEARCH_DOMAINS + 1)]},
             id="too-many-domains",
         ),
     ],
@@ -393,9 +408,14 @@ def test_a_malformed_control_plane_answer_fails_closed(answer: dict[str, Any]) -
         read_web_search_policy(answer)
 
 
+def test_the_policy_repeats_the_backends_ceiling() -> None:
+    """The policy cannot import the backend's cap without an import cycle, so this pins the two together."""
+    assert _MAX_RESULTS == MAX_RESULTS_CAP
+
+
 @pytest.mark.parametrize(
     ("name", "server_value"),
-    [("MAX_RESULTS", _MAX_RESULTS), ("MAX_DOMAINS", _MAX_DOMAINS)],
+    [("MAX_RESULTS", _MAX_RESULTS), ("MAX_DOMAINS", MAX_WEB_SEARCH_DOMAINS)],
 )
 def test_the_card_repeats_the_ceiling_the_server_enforces(name: str, server_value: int) -> None:
     """The card cannot import a Python constant, so it repeats both and this pins the pair.

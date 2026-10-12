@@ -11,16 +11,14 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import ColumnElement, Row, String, Subquery, and_, case, cast, func, or_, select
+from sqlalchemy import ColumnElement, Row, String, Subquery, and_, case, cast, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
-from gateway.core.usage_filters import billed_cost_sum, request_count, status_count
-from gateway.core.usage_source import served_here
+from gateway.core.usage_filters import requests_and_failures, spend_by_key, spend_by_workspace, window_rows
 from gateway.models.api_keys import APIKey
-from gateway.models.budgets import SCOPE_API_TOKEN, SCOPE_WORKSPACE, Budget, ScopedBudget
+from gateway.models.budgets import RESET_ALIGNMENTS, SCOPE_API_TOKEN, SCOPE_WORKSPACE, Budget, ScopedBudget
 from gateway.models.tenancy import Workspace, WorkspaceMember
-from gateway.models.usage import UsageLog
 from gateway.models.users import User
 
 _ZERO = Decimal(0)
@@ -43,11 +41,10 @@ class Ceiling:
 class Allocation:
     """One row with a finite cap: what it is called, spent, and may spend.
 
-    ``scope_type`` and ``scope_id`` are a ceiling's and are None for a
-    deployment budget, which caps no scope. A ceiling nobody named is named on
-    screen after what it caps ("A workspace"), so the scope has to survive the
-    reduction or the row would fall back to an id fingerprint. A ceiling's
-    counters ride along as stored, for the caller to roll.
+    ``scope_type`` and ``scope_id`` are a ceiling's and are None for a budget
+    judged through its users, which caps no scope. A ceiling nobody named is
+    named on screen after what it caps ("A workspace"), so the scope has to
+    survive the reduction or the row would fall back to an id fingerprint.
     """
 
     name: str | None
@@ -56,7 +53,6 @@ class Allocation:
     allocated: float
     scope_type: str | None = None
     scope_id: str | None = None
-    ceiling: Ceiling | None = None
 
 
 @dataclass(frozen=True)
@@ -111,12 +107,12 @@ class Candidates:
     expiring_before: datetime
 
 
-def _in_scope(organization_id: uuid.UUID, workspace_id: uuid.UUID | None) -> ColumnElement[bool]:
-    """Usage rows of one workspace, else of every workspace the organization holds."""
+def _in_scope(organization_id: uuid.UUID, workspace_id: uuid.UUID | None) -> Any:
+    """One workspace, else every workspace the organization holds, as ``window_rows`` takes them."""
 
     if workspace_id is not None:
-        return UsageLog.workspace_id == workspace_id
-    return UsageLog.workspace_id.in_(select(col(Workspace.id)).where(col(Workspace.organization_id) == organization_id))
+        return workspace_id
+    return select(col(Workspace.id)).where(col(Workspace.organization_id) == organization_id)
 
 
 def _ceilings(organization_id: uuid.UUID, scope_type: str) -> Subquery:
@@ -175,6 +171,39 @@ def _ceiling(row: Row[Any]) -> Ceiling | None:
     )
 
 
+@dataclass(frozen=True)
+class CeilingRollup:
+    """Capped spend ceilings reduced to what a strip renders: counts and the worst row."""
+
+    capped_count: int
+    over_count: int
+    near_count: int
+    worst: Allocation | None
+
+
+def _owned_by(organization_id: uuid.UUID | None) -> ColumnElement[bool]:
+    """The budgets an organization owns, or the deployment's own when ``organization_id`` is ``None``."""
+    if organization_id is None:
+        return Budget.organization_id.is_(None)
+    return Budget.organization_id == organization_id
+
+
+def _settled_at(now: datetime) -> ColumnElement[Any]:
+    """A ceiling's settled spend as the gate's roll will leave it at ``now``.
+
+    The roll runs only when a request next reaches the ceiling, so until then a
+    ceiling whose period ran out still holds the last period's spend. The roll
+    zeroes it (holds survive) unless the alignment is one it cannot read, which
+    keeps the stored window, as ``services.budgets.effective_period`` does.
+    """
+    rolls = and_(
+        ScopedBudget.period_end.is_not(None),
+        ScopedBudget.period_end <= now,
+        or_(Budget.reset_alignment.is_(None), Budget.reset_alignment.in_(RESET_ALIGNMENTS)),
+    )
+    return case((rolls, literal(_ZERO)), else_=ScopedBudget.current_spend)
+
+
 class OverviewRepository:
     """Aggregate reads behind the overview's counts and health strips."""
 
@@ -219,13 +248,14 @@ class OverviewRepository:
         )
         return int(await self.db.scalar(stmt) or 0)
 
-    async def budget_allocations(self) -> list[Allocation]:
-        """The deployment's capped budgets, with the spend against each.
+    async def budget_allocations(self, *, owner_organization_id: uuid.UUID | None) -> list[Allocation]:
+        """Capped budgets held by users, with the spend against each.
 
-        ``max_budget`` on a deployment budget is a per-user cap that its users
-        share, so the honest allocation is the cap times the number of active
-        users holding it, which is what the budgets page shows. A budget with no
-        cap or no users has no utilization to judge and is left out.
+        ``max_budget`` is a per-user cap that a budget's users share, so the
+        honest allocation is the cap times the number of active users holding
+        it, which is what the budgets page shows. A budget with no cap or no
+        users has no utilization to judge and is left out. Read for the budgets
+        ``owner_organization_id`` owns, or the deployment's own when it is ``None``.
 
         One grouped pass rather than a count per budget: this runs on every
         overview load, and a query per row is what makes a summary cost more
@@ -250,7 +280,7 @@ class OverviewRepository:
         stmt = (
             select(Budget, rollup.c.user_count, rollup.c.spend, rollup.c.reserved)
             .join(rollup, Budget.budget_id == rollup.c.budget_id)
-            .where(Budget.max_budget.is_not(None))
+            .where(_owned_by(owner_organization_id), Budget.max_budget.is_not(None))
         )
         rows = (await self.db.execute(stmt)).all()
         return [
@@ -264,44 +294,65 @@ class OverviewRepository:
             if user_count > 0
         ]
 
-    async def ceiling_allocations(self, organization_id: uuid.UUID) -> list[Allocation]:
-        """One organization's capped spend ceilings, with the spend against each.
+    async def ceiling_rollup(
+        self, *, owner_organization_id: uuid.UUID | None, warn_at: float, now: datetime
+    ) -> CeilingRollup:
+        """Capped spend ceilings on the budgets ``owner_organization_id`` owns, reduced in SQL.
 
-        A ceiling carries its own counters, so the allocation is the budget's
-        ``max_budget`` itself rather than a per-user cap multiplied out.
+        The deployment's own budgets when it is ``None``. A ceiling carries its
+        own counters, so its allocation is the budget's ``max_budget`` itself.
+        Counted and ranked in the database, so an overview load costs two rows
+        however many scopes carry a ceiling. Read as the gate's roll will leave
+        each one at ``now`` (see :func:`_settled_at`).
         """
-
-        stmt = (
-            select(ScopedBudget, Budget.max_budget, Budget.budget_duration_sec, Budget.reset_alignment)
-            .join(Budget, ScopedBudget.budget_id == Budget.budget_id)
-            .where(Budget.organization_id == organization_id, Budget.max_budget.is_not(None))
+        spent = _settled_at(now) + ScopedBudget.reserved_spend
+        # The ratio the overview judges by: a zero cap admits nothing, so any
+        # spend against it reads as fully used.
+        utilization = case(
+            (Budget.max_budget > 0, spent / Budget.max_budget),
+            (spent > 0, literal(1.0)),
+            else_=literal(0.0),
         )
-        rows = (await self.db.execute(stmt)).all()
-        return [
-            Allocation(
+        capped = (
+            select(ScopedBudget.id, utilization.label("utilization"))
+            .join(Budget, ScopedBudget.budget_id == Budget.budget_id)
+            .where(_owned_by(owner_organization_id), Budget.max_budget.is_not(None))
+        ).subquery()
+        counts = (
+            await self.db.execute(
+                select(
+                    func.count(),
+                    func.count().filter(capped.c.utilization >= 1),
+                    func.count().filter(capped.c.utilization >= warn_at, capped.c.utilization < 1),
+                ).select_from(capped)
+            )
+        ).one()
+        worst_row = (
+            await self.db.execute(
+                select(ScopedBudget, Budget.max_budget, spent)
+                .join(Budget, ScopedBudget.budget_id == Budget.budget_id)
+                .where(_owned_by(owner_organization_id), Budget.max_budget.is_not(None))
+                .order_by(utilization.desc(), ScopedBudget.id)
+                .limit(1)
+            )
+        ).first()
+        worst = None
+        if worst_row is not None:
+            ceiling, max_budget, worst_spent = worst_row
+            worst = Allocation(
                 name=ceiling.name,
                 budget_id=ceiling.budget_id,
-                spent=float(ceiling.current_spend) + float(ceiling.reserved_spend),
+                spent=float(worst_spent),
                 allocated=float(max_budget),
                 scope_type=ceiling.scope_type,
                 scope_id=ceiling.scope_id,
-                ceiling=Ceiling(
-                    limit=float(max_budget),
-                    current_spend=float(ceiling.current_spend),
-                    reserved_spend=float(ceiling.reserved_spend),
-                    period_start=ceiling.period_start,
-                    period_end=ceiling.period_end,
-                    duration=duration,
-                    alignment=alignment,
-                ),
             )
-            for ceiling, max_budget, duration, alignment in rows
-        ]
+        return CeilingRollup(capped_count=counts[0], over_count=counts[1], near_count=counts[2], worst=worst)
 
     async def count_ceilings(self, organization_id: uuid.UUID) -> int:
         """Every ceiling the organization has, capped or not.
 
-        Separate from :meth:`ceiling_allocations` because the page tells the two
+        Separate from :meth:`ceiling_rollup` because the page tells the two
         apart: no ceilings at all reads differently from ceilings that cap
         tokens or requests rather than dollars.
         """
@@ -314,10 +365,10 @@ class OverviewRepository:
         )
         return int(await self.db.scalar(stmt) or 0)
 
-    async def count_budgets(self) -> int:
-        """Every deployment budget, capped or not, for the same distinction."""
-
-        return int(await self.db.scalar(select(func.count()).select_from(Budget)) or 0)
+    async def count_budgets(self, *, owner_organization_id: uuid.UUID | None) -> int:
+        """Every budget ``owner_organization_id`` owns (the deployment's when ``None``), capped or not."""
+        stmt = select(func.count()).select_from(Budget).where(_owned_by(owner_organization_id))
+        return int(await self.db.scalar(stmt) or 0)
 
     async def keys_with_spend(
         self,
@@ -340,28 +391,10 @@ class OverviewRepository:
         an outer join.
         """
 
-        window: list[ColumnElement[bool]] = [
-            UsageLog.timestamp >= start,
-            UsageLog.timestamp < end,
-            _in_scope(organization_id, workspace_id),
-        ]
         # Narrow the grouped pass to the rows the outer query can keep, so it
         # does not sum the whole organization's month to answer for one owner.
-        if owner_user_id is not None:
-            window.append(UsageLog.api_key_id.in_(select(APIKey.id).where(APIKey.user_id == owner_user_id)))
-        else:
-            window.append(UsageLog.api_key_id.is_not(None))
-        spend = (
-            select(
-                UsageLog.api_key_id.label("key_id"),
-                billed_cost_sum().label("billed"),
-                func.count().label("rows"),
-                func.coalesce(func.sum(case((served_here(UsageLog.source), 1), else_=0)), 0).label("served"),
-            )
-            .where(*window)
-            .group_by(UsageLog.api_key_id)
-            .subquery()
-        )
+        owned = select(APIKey.id).where(APIKey.user_id == owner_user_id) if owner_user_id is not None else None
+        spend = spend_by_key(window_rows(start, end, _in_scope(organization_id, workspace_id), api_key_ids=owned))
         ceilings = _ceilings(organization_id, SCOPE_API_TOKEN)
         billed = func.coalesce(spend.c.billed, 0.0)
         keys = (
@@ -437,18 +470,7 @@ class OverviewRepository:
         usage reads count them.
         """
 
-        spend = (
-            select(
-                UsageLog.workspace_id.label("workspace_id"),
-                billed_cost_sum().label("billed"),
-                request_count().label("requests"),
-                status_count("error").label("failures"),
-                func.max(UsageLog.timestamp).label("last_used_at"),
-            )
-            .where(UsageLog.timestamp >= start, UsageLog.timestamp < end, _in_scope(organization_id, None))
-            .group_by(UsageLog.workspace_id)
-            .subquery()
-        )
+        spend = spend_by_workspace(window_rows(start, end, _in_scope(organization_id, None)))
         ceilings = _ceilings(organization_id, SCOPE_WORKSPACE)
         billed = func.coalesce(spend.c.billed, 0.0)
         ranked = (
@@ -513,8 +535,6 @@ class OverviewRepository:
         rows count too, as they do on the Usage page.
         """
 
-        where = [UsageLog.timestamp >= start, UsageLog.timestamp < end, _in_scope(organization_id, workspace_id)]
-        if user_id is not None:
-            where.append(UsageLog.user_id == user_id)
-        row = (await self.db.execute(select(request_count(), status_count("error")).where(*where))).one()
+        where = window_rows(start, end, _in_scope(organization_id, workspace_id), user_id=user_id)
+        row = (await self.db.execute(requests_and_failures(where))).one()
         return int(row[0] or 0), int(row[1] or 0)

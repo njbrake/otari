@@ -26,10 +26,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_ROOT, GatewayConfig
-from gateway.core.usage_source import SERVED_HERE_SLUG
 from gateway.models.api_keys import APIKey
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace, WorkspaceMember
-from gateway.models.usage import UsageLog
+from gateway.models.tools import WorkspaceCodeExecutionPolicy
+from gateway.models.usage import SERVED_HERE_SLUG, UsageLog
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 from gateway.services.secret_box import decrypt_secret, encrypt_secret, generate_secret_key
 
@@ -567,3 +567,69 @@ def test_a_real_gateway_request_still_closes_it(
     after = _activation(hosted_client, token, workspace_id)
     assert after["status"] != "waiting"
     assert after["activation_attempt"] is not None
+
+
+def test_files_are_not_offered_where_the_data_plane_could_not_read_them(
+    hosted_client: TestClient,
+    caller: tuple[uuid.UUID, uuid.UUID, str],
+) -> None:
+    """A file stored on the control plane is not in the data plane's store, so the upload is refused."""
+    _, workspace_id, token = caller
+    params = {"workspace_id": str(workspace_id)}
+    hosted_client.cookies.set(SESSION_COOKIE_NAME, token)
+    try:
+        tools = hosted_client.get(f"{API_ROOT}/playground/tools", params=params)
+        upload = hosted_client.post(
+            f"{API_ROOT}/playground/files",
+            params=params,
+            files={"file": ("report.txt", b"numbers", "text/plain")},
+        )
+    finally:
+        hosted_client.cookies.clear()
+
+    assert tools.status_code == status.HTTP_200_OK
+    assert tools.json()["files"]["enabled"] is False
+    assert upload.status_code == status.HTTP_404_NOT_FOUND
+
+
+def _code_execution(client: TestClient, token: str, workspace_id: uuid.UUID) -> dict[str, object]:
+    client.cookies.set(SESSION_COOKIE_NAME, token)
+    try:
+        response = client.get(f"{API_ROOT}/playground/tools", params={"workspace_id": str(workspace_id)})
+    finally:
+        client.cookies.clear()
+    assert response.status_code == 200, response.text
+    answer: dict[str, object] = response.json()["code_execution"]
+    return answer
+
+
+def test_code_execution_is_off_for_a_workspace_that_never_turned_it_on(
+    hosted_client: TestClient, caller: tuple[uuid.UUID, uuid.UUID, str]
+) -> None:
+    """The platform's reading: no row is off, and the control plane's own sandbox config is not asked."""
+    _, workspace_id, token = caller
+    assert _code_execution(hosted_client, token, workspace_id) == {
+        "configured": True,
+        "enabled": False,
+        "reason": "Not turned on for this workspace.",
+    }
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_code_execution_follows_the_workspace_s_own_row(
+    hosted_client: TestClient,
+    caller: tuple[uuid.UUID, uuid.UUID, str],
+    db_session_factory: Callable[[], Session],
+    enabled: bool,
+) -> None:
+    _, workspace_id, token = caller
+    session = db_session_factory()
+    try:
+        session.add(WorkspaceCodeExecutionPolicy(workspace_id=workspace_id, enabled=enabled))
+        session.commit()
+    finally:
+        session.close()
+
+    answer = _code_execution(hosted_client, token, workspace_id)
+    assert answer["configured"] is True
+    assert answer["enabled"] is enabled

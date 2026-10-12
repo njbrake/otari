@@ -1,20 +1,22 @@
 """Shared pricing lookup utilities."""
 
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from math import ceil
 from typing import NamedTuple
 
 from genai_prices import Usage, calc_price
 from genai_prices.types import PriceCalculation, TieredPrices
-from sqlalchemy import case, distinct, func, or_, select, true
+from sqlalchemy import case, distinct, func, inspect, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import API_ROOT
-from gateway.core.metered_pricing import meter_cost, quantize_cost, to_decimal
+from gateway.core.metered_pricing import meter_cost, priced_per_request, quantize_cost, request_charge_line, to_decimal
 from gateway.log_config import logger
 from gateway.models.pricing import ModelPricing, OrganizationModelPricing, PriceSource
+from gateway.models.usage import PRICING_REFERENCE_MAX_LENGTH
 
 # A zero-token usage is enough to resolve a model's per-million rates from
 # genai-prices without depending on real token counts.
@@ -281,6 +283,7 @@ def _resolve_genai_price_uncached(
             # must degrade to "unpriced"/"unknown" rather than turn into a request
             # error for that model. Signal a transient failure so the caller does
             # not memoize it (the next request retries).
+            # codeql[py/clear-text-logging-sensitive-data]
             logger.warning("genai-prices lookup failed for model_ref=%r provider_id=%r", model_ref, provider_id)
             return _TRANSIENT_FAILURE
 
@@ -350,6 +353,7 @@ def default_model_pricing(provider: str | None, model: str, as_of: datetime) -> 
     model_key = f"{provider}:{model}" if provider else model
     logger.debug(
         "Using genai-prices default pricing for '%s' (matched %s/%s)",
+        # codeql[py/clear-text-logging-sensitive-data]
         model_key,
         getattr(calc.provider, "id", None),
         getattr(calc.model, "id", None),
@@ -401,8 +405,8 @@ async def _find_organization_override(
     organization_id: uuid.UUID,
     model_keys: list[str],
     as_of: datetime,
-) -> ModelPricing | None:
-    """An organization's rate for the first of ``model_keys`` that has one.
+) -> OrganizationModelPricing | None:
+    """An organization's override for the first of ``model_keys`` that has one.
 
     One statement over every candidate key, not one per key. This runs on the
     request path ahead of the deployment lookup, so an organization with no
@@ -444,8 +448,7 @@ async def _find_organization_override(
         .order_by(key_preference, OrganizationModelPricing.effective_from.desc())
         .limit(1)
     )
-    override = (await db.execute(stmt)).scalar_one_or_none()
-    return override_as_model_pricing(override) if override is not None else None
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 class OverridePeriod(NamedTuple):
@@ -694,6 +697,11 @@ async def current_rates_page(
     return rows, count or 0
 
 
+def is_free_pricing(pricing: ModelPricing | None) -> bool:
+    """Whether a resolved rate charges nothing: zero for input and for output."""
+    return pricing is not None and pricing.input_price_per_million == 0 and pricing.output_price_per_million == 0
+
+
 async def find_model_pricing(
     db: AsyncSession,
     provider: str | None,
@@ -745,10 +753,40 @@ async def find_model_pricing(
 
 
 class ResolvedPricing(NamedTuple):
-    """A resolved rate and which step of the lookup order supplied it."""
+    """A resolved rate, which step of the lookup order supplied it, and which entry.
+
+    ``reference`` names the entry within that source: an override's row id, the
+    stored ``model_key`` a deployment rate matched on (which may be the legacy
+    spelling), or the genai-prices ``provider_id:model_id`` that answered.
+    ``effective_at`` is when that entry took effect, and is ``None`` for a
+    default, whose dataset carries no such date for the rate.
+    """
 
     pricing: ModelPricing
     source: PriceSource
+    reference: str | None = None
+    effective_at: datetime | None = None
+
+
+class PricingProvenance(NamedTuple):
+    """The usage-row columns that say which rate priced a row, in column order."""
+
+    source: PriceSource
+    reference: str | None
+    effective_at: datetime | None
+
+
+def pricing_provenance(resolved: ResolvedPricing) -> PricingProvenance:
+    """What a usage row priced at ``resolved`` records about the rate.
+
+    A model key is unbounded where the reference column is not, and an
+    oversized value would fail the row's insert on PostgreSQL rather than lose a
+    label, so a reference past the limit is recorded as unknown.
+    """
+    reference = resolved.reference
+    if reference is not None and len(reference) > PRICING_REFERENCE_MAX_LENGTH:
+        reference = None
+    return PricingProvenance(resolved.source, reference, resolved.effective_at)
 
 
 async def resolve_model_pricing(
@@ -769,21 +807,23 @@ async def resolve_model_pricing(
     if organization_id is not None:
         override = await _find_organization_override(db, organization_id, key_forms, lookup_time)
         if override is not None:
-            return ResolvedPricing(override, "organization")
+            pricing = override_as_model_pricing(override)
+            return ResolvedPricing(pricing, "organization", str(override.id), pricing.effective_at)
 
-    pricing = await _find_by_model_key(db, model_key, lookup_time)
+    stored = await _find_by_model_key(db, model_key, lookup_time)
 
     for legacy_key in legacy_keys:
-        if pricing is not None:
+        if stored is not None:
             break
-        pricing = await _find_by_model_key(db, legacy_key, lookup_time)
-    if pricing is not None:
-        return ResolvedPricing(pricing, "deployment")
+        stored = await _find_by_model_key(db, legacy_key, lookup_time)
+    if stored is not None:
+        return ResolvedPricing(stored, "deployment", stored.model_key, normalize_effective_at(stored.effective_at))
 
     if use_defaults and default_pricing_enabled():
         default = default_model_pricing(provider, model, lookup_time)
         if default is not None:
-            return ResolvedPricing(default, "defaults")
+            # A dictionary read: the lookup above memoized the resolution.
+            return ResolvedPricing(default, "defaults", default_pricing_reference(provider, model, lookup_time))
 
     return None
 
@@ -853,15 +893,104 @@ def per_request_meters(cost: Decimal) -> PerRequestMeters | None:
     since they are exempt from ``require_pricing`` and an unset or ``0.0`` rate
     both settle at $0: a zero charge line would render in Activity as a billed
     meter explaining a charge that never happened. Shared by every route billing
-    per request (audio transcription, audio speech, moderations) so the shape
-    cannot drift between them, for the reason the unit conventions above are
+    per request (audio transcription, audio speech, moderations), and built from
+    the same charge line a chat model priced per request settles with, so the
+    shape cannot drift between them, for the reason the unit conventions above are
     named helpers rather than inline expressions.
     """
     if not cost:
         return None
-    # ``float`` because the breakdown is a JSON column; the exact amount is the
-    # row's ``cost``. See ``ChargeLine`` in the cost core.
-    return {"requests": 1}, [{"meter": "request", "units": 1, "unit_rate": float(cost), "cost": float(cost)}]
+    return {"requests": 1}, [request_charge_line(cost)]
+
+
+SEARCH_UNITS_METER = "search_units"
+
+
+def search_unit_cost(units: int, pricing: ModelPricing | None) -> Decimal:
+    """USD for ``units`` search units at a per-request rate.
+
+    Rerank convention: a provider that bills by search unit (one query over a
+    batch of documents) reports how many it billed, and a rate whose ``unit``
+    is ``requests`` prices each one at ``input_price_per_million / 1e6``. A
+    provider that reports no count is billed one unit, the request itself, as
+    the other per-request routes are. Unpriced settles at $0, as
+    :func:`flat_request_cost` does.
+    """
+    return max(units, 0) * flat_request_cost(pricing)
+
+
+def billed_search_units(billed_units: Mapping[str, float] | None) -> int:
+    """How many search units a rerank request bills, at least one.
+
+    Reported under ``meta.billed_units`` by providers that bill rerank per query
+    batch rather than per token. A fraction rounds up, because the provider
+    billed it, and a request that reports none bills one unit: the request itself.
+    """
+    reported = billed_units.get("search_units") if billed_units else None
+    if reported is None or reported <= 0:
+        return 1
+    return ceil(reported)
+
+
+def metered_search_units(pricing: ModelPricing | None, billed_units: Mapping[str, float] | None) -> int | None:
+    """The search units a rerank request was billed for, or ``None`` when it was not billed per unit.
+
+    Only a model priced per request bills search units, at the count
+    :func:`billed_search_units` derives from the provider's report, so this is
+    the count the request's ``search_units`` billing meter records.
+    """
+    if not priced_per_request(pricing):
+        return None
+    return billed_search_units(billed_units)
+
+
+def rerank_cost(pricing: ModelPricing | None, *, search_units: int, total_tokens: int | None) -> Decimal | None:
+    """USD a rerank request costs, or ``None`` when nothing it reported is priced.
+
+    A per-request rate bills the search units the provider reported (see
+    :func:`search_unit_cost`). A per-token rate bills the input tokens the
+    provider reported, and a provider that reports none leaves the row unpriced.
+    """
+    if priced_per_request(pricing):
+        return search_unit_cost(search_units, pricing)
+    if pricing and total_tokens:
+        return input_token_cost(total_tokens, pricing)
+    return None
+
+
+def rerank_meters(
+    pricing: ModelPricing | None, *, search_units: int, total_tokens: int | None, cost: Decimal
+) -> PerRequestMeters | None:
+    """Billing meters and charge lines for a rerank request priced by :func:`rerank_cost`."""
+    if priced_per_request(pricing):
+        return search_unit_meters(search_units, cost)
+    if not pricing or not total_tokens:
+        return None
+    rate = float(pricing.input_price_per_million)
+    breakdown: list[dict[str, float | int | str]] = [
+        {"meter": "input", "units": total_tokens, "rate_per_million": rate, "cost": float(cost)}
+    ]
+    # See embeddings: the canonical meter name is what the billed-token SQL and
+    # the dashboard read.
+    return {"total_input_tokens": total_tokens}, breakdown
+
+
+def search_unit_meters(units: int, cost: Decimal) -> PerRequestMeters | None:
+    """Billing meters and charge line for ``units`` search units costing ``cost``.
+
+    The line carries ``unit_rate`` like every per-request line, so the
+    dashboard renders it on that branch; the meter name says what was counted.
+    ``None`` when free, for the reason :func:`per_request_meters` gives.
+    """
+    if not cost or units <= 0:
+        return None
+    line: dict[str, float | int | str] = {
+        "meter": SEARCH_UNITS_METER,
+        "units": units,
+        "unit_rate": float(cost / units),
+        "cost": float(cost),
+    }
+    return {SEARCH_UNITS_METER: units}, [line]
 
 
 GATEWAY_TOOL_PRICING_PROVIDER = "otari"
@@ -878,6 +1007,39 @@ def gateway_tool_pricing_key(tool: str) -> str:
     backend URL.
     """
     return f"{GATEWAY_TOOL_PRICING_PROVIDER}:{tool}"
+
+
+def _detach(row: object) -> None:
+    """Take an ORM row out of its session, keeping what it has loaded; anything else is left alone."""
+    state = inspect(row, raiseerr=False)
+    if state is not None and state.session is not None:
+        state.session.expunge(row)
+
+
+class RequestPrices:
+    """The rates one request has resolved, so each model it bills is priced once.
+
+    Admission, a fallover's top-up and settlement each price the model they are
+    about to bill. A request is short, so they share the first resolution rather
+    than reading the price list again; a rate that takes effect while a request
+    is in flight applies from the next request on.
+    """
+
+    def __init__(self, organization_id: uuid.UUID | None) -> None:
+        self.organization_id = organization_id
+        self._resolved: dict[tuple[str | None, str], ResolvedPricing | None] = {}
+
+    async def resolve(self, db: AsyncSession, provider: str | None, model: str) -> ResolvedPricing | None:
+        """:func:`resolve_model_pricing` for this request's organization, once per model."""
+        key = (provider, model)
+        if key not in self._resolved:
+            resolved = await resolve_model_pricing(db, provider, model, organization_id=self.organization_id)
+            # Detached, so a rollback between admission and settlement, which
+            # expires every instance in the session, cannot expire the rate too.
+            if resolved is not None:
+                _detach(resolved.pricing)
+            self._resolved[key] = resolved
+        return self._resolved[key]
 
 
 async def price_tool_calls(
@@ -1050,12 +1212,21 @@ def no_pricing_error_detail(model: str) -> str:
     """The 402 body for an unpriced model: what went wrong, why, and how to fix it.
 
     A new operator adding a provider in the dashboard hits this on their first
-    request; the cause and both fixes live only in a startup log they never see,
-    so spell them out in the response.
+    request; the cause and its fixes live only in a startup log they never see,
+    so spell them out in the response. With default pricing already on, the
+    bundled price list missed the name, most often because it is misspelled, so
+    that is named first and enabling the fallback is not offered again.
     """
+    cause = f"No pricing is configured for model '{model}', and require_pricing is on, so it cannot be billed. "
+    if default_pricing_enabled():
+        return (
+            f"{cause}Default pricing is on, and its bundled price list has no entry for this model. "
+            f"Check the model name for a typo (GET {API_ROOT}/models lists the models this gateway serves), "
+            f"or add pricing for a model the list does not cover (POST {API_ROOT}/pricing, "
+            "or the pricing section of config.yml)."
+        )
     return (
-        f"No pricing is configured for model '{model}', and require_pricing is on, so it cannot be billed. "
-        f"Fix it either way: add pricing (POST {API_ROOT}/pricing, or the pricing section of config.yml), "
+        f"{cause}Fix it either way: add pricing (POST {API_ROOT}/pricing, or the pricing section of config.yml), "
         f'or enable the default-pricing fallback (PATCH {API_ROOT}/settings {{"default_pricing": true}}) '
         "to meter with public list prices."
     )

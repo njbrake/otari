@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from gateway.core.config import GatewayConfig
+from gateway.core.retry_after import bounded_retry_after
 from gateway.exceptions.control_plane_exceptions import (
     ControlPlaneNotConfiguredError,
     ControlPlaneRefusedError,
@@ -64,6 +65,7 @@ class ResolveEndpoint(StrEnum):
 
     CODE_EXECUTION = ("/gateway/code-execution/resolve", "Code execution resolution failed")
     MCP_SERVERS = ("/gateway/mcp-servers/resolve", "MCP server resolution failed")
+    MODELS = ("/gateway/models/resolve", "Model listing failed")
     PROVIDER_KEYS = ("/gateway/provider-keys/resolve", "Authorization request rejected")
     WEB_SEARCH = ("/gateway/web-search/resolve", "Web search resolution failed")
 
@@ -84,11 +86,10 @@ async def resolve(config: GatewayConfig, *, user_token: str, endpoint: ResolveEn
 
     Raises:
         ControlPlaneNotConfiguredError: no control plane address is set.
-        ControlPlaneRefusedError: the peer refused, carrying its status, its
-            detail where that is a safe string, and its ``Retry-After``.
-        ControlPlaneUnavailableError: a timeout, a network failure, an
-            unreadable body or any other status, so nothing about the peer's
-            internals reaches the caller.
+        ControlPlaneRefusedError: the peer refused, carrying its status,
+            its detail where that is a safe string, and its ``Retry-After`` capped at one day.
+        ControlPlaneUnavailableError: a transport failure, an unreadable body or any other status,
+            so nothing about the peer's internals reaches the caller.
     """
     base_url = config.platform.get("base_url")
     if not base_url:
@@ -107,7 +108,7 @@ async def resolve(config: GatewayConfig, *, user_token: str, endpoint: ResolveEn
             body=body,
             timeout_seconds=timeout_ms / 1000,
         )
-    except (httpx.TimeoutException, httpx.NetworkError):
+    except (httpx.TransportError, httpx.DecodingError):
         raise ControlPlaneUnavailableError(UNAVAILABLE_DETAIL) from None
 
     if response.status_code == HTTPStatus.OK:
@@ -121,7 +122,7 @@ async def resolve(config: GatewayConfig, *, user_token: str, endpoint: ResolveEn
         raise ControlPlaneRefusedError(
             _safe_detail(response, endpoint.refusal_detail),
             status_code=response.status_code,
-            retry_after=response.headers.get("Retry-After") if rate_limited else None,
+            retry_after=bounded_retry_after(response.headers.get("Retry-After")) if rate_limited else None,
         )
 
     raise ControlPlaneUnavailableError(UNAVAILABLE_DETAIL)

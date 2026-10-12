@@ -15,7 +15,7 @@ import uuid
 from typing import Literal
 
 from sqlalchemy import Index, text
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field
 
 from gateway.models.base import CreatedAtMixin, PrimaryKeyMixin, UpdatedAtMixin
 
@@ -31,7 +31,7 @@ MAX_VIEW_QUERY_LENGTH = 2000
 MAX_VIEWS_PER_PAGE = 50
 
 
-class SavedView(SQLModel, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, table=True):
+class SavedView(PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, table=True):
     """One saved view, owned by the identity that saved it, in one workspace."""
 
     __tablename__ = "saved_view"

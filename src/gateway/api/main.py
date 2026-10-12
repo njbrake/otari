@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, FastAPI
 from gateway.api.deps import require_capability
 from gateway.api.routes import (
     admin,
+    agent_routing,
     agent_telemetry,
     aliases,
     audio,
@@ -18,6 +19,7 @@ from gateway.api.routes import (
     budgets,
     catalog,
     chat,
+    decisions,
     embeddings,
     files,
     health,
@@ -46,7 +48,9 @@ from gateway.api.routes import (
     overview,
     playground,
     pricing,
+    provider_endpoints,
     providers,
+    rate_limits,
     rerank,
     responses,
     routing,
@@ -61,6 +65,7 @@ from gateway.api.routes import (
     usage,
     users,
     web_search_backend,
+    web_search_keys,
     workspace_activation,
     workspace_budget,
     workspace_code_execution_policy,
@@ -156,7 +161,9 @@ _CORE_ROUTERS: tuple[RouterMount, ...] = (
     RouterMount(auth_profile.router, Plane.CONTROL),
     RouterMount(auth_signup.router, Plane.CONTROL),
     RouterMount(auth_password_reset.router, Plane.CONTROL),
-    RouterMount(auth_webauthn.router, Plane.CONTROL),
+    # Absent rather than refusing where the deployment turned passkeys off: a
+    # ceremony route that answers 503 still says passkeys exist here.
+    RouterMount(auth_webauthn.router, Plane.CONTROL, when=lambda config: config.passkeys_enabled),
     RouterMount(auth_oauth.router, Plane.CONTROL),
     # Data-plane routes that also read a local control plane, because none of
     # them has hybrid handling. ``files`` is among them because an upload exists
@@ -166,6 +173,11 @@ _CORE_ROUTERS: tuple[RouterMount, ...] = (
     RouterMount(audio.router, Plane.DATA | Plane.CONTROL),
     RouterMount(files.router, Plane.DATA | Plane.CONTROL),
     RouterMount(rerank.router, Plane.DATA | Plane.CONTROL),
+    RouterMount(decisions.router, Plane.DATA | Plane.CONTROL),
+    # One decision call, billed here like a decisions call, so it needs both
+    # planes too. Open to any key, since the harness dispatches the subagent
+    # to its own provider.
+    RouterMount(agent_routing.router, Plane.DATA | Plane.CONTROL),
     RouterMount(search.router, Plane.DATA | Plane.CONTROL),
     RouterMount(batches.router, Plane.DATA | Plane.CONTROL),
     RouterMount(moderations.router, Plane.DATA | Plane.CONTROL),
@@ -173,6 +185,9 @@ _CORE_ROUTERS: tuple[RouterMount, ...] = (
     # operator router goes first: its /discoverable and /metadata would
     # otherwise sit behind the catalog router's {model_id:path} catch-all.
     RouterMount(models.operator_router, Plane.CONTROL),
+    # A hybrid gateway has no catalog of its own, so it relays the control
+    # plane's list for the caller's key on the data plane.
+    RouterMount(models.hybrid_router, Plane.DATA, when=lambda config: config.is_hybrid_mode),
     RouterMount(models.catalog_router, Plane.CONTROL),
     # The same merged catalog, folded by model for a chooser rather than
     # listed flat for an SDK.
@@ -217,24 +232,29 @@ _CORE_ROUTERS: tuple[RouterMount, ...] = (
     RouterMount(workspace_mcp_servers.router, Plane.CONTROL),
     RouterMount(workspace_code_execution_policy.router, Plane.CONTROL),
     RouterMount(workspace_web_search.router, Plane.CONTROL),
+    RouterMount(web_search_keys.org_router, Plane.CONTROL),
+    RouterMount(web_search_keys.workspace_router, Plane.CONTROL),
     RouterMount(org_provider_keys.org_router, Plane.CONTROL),
     RouterMount(org_provider_keys.workspace_router, Plane.CONTROL),
     RouterMount(budgets.router, Plane.CONTROL),
     RouterMount(scoped_budgets.router, Plane.CONTROL),
     RouterMount(overview.router, Plane.CONTROL),
     RouterMount(aliases.router, Plane.CONTROL),
+    RouterMount(provider_endpoints.router, Plane.CONTROL),
     RouterMount(routing.router, Plane.CONTROL),
     RouterMount(routing_memory.router, Plane.CONTROL),
     # Both prefixed /pricing, split by who may call them; operator first, so
     # its DELETE /{model_key:path} does not sit behind the catalog catch-all.
     RouterMount(pricing.operator_router, Plane.CONTROL),
     RouterMount(pricing.catalog_router, Plane.CONTROL),
-    # Both prefixed /usage. POST /external-events authenticates with an API
-    # key rather than operator standing, so it is mounted on its own router.
+    # Both prefixed /usage. POST /external-events and GET /requests/{id}
+    # authenticate with an API key rather than operator standing, so they are
+    # mounted on their own router.
     RouterMount(usage.operator_router, Plane.CONTROL),
-    RouterMount(usage.ingest_router, Plane.CONTROL),
+    RouterMount(usage.key_router, Plane.CONTROL),
     RouterMount(agent_telemetry.router, Plane.CONTROL),
     RouterMount(settings.router, Plane.CONTROL),
+    RouterMount(rate_limits.router, Plane.CONTROL),
     RouterMount(mail.router, Plane.CONTROL),
     RouterMount(maintenance_mode.router, Plane.CONTROL),
     # All three prefixed /tool-settings, split by who may call them. Operator
@@ -242,6 +262,9 @@ _CORE_ROUTERS: tuple[RouterMount, ...] = (
     RouterMount(tool_settings.operator_router, Plane.CONTROL),
     RouterMount(tool_settings.reader_router, Plane.CONTROL),
     RouterMount(tool_settings.catalog_router, Plane.CONTROL),
+    # Both prefixed /search-tools. The catalog first, because its one route is a
+    # fixed path and the operator's end in a path parameter.
+    RouterMount(search_tools.catalog_router, Plane.CONTROL),
     RouterMount(search_tools.router, Plane.CONTROL),
     RouterMount(tools.router, Plane.CONTROL),
 )

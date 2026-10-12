@@ -4,10 +4,12 @@ from typing import Never
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.elements import ColumnElement
+from sqlmodel import col
 
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.budget_exceptions import MemberBudgetPolicyAlreadyExistsError
 from gateway.models.budgets import WorkspaceBudgetDefault
+from gateway.models.tenancy import Workspace
 from gateway.repositories.base_repository import BaseRepository
 
 
@@ -57,6 +59,16 @@ class WorkspaceBudgetDefaultRepository(BaseRepository[WorkspaceBudgetDefault, Ne
         )
         return result.scalar_one()
 
+    async def workspace_names_for_budget(self, budget_id: str) -> list[str]:
+        """Return the names of the workspaces whose policies hand out this budget, alphabetically."""
+        result = await self.db.execute(
+            select(col(Workspace.name))
+            .join(WorkspaceBudgetDefault, WorkspaceBudgetDefault.workspace_id == col(Workspace.id))
+            .where(WorkspaceBudgetDefault.budget_id == budget_id)
+            .order_by(Workspace.name)
+        )
+        return list(result.scalars().all())
+
     async def for_workspace(self, workspace_id: uuid.UUID) -> list[WorkspaceBudgetDefault]:
         """Return every policy on a workspace."""
         result = await self.db.execute(
@@ -100,6 +112,13 @@ class WorkspaceBudgetDefaultRepository(BaseRepository[WorkspaceBudgetDefault, Ne
             .limit(limit)
         )
         return list(result.scalars().all()), count_result.scalar_one()
+
+    async def set_budget(self, policy: WorkspaceBudgetDefault, budget_id: str) -> WorkspaceBudgetDefault:
+        """Point a policy at another budget and return it with its refreshed values."""
+        policy.budget_id = budget_id
+        await self.db.flush()
+        await self.db.refresh(policy)
+        return policy
 
     async def remove(self, policy: WorkspaceBudgetDefault) -> None:
         """Stage the deletion of a policy."""

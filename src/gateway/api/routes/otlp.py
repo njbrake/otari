@@ -79,7 +79,7 @@ from gateway.services.external_usage_service import (
     ExternalEventsRequest,
     ExternalUsageEvent,
     ingest_external_events,
-    reserved_source_reason,
+    is_reserved_source,
 )
 
 router = APIRouter(tags=["otel"])
@@ -207,10 +207,9 @@ def _resolve_timestamp(attrs: dict[str, Any], default: datetime | None) -> datet
 
 def _sanitize_source(name: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9._:-]+", "-", name).strip("-")[:64]
-    # "gateway" is reserved for usage Otari served itself and the `otari-ai:` prefix for
-    # the provenance tags otari.ai writes; a client claiming either would masquerade as
-    # those rows (and fail the ingest schema with a 500).
-    if not slug or reserved_source_reason(slug) is not None:
+    # "gateway" is reserved for usage Otari served itself; a client claiming it would
+    # masquerade as those rows (and fail the ingest schema with a 500).
+    if not slug or is_reserved_source(slug):
         return _DEFAULT_SOURCE
     return slug
 

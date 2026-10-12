@@ -85,7 +85,7 @@ export function ActivityDesk({
   onMenuSearch: (term: string) => void
   expanded: ReadonlySet<string>
   onExpanded: (expanded: ReadonlySet<string>) => void
-  onPriceModel: ((modelKey: string) => void) | undefined
+  onPriceModel: ((modelKey: string, endpoint: string) => void) | undefined
   onManageImported: (action: "recost" | "delete") => void
   empty: ReactNode
 }) {

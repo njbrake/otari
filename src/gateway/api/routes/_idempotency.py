@@ -5,8 +5,9 @@ is reserved. A retry with the same key and body is answered with the stored
 response (and its original request ID and cost) without calling the provider or
 billing again, or is answered 409 while the request holding the key still runs.
 Streaming requests and hybrid mode ignore the header: a stream the client
-dropped is already refunded, and a hybrid gateway has no database to hold the
-key in. So does a deployment without ``OTARI_SECRET_KEY``, since the stored
+dropped left no complete response to replay (it is billed only for the tokens
+the provider reported), and a hybrid gateway has no database to hold the key
+in. So does a deployment without ``OTARI_SECRET_KEY``, since the stored
 response is encrypted with it.
 """
 
@@ -20,11 +21,14 @@ from typing import Annotated, Any
 from fastapi import Depends, Header, Request, Response
 from fastapi.encoders import jsonable_encoder
 
-from gateway.api.deps import build_idempotency_service, get_config, get_unit_of_work_if_needed
+from gateway.api.deps import build_inference_service, get_config, get_unit_of_work_if_needed
 from gateway.api.routes._helpers import GUARDRAILS_RESULT_HEADER
-from gateway.api.routes._tools import CODE_EXECUTION_HEADER, WEB_SEARCH_HEADER
 from gateway.core.config import (
+    ATTEMPT_COUNT_HEADER,
     CONVERSATION_HEADER,
+    END_USER_BUDGET_HEADER,
+    FALLBACK_HEADER,
+    PROVIDER_HEADER,
     REQUEST_ID_HEADER,
     ROUTER_HEADER,
     ROUTER_TASK_HEADER,
@@ -35,18 +39,28 @@ from gateway.log_config import logger
 from gateway.services.inference import (
     Admission,
     Claimed,
-    IdempotencyService,
     IdempotentRequest,
+    InferenceService,
     InvalidKey,
     Replay,
     keep_claim_alive,
 )
+from gateway.services.tools import CODE_EXECUTION_HEADER, WEB_SEARCH_HEADER
 
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 IDEMPOTENT_REPLAYED_HEADER = "Otari-Idempotent-Replayed"
 # The response headers a replay repeats: the ones that describe this request
 # rather than the moment it was answered, which rate-limit headers do.
-_REPLAYED_HEADERS = (REQUEST_ID_HEADER, "Otari-Container-Id", "Otari-Container-Expires-At", GUARDRAILS_RESULT_HEADER)
+_REPLAYED_HEADERS = (
+    REQUEST_ID_HEADER,
+    "Otari-Container-Id",
+    "Otari-Container-Expires-At",
+    GUARDRAILS_RESULT_HEADER,
+    END_USER_BUDGET_HEADER,
+    PROVIDER_HEADER,
+    ATTEMPT_COUNT_HEADER,
+    FALLBACK_HEADER,
+)
 # The request headers that change what a request does, so they count toward
 # whether a retry is the same request.
 _REQUEST_SHAPING_HEADERS = (
@@ -56,6 +70,7 @@ _REQUEST_SHAPING_HEADERS = (
     "anthropic-beta",
     ROUTER_TASK_HEADER,
     CONVERSATION_HEADER,
+    END_USER_BUDGET_HEADER,
 )
 
 INVALID_IDEMPOTENCY_KEY_DETAIL = (
@@ -105,7 +120,7 @@ class IdempotencyGuard:
     def __init__(
         self,
         raw_request: Request,
-        service: IdempotencyService | None,
+        service: InferenceService | None,
         key: str | None,
         *,
         keep_alive: KeepAlive | None = None,
@@ -210,15 +225,15 @@ async def get_idempotency_guard(
 ) -> AsyncIterator[IdempotencyGuard]:
     """Yield the request's guard, and release its claim if the request did not complete."""
     service = None
-    if uow is not None and idempotency_key is not None and IdempotencyService.is_enabled(config):
-        service = build_idempotency_service(uow, config)
+    if uow is not None and idempotency_key is not None and InferenceService.is_enabled(config):
+        service = build_inference_service(uow, config)
 
     async def keep_alive(request: IdempotentRequest, claimed: Claimed) -> None:
         await keep_claim_alive(
             request,
             claimed,
             config.idempotency_lease_sec,
-            lambda worker_uow: build_idempotency_service(worker_uow, config),
+            lambda worker_uow: build_inference_service(worker_uow, config),
         )
 
     guard = IdempotencyGuard(raw_request, service, idempotency_key, keep_alive=keep_alive)

@@ -3,7 +3,9 @@ import { Dot } from "@/design-system/indicators/Dot"
 import { useRequestGroups } from "@/shared/api/usage"
 import {
   describeSelectionReason,
+  describeSkip,
   findPricingSelector,
+  isSkippedAttempt,
   sortPlanRows,
   withStatusCode,
 } from "./activityModel"
@@ -27,7 +29,10 @@ export function RoutingPlan({ entry }: { entry: UsageEntry }) {
   const attempts = sortPlanRows(siblings.length ? siblings : [entry])
   const isComplete = siblings.length > 0
   const served = attempts.find((attempt) => attempt.status === "success")
-  const failed = attempts.filter((attempt) => attempt.status !== "success")
+  const failed = attempts.filter(
+    (attempt) => attempt.status !== "success" && !isSkippedAttempt(attempt),
+  )
+  const skipped = attempts.filter(isSkippedAttempt)
   const total = entry.attempt_count ?? attempts.length
 
   // "Loading" only while a lookup is actually outstanding: a failed lookup, or a
@@ -47,6 +52,9 @@ export function RoutingPlan({ entry }: { entry: UsageEntry }) {
       {failed.length
         ? `, after ${failed.length} failed ${failed.length === 1 ? "attempt" : "attempts"}`
         : ""}
+      {skipped.length
+        ? `${failed.length ? " and" : ", after"} ${skipped.length} skipped ${skipped.length === 1 ? "candidate" : "candidates"}`
+        : ""}
     </>
   ) : failed.some((attempt) => attempt.status === "error") ? (
     "No candidate served this request."
@@ -59,7 +67,7 @@ export function RoutingPlan({ entry }: { entry: UsageEntry }) {
       <h3 className="text-overline">Routing · {entry.policy_name}</h3>
       <p className="text-caption text-foreground">{summary}</p>
       <table
-        aria-label={`Routing plan for policy ${entry.policy_name}`}
+        aria-label={`Routing plan for ${entry.policy_name}`}
         className="w-full table-fixed border border-border-strong text-sm"
       >
         <thead>
@@ -100,6 +108,15 @@ export function RoutingPlan({ entry }: { entry: UsageEntry }) {
                   <span className="flex items-center gap-1.5">
                     <Dot className="bg-success" />
                     served
+                  </span>
+                ) : isSkippedAttempt(attempt) ? (
+                  <span className="flex flex-col">
+                    <span className="text-mono-caption whitespace-nowrap text-subtle">
+                      skipped
+                    </span>
+                    <span className="text-caption text-subtle">
+                      {describeSkip(attempt)}
+                    </span>
                   </span>
                 ) : (
                   <span className="flex flex-col">

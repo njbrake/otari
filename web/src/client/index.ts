@@ -229,10 +229,6 @@ export type UsageFilterKeysArePinned = Assert<
 // Users, keys and budgets
 // ---------------------------------------------------------------------------
 export type User = Schemas["UserResponse"]
-export type CreateUserRequest = Defaulted<
-  Schemas["CreateUserRequest"],
-  "blocked"
->
 export type UpdateUserRequest = Schemas["UpdateUserRequest"]
 export type ApiKey = Schemas["KeyInfo"]
 export type CreateKeyRequest = Schemas["CreateKeyRequest"]
@@ -269,9 +265,6 @@ export type BudgetResetAlignment = NonNullable<
 // ---------------------------------------------------------------------------
 export type ModelObject = Schemas["ModelObject"]
 export type ModelListResponse = Schemas["ModelListResponse"]
-export type ModelPricingInfo = Schemas["ModelPricingInfo"]
-export type ModelMetadata = Schemas["ModelMetadata"]
-export type ModelMetadataResponse = Schemas["ModelMetadataResponse"]
 export type DiscoverableModel = Schemas["DiscoverableModel"]
 export type DiscoverableProvider = Schemas["DiscoverableProvider"]
 export type DiscoverableModelsResponse = Schemas["DiscoverableModelsResponse"]
@@ -283,31 +276,21 @@ export type WorstAllocation = Schemas["WorstAllocationResponse"]
 
 export type PricingResponse = Schemas["PricingResponse"]
 export type CurrentPricingPage = Schemas["CurrentPricingPage"]
-export type PricingTier = Schemas["PricingTier"]
 
 // The catalog folded by model (`/v1/catalog`): one summary per model in the
 // list, and one detail carrying every offering of it the caller may use.
 export type CatalogResponse = Schemas["CatalogResponse"]
+export type CatalogFacets = Schemas["CatalogFacets"]
+export type CatalogVendorFacet = Schemas["CatalogVendorFacet"]
+export type CatalogQueryParams = NonNullable<
+  operations["catalog-list_catalog"]["parameters"]["query"]
+>
 export type CatalogModelSummary = Schemas["CatalogModelSummary"]
 export type CatalogModelDetail = Schemas["CatalogModelDetail"]
 export type CatalogOffering = Schemas["CatalogOffering"]
 export type CatalogCapabilities = Schemas["CatalogCapabilities"]
 export type CatalogElsewhere = Schemas["CatalogElsewhere"]
 export type CatalogOfferingUsage = Schemas["OfferingUsage"]
-/** A tier as stored, which may be a shape this client cannot read (see the spec). */
-export type StoredPricingTier = NonNullable<
-  ModelPricingInfo["pricing_tiers"]
->[number]
-// A tier whose threshold is unreadable cannot take part in choosing a rate, and
-// it already could not: comparing against an absent `min_input_tokens` excluded
-// it anyway. Narrowing says so rather than leaving it to a false comparison.
-export function isPricingTier(tier: StoredPricingTier): tier is PricingTier {
-  return (
-    typeof tier === "object" &&
-    tier !== null &&
-    typeof (tier as PricingTier).min_input_tokens === "number"
-  )
-}
 // `unit` carries a schema default, so the generator emits it as required; the
 // callers that price a model omit it and the gateway reads tokens.
 export type SetPricingRequest = Defaulted<Schemas["SetPricingRequest"], "unit">
@@ -408,15 +391,11 @@ export type SetRoutingPolicyRequest = Omit<Schemas["PolicyRequest"], "spec"> & {
 }
 export type AliasResponse = Schemas["AliasResponse"]
 export type CreateAliasRequest = Schemas["AliasRequest"]
-export type ExplainPolicyRequest = Schemas["ExplainRequest"]
-export type ExplainPolicyResponse = Schemas["ExplainResponse"]
 export type RouterStatus = Schemas["RouterStatus"]
 export type RouterPool = Schemas["PoolStatus"]
 export type LearnedPolicy = Schemas["LearnedPolicy"]
 export type RecordedPool = Schemas["RecordedPool"]
 export type ScoredExample = Schemas["ScoredExample"]
-export type RankCandidatesRequest = Schemas["RankRequest"]
-export type RankCandidatesResponse = Schemas["RankResponse"]
 
 // ---------------------------------------------------------------------------
 // Settings, tools and guardrails
@@ -455,6 +434,14 @@ export type BuiltInGuardrailCatalog = Schemas["BuiltInGuardrailCatalog"]
 export type BuiltInGuardrailSpec = Schemas["BuiltInGuardrailSpec"]
 export type GuardrailCategory = Schemas["GuardrailCategory"]
 export type RequirementGroup = Schemas["RequirementGroup"]
+
+// ---------------------------------------------------------------------------
+// Rate limit rules
+// ---------------------------------------------------------------------------
+export type RateLimitRule = Schemas["RateLimitRulePublic"]
+export type RateLimitRules = Schemas["RateLimitRulesPublic"]
+export type CreateRateLimitRuleRequest = Schemas["RateLimitRuleCreate"]
+export type UpdateRateLimitRuleRequest = Schemas["RateLimitRuleUpdate"]
 
 // ---------------------------------------------------------------------------
 // Search tools
@@ -725,6 +712,12 @@ export type SavePlaygroundConversationRequest =
   Schemas["PlaygroundConversationCreate"]
 export type PlaygroundMessage = Schemas["PlaygroundMessagePublic"]
 export type PlaygroundMessages = Schemas["PlaygroundMessagesPublic"]
+export type PlaygroundAttachment = Schemas["PlaygroundAttachment"]
+
+// A file the caller uploaded, in OpenAI's file object shape, which is what the
+// Playground's own upload and listing answer in.
+export type PlaygroundFile = Schemas["OpenAIFileObject"]
+export type PlaygroundFiles = Schemas["OpenAIFileList"]
 
 // A rated A/B exchange. The summary deliberately carries no answer bodies;
 // there is no endpoint that reads one back, because a comparison is a recorded

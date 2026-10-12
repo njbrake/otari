@@ -1,5 +1,5 @@
 import { Button, Disclosure, Popover } from "@heroui/react"
-import { Link, Outlet, useLocation } from "@tanstack/react-router"
+import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router"
 import { clsx } from "clsx"
 import type { MouseEvent as ReactMouseEvent } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -53,6 +53,7 @@ import { TelemetryIdentity } from "@/app/TelemetryIdentity"
 import { UpdatePrompt } from "@/app/UpdatePrompt"
 import { useDrawerSwipe } from "@/app/useDrawerSwipe"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
+import { Chip } from "@/design-system/indicators/Chip"
 import { PricingWarning } from "@/features/models/PricingWarning"
 import { UnpricedUsageWarning } from "@/features/models/UnpricedUsageWarning"
 import { canManage } from "@/features/organization/roles"
@@ -203,6 +204,7 @@ function useRecordNavigation(): (to: NavPath, isActive: boolean) => void {
 function NavRowLink({
   to,
   label,
+  badge,
   icon: Icon,
   isActive,
   isCollapsed,
@@ -211,6 +213,7 @@ function NavRowLink({
 }: {
   to: NavPath
   label: string
+  badge?: string
   icon?: IconType
   isActive: boolean
   isCollapsed?: boolean
@@ -230,7 +233,11 @@ function NavRowLink({
         onNavigate()
       }}
       className={navRowClass({ isActive, isCollapsed, isNested })}
-      aria-label={isCollapsed ? label : undefined}
+      // Spelled out with a badge, which would otherwise run into the label
+      // ("Code executionBeta") in the accessible name.
+      aria-label={
+        isCollapsed ? label : badge ? `${label}, ${badge}` : undefined
+      }
       title={isCollapsed ? label : undefined}
     >
       {/* A nested row draws no glyph: the indent is what marks it as one, and
@@ -243,6 +250,7 @@ function NavRowLink({
       {isCollapsed ? null : (
         <span className="min-w-0 flex-1 truncate">{label}</span>
       )}
+      {badge && !isCollapsed ? <Chip tone="accent">{badge}</Chip> : null}
     </Link>
   )
 }
@@ -341,6 +349,7 @@ function NavGroup({
                 key={child.to}
                 to={child.to}
                 label={child.label}
+                badge={child.badge}
                 icon={child.icon}
                 isActive={currentPath === child.to}
                 onNavigate={() => {
@@ -419,6 +428,7 @@ function NavGroup({
             key={child.to}
             to={child.to}
             label={child.label}
+            badge={child.badge}
             icon={child.icon}
             isActive={currentPath === child.to}
             isNested
@@ -474,6 +484,7 @@ function AppShellChrome() {
   const isVisible = useNavVisibility()
   const recordNavigation = useRecordNavigation()
   const { pathname } = useLocation()
+  const navigate = useNavigate()
   useDocumentTitle(navLabelForPath(pathname) ?? CHROME_TITLES[pathname])
   // A gated-off destination is still reachable by bookmark or shared URL, so the
   // shell answers those with a panel instead of a page whose every request the
@@ -1191,7 +1202,9 @@ function AppShellChrome() {
                   // a registered path can be gated off, so the fallback is there
                   // for the type rather than for a case that happens.
                   title={`${navLabelForPath(pathname) ?? currentItem?.label ?? "That page"} is not available here`}
-                  description="This deployment does not serve that page. Pick a destination from the sidebar."
+                  description="This deployment does not serve that page. Choose another page from the menu, or go back to Overview."
+                  actionLabel={pathname === "/" ? undefined : "Go to Overview"}
+                  onAction={() => void navigate({ to: "/" })}
                 />
               ) : (
                 <Outlet />

@@ -2,8 +2,7 @@ import { Link } from "@tanstack/react-router"
 import { useState } from "react"
 import { TEXT_LINK_CLASS, TextButton } from "@/design-system/actions/TextButton"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
-import { isDeploymentOperator } from "@/features/organization/roles"
-import { useOrganizationContext } from "@/shared/api/organizations"
+import { useDeploymentOperator } from "@/shared/api/organizations"
 import { usePricing } from "@/shared/api/pricing"
 import { useUnpricedUsage } from "@/shared/api/usage"
 import { formatNumber } from "@/shared/helpers/format"
@@ -32,8 +31,7 @@ function isPriced(model: string, pricedKeys: Set<string>): boolean {
 // deployment-wide write. Dismissible per tab. One line, because it sits above
 // every page: the models it names are what to act on, and Activity has the rest.
 export function UnpricedUsageWarning() {
-  const organization = useOrganizationContext()
-  const isOperator = isDeploymentOperator(organization.data)
+  const { isOperator } = useDeploymentOperator()
   const { selected: workspace } = useSelectedWorkspace()
   const unpriced = useUnpricedUsage(
     DAY_S,

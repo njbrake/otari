@@ -100,6 +100,7 @@ export function Checkbox({
   ariaLabel,
   description,
   hasTouchTarget = false,
+  className = "",
   children,
 }: {
   isSelected: boolean
@@ -123,6 +124,11 @@ export function Checkbox({
    * below, so this one claims the space instead of borrowing it.
    */
   hasTouchTarget?: boolean
+  /**
+   * Position or target-size classes from the call site, for a row that needs a
+   * bleed `hasTouchTarget` cannot give it without growing the row.
+   */
+  className?: string
   children: ReactNode
 }) {
   const descriptionId = useId()
@@ -135,7 +141,7 @@ export function Checkbox({
       isDisabled={isDisabled}
       className={`group flex w-fit items-center gap-2 text-body${
         hasTouchTarget ? " min-h-11 min-w-11 justify-center" : ""
-      }`}
+      }${className ? ` ${className}` : ""}`}
     >
       {({ isSelected: selected, isDisabled: disabled }) => (
         <>

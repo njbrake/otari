@@ -32,7 +32,15 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import CurrentIdentity, get_config, get_db, verify_master_key
+from gateway.api.deps import (
+    CurrentIdentity,
+    MembershipListenerDep,
+    UnitOfWorkDep,
+    WorkspaceListenerDep,
+    get_config,
+    get_db,
+    verify_master_key,
+)
 from gateway.core.config import GatewayConfig
 from gateway.core.surface import Surface
 from gateway.models.tenancy import (
@@ -58,7 +66,6 @@ from gateway.models.tenancy import (
     PendingOrganizationInvitationsPublic,
     SwitchActiveOrganizationRequest,
 )
-from gateway.services.budgets import WorkspaceBudgetDefaultService
 from gateway.services.tenancy import OrganizationDomainService, OrganizationService
 
 # Auth is declared on the router, not left to arrive through `CurrentIdentity`:
@@ -79,9 +86,16 @@ class Message(BaseModel):
     message: str = Field(description="What happened.")
 
 
-def get_organization_service(db: Annotated[AsyncSession, Depends(get_db)]) -> OrganizationService:
+def get_organization_service(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    uow: UnitOfWorkDep,
+    membership_listener: MembershipListenerDep,
+    workspace_listener: WorkspaceListenerDep,
+) -> OrganizationService:
     """Build the organization service on the request's session."""
-    return OrganizationService(db, membership_listener=WorkspaceBudgetDefaultService(db))
+    return OrganizationService(
+        db, membership_listener=membership_listener, uow=uow, workspace_listener=workspace_listener
+    )
 
 
 OrganizationServiceDep = Annotated[OrganizationService, Depends(get_organization_service)]

@@ -9,7 +9,10 @@ host: "0.0.0.0"
 port: 8000
 
 # Deployment-wide management credential. Applications should use API keys.
-master_key: YOUR_MASTER_KEY_HERE
+# Set it as OTARI_MASTER_KEY (in .env with Docker Compose) rather than here, so
+# it stays out of a file you may want to commit. Left unset, Otari generates one
+# on first boot and prints it once.
+# master_key: choose-a-strong-management-key
 
 # Common models use the bundled genai-prices snapshot when no stored price
 # exists. Explicit database pricing always wins.
@@ -20,6 +23,9 @@ providers:
   openai:
     api_key: YOUR_OPENAI_API_KEY_HERE
     # api_base: "https://api.openai.com/v1"
+    # Retries the SDK makes before Otari sees a failure. Overrides
+    # provider_max_retries. See docs/configuration.md#provider-retries.
+    # max_retries: 0
 
   # A named OpenAI-compatible backend. The optional model list supplies
   # discovery when the backend has no /v1/models endpoint.
@@ -56,6 +62,10 @@ providers:
 # Optional server controls.
 # rate_limit_rpm: 60
 # enable_metrics: true
+# Honor incoming OpenTelemetry trace context (traceparent/tracestate by
+# default). Off by default: the headers are unauthenticated, so enable it only
+# for trusted service callers.
+# accept_incoming_trace_context: true
 # cors_allow_origins:
 #   - "https://app.example.com"
 
@@ -79,7 +89,8 @@ providers:
 # mail_from_email: "otari@example.com"
 # mail_from_name: "Otari"
 
-# Passkeys default to the host of public_base_url. Set these only for a parent
+# Passkeys are on by default; set passkeys_enabled: false (OTARI_PASSKEYS_ENABLED)
+# to switch them off. They default to the host of public_base_url. Set these only for a parent
 # relying-party domain or multiple permitted dashboard origins.
 # webauthn_rp_id: "example.com"
 # webauthn_allowed_origins:
@@ -95,6 +106,7 @@ providers:
 # files_max_bytes: 536870912
 # files_output_max_files: 20
 # files_output_max_bytes: 67108864
+# files_provider_copy_max_sec: 60
 # files_retention_hours: 168
 # files_sweep_interval_sec: 3600
 # A copy at the provider that runs a request's code, and how long it lives there:

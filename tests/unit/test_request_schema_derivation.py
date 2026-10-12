@@ -33,7 +33,6 @@ from pydantic import BaseModel, Field, create_model
 
 from gateway.api.routes._schema_derive import (
     PARAM_FIELD_RENAMES,
-    SENSITIVE_PARAM_FIELDS,
     derive_request_base,
 )
 from gateway.api.routes._tools import _strip_gateway_fields
@@ -42,6 +41,7 @@ from gateway.api.routes.chat import ChatCompletionRequest
 from gateway.api.routes.images import ImageGenerationRequest
 from gateway.api.routes.messages import MessagesRequest
 from gateway.api.routes.responses import ResponsesRequest
+from gateway.core.provider_params import SENSITIVE_PARAM_FIELDS
 
 # Inference endpoints whose request schema mirrors an any-llm typed ``*Params``
 # model: (gateway request model, any-llm Params model). The request model derives
@@ -169,9 +169,16 @@ def test_sensitive_params_are_dropped_when_deriving() -> None:
 def test_sensitive_params_are_stripped_before_forwarding() -> None:
     """A client-smuggled sensitive field (e.g. via the Responses ``extra="allow"`` path) is stripped."""
     stripped = _strip_gateway_fields(
-        {"model": "x", "temperature": 0.5, "api_key": "sk-leak", "provider": "evil", "extra_body": {}}
+        {
+            "model": "x",
+            "temperature": 0.5,
+            "api_key": "sk-leak",
+            "provider": "evil",
+            "extra_body": {},
+            "extra_headers": {"OpenAI-Project": "proj_other"},
+            "extra_query": {"api-version": "preview"},
+        }
     )
-    assert "api_key" not in stripped and "provider" not in stripped and "extra_body" not in stripped
     assert stripped == {"model": "x", "temperature": 0.5}
 
 
