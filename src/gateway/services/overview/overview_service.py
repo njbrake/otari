@@ -637,8 +637,12 @@ def _projected_crossing(standing: _Standing, now: datetime) -> datetime | None:
     elapsed = now - standing.start
     if elapsed < max(PACE_MIN_ELAPSED, (standing.end - standing.start) * PACE_MIN_SHARE):
         return None
-    crossing = standing.start + elapsed * (standing.limit / standing.settled)
-    return crossing if crossing < standing.end else None
+    # Decided in seconds first: a tiny spend against a large cap projects a
+    # crossing far past any date ``datetime`` can hold.
+    to_cap = elapsed.total_seconds() * (standing.limit / standing.settled)
+    if to_cap >= (standing.end - standing.start).total_seconds():
+        return None
+    return standing.start + timedelta(seconds=to_cap)
 
 
 def _error_rate(requests: int, failures: int) -> list[AttentionItem]:

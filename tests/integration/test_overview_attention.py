@@ -605,6 +605,16 @@ async def test_budget_pace_is_quiet_when_the_crossing_lands_after_the_reset(asyn
 
 
 @pytest.mark.asyncio
+async def test_budget_pace_is_quiet_when_a_trickle_projects_past_any_date(async_db: AsyncSession) -> None:
+    """A tiny spend against the cap projects a crossing no date can hold, which is no crossing."""
+
+    organization, owner, _, _, workspace = await _team(async_db, "acme-trickle")
+    _weekly(async_db, organization, workspace, spent=0.0001)
+
+    assert "budget_pace" not in _kinds(await _summary(async_db, owner, workspace=workspace, now=PACE_NOW))
+
+
+@pytest.mark.asyncio
 async def test_budget_pace_waits_for_enough_of_the_period_to_project_from(async_db: AsyncSession) -> None:
     """Half a day into a week is under the one-day minimum, however steep the start."""
 
@@ -836,7 +846,7 @@ def test_the_current_month_is_the_default(client: TestClient, master_key_header:
     }
 
 
-@pytest.mark.parametrize("month", ["2999-01", "0000-01", "2026-13", "2026-7", "july"])
+@pytest.mark.parametrize("month", ["2999-01", "9999-12", "0000-01", "2026-13", "2026-7", "july"])
 def test_a_future_or_malformed_month_is_refused(
     client: TestClient, master_key_header: dict[str, str], month: str
 ) -> None:
