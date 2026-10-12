@@ -1,5 +1,5 @@
-import { Button } from "@heroui/react"
-import { useNavigate } from "@tanstack/react-router"
+import { buttonVariants } from "@heroui/react"
+import { Link } from "@tanstack/react-router"
 import { Dot } from "@/design-system/indicators/Dot"
 import { Section } from "@/design-system/layout/Section"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
@@ -18,7 +18,6 @@ function useAddProviderRoute(): "/providers" | "/organization/provider-keys" {
 
 /** A gateway with no provider and no usage yet: the one thing to do first. */
 export function GetStartedStrip() {
-  const navigate = useNavigate()
   const addProviderRoute = useAddProviderRoute()
 
   return (
@@ -36,13 +35,12 @@ export function GetStartedStrip() {
           </p>
         </div>
       </div>
-      <Button
-        variant="primary"
-        className="shrink-0"
-        onPress={() => navigate({ to: addProviderRoute })}
+      <Link
+        to={addProviderRoute}
+        className={`${buttonVariants({ variant: "primary" })} shrink-0`}
       >
         Add your first provider
-      </Button>
+      </Link>
     </Section>
   )
 }

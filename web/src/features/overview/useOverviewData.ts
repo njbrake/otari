@@ -118,7 +118,9 @@ export function useOverviewData(url: OverviewUrl) {
   const isSettling =
     overview.isPlaceholderData ||
     summary.isPlaceholderData ||
-    failures.isPlaceholderData
+    previous.isPlaceholderData ||
+    failures.isPlaceholderData ||
+    (readsWorkspaceToo && workspace.isPlaceholderData)
   const [shown, setShown] = useState({
     scope,
     monthKey: month.key,
@@ -198,7 +200,12 @@ export function useOverviewData(url: OverviewUrl) {
       overview.dataUpdatedAt,
       failures.dataUpdatedAt,
     ),
-    error: summary.error ?? previous.error ?? overview.error ?? spend.error,
+    error:
+      summary.error ??
+      previous.error ??
+      overview.error ??
+      spend.error ??
+      (readsWorkspaceToo ? workspace.error : null),
   }
 }
 

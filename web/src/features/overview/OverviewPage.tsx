@@ -389,7 +389,9 @@ function OverviewPage({
             now={data.now}
             entries={data.failures.data ?? []}
             count={totals?.error_count}
-            isLoading={!data.isReady || data.failures.isLoading}
+            isLoading={
+              !data.isReady || (data.failures.isPending && !data.failures.data)
+            }
             error={data.failures.error}
             failuresSearch={data.failuresSearch}
           />
@@ -409,7 +411,7 @@ function OverviewPage({
           <LimitsPanel
             scope={scope}
             limits={limits}
-            isLoading={overview.isLoading}
+            isLoading={overview.isPending && !overview.data}
             isError={overview.isError && !overview.data}
             inMonth={inMonth}
             isPast={!month.isCurrent}

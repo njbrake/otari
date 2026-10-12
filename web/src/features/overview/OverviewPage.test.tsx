@@ -156,6 +156,8 @@ function failure(over: Partial<UsageEntry> = {}): UsageEntry {
 interface Bodies {
   /** Held open for the Organization scope's overview, until it resolves. */
   holdOrganization?: Promise<void>
+  /** Held open for the summaries whose window starts on this day. */
+  holdSummaryFrom?: { day: string; until: Promise<void> }
   /** The overview summary per scope asked for, over `overview`. */
   overviewByScope?: Partial<Record<string, Partial<OverviewSummary>>>
   /** The first day of the month the page reads, if not October. */
@@ -246,6 +248,12 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
       return jsonResponse(modelCatalog(b.models ?? ["openai:gpt-4o-mini"]))
     }
     if (url.includes("/usage/summary")) {
+      if (
+        b.holdSummaryFrom &&
+        params.get("start_date")?.startsWith(b.holdSummaryFrom.day)
+      ) {
+        await b.holdSummaryFrom.until
+      }
       if (params.get("start_date")?.startsWith(b.monthStart ?? "2026-10-01")) {
         if (b.workspace && !params.get("user_id")) {
           return jsonResponse(summary(b.workspace, b.workspaceSeries))
@@ -561,6 +569,36 @@ describe("the Overview's scope and month", () => {
     expect(await screen.findByTestId("loc")).toHaveTextContent("/usage")
   })
 
+  it("keeps the old month's labels until the comparison lands too", async () => {
+    let release = () => {}
+    const until = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    // August's comparison is July, held while every other read answers.
+    const requested = mockApi({ holdSummaryFrom: { day: "2026-07-01", until } })
+    const user = userEvent.setup()
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await screen.findByText("Oct 1 – 12, 2026 UTC · day 12 of 31")
+    await user.click(screen.getByRole("button", { name: "Month: This month" }))
+    await user.click(
+      within(await screen.findByRole("menu")).getByText("August 2026"),
+    )
+    await waitFor(() =>
+      expect(
+        requested.some((url) => url.includes("start_date=2026-07-01")),
+      ).toBe(true),
+    )
+    expect(
+      screen.queryByRole("heading", { name: "Failures in August" }),
+    ).toBeNull()
+
+    release()
+    expect(
+      await screen.findByRole("heading", { name: "Failures in August" }),
+    ).toBeInTheDocument()
+  })
+
   it("tells a member it is their own usage and asks the server for it", async () => {
     const requested = mockApi(
       { context: MEMBER, spend: BUDGET },
@@ -686,7 +724,7 @@ describe("the Overview's scope and month", () => {
     expect(within(rail).queryByText("Never used")).toBeNull()
     expect(within(rail).getByText("No spend ceiling")).toBeInTheDocument()
     expect(
-      within(rail).getByRole("button", { name: "Manage budgets" }),
+      within(rail).getByRole("link", { name: "Manage budgets" }),
     ).toBeInTheDocument()
     // Activity reads one workspace, so failures across them link nowhere.
     expect(screen.queryByRole("link", { name: /in Activity/ })).toBeNull()
@@ -1236,10 +1274,10 @@ describe("recent failures and the rail", () => {
     // A key past its expiry says so, rather than "Expires today" forever.
     expect(within(rail).getByText("Expired")).toHaveClass("text-danger")
     expect(
-      within(rail).getByRole("button", { name: "Create key" }),
+      within(rail).getByRole("link", { name: "Create key" }),
     ).toBeInTheDocument()
     expect(
-      within(rail).getByRole("button", { name: "All keys" }),
+      within(rail).getByRole("link", { name: "All keys" }),
     ).toBeInTheDocument()
   })
 
@@ -1318,7 +1356,7 @@ describe("OverviewIndex routing", () => {
       await screen.findByText("Get started with Otari"),
     ).toBeInTheDocument()
     await user.click(
-      screen.getByRole("button", { name: "Add your first provider" }),
+      screen.getByRole("link", { name: "Add your first provider" }),
     )
     expect(await screen.findByTestId("loc")).toHaveTextContent("/providers")
   })
@@ -1335,7 +1373,7 @@ describe("OverviewIndex routing", () => {
 
     await screen.findByText("Get started with Otari")
     await user.click(
-      screen.getByRole("button", { name: "Add your first provider" }),
+      screen.getByRole("link", { name: "Add your first provider" }),
     )
     expect(await screen.findByTestId("loc")).toHaveTextContent(
       "/organization/provider-keys",

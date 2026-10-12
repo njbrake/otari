@@ -1,9 +1,12 @@
-import { useNavigate } from "@tanstack/react-router"
+import { buttonVariants } from "@heroui/react"
+import { Link } from "@tanstack/react-router"
 import { FiPlus } from "react-icons/fi"
 import type { OverviewLimits } from "@/client"
-import { Button } from "@/design-system/actions/Button"
 import type { UsageScopeKey } from "@/features/usage/usageQuery"
 import { LimitRow } from "./LimitRow"
+
+// Navigation that looks like a button is a link.
+const LINK_BUTTON = buttonVariants({ size: "sm", variant: "ghost" })
 
 /**
  * What limits spend in this scope, each against its limit: the reader's keys
@@ -33,7 +36,6 @@ export function LimitsPanel({
   /** The workspace on screen, marked in a list of workspaces. */
   workspaceId: string | undefined
 }) {
-  const navigate = useNavigate()
   // What the rows are is the answer's own word, so the title cannot name
   // something other than the rows under it.
   const isWorkspaces = limits
@@ -86,25 +88,22 @@ export function LimitsPanel({
       )}
       <div className="flex flex-wrap gap-2 border-t border-border-subtle pt-3">
         {isWorkspaces ? (
-          <Button size="sm" onPress={() => navigate({ to: "/budgets" })}>
+          <Link to="/budgets" className={LINK_BUTTON}>
             Manage budgets
-          </Button>
+          </Link>
         ) : (
-          <Button size="sm" onPress={() => navigate({ to: "/keys" })}>
+          <Link to="/keys" className={LINK_BUTTON}>
             <FiPlus aria-hidden className="size-3.5" />
             Create key
-          </Button>
+          </Link>
         )}
         {scope === "you" ? null : (
-          <Button
-            size="sm"
-            variant="ghost"
-            onPress={() =>
-              navigate({ to: isWorkspaces ? "/workspaces" : "/keys" })
-            }
+          <Link
+            to={isWorkspaces ? "/workspaces" : "/keys"}
+            className={LINK_BUTTON}
           >
             {isWorkspaces ? "All workspaces" : "All keys"}
-          </Button>
+          </Link>
         )}
       </div>
     </div>

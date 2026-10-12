@@ -31,7 +31,7 @@ test.describe("dashboard core flows", () => {
     page,
   }) => {
     await login(page)
-    await page.getByRole("button", { name: "Add your first provider" }).click()
+    await page.getByRole("link", { name: "Add your first provider" }).click()
     await expect(page.getByText("Welcome to Otari")).toBeVisible()
 
     await page.getByRole("button", { name: "Add your first provider" }).click()

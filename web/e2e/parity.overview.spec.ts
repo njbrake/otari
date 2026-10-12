@@ -11,8 +11,9 @@ import {
 } from "./helpers"
 import { COUNTS } from "./parity-data"
 
-// The seeded fixture is shared, and nothing here mutates it, but the suite runs
-// one worker against one gateway either way (see web/playwright.config.ts).
+// The seeded fixture is shared, and the one key added here (an expiring key) is
+// the only change to it; the suite runs one worker against one gateway either
+// way (see web/playwright.config.ts).
 test.describe.configure({ mode: "serial" })
 
 // The scratch rows are consumed by the Activity spec's bulk-delete flow, which
@@ -107,7 +108,7 @@ test.describe("overview", () => {
 
   test("the rail is a way to the keys", async ({ page }) => {
     await login(page)
-    await page.getByRole("button", { name: "Create key" }).click()
+    await page.getByRole("link", { name: "Create key" }).click()
     await expect(
       page.getByRole("heading", { name: "API keys", exact: true }),
     ).toBeVisible()
