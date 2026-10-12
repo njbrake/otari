@@ -201,9 +201,10 @@ describe("UsagePage", () => {
       await waitFor(() =>
         expect(lastBreakdown(calls).get("p95_by")).toBe("policy"),
       )
+      // A menu trigger, not a toggle: its name says what it holds.
       expect(
         screen.getByRole("button", { name: "More breakdowns, Policy" }),
-      ).toBeInTheDocument()
+      ).not.toHaveAttribute("aria-pressed")
     })
 
     it("shows every column, a cut-down provider path and the p95", async () => {

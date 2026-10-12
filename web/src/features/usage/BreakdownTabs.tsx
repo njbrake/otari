@@ -49,7 +49,6 @@ export function BreakdownTabs({
             <Button
               size="sm"
               variant="ghost"
-              aria-pressed={inMore}
               aria-label={`More breakdowns${inMore ? `, ${DIMENSIONS[value].label}` : ""}`}
             >
               {inMore ? DIMENSIONS[value].label : "More"}
