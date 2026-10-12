@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, and_, case, func, or_, select
 
 from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
-from gateway.core.usage_source import UsageChannel, key_secret, not_served_here, served_here, usage_channel
+from gateway.core.usage_source import UsageChannel, minted_key, not_served_here, served_here, usage_channel
 from gateway.models.api_keys import APIKey
 from gateway.models.money import MAX_USD_LIMIT
 from gateway.models.tenancy import Workspace
@@ -318,7 +318,7 @@ def refinement_conditions(refine: UsageRefinements) -> list[ColumnElement[bool]]
     if refine.routed is not None:
         conditions.append(UsageLog.policy_name.is_not(None) if refine.routed else UsageLog.policy_name.is_(None))
     if refine.channel or refine.exclude_channel:
-        channel = usage_channel(UsageLog.source, UsageLog.endpoint, key_secret(UsageLog.api_key_id))
+        channel = usage_channel(UsageLog.source, UsageLog.endpoint, minted_key(UsageLog.api_key_id))
         if refine.channel:
             conditions.append(channel.in_(_as_list(refine.channel)))
         if refine.exclude_channel:

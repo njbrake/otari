@@ -65,15 +65,25 @@ export const SCOPE_LABELS: Record<UsageScopeKey, string> = {
   organization: "Organization",
 }
 
-/** The scopes a reader may pick, in the order the switch lists them. */
+/**
+ * The scopes a reader may pick, in the order the switch lists them. A manager
+ * whose own requests cannot be told apart reads the workspace only; while the
+ * roster that would tell them apart loads, You stays offered.
+ */
 export function scopesFor(viewer: {
   isManager: boolean
   canReadOrganization: boolean
+  ownUserId: string | undefined
+  isFindingOwnUserId: boolean
 }): UsageScopeKey[] {
   if (!viewer.isManager) return ["you"]
-  return viewer.canReadOrganization
-    ? ["workspace", "you", "organization"]
-    : ["workspace", "you"]
+  const canNarrowToOwn =
+    viewer.ownUserId !== undefined || viewer.isFindingOwnUserId
+  return [
+    "workspace",
+    ...(canNarrowToOwn ? (["you"] as const) : []),
+    ...(viewer.canReadOrganization ? (["organization"] as const) : []),
+  ]
 }
 
 /** The scope the URL names, if the reader may have it, else their default. */

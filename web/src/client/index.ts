@@ -121,6 +121,7 @@ export type UsageSummary = Schemas["UsageSummary"]
 export type UsageGroupRow = Schemas["UsageGroupRow"]
 export type UsageSessionRow = Schemas["UsageSessionRow"]
 export type UsageSeriesPoint = Schemas["UsageSeriesPoint"]
+export type UsageSeriesGroup = Schemas["UsageSeriesGroup"]
 export type UsageGroupedSeries = Schemas["UsageGroupedSeries"]
 export type UsageGroupedSeriesPoint = Schemas["UsageGroupedSeriesPoint"]
 export type UsageDeleteResult = Schemas["UsageDeleteResult"]
@@ -191,10 +192,13 @@ type SummaryQuery = NonNullable<
 export type UsageBucket = NonNullable<SummaryQuery["bucket"]>
 export type SummaryDimension = NonNullable<SummaryQuery["dimensions"]>[number]
 export type UsageChannel = NonNullable<SummaryQuery["channel"]>[number]
-export type UsageRankBy = NonNullable<SummaryQuery["rank_by"]>
+export type UsageBreakdownRankBy = NonNullable<SummaryQuery["rank_by"]>
+export type UsageRankOrder = NonNullable<SummaryQuery["rank_order"]>
 type SeriesQuery = NonNullable<
   operations["usage-usage_series"]["parameters"]["query"]
 >
+// The series ranks by fewer columns than the summary's breakdowns do.
+export type UsageRankBy = NonNullable<SeriesQuery["rank_by"]>
 export type UsageGroupBy = NonNullable<SeriesQuery["group_by"]>
 type ListQuery = NonNullable<
   operations["usage-list_usage"]["parameters"]["query"]

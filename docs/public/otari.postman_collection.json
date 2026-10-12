@@ -6445,7 +6445,7 @@
                   "value": ""
                 },
                 {
-                  "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null.",
+                  "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. Implied for every breakdown by 'rank_by=p95'.",
                   "disabled": true,
                   "key": "p95_by",
                   "value": ""
@@ -6457,9 +6457,15 @@
                   "value": ""
                 },
                 {
-                  "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key.",
+                  "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last.",
                   "disabled": true,
                   "key": "rank_by",
+                  "value": ""
+                },
+                {
+                  "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+                  "disabled": true,
+                  "key": "rank_order",
                   "value": ""
                 },
                 {
@@ -6649,7 +6655,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&rank_order=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }
@@ -9672,7 +9678,7 @@
         {
           "name": "Usage Summary",
           "request": {
-            "description": "Aggregate spend, tokens, and request volume for the dashboard Usage page.\n\nRange-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``\nlist, every aggregate is scoped to a bounded window so it stays served by the\ntimestamp index. Returns grand totals, breakdowns by model / user / API key /\nsource / session (``source_label``) / endpoint / provider / routing policy /\nworkspace / channel (top rows plus a reconciling ``other`` fold; each row with its\nbilled tokens and cache reads, imported cost and failures, a session's with its span),\nthe error taxonomy grouped by failure status code, and a UTC-bucketed time series\ncarrying each bucket's error count, imported cost and billed token composition\n(input incl. cache, cache read/write, output).\n\nEach breakdown is its own ``GROUP BY`` pass, so a caller that reads only the\ntotals or the series should narrow ``dimensions`` rather than pay for every one\n(the dashboard's tiles, timeline context, and model typeahead all do). Omitting\nthe parameter keeps the full set. ``p95_by`` (latency per group in one breakdown)\nand ``session_details`` (each session's source and key name) cost one more pass each.\n\n``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match\nany of them, so one chart can compare a handful of models, users, or keys.",
+            "description": "Aggregate spend, tokens, and request volume for the dashboard Usage page.\n\nRange-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``\nlist, every aggregate is scoped to a bounded window so it stays served by the\ntimestamp index. Returns grand totals, breakdowns by model / user / API key /\nsource / session (``source_label``) / endpoint / provider / routing policy /\nworkspace / channel (top rows plus a reconciling ``other`` fold; each row with its\nbilled tokens and cache reads, imported cost and failures, a session's with its span),\nthe error taxonomy grouped by failure status code, and a UTC-bucketed time series\ncarrying each bucket's error count, imported cost and billed token composition\n(input incl. cache, cache read/write, output).\n\nEach breakdown is its own ``GROUP BY`` pass, so a caller that reads only the\ntotals or the series should narrow ``dimensions`` rather than pay for every one\n(the dashboard's tiles, timeline context, and model typeahead all do). Omitting\nthe parameter keeps the full set. ``p95_by`` (latency per group in one breakdown)\nand ``session_details`` (each session's source and key name) cost one more pass each.\n``rank_by`` and ``rank_order`` pick which groups each breakdown keeps and list them\nin that order, so a table sorted by any column it shows needs no client-side sort.\n\n``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match\nany of them, so one chart can compare a handful of models, users, or keys.",
             "header": [],
             "method": "GET",
             "url": {
@@ -9705,7 +9711,7 @@
                   "value": ""
                 },
                 {
-                  "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null.",
+                  "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. Implied for every breakdown by 'rank_by=p95'.",
                   "disabled": true,
                   "key": "p95_by",
                   "value": ""
@@ -9717,9 +9723,15 @@
                   "value": ""
                 },
                 {
-                  "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key.",
+                  "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last.",
                   "disabled": true,
                   "key": "rank_by",
+                  "value": ""
+                },
+                {
+                  "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+                  "disabled": true,
+                  "key": "rank_order",
                   "value": ""
                 },
                 {
@@ -9909,7 +9921,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&rank_order=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }

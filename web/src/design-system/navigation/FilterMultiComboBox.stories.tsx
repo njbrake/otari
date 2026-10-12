@@ -35,8 +35,9 @@ const MODELS = [
  * remaining options, so a run of selections is one gesture. Picked options drop
  * out of the list.
  *
- * Removal deliberately lives with the page's `FilterChips`, not a second chip row
- * here, so the applied set stays visible whether or not the picker is open.
+ * Removal deliberately lives with the page's applied-filter chips, not a second
+ * chip row here, so the applied set stays visible whether or not the picker is
+ * open.
  */
 export const Empty: Story = {
   render: () => {

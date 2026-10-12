@@ -88,7 +88,6 @@ for a component, not for those.
 | `data/BulkActionBar` | `BulkActionBar` |
 | `navigation/TabRow` | `TabRow`, `Tab` |
 | `navigation/Segmented` · `/FilterSelect` · `/FilterMultiComboBox` · `/Disclosure` · `/DisclosureRow` · `/DocsLink` | one each |
-| `navigation/FilterChips` | `FilterChips`, and the `FilterChip` type |
 | `overlays/Tooltip` · `/Popover` · `/Sheet` | one each |
 | `overlays/Menu` | `Menu`, `MenuButton`, `MenuItem`, `MenuSection`, `MenuSubmenu`. The list and its rows are useless apart |
 | `indicators/Dot` · `/Badge` · `/DismissChip` · `/Kbd` · `/Avatar` | one each |
@@ -211,7 +210,7 @@ and [web/AGENTS.md](../AGENTS.md).
 | [data.md](data.md) | `DataTable`, pagination, bulk actions |
 | [metrics.md](metrics.md) | KPI strip, trends, meters, status marks, charts |
 | [feedback.md](feedback.md) | Banners, empty states, loading, dialogs |
-| [navigation.md](navigation.md) | `TabRow`, `Segmented`, `FilterChips`, the rail |
+| [navigation.md](navigation.md) | `TabRow`, `Segmented`, applied filters, the rail |
 | [overlays.md](overlays.md) | `Tooltip`, `Popover`, `Menu`, `Sheet`, the dialogs, and which of them a thing wants |
 | [motion-and-access.md](motion-and-access.md) | Durations, press, focus, 44px floor, reduced motion |
 

@@ -2,6 +2,7 @@ import { type KeyboardEvent, useRef, useState } from "react"
 import { formatCompact, formatNumber } from "@/shared/helpers/format"
 import {
   arrowDelta,
+  axisLabelPlace,
   barIndexAt,
   barMax,
   barSpanMs,
@@ -75,7 +76,14 @@ export function ActivityChart({
   // past the plot's right edge and scrolls the page sideways.
   const isPastMiddle = (index: number) => index >= bars.length / 2
   const step = Math.max(1, Math.ceil(bars.length / TICKS))
-  const ticks = bars.filter((_, index) => index % step === 0)
+  // Each tick names a bar's start, and the window's end closes the axis; a
+  // tick under half a step from that end would crowd it.
+  const ticks = bars.flatMap((bar, index) =>
+    index % step === 0 && bars.length - index > step / 2
+      ? [{ ms: bar.start, fraction: index / bars.length }]
+      : [],
+  )
+  if (bars.length) ticks.push({ ms: bars[bars.length - 1].end, fraction: 1 })
 
   const onKeyDown = (event: KeyboardEvent) => {
     const last = bars.length - 1
@@ -233,14 +241,17 @@ export function ActivityChart({
         </div>
         <div
           aria-hidden
-          className="flex justify-between text-mono-micro text-subtle"
+          className="relative h-lh text-mono-micro whitespace-nowrap text-subtle"
         >
-          {ticks.map((bar) => (
-            <span key={bar.start}>{formatBarTime(bar.start, barMs)}</span>
+          {ticks.map((tick) => (
+            <span
+              key={tick.ms}
+              className="absolute top-0"
+              style={axisLabelPlace(tick.fraction)}
+            >
+              {formatBarTime(tick.ms, barMs)}
+            </span>
           ))}
-          {bars.length ? (
-            <span>{formatBarTime(bars[bars.length - 1].end, barMs)}</span>
-          ) : null}
         </div>
       </div>
     </div>

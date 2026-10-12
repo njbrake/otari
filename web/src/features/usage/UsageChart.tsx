@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useRef, useState } from "react"
 import {
   arrowDelta,
+  axisLabelPlace,
   barIndexAt,
   describeSpan,
   formatBarTime,
@@ -287,24 +288,27 @@ export function UsageChart({
             </div>
           ) : null}
         </div>
-        {/* Spread across the axis rather than one under each bar, as
-            Activity's chart has them: a label is wider than a narrow bar, and
-            one per bar ran the last past the plot's edge on a phone. */}
+        {/* Every `step`th bar is labeled, under that bar's middle: a label is
+            wider than a narrow bar, so one under each would collide. Placed
+            rather than spread, which drifted off its bar whenever the bars did
+            not divide evenly, and pinned inside the plot at either end, where
+            a centered one ran past the edge on a phone. */}
         <div
           aria-hidden
-          className="flex justify-between text-mono-micro whitespace-nowrap text-subtle"
+          className="relative h-lh text-mono-micro whitespace-nowrap text-subtle"
         >
-          {bars
-            .filter((_, index) => index % step === 0)
-            .map((bar, label) => (
-              // Half of them on a phone, where eight dates are wider than the plot.
+          {bars.map((bar, index) =>
+            index % step === 0 ? (
               <span
                 key={bar.start}
-                className={label % 2 ? "max-sm:hidden" : undefined}
+                // Half of them on a phone, where eight dates are wider than the plot.
+                className={`absolute top-0 ${(index / step) % 2 ? "max-sm:hidden" : ""}`}
+                style={axisLabelPlace((index + 0.5) / count)}
               >
                 {formatBarTime(bar.start, barMs)}
               </span>
-            ))}
+            ) : null,
+          )}
         </div>
       </div>
     </div>

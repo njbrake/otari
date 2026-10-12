@@ -909,3 +909,51 @@ def test_a_series_by_workspace_splits_only_the_workspaces_in_scope(client: TestC
     assert isinstance(body, dict)
     assert {point["key"] for point in body["points"]} == {str(world.workspaces["alpha_one"])}
     assert {group["key"] for group in body["groups"]} == {str(world.workspaces["alpha_one"])}
+
+
+def test_the_organization_summarys_per_group_extras_read_only_the_callers_rows(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """``p95_by`` and ``session_details`` rank and name a group from the rows in scope, not the whole group."""
+    session = db_session_factory()
+    try:
+        member = str(world.users["alpha_member"])
+        for source, latency, user_id in (
+            ("codex", 100, member),
+            ("codex", 200, member),
+            # Someone else's requests in the same session: slower, and from another tool.
+            ("claude_code", 90_000, None),
+            ("claude_code", 90_000, None),
+            ("claude_code", 90_000, None),
+        ):
+            session.add(
+                UsageLog(
+                    id=str(uuid.uuid4()),
+                    workspace_id=world.workspaces["alpha_one"],
+                    user_id=user_id,
+                    model="alpha-one-member",
+                    provider="p",
+                    endpoint="/v1/chat/completions",
+                    source=source,
+                    source_label="task-1",
+                    status="success",
+                    latency_ms=latency,
+                    timestamp=datetime.now(UTC),
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    body = _summary(
+        client,
+        world,
+        "alpha_member",
+        "?dimensions=source_label&p95_by=source_label&session_details=true&rank_by=name&rank_order=asc",
+    )
+    rows = {row["key"]: row for row in body["by_source_label"]}
+    assert rows["task-1"]["requests"] == 2
+    assert rows["task-1"]["p95_latency_ms"] == 200
+    assert rows["task-1"]["source"] == "codex"
+    # The member's unlabeled requests rank after the named session.
+    assert [row["key"] for row in body["by_source_label"]] == ["task-1", None]

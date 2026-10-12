@@ -36,3 +36,11 @@ export const Stale: Story = {
 export const Fetching: Story = {
   args: { isFetching: true, updatedAt: Date.now() - 90_000 },
 }
+
+/**
+ * Named for what it reloads where a page holds more than one refreshable read.
+ * The name is the button's accessible label; nothing visible changes.
+ */
+export const Named: Story = {
+  args: { label: "Refresh usage", updatedAt: Date.now() - 42_000 },
+}

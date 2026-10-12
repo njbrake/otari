@@ -42,6 +42,23 @@ export function useWorkspace(workspaceId: string) {
   })
 }
 
+/**
+ * Each workspace among `ids`, read one by one under the same keys as
+ * `useWorkspace`, for naming the few a page holds (a filter chip) without
+ * reading every workspace. One the caller may not read is absent.
+ */
+export function useWorkspacesById(ids: readonly string[]) {
+  return useQueries({
+    queries: ids.map((id) => ({
+      queryKey: [WORKSPACES, id],
+      queryFn: () =>
+        apiFetch<Workspace>(`/workspaces/${encodeURIComponent(id)}`),
+      staleTime: 60_000,
+    })),
+    combine: (results) => results.flatMap((result) => result.data ?? []),
+  })
+}
+
 // One workspace's roster. Nested under the workspaces key so deleting a
 // workspace drops its roster with it.
 export function useWorkspaceMembers(workspaceId: string | null) {

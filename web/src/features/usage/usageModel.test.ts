@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest"
 
 import type { UsageGroupedSeries } from "@/client"
 import { breakdownRow } from "@/tests/usage"
-import { axisScale, foldSeries, niceCeiling, sortRows } from "./usageModel"
+import {
+  axisScale,
+  breakdownRankFor,
+  foldSeries,
+  niceCeiling,
+  placeUnranked,
+} from "./usageModel"
+import type { SortKey } from "./usageQuery"
 
 const DAY = "2026-09-30T00:00:00Z"
 
@@ -89,40 +96,44 @@ describe("foldSeries", () => {
   })
 })
 
-describe("sortRows", () => {
-  const rows = [
-    breakdownRow({ key: null, cost: 900, requests: 1 }),
-    breakdownRow({ key: "small", cost: 1, requests: 30 }),
-    breakdownRow({ key: "other", is_other: true, cost: 999, requests: 99 }),
-    breakdownRow({ key: "big", cost: 50, requests: 10 }),
-  ]
-  const keys = (sorted: { key: string | null }[]) => sorted.map((r) => r.key)
-
-  it("ranks by the metric, with the no-value row and the fold always last", () => {
-    expect(
-      keys(
-        sortRows(rows, { key: "value", order: "desc" }, "cost", true, label),
-      ),
-    ).toEqual(["big", "small", null, "other"])
+describe("breakdownRankFor", () => {
+  it("ranks the share by the metric on screen, as the chart does", () => {
+    const share = { key: "value", order: "desc" } as const
+    expect(breakdownRankFor(share, "cost", true)).toEqual({
+      by: "cost",
+      order: "desc",
+    })
+    expect(breakdownRankFor(share, "cost", false).by).toBe("billed")
+    expect(breakdownRankFor(share, "tokens", false).by).toBe("tokens")
   })
 
-  it("reverses a column without moving the rows that explain the rest", () => {
-    expect(
-      keys(
-        sortRows(rows, { key: "requests", order: "asc" }, "cost", true, label),
-      ),
-    ).toEqual(["big", "small", null, "other"])
-    expect(
-      keys(
-        sortRows(rows, { key: "requests", order: "desc" }, "cost", true, label),
-      ),
-    ).toEqual(["small", "big", null, "other"])
+  it("maps each column to the server's ranking, in the order picked", () => {
+    const rank = (key: SortKey) =>
+      breakdownRankFor({ key, order: "asc" }, "cost", true)
+    expect(rank("name")).toEqual({ by: "name", order: "asc" })
+    expect(rank("requests").by).toBe("requests")
+    expect(rank("tokens").by).toBe("tokens")
+    expect(rank("billed").by).toBe("billed")
+    expect(rank("subscription").by).toBe("imported")
+    expect(rank("failed").by).toBe("errors")
+    expect(rank("p95").by).toBe("p95")
   })
+})
 
-  it("sorts names alphabetically", () => {
-    expect(
-      keys(sortRows(rows, { key: "name", order: "asc" }, "cost", true, label)),
-    ).toEqual(["big", "small", null, "other"])
+describe("placeUnranked", () => {
+  it("keeps the server's order, with the no-value row and the fold last", () => {
+    const rows = [
+      breakdownRow({ key: "other", is_other: true, cost: 999 }),
+      breakdownRow({ key: null, cost: 900 }),
+      breakdownRow({ key: "small", cost: 1 }),
+      breakdownRow({ key: "big", cost: 50 }),
+    ]
+    expect(placeUnranked(rows).map((row) => row.key)).toEqual([
+      "small",
+      "big",
+      null,
+      "other",
+    ])
   })
 })
 

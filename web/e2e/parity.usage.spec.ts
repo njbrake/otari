@@ -41,7 +41,7 @@ test.describe("usage", () => {
 
     // The empty state is mutually exclusive with the tiles, so its absence is
     // part of the assertion that the window resolved to real data.
-    await expect(page.getByText(/No usage recorded yet/)).toBeHidden()
+    await expect(page.getByText(/^No usage in the last/)).toBeHidden()
 
     const total = tileValue(page, "Total at API prices")
     await expect(total).toHaveText(/^\$/)

@@ -33,6 +33,7 @@ from gateway.api.routes._usage_common import (
     ORDER_DESC,
     P95_BY_DESC,
     RANK_BY_DESC,
+    RANK_ORDER_DESC,
     SERIES_GROUP_BY_DESC,
     SERIES_RANK_BY_DESC,
     SESSION_DETAILS_DESC,
@@ -67,6 +68,7 @@ from gateway.schemas.usage import (
     SeriesGroupBy,
     SummaryDimension,
     UsageActivityGroups,
+    UsageBreakdownRankBy,
     UsageGroupedSeries,
     UsageRankBy,
     UsageSummary,
@@ -455,7 +457,8 @@ async def usage_summary(
     include_p95: Annotated[bool, Query(description=INCLUDE_P95_DESC)] = False,
     p95_by: Annotated[BreakdownDimension | None, Query(description=P95_BY_DESC)] = None,
     session_details: Annotated[bool, Query(description=SESSION_DETAILS_DESC)] = False,
-    rank_by: Annotated[UsageRankBy, Query(description=RANK_BY_DESC)] = "cost",
+    rank_by: Annotated[UsageBreakdownRankBy, Query(description=RANK_BY_DESC)] = "cost",
+    rank_order: Annotated[SortOrder, Query(description=RANK_ORDER_DESC)] = "desc",
 ) -> UsageSummary:
     """Aggregate spend, tokens, and request volume for the dashboard Usage page.
 
@@ -474,6 +477,8 @@ async def usage_summary(
     (the dashboard's tiles, timeline context, and model typeahead all do). Omitting
     the parameter keeps the full set. ``p95_by`` (latency per group in one breakdown)
     and ``session_details`` (each session's source and key name) cost one more pass each.
+    ``rank_by`` and ``rank_order`` pick which groups each breakdown keeps and list them
+    in that order, so a table sorted by any column it shows needs no client-side sort.
 
     ``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match
     any of them, so one chart can compare a handful of models, users, or keys.
@@ -490,6 +495,7 @@ async def usage_summary(
         p95_by=p95_by,
         session_details=session_details,
         rank_by=rank_by,
+        rank_order=rank_order,
     )
 
 
