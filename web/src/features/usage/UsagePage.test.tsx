@@ -166,7 +166,7 @@ describe("UsagePage", () => {
       expect(paths).not.toContain(`${API_ROOT}/workspaces`)
     })
 
-    it("keeps a filter the scope cannot use in the URL, greyed, and does not send it", async () => {
+    it("keeps a filter the scope cannot use in the URL, grayed, and does not send it", async () => {
       const { calls } = mockUsageApi({ viewer: "workspaceAdmin" })
       page("/usage?scope=you&user_id=u-jordan")
       expect(await screen.findByText("not in this scope")).toBeInTheDocument()
