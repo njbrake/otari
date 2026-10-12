@@ -2998,7 +2998,7 @@ main {
   );
   box-shadow: inset 0 1px 0 var(--hatch);
 }
-.otari-hatch[data-over="true"] {
+.otari-hatch--over {
   --hatch: color-mix(in srgb, var(--color-danger) 45%, transparent);
   box-shadow: inset 0 1px 0 var(--color-danger);
 }

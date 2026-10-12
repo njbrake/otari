@@ -1,37 +1,37 @@
 import { Link } from "@tanstack/react-router"
-import { type ReactNode, useEffect, useRef } from "react"
-import type { UsageSeriesPoint } from "@/client"
+import type { ReactNode } from "react"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { PageIntro } from "@/design-system/layout/PageIntro"
-import { scopeLabel } from "@/features/budgets/organizationBudget"
 import { SetupGuide } from "@/features/onboarding/SetupGuide"
 import { isDeploymentOperator } from "@/features/organization/roles"
-import { tightestAllocation } from "@/features/overview/overview"
 import { useModels } from "@/shared/api/models"
 import { useOrganizationContext } from "@/shared/api/organizations"
-import { useRefreshOverview } from "@/shared/api/overview"
-import { useProviderHealth, useProviders } from "@/shared/api/providers"
+import { useProviders } from "@/shared/api/providers"
 import { useUsageLogs } from "@/shared/api/usage"
 import { formatUtcMonthName } from "@/shared/helpers/format"
 import { useUrlState } from "@/shared/helpers/urlState"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
 import { BudgetChart } from "./BudgetChart"
 import { GetStartedStrip } from "./GetStartedStrip"
+import { LegendSwatch } from "./LegendSwatch"
 import { LimitsPanel } from "./LimitsPanel"
+import { OperatorProviders } from "./OperatorProviders"
 import { OverviewAttention } from "./OverviewAttention"
 import { OverviewScopeBar } from "./OverviewScopeBar"
 import { OverviewTiles } from "./OverviewTiles"
 import {
+  attentionKey,
   billedByDay,
-  budgetView,
+  canProjectMonth,
   comparisonLabel,
+  costOnDay,
   describeAttention,
   groupAttention,
+  readBudget,
   runningTotal,
 } from "./overviewModel"
 import { OVERVIEW_URL_DEFAULTS, offeredMonths } from "./overviewQuery"
-import { ProvidersPanel } from "./ProvidersPanel"
 import { RecentFailures } from "./RecentFailures"
 import { useOverviewData } from "./useOverviewData"
 
@@ -113,14 +113,6 @@ function OrganizationOverview() {
   )
 }
 
-/** The cost of the UTC day `now` falls on, from a daily series. */
-function costOn(series: readonly UsageSeriesPoint[], now: Date) {
-  const today = now.toISOString().slice(0, 10)
-  return (
-    series.find((point) => point.bucket_start.slice(0, 10) === today)?.cost ?? 0
-  )
-}
-
 /**
  * Spend, limits and failures for one scope and one calendar month: what needs
  * attention, three numbers, the month's running total against its budget, the
@@ -151,77 +143,41 @@ function OverviewPage({
 
   const series = summary.data?.series ?? []
   const totals = summary.data?.totals
-  const billed = totals
-    ? Math.max(0, totals.cost - (totals.imported_cost ?? 0))
-    : undefined
   const ownTotals = runningTotal(billedByDay(series, month))
   const workspaceTotals = data.workspace?.data
     ? runningTotal(billedByDay(data.workspace.data.series, month))
     : undefined
-  const workspaceBilledTotals = data.workspace?.data?.totals
-  const workspaceBilled =
-    scope === "workspace"
-      ? billed
-      : workspaceBilledTotals
-        ? Math.max(
-            0,
-            workspaceBilledTotals.cost -
-              (workspaceBilledTotals.imported_cost ?? 0),
-          )
-        : undefined
 
-  const spend = scope === "organization" ? undefined : data.spend.data
-  const cap = spend?.max_budget ?? undefined
+  const cap =
+    scope === "organization"
+      ? undefined
+      : (data.spend.data?.max_budget ?? undefined)
   const limits = overview.data?.limits
   const organizationName =
     context.data?.organization.name ?? "This organization"
-  const tightest = tightestAllocation(
-    overview.data?.ceilings,
-    (worst) =>
-      limits?.rows.find((row) => row.id === worst.scope_id)?.name ??
-      (worst.scope_type
-        ? scopeLabel(
-            { scope_type: worst.scope_type, scope_id: worst.scope_id ?? "" },
-            { organizationName, workspaces: [] },
-          )
-        : worst.budget_id),
-  )
-  // The server's word on this workspace's budget pace, and the settled spend
-  // to pace from where it is known: the month's billed spend, for a budget
-  // whose period is this calendar month.
-  const pace = overview.data?.attention.find(
-    (item) =>
-      item.kind === "budget_pace" && item.subject_id === viewer.workspaceId,
-  )
-  const periodIsMonth =
-    spend?.period_start != null &&
-    spend.period_end != null &&
-    Date.parse(spend.period_start) === month.start.getTime() &&
-    Date.parse(spend.period_end) === month.end.getTime()
-  const budget = budgetView({
+  const budget = readBudget({
     scope,
     month,
     now,
     isManager: viewer.isManager && !data.isFallback,
     canSetBudgets: viewer.canReadOrganization,
-    spend: data.spend.isError ? undefined : spend,
-    ownBilled: scope === "you" ? billed : undefined,
-    workspaceBilled,
-    billed,
-    tightest,
-    ceilingCount: overview.data
-      ? (overview.data.ceilings?.total_count ?? null)
-      : null,
-    serverPace: pace ? { at: pace.at ?? null } : undefined,
-    settledSpent: periodIsMonth ? workspaceBilled : undefined,
+    workspaceId: viewer.workspaceId,
+    organizationName,
+    totals,
+    workspaceTotals: data.workspace?.data?.totals,
+    spend: data.spend.isError ? undefined : data.spend.data,
+    overview: overview.data,
   })
 
-  const attention = groupAttention(overview.data?.attention ?? []).map((item) =>
-    describeAttention(item, {
-      servesProviders: isOperator && servesProviders,
-      canManageBudgets: viewer.canReadOrganization,
-      workspaceId: viewer.workspaceId || undefined,
-      failuresSearch: data.failuresSearch,
+  const attention = groupAttention(overview.data?.attention ?? []).map(
+    (item) => ({
+      key: attentionKey(item),
+      ...describeAttention(item, {
+        servesProviders: isOperator && servesProviders,
+        canManageBudgets: viewer.canReadOrganization,
+        workspaceId: viewer.workspaceId || undefined,
+        failuresSearch: data.failuresSearch,
+      }),
     }),
   )
 
@@ -240,13 +196,14 @@ function OverviewPage({
         ? `Everything in ${viewer.workspaceName || "this workspace"}, all members`
         : `All workspaces in ${organizationName}`
   // The chart's bars are the workspace's at Workspace and, for a manager, at
-  // You (their share stacked under the rest). A member sees no workspace
-  // totals, so theirs are their own with nothing measured against them.
+  // You (their share stacked under the rest). A member reads no workspace
+  // spend by day, so theirs are their own with nothing measured against them.
   const ownOnly = scope === "you" && (!viewer.isManager || data.isFallback)
   const chartTotals = workspaceTotals ?? ownTotals
   const marksCrossing = scope === "workspace" || workspaceTotals !== undefined
   const chartCap = ownOnly ? undefined : cap
   const showsBudget = chartCap !== undefined
+  const isProjected = canProjectMonth(month, now) && !ownOnly
 
   const refresh = () => {
     refreshSetup()
@@ -307,7 +264,7 @@ function OverviewPage({
           series={series}
           previousCost={data.previous.data?.totals.cost}
           comparison={comparisonLabel(data.before)}
-          todayCost={month.isCurrent ? costOn(series, data.now) : undefined}
+          todayCost={month.isCurrent ? costOnDay(series, data.now) : undefined}
           budget={budget}
           failuresSearch={data.failuresSearch}
         />
@@ -343,7 +300,7 @@ function OverviewPage({
                     {ownOnly ? "Yours" : "So far"}
                   </LegendSwatch>
                 )}
-                {month.isCurrent && !ownOnly ? (
+                {isProjected ? (
                   <LegendSwatch className="otari-hatch-swatch">
                     Projected
                   </LegendSwatch>
@@ -351,6 +308,7 @@ function OverviewPage({
               </span>
               <Link
                 to="/usage"
+                search={data.usageSearch}
                 className="ml-auto text-sm whitespace-nowrap text-link underline-offset-2 hover:underline focus-visible:otari-focus-ring"
               >
                 Daily spend in Usage →
@@ -361,6 +319,7 @@ function OverviewPage({
               <BudgetChart
                 key={`${month.key}-${scope}`}
                 month={month}
+                now={now}
                 totals={chartTotals}
                 mine={workspaceTotals ? ownTotals : undefined}
                 cap={chartCap}
@@ -372,16 +331,16 @@ function OverviewPage({
             )}
             <p className="mt-2.5 text-caption">
               {ownOnly && cap !== undefined
-                ? "Members don't see workspace totals, so there's no budget line: your spend alone can't show how close the workspace is. "
+                ? month.isCurrent
+                  ? "Your spend alone, so there's no budget line: the Workspace budget tile measures the whole workspace against it. "
+                  : "Your spend alone, so there's no budget line: workspace spend by month is for managers. "
                 : showsBudget && !month.isCurrent
                   ? "Past budgets aren't stored, so the line is today's budget. "
                   : ""}
               Running total of billed spend. Subscription usage isn&rsquo;t
               included because it doesn&rsquo;t count toward{" "}
               {cap !== undefined ? "the budget" : "limits"}.
-              {month.isCurrent && !ownOnly
-                ? " Projection uses this month's daily average."
-                : ""}
+              {isProjected ? " Projection uses this month's pace so far." : ""}
             </p>
           </section>
           <RecentFailures
@@ -421,57 +380,5 @@ function OverviewPage({
         </aside>
       </div>
     </div>
-  )
-}
-
-/**
- * Provider health, read only where the reader operates the deployment. The
- * attention list reads the same check from the gateway's cache, which a fresh
- * gateway fills only once this read runs, so a disagreement asks for the
- * overview again.
- */
-function OperatorProviders({
-  reportedDown,
-}: {
-  /** The providers the overview's attention list names as unreachable. */
-  reportedDown: string[] | undefined
-}) {
-  const health = useProviderHealth()
-  const refreshOverview = useRefreshOverview()
-  const down = health.data?.providers
-    .filter((provider) => !provider.ok && !provider.discovery_unsupported)
-    .map((provider) => provider.instance)
-    .sort()
-    .join()
-  const reported = reportedDown?.toSorted().join()
-  // Once per check result, so a lasting disagreement cannot loop.
-  const askedFor = useRef<string>(undefined)
-  useEffect(() => {
-    if (down === undefined || reported === undefined || down === reported)
-      return
-    if (askedFor.current === down) return
-    askedFor.current = down
-    void refreshOverview()
-  }, [down, reported, refreshOverview])
-  return (
-    <ProvidersPanel
-      providers={health.data?.providers}
-      isError={health.isError}
-    />
-  )
-}
-
-function LegendSwatch({
-  className,
-  children,
-}: {
-  className: string
-  children: string
-}) {
-  return (
-    <span className="flex items-center gap-1.5 whitespace-nowrap">
-      <span aria-hidden className={`size-2 ${className}`} />
-      {children}
-    </span>
   )
 }

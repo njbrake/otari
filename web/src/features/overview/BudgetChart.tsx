@@ -18,7 +18,8 @@ const HEADROOM = 1.12
 /**
  * The month's running total of billed spend, a bar a day, against the
  * budget's line: solid for the days that have happened, hatched for the rest
- * at this month's daily average, and in danger past the budget. At You, a
+ * at this month's pace so far once it has run long enough to have one, and in
+ * danger past the budget. At You, a
  * manager's own share sits under the rest of the workspace's. A month that has
  * ended is drawn against today's budget, the only one stored, so it passes no
  * verdict on it.
@@ -32,6 +33,7 @@ const HEADROOM = 1.12
  */
 export function BudgetChart({
   month,
+  now,
   totals,
   mine,
   cap,
@@ -39,6 +41,8 @@ export function BudgetChart({
   ownOnly = false,
 }: {
   month: Month
+  /** The instant the month's pace is measured to. */
+  now: number
   /** The running total for each day so far. */
   totals: readonly number[]
   /** The reader's own running total, stacked under `totals`, at You. */
@@ -57,6 +61,7 @@ export function BudgetChart({
     totals,
     month,
     marksCrossing && month.isCurrent ? cap : undefined,
+    now,
   )
   const projected = ownOnly ? [] : projection.projected
   const end = ownOnly ? (totals.at(-1) ?? 0) : projection.end
@@ -173,8 +178,7 @@ export function BudgetChart({
                     />
                   ) : ownOnly ? null : (
                     <span
-                      className="otari-hatch"
-                      data-over={isOver}
+                      className={`otari-hatch ${isOver ? "otari-hatch--over" : ""}`}
                       style={{ height: pct(value) }}
                     />
                   )}

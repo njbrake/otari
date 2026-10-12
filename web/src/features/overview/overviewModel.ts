@@ -2,10 +2,14 @@ import type { LinkProps } from "@tanstack/react-router"
 import type {
   OverviewAttentionItem,
   OverviewLimitRow,
+  OverviewSummary,
   UsageSeriesPoint,
+  UsageTotals,
+  WorkspaceSpend,
 } from "@/client"
+import { scopeLabel } from "@/features/budgets/organizationBudget"
 import type { Health } from "@/features/overview/overview"
-import { BUDGET_WARN } from "@/features/overview/overview"
+import { BUDGET_WARN, tightestAllocation } from "@/features/overview/overview"
 import {
   formatNumber,
   formatPct,
@@ -44,6 +48,22 @@ export function billedByDay(
   return days
 }
 
+/** What a total billed: its cost less what a subscription covered. */
+export function billedOf(totals: UsageTotals): number {
+  return Math.max(0, totals.cost - (totals.imported_cost ?? 0))
+}
+
+/** The cost of the UTC day `now` falls on, from a daily series. */
+export function costOnDay(
+  series: readonly Pick<UsageSeriesPoint, "bucket_start" | "cost">[],
+  now: Date,
+): number {
+  const today = now.toISOString().slice(0, 10)
+  return (
+    series.find((point) => point.bucket_start.slice(0, 10) === today)?.cost ?? 0
+  )
+}
+
 /** Each day's total so far. */
 export function runningTotal(values: readonly number[]): number[] {
   let sum = 0
@@ -65,42 +85,66 @@ export function budgetAxisTop(peak: number): number {
   )
 }
 
+// A pace needs this much of a period behind it, the longer of the two, as
+// the server's own projection does (PACE_MIN_ELAPSED, PACE_MIN_SHARE).
+const PACE_MIN_ELAPSED_MS = DAY_MS
+const PACE_MIN_SHARE = 0.1
+
+/** Whether `elapsed` of a period `length` long is enough run to project from. */
+function hasRunToProject(elapsed: number, length: number): boolean {
+  return elapsed >= Math.max(PACE_MIN_ELAPSED_MS, length * PACE_MIN_SHARE)
+}
+
+/** Whether a running month has had enough of itself to project from by `now`. */
+export function canProjectMonth(month: Month, now: number): boolean {
+  return (
+    month.isCurrent &&
+    hasRunToProject(
+      now - month.start.getTime(),
+      month.end.getTime() - month.start.getTime(),
+    )
+  )
+}
+
 /**
- * Where the month is heading: each later day at this month's daily average so
- * far, and the day the running total passes `cap`, actual or projected. A month
- * that is over has no projection.
+ * Where the month is heading: each later day at this month's pace so far,
+ * measured over the exact time it has run, and the day the running total
+ * passes `cap`, actual or projected. The pace and the crossing are the Budget
+ * tile's and the server's: nothing is projected until the month has run as
+ * long as they wait for, nor once it is over.
  */
 export function projectMonth(
   totals: readonly number[],
   month: Month,
   cap: number | undefined,
+  now: number,
 ): {
-  /** The projected total for each day after today; empty once the month is over. */
+  /** The projected total for each day after today; empty when none is drawn. */
   projected: number[]
-  /** The month's end total: projected while it runs, actual once over. */
+  /** The month's end total: projected while it runs, actual otherwise. */
   end: number
   /** The 1-based day the total passes the cap, if it does. */
   crossDay: number | undefined
 } {
   const soFar = totals.at(-1) ?? 0
-  const rate = month.elapsed > 0 ? soFar / month.elapsed : 0
-  const projected = month.isCurrent
+  const isProjected = canProjectMonth(month, now)
+  // Spend per day over the time the month has actually run.
+  const rate = isProjected
+    ? (soFar * DAY_MS) / (now - month.start.getTime())
+    : 0
+  const projected = isProjected
     ? Array.from(
         { length: month.length - month.elapsed },
-        (_, index) => soFar + rate * (index + 1),
+        (_, index) => rate * (month.elapsed + index + 1),
       )
     : []
-  const end = projected.at(-1) ?? soFar
+  const end = isProjected ? rate * month.length : soFar
   let crossDay: number | undefined
   if (cap !== undefined && cap > 0 && end > cap) {
     const actual = totals.findIndex((total) => total > cap)
-    crossDay =
-      actual >= 0
-        ? actual + 1
-        : Math.min(
-            month.length,
-            Math.ceil(month.elapsed + (cap - soFar) / Math.max(rate, 1e-9)),
-          )
+    // The day holding the instant the pace reaches the cap, which is the day
+    // the server's crossing date names.
+    crossDay = actual >= 0 ? actual + 1 : Math.floor(cap / rate) + 1
   }
   return { projected, end, crossDay }
 }
@@ -110,7 +154,10 @@ export function dayLabel(month: Month, day: number): string {
   return formatUtcDay(month.start.getTime() + (day - 1) * DAY_MS)
 }
 
-/** "Oct 1 – 12, 2026 UTC" for the days a month has had. */
+/**
+ * "Oct 1 – 12, 2026 UTC" for the days a month has had, spaced around the dash
+ * as Usage's window caption is (`formatWindowLabel`).
+ */
 export function describeMonthSoFar(month: Month): string {
   const year = month.start.getUTCFullYear()
   const first = dayLabel(month, 1)
@@ -141,11 +188,6 @@ export function budgetState(
   return { status: "ok", word: "On track" }
 }
 
-// A pace needs this much of a period behind it, the longer of the two, as
-// the server's own projection does (PACE_MIN_ELAPSED, PACE_MIN_SHARE).
-const PACE_MIN_ELAPSED_MS = DAY_MS
-const PACE_MIN_SHARE = 0.1
-
 /**
  * Where a period's settled spend is heading by its end, at its pace so far, or
  * undefined where the period has no end, nothing has settled, or too little of
@@ -160,8 +202,7 @@ export function paceFor(
   const start = Date.parse(period.start)
   const end = Date.parse(period.end)
   const elapsed = now - start
-  if (!(end > start)) return undefined
-  if (elapsed < Math.max(PACE_MIN_ELAPSED_MS, (end - start) * PACE_MIN_SHARE)) {
+  if (!(end > start) || !hasRunToProject(elapsed, end - start)) {
     return undefined
   }
   return { total: (settled * (end - start)) / elapsed, end: period.end }
@@ -391,8 +432,99 @@ export function budgetView({
 }
 
 /**
+ * The Budget tile from what the page read. The workspace's billed spend is the
+ * scope's own at Workspace, and its separate read beside a manager's at You.
+ * The tightest ceiling is named after the limit row it caps where the rail
+ * lists one, else after what it caps. The server's pace item for this
+ * workspace says whether the budget is at risk, and the month's billed spend
+ * is the settled spend to pace from only where the budget's period is this
+ * calendar month.
+ */
+export function readBudget({
+  scope,
+  month,
+  now,
+  isManager,
+  canSetBudgets,
+  workspaceId,
+  organizationName,
+  totals,
+  workspaceTotals,
+  spend,
+  overview,
+}: {
+  scope: "you" | "workspace" | "organization"
+  month: Month
+  now: number
+  /** Whether the reader manages the workspace, as the server read them. */
+  isManager: boolean
+  canSetBudgets: boolean
+  /** The workspace on screen; "" for none. */
+  workspaceId: string
+  organizationName: string
+  /** The scope's usage this month, once read. */
+  totals: UsageTotals | undefined
+  /** The workspace's own usage this month, read beside a manager's at You. */
+  workspaceTotals: UsageTotals | undefined
+  /** The workspace budget: null where none is set, undefined while unknown. */
+  spend:
+    | Pick<
+        WorkspaceSpend,
+        "max_budget" | "spent" | "period_start" | "period_end"
+      >
+    | null
+    | undefined
+  overview:
+    | Pick<OverviewSummary, "attention" | "ceilings" | "limits">
+    | undefined
+}): BudgetView {
+  const billed = totals ? billedOf(totals) : undefined
+  const workspaceBilled =
+    scope === "workspace"
+      ? billed
+      : workspaceTotals
+        ? billedOf(workspaceTotals)
+        : undefined
+  const tightest = tightestAllocation(
+    overview?.ceilings,
+    (worst) =>
+      overview?.limits.rows.find((row) => row.id === worst.scope_id)?.name ??
+      (worst.scope_type
+        ? scopeLabel(
+            { scope_type: worst.scope_type, scope_id: worst.scope_id ?? "" },
+            { organizationName, workspaces: [] },
+          )
+        : worst.budget_id),
+  )
+  const pace = overview?.attention.find(
+    (item) => item.kind === "budget_pace" && item.subject_id === workspaceId,
+  )
+  const periodIsMonth =
+    spend?.period_start != null &&
+    spend.period_end != null &&
+    Date.parse(spend.period_start) === month.start.getTime() &&
+    Date.parse(spend.period_end) === month.end.getTime()
+  return budgetView({
+    scope,
+    month,
+    now,
+    isManager,
+    canSetBudgets,
+    spend,
+    ownBilled: scope === "you" ? billed : undefined,
+    workspaceBilled,
+    billed,
+    tightest,
+    ceilingCount: overview ? (overview.ceilings?.total_count ?? null) : null,
+    serverPace: pace ? { at: pace.at ?? null } : undefined,
+    settledSpent: periodIsMonth ? workspaceBilled : undefined,
+  })
+}
+
+/**
  * The comparison under the total: the same days of the month before while a
- * month runs ("Sep 1–12"), the whole month before once it is over ("August").
+ * month runs ("Sep 1 – 12", spaced as `describeMonthSoFar` is), the whole
+ * month before once it is over ("August").
  */
 export function comparisonLabel(before: {
   start: Date
@@ -405,7 +537,7 @@ export function comparisonLabel(before: {
     (before.end.getTime() - before.start.getTime()) / DAY_MS,
   )
   const first = formatUtcDay(before.start.getTime())
-  return days > 1 ? `${first}–${days}` : first
+  return days > 1 ? `${first} – ${days}` : first
 }
 
 // ---------- needs attention ----------
@@ -444,6 +576,17 @@ export function groupAttention(
         ? []
         : [item],
   )
+}
+
+/**
+ * What tells one attention item from another across refreshes: its kind and
+ * what it is about. The folded provider item has no subject, and is the only
+ * one of its kind.
+ */
+export function attentionKey(
+  item: Pick<OverviewAttentionItem, "kind" | "subject_id">,
+): string {
+  return `${item.kind}:${item.subject_id ?? ""}`
 }
 
 export interface AttentionLine {

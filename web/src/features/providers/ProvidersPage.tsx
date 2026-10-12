@@ -67,6 +67,7 @@ import {
   SessionAffinityField,
   supportsSessionAffinity,
 } from "./providerFields"
+import { HEALTH_LABELS, healthState } from "./providerHealth"
 
 // Testing the form's credentials before they are saved, in two nodes because
 // they belong in two places: the button sits in the footer beside the submit,
@@ -962,16 +963,6 @@ function TestOutcome({ state }: { state: TestState | undefined }) {
 // listing (its backend never implemented /v1/models) is not unreachable: only
 // discovery is broken, and it may still serve requests, so it gets the amber
 // warning state rather than the red one (issue #447).
-// A repeated column's words, in their own casing. The uppercase these carried
-// was emphasis applied to every row alike, including the reachable ones, which
-// is the state a column watching for failures wants to draw the eye to least.
-// Same treatment, and same reasoning, as Activity's status column.
-const HEALTH_LABELS = {
-  ok: "Reachable",
-  degraded: "No model discovery",
-  unreachable: "Unreachable",
-} as const
-
 function HealthPill({ health }: { health: ProviderHealth | undefined }) {
   if (!health) {
     return <span className="text-caption">—</span>
@@ -998,11 +989,7 @@ function HealthPill({ health }: { health: ProviderHealth | undefined }) {
       className={`flex items-center gap-2 text-mono-caption ${styles}`}
     >
       <Dot className={dot} />
-      {
-        HEALTH_LABELS[
-          health.ok ? "ok" : isDegraded ? "degraded" : "unreachable"
-        ]
-      }
+      {HEALTH_LABELS[healthState(health)]}
     </span>
   )
 }

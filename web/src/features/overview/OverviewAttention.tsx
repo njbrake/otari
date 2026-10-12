@@ -14,7 +14,8 @@ export function OverviewAttention({
   isAlert,
   isBusy,
 }: {
-  items: AttentionLine[]
+  /** Each line, keyed by `attentionKey`. */
+  items: (AttentionLine & { key: string })[]
   /** At least one item is an alert rather than a warning. */
   isAlert: boolean
   /** The items are another scope's or month's, being replaced. */
@@ -34,7 +35,7 @@ export function OverviewAttention({
         Needs attention
       </span>
       {items.map((item, index) => (
-        <span key={index} className="flex items-center gap-2.5 text-muted">
+        <span key={item.key} className="flex items-center gap-2.5 text-muted">
           {index > 0 ? (
             <span aria-hidden className="max-sm:hidden text-subtle">
               ·

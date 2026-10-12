@@ -401,7 +401,7 @@ describe("the Overview's numbers", () => {
 
     const total = await screen.findByText("$683.65")
     const cell = total.parentElement as HTMLElement
-    expect(within(cell).getByText("Sep 1–12 $41.80")).toBeInTheDocument()
+    expect(within(cell).getByText("Sep 1 – 12 $41.80")).toBeInTheDocument()
     expect(within(cell).getByText("$37.02 today")).toBeInTheDocument()
     expect(within(cell).getByText("$71.25")).toBeInTheDocument()
     expect(
@@ -567,6 +567,24 @@ describe("the Overview's scope and month", () => {
     await user.click(screen.getByRole("button", { name: "Month: August 2026" }))
     await user.click(await screen.findByText("Other ranges in Usage"))
     expect(await screen.findByTestId("loc")).toHaveTextContent("/usage")
+  })
+
+  it("links Usage's daily spend for the scope and month on screen", async () => {
+    mockApi({})
+    renderPage(<OverviewIndex />, {
+      url: "/overview?month=2026-09",
+      workspace: WORKSPACE_A,
+    })
+
+    const link = await screen.findByRole("link", {
+      name: "Daily spend in Usage →",
+    })
+    await waitFor(() =>
+      expect(link).toHaveAttribute(
+        "href",
+        "/usage?scope=workspace&start_date=2026-09-01T00%3A00%3A00.000Z&end_date=2026-10-01T00%3A00%3A00.000Z",
+      ),
+    )
   })
 
   it("keeps the old month's labels until the comparison lands too", async () => {
@@ -989,17 +1007,19 @@ describe("the budget chart", () => {
     await user.keyboard("{ArrowRight}")
     expect(chart).toHaveAttribute(
       "aria-valuetext",
-      "Oct 13, projected: Projected $325.00",
+      // $300 over the 11.5 days October has run, carried to the end of the 13th.
+      "Oct 13, projected: Projected $339.13",
     )
   })
 
   it("marks the day the projection passes the budget", async () => {
-    // $60 a day passes $1,000 on day 17.
+    // $720 over 11.5 days passes $1,000 15.97 days in: Oct 16, as the
+    // server dates it.
     mockApi({ spend: BUDGET, series: daily(12, 60) })
     renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
 
     expect(await screen.findByText(/Over budget ~/)).toHaveTextContent(
-      "Over budget ~Oct 17",
+      "Over budget ~Oct 16",
     )
     expect(
       screen.getByRole("heading", { name: "Billed spend vs budget, October" }),
@@ -1064,7 +1084,7 @@ describe("a member's chart and a month that has ended", () => {
     expect(screen.queryByText(/Over budget ~/)).toBeNull()
     expect(
       screen.getByText(
-        /Members don't see workspace totals, so there's no budget line: your spend alone can't show how close the workspace is\. Running total of billed spend\./,
+        /Your spend alone, so there's no budget line: the Workspace budget tile measures the whole workspace against it\. Running total of billed spend\./,
       ),
     ).toBeInTheDocument()
     expect(screen.queryByText(/Projection uses/)).toBeNull()
@@ -1084,7 +1104,7 @@ describe("a member's chart and a month that has ended", () => {
         /^Running total of billed spend\. Subscription usage isn.t included because it doesn.t count toward limits\.$/,
       ),
     ).toBeInTheDocument()
-    expect(screen.queryByText(/Members don't see workspace totals/)).toBeNull()
+    expect(screen.queryByText(/no budget line/)).toBeNull()
   })
 
   it("draws a past month against today's budget and judges nothing", async () => {
@@ -1245,6 +1265,12 @@ describe("recent failures and the rail", () => {
               name: "old-key",
               expires_at: "2026-10-01T00:00:00Z",
             }),
+            limitRow({
+              id: "key-5",
+              name: "batch-jobs",
+              spent: 12,
+              limit: 10,
+            }),
           ],
         },
       },
@@ -1258,7 +1284,9 @@ describe("recent failures and the rail", () => {
     )
     // The meter and the share read the ceiling's own count, which is what
     // the gate enforces; the figure beside the name is the month's billing.
-    expect(within(rail).getByText("92% of limit")).toHaveClass("text-danger")
+    // Near its limit from 80%, as the server judges it, and over from 100%.
+    expect(within(rail).getByText("92% of limit")).toHaveClass("text-warning")
+    expect(within(rail).getByText("120% of limit")).toHaveClass("text-danger")
     expect(within(rail).getByText("Resets Nov 1")).toBeInTheDocument()
     expect(
       within(rail).getByRole("progressbar", {
@@ -1307,8 +1335,9 @@ describe("recent failures and the rail", () => {
 
     const panel = (await screen.findByRole("heading", { name: "Providers" }))
       .parentElement as HTMLElement
-    expect(await within(panel).findByText("UNREACHABLE")).toBeInTheDocument()
-    expect(within(panel).getByText("OK")).toBeInTheDocument()
+    // In the Providers page's words.
+    expect(await within(panel).findByText("Unreachable")).toBeInTheDocument()
+    expect(within(panel).getByText("Reachable")).toBeInTheDocument()
   })
 
   it("asks for the overview again, once, when a fresh provider check disagrees with it", async () => {

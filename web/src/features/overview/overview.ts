@@ -7,11 +7,14 @@ export type Health = "ok" | "warn" | "alert" | "neutral"
 
 // ---------- error rate ----------
 
-// Thresholds (fractions): >=2% amber, >=10% red. See plan issue #302.
-export const ERROR_WARN = 0.02
-export const ERROR_ALERT = 0.1
+// Thresholds (fractions): >=2% amber, >=10% red. Red is the server's
+// `error_rate` attention item (ERROR_RATE_ALERT), and like it no verdict is
+// passed under ERROR_RATE_MIN_REQUESTS, where one failure swings the rate.
+const ERROR_WARN = 0.02
+const ERROR_ALERT = 0.1
+const ERROR_MIN_REQUESTS = 20
 
-export interface ErrorRateHealth {
+interface ErrorRateHealth {
   // null when there are no requests to derive a rate from (renders as "—").
   rate: number | null
   status: Health
@@ -24,6 +27,9 @@ export function errorRateHealth(
     return { rate: null, status: "neutral" }
   }
   const rate = totals.error_count / totals.request_count
+  if (totals.request_count < ERROR_MIN_REQUESTS) {
+    return { rate, status: "neutral" }
+  }
   const status: Health =
     rate >= ERROR_ALERT ? "alert" : rate >= ERROR_WARN ? "warn" : "ok"
   return { rate, status }
@@ -34,7 +40,7 @@ export function errorRateHealth(
 // >=80% of an allocation is near its limit, >=100% over it.
 export const BUDGET_WARN = 0.8
 
-export interface TightestAllocation {
+interface TightestAllocation {
   name: string
   spent: number
   allocated: number

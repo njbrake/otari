@@ -20,7 +20,7 @@ import {
 } from "./overviewQuery"
 
 /** How many failures the page lists. */
-export const FAILURES_SHOWN = 5
+const FAILURES_SHOWN = 5
 
 /**
  * Every read the Overview makes, for the scope and month the URL names: the
@@ -36,7 +36,7 @@ export function useOverviewData(url: OverviewUrl) {
     (scope) =>
       scope !== "you" ||
       !viewer.isManager ||
-      viewer.ownUserId !== undefined ||
+      viewer.canNarrowToOwn ||
       viewer.isFindingOwnUserId,
   )
   const requested = readScope(url, scopes)
@@ -149,6 +149,12 @@ export function useOverviewData(url: OverviewUrl) {
   const failuresSearch = activityBase
     ? { ...activityBase, status: "error" }
     : undefined
+  // Usage's search for the same scope and month, as a span it keeps.
+  const usageSearch: DashboardSearch = {
+    scope: shownScope,
+    start_date: shownMonth.start.toISOString(),
+    end_date: shownMonth.end.toISOString(),
+  }
 
   // Every read goes again. The month's keys hold still within a month, so a
   // new `now` alone would move only "today" and the projection.
@@ -187,6 +193,7 @@ export function useOverviewData(url: OverviewUrl) {
     failures,
     activityBase,
     failuresSearch,
+    usageSearch,
     refresh,
     isFetching:
       summary.isFetching ||
@@ -208,5 +215,3 @@ export function useOverviewData(url: OverviewUrl) {
       (readsWorkspaceToo ? workspace.error : null),
   }
 }
-
-export type OverviewData = ReturnType<typeof useOverviewData>

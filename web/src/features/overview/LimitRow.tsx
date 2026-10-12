@@ -7,12 +7,11 @@ import {
   formatUsdLimit,
   formatUtcDay,
 } from "@/shared/helpers/format"
+import { BUDGET_WARN } from "./overview"
 import { daysUntil, limitFraction } from "./overviewModel"
 
 // Within this many days an expiry is worth a warning.
 const EXPIRY_WARN_DAYS = 7
-// From this share of a limit the percentage turns to danger.
-const LIMIT_DANGER = 0.9
 
 /**
  * One key or workspace against its limit: billed spend this month beside the
@@ -68,7 +67,13 @@ export function LimitRow({
     } else if (row.limit !== null) {
       facts.push({
         text: `${formatPct(fraction, 0)} of limit`,
-        tone: fraction >= LIMIT_DANGER ? "danger" : undefined,
+        // Near and over as the server's attention items judge them.
+        tone:
+          fraction >= 1
+            ? "danger"
+            : fraction >= BUDGET_WARN
+              ? "warning"
+              : undefined,
       })
       if (row.period_end) {
         facts.push({ text: `Resets ${formatUtcDay(row.period_end)}` })

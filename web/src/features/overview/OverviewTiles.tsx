@@ -34,7 +34,7 @@ export function OverviewTiles({
   series: readonly UsageSeriesPoint[]
   /** The comparison window's total, once read. */
   previousCost: number | undefined
-  /** How the comparison window is named: "Sep 1–12", "August". */
+  /** How the comparison window is named: "Sep 1 – 12", "August". */
   comparison: string
   /** Today's total, while the month runs. */
   todayCost: number | undefined

@@ -1,10 +1,11 @@
 import type { ProviderHealth } from "@/client"
 import { Dot } from "@/design-system/indicators/Dot"
+import { HEALTH_LABELS, healthState } from "@/features/providers/providerHealth"
 
 /**
  * The deployment's providers and whether each answers, for its operator. A
  * provider that answers but lists no models is told apart from one that is
- * down, as the Providers page tells them apart.
+ * down, in the words the Providers page uses.
  */
 export function ProvidersPanel({
   providers,
@@ -17,7 +18,7 @@ export function ProvidersPanel({
     <div className="mb-6 flex flex-col">
       <h2 className="text-title">Providers</h2>
       <span className="text-caption text-subtle">
-        Reachability, checked every hour.
+        Reachability, as of the gateway&rsquo;s last check.
       </span>
       {isError ? (
         <p className="mt-2 text-caption">
@@ -28,7 +29,7 @@ export function ProvidersPanel({
       ) : (
         <ul className="mt-2 flex flex-col">
           {(providers ?? []).map((provider) => {
-            const isDegraded = !provider.ok && provider.discovery_unsupported
+            const state = healthState(provider)
             return (
               <li
                 key={provider.instance}
@@ -40,14 +41,10 @@ export function ProvidersPanel({
                 <Dot className={provider.ok ? "bg-success" : "bg-danger"} />
                 <span
                   className={`text-mono-caption ${
-                    provider.ok || isDegraded ? "text-muted" : "text-danger"
+                    state === "unreachable" ? "text-danger" : "text-muted"
                   }`}
                 >
-                  {provider.ok
-                    ? "OK"
-                    : isDegraded
-                      ? "NO MODEL LIST"
-                      : "UNREACHABLE"}
+                  {HEALTH_LABELS[state]}
                 </span>
               </li>
             )

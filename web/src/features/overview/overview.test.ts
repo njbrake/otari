@@ -31,6 +31,15 @@ describe("errorRateHealth", () => {
       errorRateHealth(totals({ request_count: 1000, error_count: 100 })).status,
     ).toBe("alert") // 10%
   })
+
+  it("passes no verdict under 20 requests, as the server's error-rate item does", () => {
+    expect(
+      errorRateHealth(totals({ request_count: 3, error_count: 1 })),
+    ).toEqual({ rate: 1 / 3, status: "neutral" })
+    expect(
+      errorRateHealth(totals({ request_count: 20, error_count: 2 })).status,
+    ).toBe("alert")
+  })
 })
 
 function health(over: Partial<AllocationHealth> = {}): AllocationHealth {

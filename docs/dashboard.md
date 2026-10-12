@@ -150,16 +150,18 @@ into billed and subscription and set against the same days of the month before
 the organization the tightest spend ceiling, with its pace; and requests, with
 how many failed. Under them, the month's running
 total of billed spend against the budget, projected to the month's end at its
-daily average, then the month's latest failures, each opening in Activity.
+pace so far (the Budget tile's pace, and the gateway's crossing date, once the
+month is a day or a tenth in, whichever is longer), then the month's latest
+failures, each opening in Activity.
 Beside them sit the limits that apply in the scope: your keys, the workspace's
 keys, or the organization's workspaces against their ceilings. A deployment
 operator also sees whether each provider answers. The scope and month live in
 the URL.
 
-A member sees no workspace totals, so their chart is their own running total
-alone, with no budget line or projection: their share cannot show how close the
-workspace is to its budget. The Budget tile still gives them the workspace
-budget's figures. A month that has ended is drawn against today's budget and
+A member sees no workspace spend by day, so their chart is their own running
+total alone, with no budget line or projection: their share cannot show how
+close the workspace is to its budget. The Budget tile still gives them the
+workspace budget's figures for the month running. A month that has ended is drawn against today's budget and
 today's limits, since past ones are not stored, so it carries no verdict: no
 crossing date, no severity, and limits named ("Limit today") rather than
 measured against the month.
