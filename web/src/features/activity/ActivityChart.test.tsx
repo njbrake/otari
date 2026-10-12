@@ -96,4 +96,25 @@ describe("ActivityChart", () => {
       ).className,
     ).not.toContain("-translate-x-full")
   })
+
+  it("sets each tick under the bar it names, and closes the axis on the window's end", () => {
+    const DAY = 24 * HOUR
+    // Thirty days over a step of four leaves the last tick two bars short of
+    // the end, which it would crowd, so it is dropped.
+    const days: ChartBar[] = Array.from({ length: 30 }, (_, index) => ({
+      start: START + index * DAY,
+      end: START + (index + 1) * DAY,
+      ok: 1,
+      failed: 0,
+    }))
+    render(<ActivityChart bars={days} span={undefined} onSpan={vi.fn()} />)
+    expect(screen.getByText("Jan 19")).toHaveStyle({
+      left: `${(4 / 30) * 100}%`,
+    })
+    expect(screen.queryByText("Feb 12")).toBeNull()
+    expect(screen.getByText("Feb 14")).toHaveStyle({
+      left: "100%",
+      transform: "translateX(-100%)",
+    })
+  })
 })
