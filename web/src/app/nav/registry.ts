@@ -211,18 +211,16 @@ const BASE_NAV_SECTIONS = [
  * provisioned for itself. The gate is written anyway because it is the thing
  * that becomes load-bearing the moment per-user sign-in lands (otari-ai#1716).
  *
- * One of the design's rows is **declared and gated on a surface the standalone
- * bootstrap does not report** (`STANDALONE_SURFACES` in
- * `src/gateway/api/routes/bootstrap.py` is that list), so it is absent here and
- * present on a deployment that serves it, and a group whose every row is gated
- * drops entirely, heading included. Usage is that row; its own comment says why.
+ * No Observe section: the organization as a whole (otari-ai#1963) is a scope of
+ * the Usage page, which the workspace rail reaches, and a link to the old
+ * `/organization/usage` lands there.
  *
- * The organization's guardrails are not such a row: `organization_guardrails`
- * is published by both topologies, because its rows are keyed on the
- * organization. It is in General, under Deployment providers. Gateway holds
- * nothing in this build and drops; it stays declared for an overlay's Gateways.
+ * The organization's guardrails are published by both topologies, because its
+ * rows are keyed on the organization. They are in General, under Deployment
+ * providers. Gateway holds nothing in this build and drops; it stays declared
+ * for an overlay's Gateways.
  *
- * The organization's own provider credentials are not such a row either:
+ * So are the organization's own provider credentials:
  * `organization_providers` is published by both topologies, because the page
  * behind it is where an organization's models are offered, priced and switched.
  * It sits under General beside the process-global `providers` row, under a
@@ -240,16 +238,7 @@ const BASE_NAV_SECTIONS = [
  * composed tree is never written: the Vite plugin logs that error and keeps
  * building against the tree already on disk, where the overlay's page has no
  * route at all, and a step that generates the tree on its own fails outright.
- *
- * The surface axis rather than the capability one, and that is a constraint
- * rather than a preference: `registry.test.ts` requires every capability a base
- * entry names to be in `BASE_CAPABILITIES`, that is, to be granted, so a
- * capability gate cannot express "declared but not served" without relaxing that
- * invariant. A surface gate says exactly this and needs no test change.
  */
-// No Observe section: the organization as a whole (otari-ai#1963) is a scope of
-// the Usage page, which the workspace rail reaches, and a link to the old
-// `/organization/usage` lands there.
 const ORGANIZATION_NAV_SECTIONS = [
   {
     id: "org-people",

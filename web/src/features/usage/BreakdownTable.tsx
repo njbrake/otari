@@ -102,7 +102,7 @@ export function BreakdownTable({
       cell: (row) => {
         const name = nameOf(row)
         return (
-          <div className="group/cell relative flex min-w-0 flex-col pr-7">
+          <div className="group/cell relative flex min-w-0 flex-col pr-7 pointer-coarse:pr-12">
             <span className="flex min-w-0 items-center gap-2">
               <span
                 aria-hidden

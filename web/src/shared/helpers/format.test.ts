@@ -73,6 +73,8 @@ describe("usage chart and tile figures", () => {
     expect(formatUsdAxis(200)).toBe("$200")
     expect(formatUsdAxis(1500)).toBe("$1.5K")
     expect(formatUsdAxis(0)).toBe("$0")
+    expect(formatUsdAxis(0.0001, 0.0001)).toBe("$0.0001")
+    expect(formatUsdAxis(0.0003, 0.0001)).toBe("$0.0003")
   })
 
   it("says a multiple with one decimal", () => {
