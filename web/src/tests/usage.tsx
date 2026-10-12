@@ -3,12 +3,7 @@ import { useLocation } from "@tanstack/react-router"
 import { render } from "@testing-library/react"
 import type { ReactElement } from "react"
 import { vi } from "vitest"
-import type {
-  SavedView,
-  UsageSummary,
-  UsageTotals,
-  Workspace,
-} from "@/client"
+import type { SavedView, UsageSummary, UsageTotals, Workspace } from "@/client"
 import { DIMENSIONS } from "@/features/usage/usageQuery"
 import { API_ROOT } from "@/shared/api/client"
 import type { UsageBreakdownRow } from "@/shared/api/usage"
