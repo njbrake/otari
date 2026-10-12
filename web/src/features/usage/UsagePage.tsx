@@ -166,7 +166,9 @@ export function UsagePage() {
       : undefined
 
   const isFiltered = data.filters.length > 0 || data.hasSpan
-  const isEmptyEver =
+  // Empty in this window only: an older one may still hold usage, and nothing
+  // read here says whether it does.
+  const isWindowEmpty =
     summary !== undefined && summary.totals.request_count === 0 && !isFiltered
   const toolRows = summary?.by_tool ?? []
   const clearAll = () => url.patch(CLEAR_FILTERS)
@@ -239,9 +241,10 @@ export function UsagePage() {
         onClearAll={clearAll}
       />
 
-      {isEmptyEver ? (
+      {isWindowEmpty ? (
         <EmptyMessage minHeightClass="min-h-[16rem]">
-          No usage recorded yet. Requests through the gateway show up here.
+          No usage in the last {data.preset.label}. Requests through the gateway
+          show up here, and a longer window reaches further back.
         </EmptyMessage>
       ) : (
         <>

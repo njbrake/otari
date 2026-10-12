@@ -584,7 +584,7 @@ describe("UsagePage", () => {
     })
   })
 
-  it("says a gateway with no usage has none yet", async () => {
+  it("says the window is empty, not that the gateway has never had usage", async () => {
     mockUsageApi({
       viewer: "member",
       summary: breakdownSummary(
@@ -593,7 +593,10 @@ describe("UsagePage", () => {
       ),
     })
     page()
-    expect(await screen.findByText(/No usage recorded yet/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/No usage in the last 30d\./),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/recorded yet/)).toBeNull()
   })
 
   it("explains an empty filtered table and clears back", async () => {
