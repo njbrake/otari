@@ -5,7 +5,7 @@ import { DIMENSIONS, type UsageFilter } from "./usageQuery"
 /**
  * The applied filters as chips, each clearing only itself, shown once there
  * is one. A filter the scope cannot use (Member, read as You) stays in the URL
- * and applies again in a scope that has it, so it is shown greyed rather than
+ * and applies again in a scope that has it, so it is shown grayed rather than
  * dropped.
  */
 export function UsageFilterChips({

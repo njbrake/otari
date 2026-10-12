@@ -325,11 +325,20 @@ const usdAxisMills = new Intl.NumberFormat("en-US", {
 /**
  * Dollars on a chart's axis, where a tick says a size rather than a sum, at
  * the precision its steps need: "$200" and "$1.5K" for whole-dollar steps,
- * "$0.05" for cents, "$0.005" below a cent.
+ * "$0.05" for cents, "$0.005" below a cent, and as many places as a step
+ * finer than that takes, so no two ticks read alike.
  */
 export function formatUsdAxis(value: number, step = 1): string {
   if (step >= 1) return usdAxis.format(value)
-  return step >= 0.01 ? usdAxisCents.format(value) : usdAxisMills.format(value)
+  if (step >= 0.01) return usdAxisCents.format(value)
+  if (step >= 0.001) return usdAxisMills.format(value)
+  const digits = Math.min(20, -Math.floor(Math.log10(step)))
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value)
 }
 
 const multiple = new Intl.NumberFormat("en-US", {

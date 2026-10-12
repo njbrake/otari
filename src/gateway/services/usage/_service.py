@@ -230,7 +230,7 @@ class UsageReadService:
             p95 = await self._summaries.group_p95_latency_ms(dimension, keys, conditions)
             rows = [row.model_copy(update={"p95_latency_ms": p95.get(row.key)}) for row in rows]
         if is_session and with_details:
-            details = await self._summaries.session_details(keys, conditions)
+            details = await self._summaries.session_details(keys, conditions, status_filter=status)
             rows = [row.model_copy(update=asdict(details[row.key])) if row.key in details else row for row in rows]
         return rows
 
