@@ -154,7 +154,8 @@ RANK_BY_DESC = (
     "'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it "
     "has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then "
     "carries). A group with no value to rank by comes last; ties fall back to the key, the group with "
-    "no key last."
+    "no key last. 'p95' reads the latency of every group in the window, not just the top N, so it costs "
+    "the most."
 )
 RANK_ORDER_DESC = (
     "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the "
