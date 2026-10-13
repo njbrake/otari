@@ -604,6 +604,50 @@ describe("the Overview's numbers", () => {
     release()
   })
 
+  it("adds the getting-started strip once a held, empty provider list answers", async () => {
+    let release = () => {}
+    const holdProviders = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const requested = mockApi({ providers: [], holdProviders })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/usage/summary"))).toBe(
+        true,
+      ),
+    )
+    expect(screen.queryByText("Get started with Otari")).toBeNull()
+    release()
+    expect(
+      await screen.findByText("Get started with Otari"),
+    ).toBeInTheDocument()
+  })
+
+  it("offers the setup guide once a held provider list names a provider", async () => {
+    let release = () => {}
+    const holdProviders = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const requested = mockApi({
+      context: TWO_WORKSPACES,
+      activation: workspaceActivation(),
+      holdProviders,
+    })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/usage/summary"))).toBe(
+        true,
+      ),
+    )
+    expect(requested.some((url) => url.includes("/activation"))).toBe(false)
+    release()
+    expect(
+      await screen.findByRole("heading", { name: "Send your first request" }),
+    ).toBeInTheDocument()
+  })
+
   it("shows a dash, not a zero, for a summary that failed", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input)
