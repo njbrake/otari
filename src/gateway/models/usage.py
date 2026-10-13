@@ -66,8 +66,9 @@ class UsageLog(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
     # The workspace this row belongs to; see `APIKey.workspace_id` for why.
+    # No index of its own: `ix_usage_logs_workspace_id_timestamp` leads with it.
     workspace_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("workspace.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("workspace.id", ondelete="RESTRICT"), nullable=False
     )
     api_key_id: Mapped[str | None] = mapped_column(ForeignKey("api_keys.id", ondelete="SET NULL"), index=True)
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id", ondelete="SET NULL"), index=True)
