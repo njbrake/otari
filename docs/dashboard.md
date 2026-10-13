@@ -264,8 +264,8 @@ A routed request is one row, served by whichever attempt succeeded; its earlier
 failed attempts are counted on it and listed under it on request. Opening a row
 shows the request beside the log: its routing plan, source, token composition,
 cost and timing. Live updates bring the log up to now every ten seconds, and the
-totals, latency and chart above it every minute, and hold still while you page
-back, read a request, or look at a window that has ended.
+totals, latency, chart and a grouped log every minute. They hold still while you
+page back, read a request, or look at a window that has ended.
 Imported usage is labeled by source, shown at its equivalent cost, and does not
 consume a budget. Everyone in a workspace sees what it has spent against its own
 ceiling, where it has one.

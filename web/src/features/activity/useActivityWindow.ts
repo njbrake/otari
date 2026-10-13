@@ -27,16 +27,26 @@ export const LIVE_AGGREGATE_MS = 60_000
  * Both are snapshots rather than recomputed each render, because a rolling
  * preset recomputed on render mints a new "now", a new query key and a new
  * request every time anything re-renders. They are taken again when the
- * selection in the URL changes, and on each new reading of the clock, and both
- * off one clock reading: taken separately they land a millisecond apart and the
- * list window reads as reaching outside the chart's.
+ * selection in the URL changes, and on each new reading of the clock. The
+ * aggregate and the chart's window are taken off one clock reading: taken
+ * separately they land a millisecond apart and the aggregate reads as reaching
+ * outside the chart's.
  * A link opened on `?page=3` keeps its page, since mounting takes the first
  * snapshot rather than a second one.
  */
 export function useActivityWindow(
   url: ActivityUrl,
-  /** A clock whose each new reading takes both windows up to it. */
+  /**
+   * A clock whose each new reading takes the list's window up to it, and the
+   * aggregates' once it is `aggregateEveryMs` past them.
+   */
   liveClock: number | undefined,
+  /**
+   * How far a reading has to move before the aggregates move with it. The
+   * phone's clock reads only on a return to the tab, so it passes 0: holding its
+   * aggregates back saves nothing and leaves them behind its rows.
+   */
+  aggregateEveryMs = LIVE_AGGREGATE_MS,
 ) {
   const range = url.get("range")
   const startParam = url.get("start_date")
@@ -68,7 +78,7 @@ export function useActivityWindow(
     )
   } else if (liveClock !== undefined && liveClock > snapshot.takenAt) {
     setSnapshot(
-      liveClock - snapshot.aggregateTakenAt >= LIVE_AGGREGATE_MS
+      liveClock - snapshot.aggregateTakenAt >= aggregateEveryMs
         ? take(liveClock)
         : {
             ...snapshot,

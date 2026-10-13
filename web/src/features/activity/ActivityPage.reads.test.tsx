@@ -8,6 +8,7 @@ import { API_ROOT } from "@/shared/api/client"
 import {
   CALLER_IDENTITY,
   entry,
+  group,
   lastList,
   listCalls,
   mockApi,
@@ -199,6 +200,33 @@ describe("ActivityPage", () => {
         await vi.advanceTimersByTimeAsync(LIVE_AGGREGATE_MS + 500)
         await waitFor(() => expect(latencyReads).toBeGreaterThan(1))
         expect(screen.getByText("P95 1.20 s")).toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("holds an open group's rows with its heading between minutes", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const user = userEvent.setup({
+          advanceTimers: vi.advanceTimersByTime,
+        })
+        const { calls } = mockApi({
+          rows: [entry()],
+          groups: [group({ key: "key-1", label: "ci-runner", requests: 12 })],
+        })
+        renderPage(<ActivityPage />, "/activity?group=source")
+        await user.click(await screen.findByRole("row", { name: /ci-runner/ }))
+        const previews = () =>
+          listCalls(calls).filter((url) => url.includes("api_key_id=key-1"))
+        await waitFor(() => expect(previews().length).toBeGreaterThan(0))
+        const read = previews().length
+
+        await vi.advanceTimersByTimeAsync(10_500)
+        expect(previews().length).toBe(read)
+
+        await vi.advanceTimersByTimeAsync(LIVE_AGGREGATE_MS)
+        await waitFor(() => expect(previews().length).toBeGreaterThan(read))
       } finally {
         vi.useRealTimers()
       }

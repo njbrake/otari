@@ -47,7 +47,7 @@ import {
 } from "./activityRows"
 import { phoneBarSpec } from "./chartBars"
 import type { useActivityViewer } from "./useActivityViewer"
-import { useActivityWindow } from "./useActivityWindow"
+import { LIVE_AGGREGATE_MS, useActivityWindow } from "./useActivityWindow"
 
 // How often live mode brings the window up to now. The phone has no live mode,
 // so it does so only on a return to the tab, once its window is this old.
@@ -100,9 +100,10 @@ function groupList(read: {
  *   time, so "All" sends the chart's year-long extent instead. A list the
  *   server bounds the same way (sorted by anything but time, or searched by
  *   substring) sends it too.
- * - Live mode brings the windows up to now on a clock (`useLiveClock`), which
- *   moves every key once a tick, and holds still while the reader pages back,
- *   has a request open, or is looking at a window that has ended.
+ * - Live mode brings the windows up to now on a clock (`useLiveClock`): the rows
+ *   and count every tick, the aggregates once a minute (`useActivityWindow`).
+ *   It holds still while the reader pages back, has a request open, or is
+ *   looking at a window that has ended.
  */
 export function useActivityLog({
   url,
@@ -133,7 +134,11 @@ export function useActivityLog({
     isPhone ? PHONE_REFRESH_MS : LIVE_POLL_MS,
     { isPolling: !isPhone },
   )
-  const time = useActivityWindow(url, liveClock)
+  const time = useActivityWindow(
+    url,
+    liveClock,
+    isPhone ? 0 : LIVE_AGGREGATE_MS,
+  )
   const memberLabels = useMemberAttributionLabels()
 
   const wantsOwn = viewer.isManager && url.get("scope") === "you"
@@ -156,12 +161,15 @@ export function useActivityLog({
   const isUnbounded =
     sort.key === NEWEST_FIRST.key && !isSubstringSearch(listed.q)
   const filters = isUnbounded ? listed : withStart
-  // The totals and their p95 read the list's window as the chart's clock last
-  // took it, so live mode moves them only every `LIVE_AGGREGATE_MS`.
+  // The aggregates (totals, p95, groups, column menus) read the list's window as
+  // the chart's clock last took it, so live mode moves them only every
+  // `LIVE_AGGREGATE_MS`. An open group's rows read it too, so they agree with
+  // the heading they sit under.
   const aggregated = toUsageFilters(url, time.aggregate, activityScope)
   const aggregateFilters: UsageFilters = aggregated.start_date
     ? aggregated
     : { ...aggregated, start_date: time.chart.start }
+  const groupedFilters = isUnbounded ? aggregated : aggregateFilters
   // What a bulk action on imported rows reaches, closed at the moment the
   // window was taken: an open window would otherwise reach rows that land
   // between the count the dialog states and the write it confirms.
@@ -283,7 +291,7 @@ export function useActivityLog({
     ? groupRows.filter((row) => expanded.has(row.key ?? ""))
     : []
   const previews = useUsagePreviews(
-    openGroups.map((row) => groupFilters(filters, groupBy, row)),
+    openGroups.map((row) => groupFilters(groupedFilters, groupBy, row)),
     GROUP_PREVIEW,
   )
   const previewRows = new Map(
