@@ -200,6 +200,9 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
     usageFilters,
     usageScope,
     summary: answer?.summary,
+    // Only the summary's own failure ends the wait: a sibling read that fails
+    // first would otherwise put zeros in the tiles while the totals are out.
+    isLoadingSummary: answer === undefined && !breakdown.error,
     rows: p95
       ? rows.map((row) =>
           row.is_other

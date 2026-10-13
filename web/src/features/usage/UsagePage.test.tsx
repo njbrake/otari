@@ -318,6 +318,22 @@ describe("UsagePage", () => {
       expect(screen.getByText(/from cache/)).toBeInTheDocument()
     })
 
+    it("keeps the tiles waiting on the summary when a read beside it fails first", async () => {
+      mockUsageApi({
+        viewer: "member",
+        hold: (kind) =>
+          kind === "summary"
+            ? new Promise<void>(() => {})
+            : kind === "tools"
+              ? Promise.reject(new Error("tools exploded"))
+              : undefined,
+      })
+      const { container } = page()
+
+      expect(await screen.findByRole("alert")).toBeInTheDocument()
+      expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(3)
+    })
+
     it("pins the rows with no value last, explained", async () => {
       const { calls } = mockUsageApi({ viewer: "member" })
       page("/usage?by=session")

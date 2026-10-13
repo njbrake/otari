@@ -197,12 +197,14 @@ function OverviewPage({
   })
   // A budget tile with nothing to show yet, as opposed to one whose reads
   // answered with nothing: its reads are still out and none has failed.
+  // `isLoading`, not `isPending`: a read that is disabled (the budget, with no
+  // workspace selected) stays pending for good and would hold the tile forever.
   const isBudgetLoading =
     !data.error &&
     (!totals ||
-      data.spend.isPending ||
-      overview.isPending ||
-      data.workspace?.isPending === true) &&
+      data.spend.isLoading ||
+      overview.isLoading ||
+      data.workspace?.isLoading === true) &&
     (budget.kind === "unknown"
       ? budget.line === undefined
       : budget.kind === "none" && budget.used === undefined)
@@ -305,7 +307,7 @@ function OverviewPage({
           todayCost={month.isCurrent ? costOnDay(series, data.now) : undefined}
           budget={budget}
           failuresSearch={data.failuresSearch}
-          isLoading={!totals && !data.error}
+          isLoading={!totals && !summary.error}
           isBudgetLoading={isBudgetLoading}
         />
       </div>

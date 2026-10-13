@@ -259,7 +259,7 @@ export function UsagePage() {
               previous={data.previous}
               windowLabel={data.preset.label}
               unpricedSearch={unpricedSearch}
-              isLoading={!summary && !data.error}
+              isLoading={data.isLoadingSummary}
             />
           </div>
 

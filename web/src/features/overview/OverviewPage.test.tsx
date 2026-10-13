@@ -525,6 +525,63 @@ describe("the Overview's numbers", () => {
     )
   })
 
+  it("does not hold the budget tile for a budget read that never runs", async () => {
+    // No workspace is selected, so the budget read is disabled and stays
+    // pending: it is not a wait.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith(`${API_ROOT}/organizations/me`)) {
+        return jsonResponse({ detail: "context exploded" }, 500)
+      }
+      if (url.includes(`${API_ROOT}/usage/summary`)) {
+        return jsonResponse(summary({ cost: 200, request_count: 2000 }))
+      }
+      if (url.includes(`${API_ROOT}/overview`))
+        return jsonResponse(overviewBody())
+      if (url.includes(`${API_ROOT}/providers`) && !url.includes("health")) {
+        return jsonResponse({ providers: [{ provider: "openai" }] })
+      }
+      return jsonResponse([])
+    })
+    const { container } = renderPage(<OverviewIndex />)
+
+    expect((await screen.findAllByText("$200.00")).length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(0)
+    expect(
+      within(tile("Workspace budget")).getByText("no data"),
+    ).toBeInTheDocument()
+  })
+
+  it("keeps the totals loading when another read fails first", async () => {
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith(`${API_ROOT}/organizations/me`)) {
+        return jsonResponse(organizationContext(TWO_WORKSPACES))
+      }
+      if (url.includes("/budget")) {
+        return jsonResponse({ detail: "budget exploded" }, 500)
+      }
+      if (url.includes("/usage/summary")) {
+        await held
+        return jsonResponse({ detail: "late" }, 500)
+      }
+      if (url.includes(`${API_ROOT}/providers`) && !url.includes("health")) {
+        return jsonResponse({ providers: [{ provider: "openai" }] })
+      }
+      return jsonResponse(url.includes("/overview") ? overviewBody() : [])
+    })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    expect(await screen.findByText(/budget exploded/)).toBeInTheDocument()
+    expect(tile("Total at API prices")).toHaveAttribute("aria-busy", "true")
+    expect(tile("Requests")).toHaveAttribute("aria-busy", "true")
+    release()
+  })
+
   it("shows a dash, not a zero, for a summary that failed", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input)

@@ -86,7 +86,7 @@ export function ActivityTotals({
     isBrief ? null : isLoadingP95 ? (
       <span key="p95" className="flex items-center gap-1.5">
         P95 <Skeleton className="h-3 w-10" />
-        <span className="sr-only">loading</span>
+        <span className="sr-only">Loading</span>
       </span>
     ) : p95 ? (
       <span key="p95">P95 {p95}</span>
