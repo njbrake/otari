@@ -5,7 +5,7 @@ import type { TotalsScope } from "@/shared/api/usage"
 /**
  * What a member who does not manage a workspace may read of it, as its
  * managers' visibility settings decide. The one place the dashboard derives
- * that: Overview and Usage read `memberReach` and nothing else, so a setting
+ * that: Overview and Usage read `readMemberReach` and nothing else, so a setting
  * added to the workspace's visibility widens a member's reach here alone.
  *
  * The server is the authority (`WorkspaceReader` in
@@ -113,7 +113,7 @@ export interface MemberReach {
 }
 
 /** What one reader may see of the workspace on screen, given what is known of its settings. */
-export function memberReach(
+export function readMemberReach(
   viewer: ReachViewer,
   known: MemberTotalsVisibility,
 ): MemberReach {
@@ -164,15 +164,15 @@ export function memberReach(
  * member's as if it shared its totals, since only the server's answer says
  * whether it does, and it reads the caller's own usage where it does not.
  */
-export function askableScopes(viewer: ReachViewer): UsageScopeKey[] {
-  return memberReach(viewer, {
+export function listAskableScopes(viewer: ReachViewer): UsageScopeKey[] {
+  return readMemberReach(viewer, {
     status: "known",
     visibility: { members_see_workspace_totals: true },
   }).scopes
 }
 
 /** How a scope's usage reads go: across the organization, as a member's ask for the workspace's totals, or as the caller's rows. */
-export function usageScopeFor(
+export function pickUsageScope(
   reach: MemberReach,
   scope: UsageScopeKey,
 ): TotalsScope {

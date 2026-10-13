@@ -228,7 +228,7 @@ export function UsagePage() {
         range={data.preset.key}
         onRange={(range) => url.patch({ range, start_date: "", end_date: "" })}
         bounds={bounds}
-        isAwaitingScope={data.isAwaitingScope}
+        isAwaitingScope={data.isAwaitingScope || data.isScopePending}
         spend={data.scope === "organization" ? undefined : data.spend}
         onRefresh={data.refresh}
         isFetching={data.isFetching}

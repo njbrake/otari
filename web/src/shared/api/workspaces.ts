@@ -105,8 +105,8 @@ export function useWorkspaceVisibility(
 /**
  * Change it, optimistically: a switch has to move when it is pressed. Only the
  * fields in the change are sent, and merged over the answer on screen. The
- * previous answer is kept so a refused write puts the switch back, and the
- * entry is read again once the write settles either way.
+ * saved answer replaces it; a refused write puts the previous answer back and
+ * reads the setting again, since the refusal may mean it moved.
  */
 export function useSetWorkspaceVisibility(workspaceId: string) {
   const queryClient = useQueryClient()
@@ -118,12 +118,17 @@ export function useSetWorkspaceVisibility(workspaceId: string) {
         { method: "PATCH", body: JSON.stringify(change) },
       ),
     onMutate: async (change) => {
-      await queryClient.cancelQueries({ queryKey })
+      // The overview's answer seeds this entry too, so one in flight could
+      // land over the optimistic value.
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey }),
+        queryClient.cancelQueries({ queryKey: [OVERVIEW, workspaceId] }),
+      ])
       const previous = queryClient.getQueryData<WorkspaceVisibility>(queryKey)
       if (previous !== undefined) {
         queryClient.setQueryData<WorkspaceVisibility>(queryKey, {
           ...previous,
-          ...definedFields(change),
+          ...pickDefinedFields(change),
         })
       }
       return { previous }
@@ -132,20 +137,20 @@ export function useSetWorkspaceVisibility(workspaceId: string) {
       if (context?.previous !== undefined) {
         queryClient.setQueryData(queryKey, context.previous)
       }
+      void queryClient.invalidateQueries({ queryKey })
     },
     onSuccess: (data) => {
       queryClient.setQueryData(queryKey, data)
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey })
-      // The overview carries the setting beside the workspace's figures.
-      void queryClient.invalidateQueries({ queryKey: [OVERVIEW] })
+      // The workspace's overview carries the setting beside its figures.
+      void queryClient.invalidateQueries({ queryKey: [OVERVIEW, workspaceId] })
     },
   })
 }
 
 /** The fields a change sets: a field it leaves null or out keeps its value. */
-function definedFields(
+function pickDefinedFields(
   change: WorkspaceVisibilityUpdate,
 ): Partial<WorkspaceVisibility> {
   return Object.fromEntries(

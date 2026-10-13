@@ -226,6 +226,10 @@ export function mockUsageApi(
     membersSeeWorkspaceTotals?: boolean
     /** Held open for the visibility read, until it resolves. */
     holdVisibility?: Promise<void>
+    /** Held open for every visibility read after the first, until it resolves. */
+    holdReread?: Promise<void>
+    /** The visibility read fails. */
+    visibilityFails?: boolean
     /**
      * The managers turn the totals off before the page next asks for them:
      * that ask is refused, and the setting reads as hidden from then on.
@@ -242,6 +246,7 @@ export function mockUsageApi(
   const summary = opts.summary ?? breakdownSummary()
   const calls: FetchCall[] = []
   let isShared = opts.membersSeeWorkspaceTotals ?? false
+  let visibilityReads = 0
   const mock = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation(async (input, init) => {
@@ -261,6 +266,11 @@ export function mockUsageApi(
       }
       if (url.includes(`/workspaces/${WORKSPACE_ID}/visibility`)) {
         await opts.holdVisibility
+        if (opts.visibilityFails) {
+          return jsonResponse({ detail: "visibility exploded" }, 500)
+        }
+        visibilityReads += 1
+        if (visibilityReads > 1) await opts.holdReread
         return jsonResponse({ members_see_workspace_totals: isShared })
       }
       if (params.get("workspace_totals") === "true" && opts.revokesTotals) {

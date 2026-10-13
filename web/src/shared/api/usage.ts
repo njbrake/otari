@@ -41,9 +41,9 @@ import {
 } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
 import {
-  ORGANIZATION_SPEND_CEILINGS,
   OVERVIEW,
   USAGE,
+  workspaceSpendKey,
   workspaceVisibilityKey,
 } from "@/shared/api/queryKeys"
 import { isoAgo } from "@/shared/helpers/timeRange"
@@ -229,9 +229,7 @@ function useTotalsScope(scope: TotalsScope) {
           )
           // And the budget, whose dollars the same setting withholds.
           void queryClient.invalidateQueries(
-            {
-              queryKey: [ORGANIZATION_SPEND_CEILINGS, "workspace", workspaceId],
-            },
+            { queryKey: workspaceSpendKey(workspaceId) },
             once,
           )
         }
@@ -239,6 +237,22 @@ function useTotalsScope(scope: TotalsScope) {
       }
     },
   }
+}
+
+/**
+ * A usage read's error as a page reports it. A refused ask for a workspace's
+ * totals is left out: it is the setting having moved, not a failure, and the
+ * re-read it sets off drops the page to the member's own view.
+ */
+export function pickReportedError(
+  error: Error | null,
+  usageScope: TotalsScope,
+): Error | null {
+  const isRefusedTotals =
+    usageScope === "workspace_totals" &&
+    error instanceof ApiError &&
+    error.status === 403
+  return isRefusedTotals ? null : error
 }
 
 export interface UsageSort {

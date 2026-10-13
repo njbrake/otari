@@ -22,7 +22,7 @@ export function LimitsPanel({
   isPast,
   now,
   workspaceId,
-  isMemberWorkspace = false,
+  isHidingKeys = false,
 }: {
   scope: UsageScopeKey
   limits: OverviewLimits | undefined
@@ -40,9 +40,9 @@ export function LimitsPanel({
    * A member reading the workspace's totals, whose keys are other people's:
    * the server lists none, and the panel says where theirs are instead.
    */
-  isMemberWorkspace?: boolean
+  isHidingKeys?: boolean
 }) {
-  if (isMemberWorkspace) {
+  if (isHidingKeys) {
     return (
       <div className="flex min-w-0 flex-col">
         <h2 className="text-title">Keys</h2>

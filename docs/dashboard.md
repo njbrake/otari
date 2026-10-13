@@ -188,10 +188,10 @@ a whole percent of its cap ("used of $1,000"), without the dollars spent; with
 no budget set it shows their own billed spend as before. Where the setting
 cannot be read (the overview failed), a member sees their own spend, as if
 hidden, and where a read of the workspace's totals is refused because the
-setting changed meanwhile, the page reads it again and follows it. A month that has ended
-is drawn against today's budget and today's limits, since past ones are not
-stored, so it carries no verdict: no crossing date, no severity, and limits
-named ("Limit today") rather than measured against the month.
+setting changed meanwhile, the page reads it again and follows it. A month
+that has ended is drawn against today's budget and today's limits, since past
+ones are not stored, so it carries no verdict: no crossing date, no severity,
+and limits named ("Limit today") rather than measured against the month.
 
 Before anything has been sent, Overview opens with a getting-started strip. A
 deployment operator sees it on a gateway with no providers and no usage, with a
@@ -248,8 +248,9 @@ you see everyone's requests and can narrow to your own; in any other workspace
 you belong to, you see only your own. Managing one workspace widens that
 workspace and no other. While a workspace shares its totals with members (the
 default), the organization usage API also gives a member its aggregates when
-asked (`workspace_totals=true`): totals and the time series, split by model,
-provider or status code, never another person's requests, keys or sessions. See
+asked (`workspace_totals=true`): totals, the time series and the 95th
+percentile latency, split by model, provider or status code, never another
+person's requests, keys or sessions, nor the gateway-run tools. See
 [Access control](access-control.md#workspace-scoped-spend).
 
 Filter Activity from the log itself: each column header sorts and holds that
@@ -278,17 +279,16 @@ leaves it out, dragging across the chart narrows it to a stretch of dates, and
 clicking a row opens its requests in Activity with the same filters and window;
 from Organization scope Activity opens on that row's workspace. A member at
 Workspace scope reads the workspace's totals: the breakdowns are model and
-provider only, no filter naming a person, key, session, channel or policy is
-sent (one already in the URL waits there, marked as not in this scope), and rows
-do not open in Activity, which shows a member only their own requests. While the
+provider only, the gateway-run tools are not listed, no filter naming a person,
+key, session, channel or policy is sent (one already in the URL waits there,
+marked as not in this scope), and rows do not open in Activity, which shows a
+member only their own requests. While the
 workspace keeps its totals from members, a member's Usage is You only, and the
 workspace budget beside the window reads as a percent "used of" its cap, with a
 line saying the total is hidden by an admin. A link to Workspace scope waits for
 the setting before it reads anything, rather than showing a member their own
-usage first. The
-organization's usage is that Organization scope rather than a page of the
-organization view. Everything lives
-in the URL under the names Activity reads (`model`, `api_key_id`, `user_id` and
+usage first. The organization's usage is that Organization scope rather than a
+page of the organization view. Everything lives in the URL under the names Activity reads (`model`, `api_key_id`, `user_id` and
 the rest), and a view can be saved by name, as on Activity. A key's actions menu
 on the API keys page has View usage, which opens Usage filtered to that key.
 

@@ -27,10 +27,10 @@ import {
   attentionKey,
   billedByDay,
   canProjectMonth,
-  chartCaptionLead,
   comparisonLabel,
   costOnDay,
   describeAttention,
+  describeChartCaptionLead,
   groupAttention,
   readBudget,
   runningTotal,
@@ -270,6 +270,7 @@ function OverviewPage({
       <OverviewScopeBar
         scopes={data.scopes}
         scope={data.requested}
+        isScopePending={isAwaitingTotals}
         onScope={(next) =>
           url.patch({ scope: next === data.scopes[0] ? "" : next })
         }
@@ -374,7 +375,7 @@ function OverviewPage({
               <div className="h-51" aria-hidden />
             )}
             <p className="mt-2.5 text-caption">
-              {chartCaptionLead({
+              {describeChartCaptionLead({
                 isAwaitingTotals,
                 isOwnOnly,
                 hasBudget: cap !== undefined,
@@ -426,7 +427,7 @@ function OverviewPage({
             isPast={!month.isCurrent}
             now={now}
             workspaceId={viewer.workspaceId || undefined}
-            isMemberWorkspace={data.isHidingWorkspaceKeys}
+            isHidingKeys={data.isHidingWorkspaceKeys}
           />
         </aside>
       </div>

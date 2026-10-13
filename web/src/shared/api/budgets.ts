@@ -26,6 +26,7 @@ import {
   ORGANIZATION_CONTEXT,
   ORGANIZATION_SPEND_CEILINGS,
   SCOPED_BUDGETS,
+  workspaceSpendKey,
 } from "@/shared/api/queryKeys"
 
 const fetchAllBudgets = () => fetchAllRows<Budget>("/budgets")
@@ -253,12 +254,11 @@ export function useOrganizationSpendCeilings(
 }
 
 // The workspace's own spend ceiling as any member of it reads it, or null when
-// it has none. Under the ceilings' head so every budget or ceiling write here
-// refreshes it too. Spend moves with traffic, so it is also re-read with the
+// it has none. Spend moves with traffic, so it is also re-read with the
 // page that shows it.
 export function useWorkspaceSpend(workspaceId: string) {
   return useQuery({
-    queryKey: [ORGANIZATION_SPEND_CEILINGS, "workspace", workspaceId],
+    queryKey: workspaceSpendKey(workspaceId),
     queryFn: () =>
       apiFetch<WorkspaceSpend | null>(
         `/workspaces/${encodeURIComponent(workspaceId)}/budget`,

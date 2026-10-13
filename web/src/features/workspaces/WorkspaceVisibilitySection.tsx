@@ -21,9 +21,10 @@ export function WorkspaceVisibilitySection({
 }) {
   const visibility = useWorkspaceVisibility(workspaceId)
   const setVisibility = useSetWorkspaceVisibility(workspaceId)
-  const isShown = visibility.data?.members_see_workspace_totals ?? false
+  // Unknown until the read answers, so the list below does not say "not
+  // shown" for a setting that is on by default and then flip.
+  const isShown = visibility.data?.members_see_workspace_totals
   const titleId = useId()
-  const totalsLabelId = useId()
   const seesId = useId()
 
   return (
@@ -34,10 +35,10 @@ export function WorkspaceVisibilitySection({
             Workspace visibility
           </h2>
           <span className="text-caption text-subtle">
-            Admins only · admins always see everything
+            Owners and admins only · they always see everything
           </span>
         </div>
-        <p className="text-sm text-muted">
+        <p className="text-caption">
           What members can see beyond their own requests.
         </p>
       </div>
@@ -45,12 +46,11 @@ export function WorkspaceVisibilitySection({
       <SettingsGroup isBounded>
         <SettingRow
           label="Workspace totals"
-          labelId={totalsLabelId}
           help="Spend, budget used and request counts for the whole workspace. On by default."
           control={
             <Toggle
               label="Workspace totals"
-              isSelected={isShown}
+              isSelected={isShown ?? false}
               // Withheld until the read answers, so a pending or failed read
               // never offers to write the opposite of what is stored, and
               // while a save is in flight, so two presses cannot settle out
@@ -89,24 +89,32 @@ function SeesRow({
   isNever = false,
   children,
 }: {
-  isSeen: boolean
+  /** Undefined while the setting is still being read. */
+  isSeen: boolean | undefined
   /** Never shown whatever the setting, which the strike-through says. */
   isNever?: boolean
   children: string | string[]
 }) {
   return (
-    <li className="flex items-start gap-2 text-sm">
-      {isSeen ? (
+    <li className="flex items-start gap-2 text-body">
+      {isSeen === undefined ? (
+        // Holds the icon's slot, so the row does not move when it lands.
+        <span aria-hidden className="mt-0.5 size-4 shrink-0" />
+      ) : isSeen ? (
         <FiCheck aria-hidden className="mt-0.5 size-4 shrink-0 text-success" />
       ) : (
         <FiX aria-hidden className="mt-0.5 size-4 shrink-0 text-subtle" />
       )}
-      <span className="sr-only">{isSeen ? "Shown: " : "Not shown: "}</span>
+      {isSeen === undefined ? null : (
+        <span className="sr-only">{isSeen ? "Shown: " : "Not shown: "}</span>
+      )}
       <span
         className={
-          isSeen
-            ? "text-foreground"
-            : `text-subtle ${isNever ? "line-through" : ""}`
+          isSeen === undefined
+            ? "text-muted"
+            : isSeen
+              ? "text-foreground"
+              : `text-subtle ${isNever ? "line-through" : ""}`
         }
       >
         {children}

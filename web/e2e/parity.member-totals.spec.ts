@@ -6,6 +6,7 @@ import {
 } from "@playwright/test"
 
 import { API_ROOT } from "@/shared/api/client"
+import { formatUsdHeadline, formatUsdLimit } from "@/shared/helpers/format"
 import { authHeaders, expectOk, login, nav, tileValue } from "./helpers"
 
 // One manager and one member over the shared gateway, so the flow runs in
@@ -118,7 +119,9 @@ test.describe("workspace totals for members", () => {
         created.ceilingId = ((await ceiling.json()) as { id: string }).id
       }
       const cap = existing?.max_budget ?? 1000
-      const capText = `$${cap.toLocaleString("en-US")}`
+      // Each page formats the cap as it does everywhere else.
+      const overviewCap = formatUsdLimit(cap)
+      const usageCap = formatUsdHeadline(cap)
 
       // A member of that workspace who manages nothing, with a password.
       // Fresh per run, as the tenancy spec's invitee is.
@@ -171,7 +174,7 @@ test.describe("workspace totals for members", () => {
         member.getByRole("radiogroup", { name: "Scope" }),
       ).toHaveCount(0)
       await expect(tileValue(member, "Workspace budget")).toHaveText(/^\d+%$/)
-      await expect(member.getByText(`used of ${capText}`)).toBeVisible()
+      await expect(member.getByText(`used of ${overviewCap}`)).toBeVisible()
       await expect(
         member.getByText(/^Workspace total hidden by your admin/),
       ).toBeVisible()
@@ -179,10 +182,10 @@ test.describe("workspace totals for members", () => {
       // Usage carries the same budget as a share, on lines that wrap on a
       // phone rather than pushing the page sideways.
       await member.goto(`${origin}/#/usage`)
-      await expect(member.getByText(`used of ${capText}`)).toBeVisible()
+      await expect(member.getByText(`used of ${usageCap}`)).toBeVisible()
       for (const width of [320, 390]) {
         await member.setViewportSize({ width, height: 812 })
-        await expect(member.getByText(`used of ${capText}`)).toBeVisible()
+        await expect(member.getByText(`used of ${usageCap}`)).toBeVisible()
         const spill = await member.evaluate(() => {
           const main = document.getElementById("main-content")
           return main ? main.scrollWidth - main.clientWidth : -1

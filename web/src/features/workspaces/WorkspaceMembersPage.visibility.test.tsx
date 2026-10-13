@@ -31,6 +31,8 @@ function mockApi({
   organizationRole = "owner",
   shown = true,
   patch,
+  reread,
+  isReadRefused = false,
 }: {
   /** The caller's role in the workspace. */
   role?: string
@@ -39,10 +41,15 @@ function mockApi({
   shown?: boolean
   /** How the server answers the write; it applies the change by default. */
   patch?: (body: string) => Promise<Response>
+  /** Held open until it resolves: every read of the setting after the first. */
+  reread?: Promise<void>
+  /** The setting cannot be read at all. */
+  isReadRefused?: boolean
 } = {}) {
   const requests: Request[] = []
   // What the server has stored, which a write it accepts changes.
   let stored = shown
+  let reads = 0
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input)
     const method = (init?.method ?? "GET").toUpperCase()
@@ -61,6 +68,14 @@ function mockApi({
         }
         return response
       }
+      if (isReadRefused) {
+        return Response.json(
+          { detail: "The workspace's settings could not be read" },
+          { status: 500 },
+        )
+      }
+      reads += 1
+      if (reads > 1 && reread) await reread
       return Response.json({ members_see_workspace_totals: stored })
     }
     if (url.includes(`${API_ROOT}/workspaces/${ALPHA}/members`)) {
@@ -117,7 +132,7 @@ describe("WorkspaceMembersPage visibility", () => {
       await screen.findByRole("heading", { name: "Workspace visibility" }),
     ).toBeInTheDocument()
     expect(
-      screen.getByText("Admins only · admins always see everything"),
+      screen.getByText("Owners and admins only · they always see everything"),
     ).toBeInTheDocument()
     await waitFor(async () =>
       expect(await totalsSwitch()).toHaveAttribute("aria-checked", "true"),
@@ -197,24 +212,29 @@ describe("WorkspaceMembersPage visibility", () => {
     answer(Response.json({ members_see_workspace_totals: false }))
     await waitFor(() => expect(toggle).toBeEnabled())
     expect(toggle).toHaveAttribute("aria-checked", "false")
-    // Read again once the write settled.
-    await waitFor(() =>
-      expect(
-        requests.filter(
-          (request) =>
-            request.method === "GET" && request.url.endsWith("/visibility"),
-        ),
-      ).toHaveLength(2),
-    )
+    // The saved answer is the setting; nothing reads it again.
+    expect(
+      requests.filter(
+        (request) =>
+          request.method === "GET" && request.url.endsWith("/visibility"),
+      ),
+    ).toHaveLength(1)
   })
 
   it("puts the switch back and says why when the save is refused", async () => {
     let refuse: (response: Response) => void = () => {}
+    // The read that follows a refusal is held, so the switch coming back is
+    // the rollback's doing and not that read's.
+    let release: () => void = () => {}
+    const reread = new Promise<void>((resolve) => {
+      release = resolve
+    })
     mockApi({
       patch: () =>
         new Promise<Response>((resolve) => {
           refuse = resolve
         }),
+      reread,
     })
     const user = userEvent.setup()
     await renderPage()
@@ -235,5 +255,18 @@ describe("WorkspaceMembersPage visibility", () => {
     ).toBeInTheDocument()
     await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"))
     expect(totalsLine()).toHaveTextContent(/^Shown:/)
+    release()
+  })
+
+  it("keeps the switch withheld and says why when the setting cannot be read", async () => {
+    mockApi({ isReadRefused: true })
+    await renderPage()
+
+    expect(
+      await screen.findByText("The workspace's settings could not be read"),
+    ).toBeInTheDocument()
+    expect(await totalsSwitch()).toBeDisabled()
+    // Nothing is claimed about a setting that could not be read.
+    expect(totalsLine()).not.toHaveTextContent(/Shown:/)
   })
 })

@@ -731,7 +731,7 @@ export function daysUntil(iso: string, now: number): number {
  * budget line, or that the line is today's budget. Nothing while it is not yet
  * known whether a member is shown the workspace's totals.
  */
-export function chartCaptionLead({
+export function describeChartCaptionLead({
   isAwaitingTotals,
   isOwnOnly,
   hasBudget,

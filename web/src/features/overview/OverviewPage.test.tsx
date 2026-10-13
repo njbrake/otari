@@ -173,6 +173,8 @@ interface Bodies {
    * is refused, and the overview says they are hidden from then on.
    */
   revokesTotals?: boolean
+  /** Held open for every overview read after a refused ask, until it resolves. */
+  holdAfterRevoke?: Promise<void>
   /** Held open for the operator's provider list. */
   holdProviders?: Promise<void>
   /** The overview summary per scope asked for, over `overview`. */
@@ -308,6 +310,7 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
       const named = params.get("workspace_id") ?? ""
       if (b.holdWorkspaceOverview?.id === named)
         await b.holdWorkspaceOverview.until
+      if (isRevoked) await b.holdAfterRevoke
       if (b.overviewFails) {
         return jsonResponse({ detail: "overview exploded" }, 500)
       }
@@ -1400,8 +1403,14 @@ describe("a member's chart and a month that has ended", () => {
   })
 
   it("drops a member to their own spend when a read of the totals is refused", async () => {
-    mockApi(
+    // The overview read again after the refusal is held, so the page is seen
+    // between the two: the refusal is no error to report.
+    let release: () => void = () => {}
+    const requested = mockApi(
       {
+        holdAfterRevoke: new Promise((resolve) => {
+          release = resolve
+        }),
         context: MEMBER,
         spend: BUDGET,
         series: daily(12, 5),
@@ -1417,6 +1426,18 @@ describe("a member's chart and a month that has ended", () => {
       workspace: WORKSPACE_A,
     })
 
+    // An overview read after the refused one: the re-read, held open.
+    await waitFor(() => {
+      const refused = requested.findIndex((url) =>
+        url.includes("workspace_totals=true"),
+      )
+      expect(refused).toBeGreaterThan(-1)
+      expect(
+        requested.slice(refused).some((url) => url.includes("/overview?")),
+      ).toBe(true)
+    })
+    expect(screen.queryByText(/not shared with members/)).toBeNull()
+    release()
     expect(
       await screen.findByText(/Workspace totals are hidden by your admin/),
     ).toBeInTheDocument()
@@ -1934,7 +1955,7 @@ describe("recent failures and the rail", () => {
   it("reads no provider health for a caller who does not operate the deployment", async () => {
     const requested = mockApi({ context: MEMBER }, { scoped: true })
     renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
-    await screen.findByText("Your usage")
+    await screen.findByRole("radiogroup", { name: "Scope" })
     expect(screen.queryByRole("heading", { name: "Providers" })).toBeNull()
     expect(requested.some((url) => url.includes("/providers"))).toBe(false)
   })

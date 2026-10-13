@@ -14,6 +14,7 @@ import type { Month } from "./overviewQuery"
 export function OverviewScopeBar({
   scopes,
   scope,
+  isScopePending = false,
   onScope,
   months,
   month,
@@ -27,6 +28,8 @@ export function OverviewScopeBar({
 }: {
   scopes: readonly UsageScopeKey[]
   scope: UsageScopeKey
+  /** Whether there is a choice of scope waits on the workspace's answer, so none is shown yet. */
+  isScopePending?: boolean
   onScope: (scope: UsageScopeKey) => void
   months: readonly Month[]
   /** The month asked for, which the menu shows at once. */
@@ -44,7 +47,11 @@ export function OverviewScopeBar({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-border py-3">
-      {scopes.length > 1 ? (
+      {isScopePending ? (
+        // The scope control's footprint, held while the workspace's answer
+        // says whether there is a choice, so the row does not shift when it lands.
+        <span aria-hidden className="h-11 w-36 md:h-8" />
+      ) : scopes.length > 1 ? (
         <Segmented
           label="Scope"
           value={scope}
@@ -55,7 +62,7 @@ export function OverviewScopeBar({
           }))}
         />
       ) : (
-        <span className="flex items-center gap-1.5 text-sm whitespace-nowrap">
+        <span className="flex items-center gap-1.5 text-body whitespace-nowrap">
           <FiUser aria-hidden className="size-3.5 text-muted" />
           Your usage
         </span>

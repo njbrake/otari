@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
-  askableScopes,
+  listAskableScopes,
   MEMBER_TOTALS_DIMENSIONS,
   MEMBER_TOTALS_FILTERS,
   type MemberTotalsVisibility,
-  memberReach,
+  pickUsageScope,
+  readMemberReach,
   readMemberTotalsVisibility,
-  usageScopeFor,
 } from "./memberVisibility"
 
 const manager = {
@@ -28,9 +28,10 @@ const hidden: MemberTotalsVisibility = {
 }
 
 describe("the member totals allowlists", () => {
-  // Pinned to the server's lists in src/gateway/services/organizations/_visibility.py:
-  // a name added here alone is refused there, and drops the member to You.
-  it("match the server's breakdowns", () => {
+  // A change to these lists is a deliberate one. That they match the server's
+  // (`_visibility.py`) is tests/unit/test_member_totals_client_mirror.py's, which
+  // reads both.
+  it("hold the breakdowns a member may split by", () => {
     expect([...MEMBER_TOTALS_DIMENSIONS]).toEqual([
       "model",
       "provider",
@@ -38,7 +39,7 @@ describe("the member totals allowlists", () => {
     ])
   })
 
-  it("match the server's filters", () => {
+  it("hold the filters a member may narrow by", () => {
     expect([...MEMBER_TOTALS_FILTERS].sort()).toEqual(
       [
         "counts_toward_budget",
@@ -76,9 +77,9 @@ describe("readMemberTotalsVisibility", () => {
   })
 })
 
-describe("memberReach for a member", () => {
+describe("readMemberReach for a member", () => {
   it("adds the workspace's totals while its managers share them", () => {
-    const reach = memberReach(member, shown)
+    const reach = readMemberReach(member, shown)
     expect(reach).toMatchObject({
       scopes: ["you", "workspace"],
       isPending: false,
@@ -93,12 +94,12 @@ describe("memberReach for a member", () => {
     })
     expect(reach.totalsFilters.has("model")).toBe(true)
     expect(reach.totalsFilters.has("user_id")).toBe(false)
-    expect(usageScopeFor(reach, "workspace")).toBe("workspace_totals")
-    expect(usageScopeFor(reach, "you")).toBe("caller")
+    expect(pickUsageScope(reach, "workspace")).toBe("workspace_totals")
+    expect(pickUsageScope(reach, "you")).toBe("caller")
   })
 
   it("keeps them to their own usage while the totals are hidden", () => {
-    expect(memberReach(member, hidden)).toMatchObject({
+    expect(readMemberReach(member, hidden)).toMatchObject({
       scopes: ["you"],
       isPending: false,
       isHiddenByAdmin: true,
@@ -109,7 +110,7 @@ describe("memberReach for a member", () => {
   })
 
   it("reads nothing of the workspace while its answer is on its way", () => {
-    expect(memberReach(member, { status: "pending" })).toMatchObject({
+    expect(readMemberReach(member, { status: "pending" })).toMatchObject({
       scopes: ["you"],
       isPending: true,
       isHiddenByAdmin: false,
@@ -118,7 +119,7 @@ describe("memberReach for a member", () => {
   })
 
   it("reads a failed answer as hidden, without blaming an admin", () => {
-    expect(memberReach(member, { status: "unavailable" })).toMatchObject({
+    expect(readMemberReach(member, { status: "unavailable" })).toMatchObject({
       scopes: ["you"],
       isPending: false,
       isHiddenByAdmin: false,
@@ -128,7 +129,9 @@ describe("memberReach for a member", () => {
 
   it("trusts no answer while no workspace is named, and waits on none", () => {
     for (const known of [shown, { status: "pending" } as const]) {
-      expect(memberReach({ ...member, workspaceId: "" }, known)).toMatchObject({
+      expect(
+        readMemberReach({ ...member, workspaceId: "" }, known),
+      ).toMatchObject({
         scopes: ["you"],
         isPending: false,
         canReadWorkspaceTotals: false,
@@ -137,14 +140,14 @@ describe("memberReach for a member", () => {
   })
 
   it("asks the server as if the workspace shared its totals", () => {
-    expect(askableScopes(member)).toEqual(["you", "workspace"])
+    expect(listAskableScopes(member)).toEqual(["you", "workspace"])
   })
 })
 
-describe("memberReach for a manager", () => {
+describe("readMemberReach for a manager", () => {
   it("reads everything, whatever the setting", () => {
     for (const known of [hidden, { status: "pending" } as const]) {
-      expect(memberReach(manager, known)).toMatchObject({
+      expect(readMemberReach(manager, known)).toMatchObject({
         scopes: ["workspace", "you"],
         isPending: false,
         canReadWorkspaceTotals: true,
@@ -154,23 +157,23 @@ describe("memberReach for a manager", () => {
         isListingOwnWorkspaceFailures: false,
       })
     }
-    expect(usageScopeFor(memberReach(manager, hidden), "workspace")).toBe(
+    expect(pickUsageScope(readMemberReach(manager, hidden), "workspace")).toBe(
       "caller",
     )
-    expect(usageScopeFor(memberReach(manager, hidden), "organization")).toBe(
-      "organization",
-    )
+    expect(
+      pickUsageScope(readMemberReach(manager, hidden), "organization"),
+    ).toBe("organization")
   })
 
   it("adds the organization for someone who manages it", () => {
     expect(
-      memberReach({ ...manager, canReadOrganization: true }, shown).scopes,
+      readMemberReach({ ...manager, canReadOrganization: true }, shown).scopes,
     ).toEqual(["workspace", "you", "organization"])
   })
 
   it("drops You for a manager whose own requests cannot be told apart", () => {
     expect(
-      memberReach(
+      readMemberReach(
         { ...manager, canReadOrganization: true, ownUserId: undefined },
         shown,
       ).scopes,
@@ -179,7 +182,7 @@ describe("memberReach for a manager", () => {
 
   it("keeps You while the roster that names the caller loads", () => {
     expect(
-      memberReach(
+      readMemberReach(
         { ...manager, ownUserId: undefined, isFindingOwnUserId: true },
         shown,
       ).scopes,

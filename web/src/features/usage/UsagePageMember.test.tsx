@@ -157,6 +157,24 @@ describe("a member's Usage while the workspace hides its totals", () => {
   })
 })
 
+describe("a member's Usage when the setting cannot be read", () => {
+  it("reads their own usage only, and asks for no totals", async () => {
+    const { calls } = mockUsageApi({
+      viewer: "member",
+      membersSeeWorkspaceTotals: true,
+      visibilityFails: true,
+    })
+    page("/usage?scope=workspace")
+
+    expect(await screen.findByText("Your usage")).toBeInTheDocument()
+    expect(screen.queryByRole("radiogroup", { name: "Scope" })).toBeNull()
+    await table()
+    expect(
+      calls.filter((call) => call.url.includes("workspace_totals")),
+    ).toEqual([])
+  })
+})
+
 describe("a member's link to the workspace's Usage", () => {
   it("waits for the workspace's answer rather than reading their own usage first", async () => {
     let release: () => void = () => {}
@@ -193,12 +211,26 @@ describe("a member's link to the workspace's Usage", () => {
   })
 
   it("drops to their own usage when the managers turned the totals off meanwhile", async () => {
+    // The setting read again after the refusal is held, so the page is seen
+    // between the two: the refusal is no error to report.
+    let release: () => void = () => {}
     const { calls } = mockUsageApi({
       viewer: "member",
       membersSeeWorkspaceTotals: true,
       revokesTotals: true,
+      holdReread: new Promise((resolve) => {
+        release = resolve
+      }),
     })
     page("/usage?scope=workspace")
+
+    await waitFor(() =>
+      expect(
+        calls.filter((call) => call.url.includes("/visibility")).length,
+      ).toBe(2),
+    )
+    expect(screen.queryByText(/Workspace totals are not shared/)).toBeNull()
+    release()
 
     // The refused ask reads the setting again, and the page follows it.
     expect(await screen.findByText("Your usage")).toBeInTheDocument()

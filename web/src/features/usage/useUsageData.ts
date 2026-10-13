@@ -4,14 +4,15 @@ import { useActivityViewer } from "@/features/activity/useActivityViewer"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { canManage } from "@/features/organization/roles"
 import {
-  memberReach,
+  pickUsageScope,
+  readMemberReach,
   readMemberTotalsVisibility,
-  usageScopeFor,
 } from "@/features/workspaces/memberVisibility"
 import { useWorkspaceSpend } from "@/shared/api/budgets"
 import { useOrganizationContext } from "@/shared/api/organizations"
 import {
   NO_BREAKDOWNS,
+  pickReportedError,
   useUsageBreakdown,
   useUsageGroupedSeries,
   useUsageLatency,
@@ -74,7 +75,7 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
   const visibility = useWorkspaceVisibility(
     viewer.isManager ? "" : viewer.workspaceId,
   )
-  const reach = memberReach(viewer, readMemberTotalsVisibility(visibility))
+  const reach = readMemberReach(viewer, readMemberTotalsVisibility(visibility))
   const scopes = reach.scopes
   const scope = readScope(url, scopes)
   // A link to Workspace waits for who is reading and, for a member, the
@@ -87,7 +88,7 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
   const isReady =
     !isAwaitingScope &&
     !(scope === "you" && viewer.isManager && viewer.ownUserId === undefined)
-  const usageScope = usageScopeFor(reach, scope)
+  const usageScope = pickUsageScope(reach, scope)
   const isReadingTotals = usageScope === "workspace_totals"
   const offered = dimensionsFor(scope, reach)
   const dimension = readDimension(url, offered)
@@ -220,6 +221,7 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
     scope,
     /** A link asked for a member's Workspace, and the workspace's answer is on its way. */
     isAwaitingScope,
+    isScopePending: reach.isPending,
     /** Rows open their requests in Activity, which lists a member only their own. */
     canOpenActivity: scope !== "workspace" || reach.canOpenWorkspaceActivity,
     context,
@@ -259,7 +261,10 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
     isLoading: !isReady || (!isCurrent && !breakdown.error),
     isFetching: breakdown.isFetching || breakdown.isPlaceholderData,
     updatedAt: breakdown.dataUpdatedAt,
-    error: breakdown.error ?? grouped.error ?? tools.error ?? latency.error,
+    error:
+      [breakdown.error, grouped.error, tools.error, latency.error]
+        .map((error) => pickReportedError(error, usageScope))
+        .find((error) => error !== null) ?? null,
     refresh,
   }
 }

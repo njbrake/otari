@@ -10,11 +10,11 @@ import {
   budgetState,
   budgetView,
   canProjectMonth,
-  chartCaptionLead,
   comparisonLabel,
   costOnDay,
   daysUntil,
   describeAttention,
+  describeChartCaptionLead,
   describeMonthSoFar,
   groupAttention,
   paceFor,
@@ -715,7 +715,7 @@ describe("expiry", () => {
   })
 })
 
-describe("chartCaptionLead", () => {
+describe("describeChartCaptionLead", () => {
   const base = {
     isAwaitingTotals: false,
     isOwnOnly: false,
@@ -727,13 +727,17 @@ describe("chartCaptionLead", () => {
 
   it("says nothing while a member's setting is unknown", () => {
     expect(
-      chartCaptionLead({ ...base, isAwaitingTotals: true, isOwnOnly: true }),
+      describeChartCaptionLead({
+        ...base,
+        isAwaitingTotals: true,
+        isOwnOnly: true,
+      }),
     ).toBe("")
   })
 
   it("names the admin where the totals are hidden from a member", () => {
     expect(
-      chartCaptionLead({
+      describeChartCaptionLead({
         ...base,
         isOwnOnly: true,
         isHiddenFromMember: true,
@@ -746,15 +750,17 @@ describe("chartCaptionLead", () => {
 
   it("explains a reader's own spend alone, this month and in a past one", () => {
     const own = { ...base, isOwnOnly: true, showsBudget: false }
-    expect(chartCaptionLead(own)).toMatch(/the Workspace budget tile measures/)
-    expect(chartCaptionLead({ ...own, isCurrentMonth: false })).toMatch(
+    expect(describeChartCaptionLead(own)).toMatch(
+      /the Workspace budget tile measures/,
+    )
+    expect(describeChartCaptionLead({ ...own, isCurrentMonth: false })).toMatch(
       /workspace spend by month is for managers/,
     )
   })
 
   it("says nothing of a budget line where the workspace has no budget", () => {
     expect(
-      chartCaptionLead({
+      describeChartCaptionLead({
         ...base,
         isOwnOnly: true,
         hasBudget: false,
@@ -765,9 +771,9 @@ describe("chartCaptionLead", () => {
   })
 
   it("says a past month's line is today's budget", () => {
-    expect(chartCaptionLead({ ...base, isCurrentMonth: false })).toBe(
+    expect(describeChartCaptionLead({ ...base, isCurrentMonth: false })).toBe(
       "Past budgets aren't stored, so the line is today's budget. ",
     )
-    expect(chartCaptionLead(base)).toBe("")
+    expect(describeChartCaptionLead(base)).toBe("")
   })
 })

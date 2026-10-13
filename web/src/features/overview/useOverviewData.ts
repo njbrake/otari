@@ -3,15 +3,16 @@ import type { UsageFilters } from "@/client"
 import { readScope } from "@/features/usage/usageQuery"
 import { useUsageViewer } from "@/features/usage/useUsageData"
 import {
-  askableScopes,
-  memberReach,
+  listAskableScopes,
+  pickUsageScope,
+  readMemberReach,
   readMemberTotalsVisibility,
-  usageScopeFor,
 } from "@/features/workspaces/memberVisibility"
 import { useWorkspaceSpend } from "@/shared/api/budgets"
 import { useOverviewSummary } from "@/shared/api/overview"
 import {
   NO_BREAKDOWNS,
+  pickReportedError,
   useUsageCount,
   useUsageLogs,
   useUsageSummary,
@@ -42,7 +43,7 @@ export function useOverviewData(url: OverviewUrl) {
   // Asked of the server as if the workspace shared its totals, since only its
   // answer says whether it does: where it does not, a member's Workspace falls
   // back to their own usage, and the switch offers only that.
-  const requested = readScope(url, askableScopes(viewer))
+  const requested = readScope(url, listAskableScopes(viewer))
 
   // Taken on mount and on refresh rather than each render, so the month's
   // bounds, and with them every query key, hold still in between.
@@ -66,7 +67,7 @@ export function useOverviewData(url: OverviewUrl) {
   const visibility = useWorkspaceVisibility(viewer.workspaceId, {
     enabled: false,
   })
-  const reach = memberReach(
+  const reach = readMemberReach(
     viewer,
     readMemberTotalsVisibility({
       data: visibility.data,
@@ -100,7 +101,7 @@ export function useOverviewData(url: OverviewUrl) {
   })
   const monthWindow = windowFilters(month.start, month.end)
   const monthFilters: UsageFilters = { ...base, ...monthWindow }
-  const usageScope = usageScopeFor(reach, scope)
+  const usageScope = pickUsageScope(reach, scope)
   // The workspace's own series beside the reader's: the rest of the workspace
   // in the chart, measured against the workspace's budget.
   const readsWorkspaceToo =
@@ -125,7 +126,7 @@ export function useOverviewData(url: OverviewUrl) {
     "day",
     NO_BREAKDOWNS,
     readsWorkspaceToo,
-    usageScopeFor(reach, "workspace"),
+    pickUsageScope(reach, "workspace"),
   )
   // Read in every scope, so it is on hand the moment a scope that shows it
   // is: any member of the workspace may read it.
@@ -280,10 +281,12 @@ export function useOverviewData(url: OverviewUrl) {
       failures.dataUpdatedAt,
     ),
     error:
-      summary.error ??
-      previous.error ??
+      pickReportedError(summary.error, usageScope) ??
+      pickReportedError(previous.error, usageScope) ??
       overview.error ??
       spend.error ??
-      (readsWorkspaceToo ? workspace.error : null),
+      (readsWorkspaceToo
+        ? pickReportedError(workspace.error, pickUsageScope(reach, "workspace"))
+        : null),
   }
 }
