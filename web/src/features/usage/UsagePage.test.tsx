@@ -474,9 +474,12 @@ describe("UsagePage", () => {
       await rowNamed("claude-opus-5-5")
       screen.getByRole("slider", { name: /Filter by date/ }).focus()
       await user.keyboard("{ArrowRight}")
-      // The members' series are not drawn under Model while its own load.
-      const swatches = (await readout()).querySelectorAll("[aria-hidden]")
-      expect(swatches).toHaveLength(0)
+      // The members' series are not drawn under Model while its own load; the
+      // window's totals hold the bar as one series until they do.
+      const loading = await readout()
+      expect(within(loading).queryByText("Jordan M.")).toBeNull()
+      expect(within(loading).getByText("All usage")).toBeInTheDocument()
+      expect(loading.querySelectorAll("[aria-hidden]")).toHaveLength(1)
 
       releaseSeries()
       await waitFor(async () =>

@@ -8,6 +8,7 @@ import {
   foldSeries,
   niceCeiling,
   placeUnranked,
+  totalSeries,
 } from "./usageModel"
 import type { SortKey } from "./usageQuery"
 
@@ -177,5 +178,36 @@ describe("axisScale", () => {
 
   it("counts one request in whole requests", () => {
     expect(ticks(1, "requests")).toEqual(["1", "2", "3", "4"])
+  })
+})
+
+describe("totalSeries", () => {
+  const point = {
+    bucket_start: DAY,
+    cost: 3,
+    imported_cost: 1,
+    input_tokens: 70,
+    output_tokens: 30,
+    // The raw total, which the groups do not use.
+    tokens: 999,
+    cache_read_tokens: 40,
+    cache_write_tokens: 0,
+    requests: 5,
+    errors: 0,
+  }
+
+  it("draws the window's totals as one series, in the figure the groups will use", () => {
+    expect(totalSeries([point], "cost", true).points).toEqual([
+      { start: Date.parse(DAY), values: { total: 3 } },
+    ])
+    // Billed only, without the subscription's share.
+    expect(totalSeries([point], "cost", false).points[0].values.total).toBe(2)
+    // Billed input plus output, which is what a grouped point's tokens are.
+    expect(totalSeries([point], "tokens", true).points[0].values.total).toBe(
+      100,
+    )
+    expect(totalSeries([point], "requests", true).series).toEqual([
+      expect.objectContaining({ key: "total", label: "All usage" }),
+    ])
   })
 })
