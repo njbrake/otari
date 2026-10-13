@@ -149,7 +149,8 @@ back rather than holding them until its reads finish. The limit is per worker: t
 sees up to workers × replicas × `usage_read_concurrency` of these reads at once.
 Raise it for a database with memory to spare.
 
-On PostgreSQL those reads take a whole hour's sums from `usage_rollups` rather
+On PostgreSQL those reads, and a model page's last 30 days of usage for each
+offering, take a whole hour's sums from `usage_rollups` rather
 than scanning the hour's rows, so a month-long window reads a row per hour for
 each combination of model, user, key, session and the other keys a read groups
 by, instead of a row per request. A trigger on `usage_logs` marks

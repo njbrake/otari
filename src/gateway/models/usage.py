@@ -304,6 +304,8 @@ class UsageRollup(Base):
         # scope) finds its rollups here rather than scanning a month of them.
         Index("ix_usage_rollups_user_id_hour", "user_id", "hour"),
         Index("ix_usage_rollups_api_key_id_hour", "api_key_id", "hour"),
+        # A model page's usage of each offering reads one model's rollups.
+        Index("ix_usage_rollups_model_hour", "model", "hour"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)

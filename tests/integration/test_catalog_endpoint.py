@@ -5,6 +5,7 @@ without dialing a provider, and models.dev is a mocked fetch: what is under
 test is the fold and the join, not the sources.
 """
 
+import asyncio
 import uuid
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta
@@ -14,15 +15,19 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
+from sqlalchemy import delete, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_ROOT, GatewayConfig
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.pricing import OrganizationModelPricing
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User
+from gateway.repositories.usage import UsageRollupRepository
 from gateway.services import model_catalog_service as mcs
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
-from .conftest import build_test_client
+from .conftest import _to_async_url, build_test_client
 from .hosted_port_helpers import HostedModelProvider, bind_model_provider
 
 # Two providers serving one model under two spellings, one of them Fireworks'
@@ -669,6 +674,92 @@ def test_a_signed_in_caller_sees_their_own_usage_of_an_offering(
     assert usage["spend_usd"] == 0.003
     assert usage["effective_price_per_million"] == 1.0
     assert by_selector[_FIREWORKS_GLM]["usage_30d"] is None
+
+
+def _refresh_rollups(postgres_url: str) -> None:
+    """Build every marked hour's usage rollups, as the background refresher would."""
+
+    async def main() -> None:
+        engine = create_async_engine(_to_async_url(postgres_url))
+        try:
+            async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+                uow = UnitOfWork(session)
+                while True:
+                    async with uow:
+                        if not await UsageRollupRepository(uow).refresh(24, now=datetime.now(UTC)):
+                            return
+        finally:
+            await engine.dispose()
+
+    asyncio.run(main())
+
+
+def test_an_offerings_usage_reads_whole_hours_from_the_rollups(
+    priced: TestClient,
+    master_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    postgres_url: str,
+) -> None:
+    """The detail page's usage must not scan every row of the organization's month."""
+    from sqlmodel import select
+
+    from gateway.models.tenancy import Workspace
+    from gateway.models.usage import UsageLog
+
+    assert priced.get(f"{API_ROOT}/organizations/me", headers=master_header).status_code == status.HTTP_200_OK
+    two_days_ago = (datetime.now(UTC) - timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
+    session = db_session_factory()
+    try:
+        workspace_id = session.execute(select(Workspace.id)).scalars().first()
+        assert workspace_id is not None
+        # Both spellings of the offering, a failure that never billed, and a
+        # different model on the same instance.
+        for model, provider, status_ in (
+            ("zai-org/GLM-5.3", "nebius", "success"),
+            (_NEBIUS_GLM, None, "success"),
+            ("zai-org/GLM-5.3", "nebius", "error"),
+            ("moonshotai/Kimi-K2.6", "nebius", "success"),
+        ):
+            session.add(
+                UsageLog(
+                    workspace_id=workspace_id,
+                    timestamp=two_days_ago + timedelta(minutes=10),
+                    model=model,
+                    provider=provider,
+                    endpoint=f"{API_ROOT}/chat/completions",
+                    status=status_,
+                    prompt_tokens=1000,
+                    completion_tokens=500,
+                    total_tokens=1500,
+                    cache_read_tokens=500,
+                    cost=0.0015,
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    def usage() -> Any:
+        body = _get(priced, f"{API_ROOT}/catalog/models/z-ai/glm-5.3", headers=master_header)
+        return {offering["selector"]: offering["usage_30d"] for offering in body["offerings"]}
+
+    from_rows = usage()
+    assert from_rows[_NEBIUS_GLM]["requests"] == 2
+    assert from_rows[_NEBIUS_GLM]["total_tokens"] == 3000
+    assert from_rows[_NEBIUS_GLM]["cache_hit_rate"] == 0.5
+
+    _refresh_rollups(postgres_url)
+    # Gone from the rows without a mark, which only the rollups still remember.
+    session = db_session_factory()
+    try:
+        session.execute(text("ALTER TABLE usage_logs DISABLE TRIGGER USER"))
+        session.execute(delete(UsageLog))
+        session.execute(text("ALTER TABLE usage_logs ENABLE TRIGGER USER"))
+        session.commit()
+    finally:
+        session.close()
+
+    assert usage() == from_rows
 
 
 @pytest.mark.parametrize(
