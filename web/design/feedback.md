@@ -63,8 +63,8 @@ ErrorBoundary: { children, resetKey? }
 ```
 
 `LoadingBar` is not one a page reaches for either: the shell lays it over the top
-bar's bottom rule and turns it on while the reads the last move started (opening the
-page, or changing its URL) have no answer yet. A poll, and live mode's clock, do not
+bar's bottom rule and turns it on while the page's code, or the reads the last move
+started (opening the page, or changing its URL), have no answer yet. A poll, and live mode's clock, do not
 turn it on, because nothing the reader did is waiting on them.
 
 `PageError` is `PageLoading`'s counterpart, for a failure that took the whole page

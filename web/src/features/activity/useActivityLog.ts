@@ -1,3 +1,4 @@
+import { useState } from "react"
 import type {
   UsageActivityGroup,
   UsageActivityGroups,
@@ -339,6 +340,29 @@ export function useActivityLog({
     if (time.hasSpan && !isOpen) void chart.refetch()
   }
 
+  // Totals and p95 arrive apart, so a p95 is set beside totals only once both
+  // answer for the same window. A live tick moves the window by seconds, which
+  // is not a change the reader made, so the last p95 for the same view stays up
+  // through it rather than blinking to a placeholder every ten seconds.
+  const p95View = JSON.stringify([
+    time.range,
+    url.get("start_date"),
+    url.get("end_date"),
+    { ...aggregateFilters, start_date: undefined, end_date: undefined },
+  ])
+  const freshP95 =
+    latency.data && !latency.isPlaceholderData && !totals.isPlaceholderData
+      ? { view: p95View, value: latency.data.p95_latency_ms ?? null }
+      : undefined
+  const [lastP95, setLastP95] = useState(freshP95)
+  if (
+    freshP95 &&
+    (lastP95?.view !== freshP95.view || lastP95.value !== freshP95.value)
+  ) {
+    setLastP95(freshP95)
+  }
+  const shownP95 = freshP95 ?? (lastP95?.view === p95View ? lastP95 : undefined)
+
   return {
     viewer,
     time,
@@ -363,23 +387,13 @@ export function useActivityLog({
     isFetchingRows: logs.isFetching,
     rowsUpdatedAt: logs.dataUpdatedAt,
     total: count.isSuccess ? count.data.total : null,
-    // Totals and p95 arrive apart, so one window's p95 is never set beside
-    // another's totals.
     totals: totals.data && {
       ...totals.data.totals,
-      p95_latency_ms:
-        latency.isPlaceholderData || totals.isPlaceholderData
-          ? null
-          : (latency.data?.p95_latency_ms ?? null),
+      p95_latency_ms: shownP95?.value ?? null,
     },
     isLoadingTotals: !totals.data && !totals.error,
     isLoadingP95:
-      !isPhone &&
-      !totals.error &&
-      !latency.error &&
-      (latency.isPending ||
-        latency.isPlaceholderData ||
-        totals.isPlaceholderData),
+      !isPhone && !totals.error && !latency.error && shownP95 === undefined,
     series: chartRead.data?.series ?? [],
     spend: spend.data ?? undefined,
     inFlight:

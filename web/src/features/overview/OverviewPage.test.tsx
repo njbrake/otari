@@ -503,6 +503,28 @@ describe("the Overview's numbers", () => {
     )
   })
 
+  it("holds the tiles as skeletons, not dashes, while the month's summary is out", async () => {
+    let release = () => {}
+    const until = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    mockApi({ holdSummaryFrom: { day: "2026-10-01", until } })
+    const { container } = renderPage(<OverviewIndex />, {
+      workspace: WORKSPACE_A,
+    })
+
+    await waitFor(() =>
+      expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(3),
+    )
+    expect(screen.queryByText("no data")).toBeNull()
+    expect(screen.queryByText("—")).toBeNull()
+
+    release()
+    await waitFor(() =>
+      expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(0),
+    )
+  })
+
   it("shows a dash, not a zero, for a summary that failed", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input)

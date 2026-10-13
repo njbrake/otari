@@ -1,8 +1,11 @@
 import { useIsFetching } from "@tanstack/react-query"
-import { useLocation } from "@tanstack/react-router"
+import { useLocation, useRouterState } from "@tanstack/react-router"
 import { useEffect, useState } from "react"
 
-/** How long a page may take to start a read before there is no wait to show. */
+/**
+ * How long a page may take to start a read, once the router has it on screen,
+ * before there is no wait to show.
+ */
 const START_MS = 1000
 /**
  * How long every read must stay settled before the wait is over. A read that
@@ -13,7 +16,9 @@ const SETTLE_MS = 150
 
 /**
  * Whether the page is still waiting on what the last move asked for: opening
- * the page, or changing its URL (a filter, a window, a tab).
+ * the page, or changing its URL (a filter, a window, a tab). Loading the
+ * page's own code counts, so a slow chunk neither hides the wait nor uses up
+ * the time its reads have to start.
  *
  * Only a read with no answer of its own counts, which is a first load or a new
  * key. A poll refreshing a read that has one does not, and neither does
@@ -23,6 +28,7 @@ const SETTLE_MS = 150
  */
 export function usePageLoading(): boolean {
   const href = useLocation({ select: (location) => location.href })
+  const isRouting = useRouterState({ select: (state) => state.isLoading })
   const isFetching =
     useIsFetching({ predicate: (query) => query.state.status === "pending" }) >
     0
@@ -35,7 +41,7 @@ export function usePageLoading(): boolean {
   }
 
   useEffect(() => {
-    if (!wait.isOpen || isFetching) return
+    if (!wait.isOpen || isFetching || isRouting) return
     const timer = setTimeout(
       () =>
         setWait((current) =>
@@ -44,7 +50,7 @@ export function usePageLoading(): boolean {
       wait.hasStarted ? SETTLE_MS : START_MS,
     )
     return () => clearTimeout(timer)
-  }, [wait, isFetching])
+  }, [wait, isFetching, isRouting])
 
-  return wait.isOpen && isFetching
+  return wait.isOpen && (isFetching || isRouting)
 }

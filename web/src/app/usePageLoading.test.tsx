@@ -3,8 +3,16 @@ import {
   QueryClientProvider,
   useQuery,
 } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
-import { render, screen, waitFor } from "@testing-library/react"
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider,
+  useNavigate,
+} from "@tanstack/react-router"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { type ReactNode, useState } from "react"
 import { describe, expect, it } from "vitest"
@@ -112,5 +120,56 @@ describe("usePageLoading", () => {
     expect(await screen.findByText("waiting")).toBeInTheDocument()
     reads.answer("read-1")
     await waitFor(() => expect(screen.getByText("settled")).toBeInTheDocument())
+  })
+
+  it("stays on while the next page's code loads, past the time a read has to start", async () => {
+    let release = () => {}
+    const chunk = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    function Shell() {
+      const isLoading = usePageLoading()
+      return (
+        <>
+          <p>{isLoading ? "waiting" : "settled"}</p>
+          <Outlet />
+        </>
+      )
+    }
+    const root = createRootRoute({ component: Shell })
+    const router = createRouter({
+      routeTree: root.addChildren([
+        createRoute({ getParentRoute: () => root, path: "/" }),
+        // A route whose loading outlasts the time a page has to start a read,
+        // as a slow code-split chunk does.
+        createRoute({
+          getParentRoute: () => root,
+          path: "/slow",
+          loader: () => chunk,
+          component: () => <p>slow page</p>,
+        }),
+      ]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    })
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(screen.getByText("settled")).toBeInTheDocument())
+
+    act(() => {
+      void router.history.push("/slow")
+    })
+    expect(await screen.findByText("waiting")).toBeInTheDocument()
+    await act(() => new Promise((resolve) => setTimeout(resolve, 1200)))
+    expect(screen.getByText("waiting")).toBeInTheDocument()
+
+    release()
+    expect(await screen.findByText("slow page")).toBeInTheDocument()
+    await waitFor(
+      () => expect(screen.getByText("settled")).toBeInTheDocument(),
+      { timeout: 2000 },
+    )
   })
 })

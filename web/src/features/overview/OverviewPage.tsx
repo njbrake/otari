@@ -195,6 +195,17 @@ function OverviewPage({
     spend: data.spend.isError ? undefined : data.spend.data,
     overview: overview.data,
   })
+  // A budget tile with nothing to show yet, as opposed to one whose reads
+  // answered with nothing: its reads are still out and none has failed.
+  const isBudgetLoading =
+    !data.error &&
+    (!totals ||
+      data.spend.isPending ||
+      overview.isPending ||
+      data.workspace?.isPending === true) &&
+    (budget.kind === "unknown"
+      ? budget.line === undefined
+      : budget.kind === "none" && budget.used === undefined)
 
   const attention = groupAttention(overview.data?.attention ?? []).map(
     (item) => ({
@@ -295,6 +306,7 @@ function OverviewPage({
           budget={budget}
           failuresSearch={data.failuresSearch}
           isLoading={!totals && !data.error}
+          isBudgetLoading={isBudgetLoading}
         />
       </div>
 

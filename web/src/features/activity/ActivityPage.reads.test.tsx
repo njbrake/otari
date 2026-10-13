@@ -179,6 +179,33 @@ describe("ActivityPage", () => {
       ).toBeInTheDocument()
     })
 
+    it("keeps the last P95 up through a live tick, rather than blinking it", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        let latencyReads = 0
+        const { calls } = mockApi({
+          rows: [entry()],
+          totals: { p95_latency_ms: 1200 },
+          // Every latency read after the first waits, so the tick's own p95
+          // never lands while the test looks.
+          hold: () =>
+            latencyReads++ === 0 ? Promise.resolve() : new Promise(() => {}),
+        })
+        renderPage(<ActivityPage />)
+        expect(await screen.findByText("P95 1.20 s")).toBeInTheDocument()
+        const first = lastList(calls).get("start_date")
+
+        await vi.advanceTimersByTimeAsync(10_500)
+        await waitFor(() =>
+          expect(lastList(calls).get("start_date")).not.toBe(first),
+        )
+        expect(latencyReads).toBeGreaterThan(1)
+        expect(screen.getByText("P95 1.20 s")).toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it("brings a live window up to now on each tick, rather than re-reading a stale one", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       try {

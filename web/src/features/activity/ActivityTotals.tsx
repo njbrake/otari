@@ -86,6 +86,7 @@ export function ActivityTotals({
     isBrief ? null : isLoadingP95 ? (
       <span key="p95" className="flex items-center gap-1.5">
         P95 <Skeleton className="h-3 w-10" />
+        <span className="sr-only">loading</span>
       </span>
     ) : p95 ? (
       <span key="p95">P95 {p95}</span>
@@ -96,11 +97,13 @@ export function ActivityTotals({
     return isPhone ? (
       <div className="flex gap-x-2.5 border-t border-border-subtle bg-surface-subtle px-4 py-[0.4375rem] text-mono-micro">
         <Skeleton className="h-[1lh] w-48" />
+        <span className="sr-only">Loading totals</span>
       </div>
     ) : (
       <div className="-mx-4 flex min-h-10 items-center gap-2.5 border-b border-border bg-surface-subtle px-4 py-1.5 md:-mx-6 md:px-6">
         <Skeleton className="h-3 w-24" />
         <Skeleton className="h-3 w-72 max-w-[50%]" />
+        <span className="sr-only">Loading totals</span>
         {trailing ? <span className="ml-auto">{trailing}</span> : null}
       </div>
     )

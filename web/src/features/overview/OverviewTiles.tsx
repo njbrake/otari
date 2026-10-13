@@ -30,6 +30,7 @@ export function OverviewTiles({
   budget,
   failuresSearch,
   isLoading = false,
+  isBudgetLoading = false,
 }: {
   totals: UsageTotals | undefined
   series: readonly UsageSeriesPoint[]
@@ -44,6 +45,8 @@ export function OverviewTiles({
   failuresSearch: DashboardSearch | undefined
   /** The totals have not answered yet, as opposed to not being available. */
   isLoading?: boolean
+  /** The budget tile's reads have not answered yet. */
+  isBudgetLoading?: boolean
 }) {
   const total = totals?.cost ?? 0
   const subscription = totals?.imported_cost ?? 0
@@ -57,7 +60,7 @@ export function OverviewTiles({
       : undefined
 
   return (
-    <KpiStrip isEmpty={false} columns={3}>
+    <KpiStrip columns={3}>
       <KpiCell
         label="Total at API prices"
         isLoading={isLoading}
@@ -86,7 +89,7 @@ export function OverviewTiles({
           ) : undefined
         }
       />
-      <BudgetCell budget={budget} />
+      <BudgetCell budget={budget} isLoading={isBudgetLoading} />
       <KpiCell
         label="Requests"
         isLoading={isLoading}
@@ -126,11 +129,18 @@ export function OverviewTiles({
   )
 }
 
-function BudgetCell({ budget }: { budget: BudgetView }) {
+function BudgetCell({
+  budget,
+  isLoading,
+}: {
+  budget: BudgetView
+  isLoading: boolean
+}) {
   if (budget.kind === "unknown") {
     return (
       <KpiCell
         label={budget.label}
+        isLoading={isLoading}
         value="—"
         subline={budget.subline}
         graphic={
@@ -147,6 +157,7 @@ function BudgetCell({ budget }: { budget: BudgetView }) {
     return (
       <KpiCell
         label={budget.label}
+        isLoading={isLoading}
         value={budget.used === undefined ? "—" : formatUsd(budget.used)}
         subline={budget.subline}
         graphic={

@@ -60,7 +60,7 @@ export function UsageTiles({
   }
 
   return (
-    <KpiStrip isEmpty={!summary} columns={3}>
+    <KpiStrip columns={3}>
       <KpiCell
         label="Total at API prices"
         isLoading={isLoading}

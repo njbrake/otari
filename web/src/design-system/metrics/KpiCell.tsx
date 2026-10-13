@@ -58,7 +58,14 @@ export function KpiCell({
           30px the size is already the hierarchy, and a heavier numeral here
           would out-weigh the page title above it. */}
       <span className="text-mono-figure font-normal text-foreground">
-        {isLoading ? <Skeleton className="h-[1lh] w-32" /> : value}
+        {isLoading ? (
+          <>
+            <Skeleton className="h-[1lh] w-32" />
+            <span className="sr-only">Loading</span>
+          </>
+        ) : (
+          value
+        )}
       </span>
       {/* One line, always present, so no cell is shorter than its neighbors,
           and never wrapped, which would undo the subgrid's shared baseline.

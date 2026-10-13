@@ -247,7 +247,10 @@ export function BreakdownTable({
       allowsSorting: true,
       cell: (row) =>
         isLoadingP95 && !row.is_other ? (
-          <Skeleton className="ml-auto h-3 w-12" />
+          <>
+            <Skeleton className="ml-auto h-3 w-12" />
+            <span className="sr-only">Loading</span>
+          </>
         ) : (
           <span className="text-mono-caption">
             {formatLatency(row.p95_latency_ms) ?? (

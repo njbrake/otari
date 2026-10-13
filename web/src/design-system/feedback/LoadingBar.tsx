@@ -8,9 +8,10 @@
  * that advanced anyway would be inventing a number. It fades in after a beat,
  * so a read that answers quickly never shows it.
  *
- * Hidden from assistive tech: the sections that are waiting say so in their
- * own regions, and a second announcement for the same wait is noise. The
- * parent positions it, and must be `relative`.
+ * Hidden from assistive tech: a page-wide "loading" says nothing about which
+ * part is waiting, so each placeholder carries its own visually hidden
+ * "Loading" where the value will land instead. The parent positions it, and
+ * must be `relative`.
  */
 export function LoadingBar({ isActive }: { isActive: boolean }) {
   return isActive ? (
