@@ -228,17 +228,47 @@ describe("ActivityPage", () => {
       expect(screen.getByText("$1.19 billed")).toBeInTheDocument()
       expect(screen.getByText("$25.79 subscription")).toBeInTheDocument()
       expect(screen.getByText("P95 1.20 s")).toBeInTheDocument()
-      expect(
-        calls.some(
-          (call) =>
-            call.url.includes("/usage/summary") &&
-            call.url.includes("include_p95=true"),
-        ),
-      ).toBe(true)
+      expect(calls.some((call) => call.url.includes("/usage/latency"))).toBe(
+        true,
+      )
 
       await user.click(screen.getByRole("button", { name: "11 unpriced" }))
       await listCarries(calls, "priced", "false")
       expect(lastList(calls).get("status")).toBe("success")
+    })
+
+    it("drops the last window's p95 until the new one arrives", async () => {
+      const user = userEvent.setup()
+      let release = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const shown = {
+        request_count: 115,
+        unpriced_requests: 11,
+        p95_latency_ms: 1200,
+      }
+      mockApi({
+        rows: [entry()],
+        totals: shown,
+        hold: (_, params) =>
+          params.get("priced") === "false" ? held : Promise.resolve(),
+      })
+      renderPage(<ActivityPage />)
+      expect(await screen.findByText("P95 1.20 s")).toBeInTheDocument()
+
+      shown.p95_latency_ms = 2000
+      await user.click(screen.getByRole("button", { name: "11 unpriced" }))
+      await waitFor(() =>
+        expect(screen.queryByText("P95 1.20 s")).not.toBeInTheDocument(),
+      )
+      expect(
+        await screen.findByText("115 filtered requests"),
+      ).toBeInTheDocument()
+      // The figure waits as a skeleton beside its label.
+      expect(screen.getByText("P95")).toBeInTheDocument()
+      release()
+      expect(await screen.findByText("P95 2.00 s")).toBeInTheDocument()
     })
   })
 

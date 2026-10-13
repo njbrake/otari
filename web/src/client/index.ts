@@ -120,6 +120,9 @@ export type UsageTotals = Schemas["UsageTotals"]
 export type UsageSummary = Schemas["UsageSummary"]
 export type UsageGroupRow = Schemas["UsageGroupRow"]
 export type UsageSessionRow = Schemas["UsageSessionRow"]
+export type UsageLatency = Schemas["UsageLatency"]
+export type UsageToolRow = Schemas["UsageToolRow"]
+export type UsageTools = Schemas["UsageTools"]
 export type UsageSeriesPoint = Schemas["UsageSeriesPoint"]
 export type UsageSeriesGroup = Schemas["UsageSeriesGroup"]
 export type UsageGroupedSeries = Schemas["UsageGroupedSeries"]
@@ -194,6 +197,10 @@ export type SummaryDimension = NonNullable<SummaryQuery["dimensions"]>[number]
 export type UsageChannel = NonNullable<SummaryQuery["channel"]>[number]
 export type UsageBreakdownRankBy = NonNullable<SummaryQuery["rank_by"]>
 export type UsageRankOrder = NonNullable<SummaryQuery["rank_order"]>
+type LatencyQuery = NonNullable<
+  operations["usage-usage_latency"]["parameters"]["query"]
+>
+export type BreakdownDimension = NonNullable<LatencyQuery["group_by"]>
 type SeriesQuery = NonNullable<
   operations["usage-usage_series"]["parameters"]["query"]
 >

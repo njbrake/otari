@@ -5,7 +5,7 @@ members start seeing the workspace's aggregate usage and its budget's dollars;
 a manager can turn that off.
 
 Revision ID: a9c3e5f7b1d2
-Revises: fc179a3f122a
+Revises: b4d6f8a0c2e3
 Create Date: 2026-10-12
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a9c3e5f7b1d2"
-down_revision: str | Sequence[str] | None = "fc179a3f122a"
+down_revision: str | Sequence[str] | None = "b4d6f8a0c2e3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

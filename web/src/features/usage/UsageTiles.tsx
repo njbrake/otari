@@ -27,6 +27,7 @@ export function UsageTiles({
   previous,
   windowLabel,
   unpricedSearch,
+  isLoading = false,
 }: {
   summary: UsageSummary | undefined
   /** The window before's totals; none for a dragged span. */
@@ -35,6 +36,8 @@ export function UsageTiles({
   windowLabel: string
   /** Activity's search for the unpriced requests, where Activity can show them. */
   unpricedSearch: DashboardSearch | undefined
+  /** The summary has not answered yet, as opposed to failing. */
+  isLoading?: boolean
 }) {
   const totals = summary?.totals
   const total = totals?.cost ?? 0
@@ -57,9 +60,10 @@ export function UsageTiles({
   }
 
   return (
-    <KpiStrip isEmpty={!summary} columns={3}>
+    <KpiStrip columns={3}>
       <KpiCell
         label="Total at API prices"
+        isLoading={isLoading}
         value={formatUsd(total)}
         delta={growth(total, previous?.cost, formatUsd)}
         subline={
@@ -83,6 +87,7 @@ export function UsageTiles({
       />
       <KpiCell
         label="Requests"
+        isLoading={isLoading}
         value={formatNumber(requests)}
         delta={growth(requests, previous?.request_count, formatNumber)}
         subline={
@@ -103,6 +108,7 @@ export function UsageTiles({
       />
       <KpiCell
         label="Tokens"
+        isLoading={isLoading}
         value={formatTokens(tokens)}
         delta={growth(tokens, billedTokenTotal(previous), formatTokens)}
         subline={`${formatPct(fromCache, 0)} from cache`}

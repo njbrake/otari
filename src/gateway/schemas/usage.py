@@ -257,6 +257,37 @@ class UsageToolRow(BaseModel):
     cost: float
 
 
+class UsageTools(BaseModel):
+    """The window's gateway-run tool spend, the ``by_tool`` of ``UsageSummary`` on its own."""
+
+    start_date: str
+    end_date: str
+    tools: list[UsageToolRow]
+
+
+class UsageGroupLatency(BaseModel):
+    """One breakdown group's p95 latency, keyed as that breakdown's row is (``key`` None for the NULL group)."""
+
+    key: str | None
+    p95_latency_ms: int | None
+
+
+class UsageLatency(BaseModel):
+    """The window's 95th-percentile latency, or each of one breakdown's top groups' when ``group_by`` names one.
+
+    The same values ``include_p95`` and ``p95_by`` add to ``UsageSummary``, served
+    apart from it because sorting the window's latencies is the slow part of a
+    summary. With ``group_by`` the overall ``p95_latency_ms`` is null and ``groups``
+    lists the groups that breakdown would rank into its top N, fold row excluded.
+    """
+
+    start_date: str
+    end_date: str
+    p95_latency_ms: int | None
+    group_by: BreakdownDimension | None
+    groups: list[UsageGroupLatency]
+
+
 class UsageSummary(BaseModel):
     """Aggregate spend/volume for the Usage & analytics page.
 

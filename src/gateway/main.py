@@ -25,6 +25,7 @@ from gateway.api.deps import (
     build_file_service,
     build_inference_service,
     build_telemetry_retention_service,
+    build_usage_rollup_service,
     get_membership_listener,
     get_workspace_code_execution_policies,
     get_workspace_listener,
@@ -35,7 +36,7 @@ from gateway.api.main import register_routers
 from gateway.container import Container, build_container
 from gateway.context_propagation import TraceContextPropagationMiddleware
 from gateway.core.config import API_KEY_HEADER, API_ROOT, GATEWAY_TOKEN_HEADER, X_API_KEY_HEADER, GatewayConfig
-from gateway.core.database import create_session, dispose_db, init_db
+from gateway.core.database import create_session, dispose_db, init_db, is_postgresql
 from gateway.core.error_codes import INVALID_REQUEST, error_code_of, error_headers
 from gateway.core.feature import Worker
 from gateway.core.settings.tools import warn_about_tool_instances
@@ -122,7 +123,12 @@ from gateway.services.tenancy.organization_guardrail_runner import (
     run_guardrail_runner_refresher,
 )
 from gateway.services.tool_settings_service import apply_overrides_from_db as apply_tool_overrides_from_db
-from gateway.services.usage import TelemetryRetentionService, run_telemetry_retention_sweeper
+from gateway.services.usage import (
+    TelemetryRetentionService,
+    UsageRollupService,
+    run_telemetry_retention_sweeper,
+    run_usage_rollup_refresher,
+)
 from gateway.version import __version__
 
 # Every path here must be mounted; a contract test checks.
@@ -264,6 +270,19 @@ def _start_telemetry_retention_sweeper(config: GatewayConfig, container: Contain
     return run_telemetry_retention_sweeper(config.telemetry_retention_days, open_service)
 
 
+def _start_usage_rollup_refresher(config: GatewayConfig, _container: Container) -> Coroutine[Any, Any, None] | None:
+    """Return the usage rollup refresh, or None where the database is not PostgreSQL."""
+    if not is_postgresql(config.database_url):
+        return None
+
+    @asynccontextmanager
+    async def open_service() -> AsyncIterator[UsageRollupService]:
+        async with create_unit_of_work() as uow:
+            yield build_usage_rollup_service(uow)
+
+    return run_usage_rollup_refresher(config.usage_rollup_refresh_interval_sec, open_service)
+
+
 def _start_container_sweeper(config: GatewayConfig, _container: Container) -> Coroutine[Any, Any, None] | None:
     """Return the sandbox container sweep, or None when no sandbox is held past its request."""
     if not config.sandbox_configured() or config.sandbox_container_idle_ttl_sec <= 0:
@@ -337,6 +356,9 @@ _LIFESPAN_WORKERS: tuple[_LifespanWorker, ...] = (
     # Imported usage and agent telemetry arrive far faster than served traffic;
     # this keeps them to the configured window.
     _LifespanWorker("telemetry retention sweep", _start_telemetry_retention_sweeper),
+    # Rebuilds the hours of usage a write changed, so the usage reads take their
+    # sums instead of scanning their rows.
+    _LifespanWorker("usage rollup refresh", _start_usage_rollup_refresher),
     # The provider reclaims a held sandbox on its own timer; this drops the
     # rows that named it once nobody can resume them.
     _LifespanWorker("sandbox container sweep", _start_container_sweeper),
@@ -676,6 +698,7 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
                 # Persisted dashboard overrides win over config/env; apply them
                 # before pricing init so default-pricing behavior is consistent.
                 await apply_overrides_from_db(config, session)
+                app.state.heavy_usage_reads = asyncio.Semaphore(config.usage_read_concurrency)
                 # Checked when serving starts rather than when the app is built,
                 # so a tool that only reads the schema needs no pepper, and after
                 # the overrides, so it sees the copy setting this process serves.
@@ -816,7 +839,7 @@ async def _tenancy_error_handler(_: Request, exc: Exception) -> Response:
     answered.
 
     A 4xx message is written for the caller and is rendered as it is. A 5xx one
-    is not: it describes the deployment rather than the request, and
+    is not, unless its class sets ``detail_is_public``: it describes the deployment rather than the request, and
     ``ForeignTenancyError`` already interpolates organization names and slugs
     read out of the database. That message goes to the log, where an operator
     can act on it, and the response carries the generic detail the rest of this
@@ -825,7 +848,7 @@ async def _tenancy_error_handler(_: Request, exc: Exception) -> Response:
     """
     if not isinstance(exc, TenancyError):  # pragma: no cover - registered for TenancyError only
         raise exc
-    if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+    if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR and not exc.detail_is_public:
         logger.error("Tenancy request failed: %s", exc.message)
         return JSONResponse(
             status_code=exc.status_code,

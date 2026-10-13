@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { OverviewSummary } from "@/client"
-import { apiFetch } from "@/shared/api/client"
+import { apiFetch, heavyReadSignal } from "@/shared/api/client"
 import { OVERVIEW } from "@/shared/api/queryKeys"
+import { HEAVY_READ } from "@/shared/api/usage"
 
 export type OverviewScope = OverviewSummary["scope"]
 
@@ -26,12 +27,16 @@ export function useOverviewSummary({
 }) {
   return useQuery({
     queryKey: [OVERVIEW, workspaceId ?? null, month, scope],
-    queryFn: () => {
+    // Its month aggregate waits its turn with the Usage page's reads.
+    queryFn: ({ signal }) => {
       const params = new URLSearchParams({ month, scope })
       if (workspaceId) params.set("workspace_id", workspaceId)
-      return apiFetch<OverviewSummary>(`/overview?${params}`)
+      return apiFetch<OverviewSummary>(`/overview?${params}`, {
+        signal: heavyReadSignal(signal),
+      })
     },
     staleTime: 60_000,
+    ...HEAVY_READ,
     // The last answer stays up while another scope or month loads, so the
     // attention line, the rail and the budget do not drop out and back.
     placeholderData: (previous) => previous,

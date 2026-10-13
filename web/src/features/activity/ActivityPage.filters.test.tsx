@@ -402,17 +402,20 @@ describe("ActivityPage", () => {
       )
     })
 
-    it("asks only the totals for a 95th percentile, not the chart", async () => {
+    it("reads the 95th percentile apart from the totals, over the window", async () => {
       const { calls } = mockApi({ rows: [entry()] })
       renderPage(<ActivityPage />, "/activity?start_date=2026-09-01T00:00:00Z")
       await rowOf("gpt-4o")
-      const summaries = calls
-        .map((call) => call.url)
-        .filter((url) => url.includes("/usage/summary"))
-      expect(summaries.some((url) => url.includes("include_p95=true"))).toBe(
-        true,
-      )
-      expect(summaries.some((url) => !url.includes("include_p95"))).toBe(true)
+      const urls = calls.map((call) => call.url)
+      const latency = urls.find((url) => url.includes("/usage/latency"))
+      expect(latency).toContain("start_date=")
+      expect(latency).not.toContain("group_by")
+      expect(
+        urls.some(
+          (url) =>
+            url.includes("/usage/summary") && url.includes("include_p95"),
+        ),
+      ).toBe(false)
     })
 
     it("ignores a grouping the page does not offer", async () => {

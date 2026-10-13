@@ -166,12 +166,12 @@ export function useOrganizationMemberships() {
         "/organizations/me/memberships",
       ),
     staleTime: 60_000,
-    // Same guard as `useUsageGroupedSeries` and `useInFlightRequests`, and for
-    // both of their reasons: a gateway older than this bundle does not serve
-    // this route (the process may not have restarted onto the build that ships
-    // it), and a hybrid gateway answers 404 for every `/organizations` path
-    // by design. Neither is something a retry fixes; the switcher falls back to
-    // stating the one organization the context names.
+    // Same guard as `useInFlightRequests`, for two reasons: a gateway older
+    // than this bundle does not serve this route (the process may not have
+    // restarted onto the build that ships it), and a hybrid gateway answers 404
+    // for every `/organizations` path by design. Neither is something a retry
+    // fixes; the switcher falls back to stating the one organization the context
+    // names.
     retry: (failureCount, error) =>
       !(error instanceof ApiError && error.status === 404) && failureCount < 3,
   })

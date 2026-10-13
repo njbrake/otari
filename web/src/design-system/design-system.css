@@ -674,7 +674,51 @@
   }
 }
 
+/* The page's loading bar (`LoadingBar`): a segment crossing a 2px track laid
+ * over the top bar's bottom rule. The fade-in waits 200ms, so a read that
+ * answers sooner never paints it; the segment is 30% of the track, so it
+ * travels from -100% to 333% of its own width to cross the whole of it. */
+.otari-loading-bar {
+  position: absolute;
+  inset-inline: 0;
+  bottom: -1px;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  animation: otari-loading-bar-in 150ms ease-out 200ms forwards;
+}
+.otari-loading-bar::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 30%;
+  background: var(--color-primary);
+  animation: otari-loading-bar-sweep 1.4s ease-in-out infinite;
+}
+@keyframes otari-loading-bar-in {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes otari-loading-bar-sweep {
+  from {
+    translate: -100% 0;
+  }
+  to {
+    translate: 333% 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  /* A still, faint bar across the whole edge: the page still says it is
+     waiting, with nothing moving. */
+  .otari-loading-bar::after {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
   .otari-detail-reveal {
     animation: none;
     grid-template-rows: 1fr;

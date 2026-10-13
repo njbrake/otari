@@ -60,6 +60,22 @@ function mockApi(deploymentOperator: boolean) {
       )
     }
     if (url.includes("/usage/summary")) return jsonResponse(summary())
+    if (url.includes("/usage/latency")) {
+      return jsonResponse({
+        start_date: "2026-06-21T00:00:00Z",
+        end_date: "2026-07-21T00:00:00Z",
+        p95_latency_ms: null,
+        group_by: "model",
+        groups: [],
+      })
+    }
+    if (url.includes("/usage/tools")) {
+      return jsonResponse({
+        start_date: "2026-06-21T00:00:00Z",
+        end_date: "2026-07-21T00:00:00Z",
+        tools: [],
+      })
+    }
     if (url.includes("/usage/series")) {
       return jsonResponse({
         start_date: "2026-06-21T00:00:00Z",

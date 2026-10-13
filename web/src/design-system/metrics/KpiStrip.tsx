@@ -47,11 +47,9 @@ const DIVIDERS = {
  */
 export function KpiStrip({
   children,
-  isEmpty,
   columns = 5,
 }: {
   children: ReactNode
-  isEmpty: boolean
   columns?: keyof typeof COLUMNS
 }) {
   return (
@@ -62,9 +60,6 @@ export function KpiStrip({
       // drops its value below the others'.
       className="border-y border-border"
       contentClassName={`${COLUMNS[columns]} ${DIVIDERS[columns]}`}
-      // The graphic row is dropped uniformly in the empty state, so the strip
-      // gets shorter without any cell changing shape relative to its neighbors.
-      data-empty={isEmpty ? "true" : undefined}
     >
       {children}
     </Section>

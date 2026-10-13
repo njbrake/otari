@@ -62,7 +62,7 @@ export function ActivityPhone({
   const windows = Object.keys(PHONE_BARS).filter(
     (key) => key !== "30d" || !isManager,
   )
-  const bars = phoneBars(log.series, log.time.range, log.time.now)
+  const bars = phoneBars(log.series, log.time.range, log.time.chartNow)
   const barMs = barSpanMs(bars)
   const { sort, open, chips } = log
   // The columns a phone filters by value: the desk's, less what it cannot fit.
@@ -183,7 +183,11 @@ export function ActivityPhone({
               />
             </div>
           ) : null}
-          <ActivityTotals totals={log.totals} variant="phone" />
+          <ActivityTotals
+            totals={log.totals}
+            isLoading={log.isLoadingTotals}
+            variant="phone"
+          />
         </div>
 
         {log.isLoadingRows ? (

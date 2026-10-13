@@ -35,7 +35,8 @@ reading of the same rows:
   across the organization sees the rest of it as a member does. A deployment
   operator reads everyone's rows in a workspace they name.
 * **A member may ask for a workspace's totals** with ``workspace_totals=true``
-  and a ``workspace_id``, on the summary, the series and the groups. Granted
+  and a ``workspace_id``, on the summary, the latency, the tools, the series
+  and the groups. Granted
   only while the workspace's managers share its totals with members, and only
   split by model, provider or status code, with no filter that names a person,
   key or session; anything else is a 403, never a quiet narrowing to their own
@@ -75,6 +76,7 @@ from gateway.api.deps import (
     get_db,
     verify_master_key,
 )
+from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.api.routes._usage_common import (
     COUNT_SORT_DESC,
     DIMENSIONS_DESC,
@@ -82,6 +84,7 @@ from gateway.api.routes._usage_common import (
     GROUP_ORDER_DESC,
     GROUP_SEARCH_DESC,
     INCLUDE_P95_DESC,
+    LATENCY_GROUP_BY_DESC,
     ORDER_DESC,
     P95_BY_DESC,
     RANK_BY_DESC,
@@ -114,8 +117,10 @@ from gateway.schemas.usage import (
     UsageActivityGroups,
     UsageBreakdownRankBy,
     UsageGroupedSeries,
+    UsageLatency,
     UsageRankBy,
     UsageSummary,
+    UsageTools,
 )
 from gateway.services.organizations import WorkspaceVisibilityService
 from gateway.services.tenancy import OrganizationService
@@ -134,6 +139,7 @@ router = APIRouter(
     # is the pattern the tenant-scoped routers already follow and the reason the
     # deployment operator gate does not belong here.
     dependencies=[Depends(verify_master_key)],
+    route_class=CancelOnDisconnectRoute,
 )
 
 # Published by hosted only, and no dashboard page gates on it any more: these routes
@@ -238,8 +244,8 @@ async def _scope_condition(
         # Only the organization is resolved on this branch. The full scope would
         # also build the caller's workspace-id set, which is deliberately
         # unpaged, and the branch below discards it: the Activity page issues a
-        # list, a count, a summary and a series per filter change, so resolving
-        # it here would be four unbounded reads an interaction, for nothing.
+        # list, a count, a summary, a latency and a series per filter change, so
+        # resolving it here would be five unbounded reads an interaction, for nothing.
         # ``get_active_organization_for_user`` is the same refusal the full scope
         # opens with, so a pointer with no live membership behind it still stops
         # here rather than reaching the resolver below.
@@ -393,6 +399,73 @@ async def organization_usage_summary(
         rank_by=rank_by,
         rank_order=rank_order,
         group_by_tag=group_by_tag,
+    )
+
+
+@router.get("/latency")
+async def organization_usage_latency(
+    identity: CurrentIdentity,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
+    visibility: WorkspaceVisibilityServiceDep,
+    filters: Annotated[UsageReadFilters, Depends()],
+    group_by: Annotated[BreakdownDimension | None, Query(description=LATENCY_GROUP_BY_DESC)] = None,
+    rank_by: Annotated[UsageBreakdownRankBy, Query(description=RANK_BY_DESC)] = "cost",
+    rank_order: Annotated[SortOrder, Query(description=RANK_ORDER_DESC)] = "desc",
+    workspace_totals: WorkspaceTotalsQuery = False,
+) -> UsageLatency:
+    """The 95th-percentile latency over the window, or per group of one breakdown, for the caller's organization.
+
+    The tenant-scoped counterpart of ``GET /api/v1/usage/latency``.
+    """
+    scope, _ = await _scope_condition(
+        db,
+        user=identity,
+        workspace_id=filters.workspace_id,
+        visibility=visibility,
+        workspace_totals=workspace_totals,
+        breakdowns=_breakdowns(group_by=group_by),
+        filters=filters,
+    )
+    start, end = summary_window(filters, grid=None)
+    return await reads.latency(
+        start=start,
+        end=end,
+        conditions=filters.conditions(start_date=start, end_date=end, scope=scope),
+        status=filters.status,
+        group_by=group_by,
+        rank_by=rank_by,
+        rank_order=rank_order,
+    )
+
+
+@router.get("/tools")
+async def organization_usage_tools(
+    identity: CurrentIdentity,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
+    visibility: WorkspaceVisibilityServiceDep,
+    filters: Annotated[UsageReadFilters, Depends()],
+    workspace_totals: WorkspaceTotalsQuery = False,
+) -> UsageTools:
+    """Spend and volume per gateway-run tool, for the caller's organization.
+
+    The tenant-scoped counterpart of ``GET /api/v1/usage/tools``. A member's
+    workspace-totals ask is a breakdown by tool, so it is refused while tools
+    are not among the dimensions a member may split by.
+    """
+    scope, _ = await _scope_condition(
+        db,
+        user=identity,
+        workspace_id=filters.workspace_id,
+        visibility=visibility,
+        workspace_totals=workspace_totals,
+        breakdowns=["tool"],
+        filters=filters,
+    )
+    start, end = summary_window(filters, grid=None)
+    return await reads.tools(
+        start=start, end=end, conditions=filters.conditions(start_date=start, end_date=end, scope=scope)
     )
 
 

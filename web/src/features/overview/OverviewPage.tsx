@@ -74,9 +74,8 @@ function OperatorOverview() {
   // Imported usage lands without a provider, so "no providers" alone does not
   // mean nothing has happened: the strip waits on the log being empty too.
   const anyUsage = useUsageLogs({}, 0, 1, { enabled: needsSetup })
-  if (providers.isLoading) {
-    return <PageLoading />
-  }
+  // The month's reads don't wait on the provider list; the strip and the guide,
+  // which only a gateway with no provider shows, appear once it answers.
   return (
     <OverviewPage
       isOperator
@@ -195,6 +194,19 @@ function OverviewPage({
     spend: data.spend.isError ? undefined : data.spend.data,
     overview: overview.data,
   })
+  // A budget tile with nothing to show yet, as opposed to one whose reads
+  // answered with nothing: its reads are still out and none has failed.
+  // `isLoading`, not `isPending`: a read that is disabled (the budget, with no
+  // workspace selected) stays pending for good and would hold the tile forever.
+  const isBudgetLoading =
+    !data.error &&
+    (!totals ||
+      data.spend.isLoading ||
+      overview.isLoading ||
+      data.workspace?.isLoading === true) &&
+    (budget.kind === "unknown"
+      ? budget.line === undefined
+      : budget.kind === "none" && budget.used === undefined)
 
   const attention = groupAttention(overview.data?.attention ?? []).map(
     (item) => ({
@@ -294,6 +306,8 @@ function OverviewPage({
           todayCost={month.isCurrent ? costOnDay(series, data.now) : undefined}
           budget={budget}
           failuresSearch={data.failuresSearch}
+          isLoading={!totals && !summary.error}
+          isBudgetLoading={isBudgetLoading}
         />
       </div>
 

@@ -4,6 +4,8 @@ A condition that belongs to the deployment rather than to one domain has no
 domain module to sit in, and lives here.
 """
 
+from fastapi import status
+
 from gateway.exceptions import TenancyError, TenancyValidationError
 
 
@@ -43,3 +45,18 @@ __all__ = [
     "SecretBoxUnavailableTenancyError",
     "UnresolvedRedactionError",
 ]
+
+
+class UsageReadsBusyError(TenancyError):
+    """Every heavy usage read this worker allows is running, and this one waited too long for a turn.
+
+    A 503 the caller can retry, and the one 5xx whose message is the caller's to
+    read: it names the condition and what to do about it, and nothing about the
+    deployment beyond that it is busy.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    detail_is_public = True
+
+    def __init__(self) -> None:
+        super().__init__("Usage reads are busy; try again shortly")

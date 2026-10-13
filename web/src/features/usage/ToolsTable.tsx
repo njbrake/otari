@@ -1,12 +1,12 @@
 import { FiArrowUpRight, FiGlobe } from "react-icons/fi"
-import type { UsageSummary } from "@/client"
+import type { UsageToolRow } from "@/client"
 import { TextButton } from "@/design-system/actions/TextButton"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { describeTool } from "@/features/activity/activityModel"
 import { formatNumber, formatUsd } from "@/shared/helpers/format"
 
-type ToolRow = UsageSummary["by_tool"][number]
+type ToolRow = UsageToolRow
 
 /**
  * Tools Otari ran itself, which bill per call rather than per token. A tool

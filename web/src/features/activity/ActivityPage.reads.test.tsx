@@ -3,10 +3,12 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ActivityPage } from "@/features/activity/ActivityPage"
+import { LIVE_AGGREGATE_MS } from "@/features/activity/useActivityWindow"
 import { API_ROOT } from "@/shared/api/client"
 import {
   CALLER_IDENTITY,
   entry,
+  group,
   lastList,
   listCalls,
   mockApi,
@@ -179,6 +181,86 @@ describe("ActivityPage", () => {
       ).toBeInTheDocument()
     })
 
+    it("keeps the last P95 up through a live tick, rather than blinking it", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        let latencyReads = 0
+        mockApi({
+          rows: [entry()],
+          totals: { p95_latency_ms: 1200 },
+          // Every latency read after the first waits, so the tick's own p95
+          // never lands while the test looks.
+          hold: () =>
+            latencyReads++ === 0 ? Promise.resolve() : new Promise(() => {}),
+        })
+        renderPage(<ActivityPage />)
+        expect(await screen.findByText("P95 1.20 s")).toBeInTheDocument()
+
+        // Past the point where a tick moves the aggregates as well as the rows.
+        await vi.advanceTimersByTimeAsync(LIVE_AGGREGATE_MS + 500)
+        await waitFor(() => expect(latencyReads).toBeGreaterThan(1))
+        expect(screen.getByText("P95 1.20 s")).toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("holds an open group's rows with its heading between minutes", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const user = userEvent.setup({
+          advanceTimers: vi.advanceTimersByTime,
+        })
+        const { calls } = mockApi({
+          rows: [entry()],
+          groups: [group({ key: "key-1", label: "ci-runner", requests: 12 })],
+        })
+        renderPage(<ActivityPage />, "/activity?group=source")
+        await user.click(await screen.findByRole("row", { name: /ci-runner/ }))
+        const previews = () =>
+          listCalls(calls).filter((url) => url.includes("api_key_id=key-1"))
+        await waitFor(() => expect(previews().length).toBeGreaterThan(0))
+        const read = previews().length
+
+        await vi.advanceTimersByTimeAsync(10_500)
+        expect(previews().length).toBe(read)
+
+        await vi.advanceTimersByTimeAsync(LIVE_AGGREGATE_MS)
+        await waitFor(() => expect(previews().length).toBeGreaterThan(read))
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("moves the rows on every tick and the aggregates only once a minute", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const { calls } = mockApi({ rows: [entry()], viewer: "member" })
+        renderPage(<ActivityPage />)
+        await rowOf("gpt-4o")
+        const reads = (path: string) =>
+          calls.filter((call) => call.url.includes(path)).length
+        const summaries = reads("/usage/summary")
+        const latencies = reads("/usage/latency")
+        const first = lastList(calls).get("start_date")
+
+        await vi.advanceTimersByTimeAsync(10_500)
+        await waitFor(() =>
+          expect(lastList(calls).get("start_date")).not.toBe(first),
+        )
+        expect(reads("/usage/summary")).toBe(summaries)
+        expect(reads("/usage/latency")).toBe(latencies)
+
+        await vi.advanceTimersByTimeAsync(LIVE_AGGREGATE_MS)
+        await waitFor(() =>
+          expect(reads("/usage/summary")).toBeGreaterThan(summaries),
+        )
+        expect(reads("/usage/latency")).toBeGreaterThan(latencies)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it("brings a live window up to now on each tick, rather than re-reading a stale one", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       try {
@@ -317,12 +399,8 @@ describe("ActivityPage", () => {
       expect(summary?.url).toContain("start_date=")
       // One read for the totals and the chart, which ask the same question.
       expect(summary?.url).toContain("dimensions=none")
-      const summaries = calls.filter((call) =>
-        call.url.includes("/usage/summary"),
-      )
-      expect(summaries.every((call) => call.url.includes("include_p95"))).toBe(
-        true,
-      )
+      const latency = calls.find((call) => call.url.includes("/usage/latency"))
+      expect(latency?.url).toContain("start_date=")
     })
 
     it("reports a failed chart and totals read rather than drawing nothing", async () => {

@@ -23,6 +23,7 @@ from gateway.api.deps import (
     verify_api_key_or_master_key,
 )
 from gateway.api.routes._billing_schemas import ChargeLine, MeterMap
+from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.api.routes._usage_common import (
     COUNT_SORT_DESC,
     DIMENSIONS_DESC,
@@ -30,6 +31,7 @@ from gateway.api.routes._usage_common import (
     GROUP_ORDER_DESC,
     GROUP_SEARCH_DESC,
     INCLUDE_P95_DESC,
+    LATENCY_GROUP_BY_DESC,
     ORDER_DESC,
     P95_BY_DESC,
     RANK_BY_DESC,
@@ -71,8 +73,10 @@ from gateway.schemas.usage import (
     UsageActivityGroups,
     UsageBreakdownRankBy,
     UsageGroupedSeries,
+    UsageLatency,
     UsageRankBy,
     UsageSummary,
+    UsageTools,
 )
 from gateway.services.external_usage_service import (
     ExternalEventsRequest,
@@ -102,6 +106,7 @@ operator_router = APIRouter(
     prefix="/usage",
     tags=["usage"],
     dependencies=[Depends(require_deployment_operator)],
+    route_class=CancelOnDisconnectRoute,
 )
 key_router = APIRouter(
     prefix="/usage",
@@ -567,6 +572,49 @@ async def usage_summary(
         rank_by=rank_by,
         rank_order=rank_order,
         group_by_tag=group_by_tag,
+    )
+
+
+@operator_router.get("/latency")
+async def usage_latency(
+    reads: UsageReadServiceDep,
+    filters: Annotated[UsageReadFilters, Depends()],
+    group_by: Annotated[BreakdownDimension | None, Query(description=LATENCY_GROUP_BY_DESC)] = None,
+    rank_by: Annotated[UsageBreakdownRankBy, Query(description=RANK_BY_DESC)] = "cost",
+    rank_order: Annotated[SortOrder, Query(description=RANK_ORDER_DESC)] = "desc",
+) -> UsageLatency:
+    """The 95th-percentile latency over the window, or per group of one breakdown.
+
+    The values ``/summary`` adds with ``include_p95`` and ``p95_by``, on their own,
+    so a dashboard can show the totals and breakdowns first: sorting the window's
+    latencies is the slowest part of a summary. Same filters and window as ``/summary``.
+    """
+    start, end = summary_window(filters, grid=None)
+    return await reads.latency(
+        start=start,
+        end=end,
+        conditions=filters.conditions(start_date=start, end_date=end, scope=None),
+        status=filters.status,
+        group_by=group_by,
+        rank_by=rank_by,
+        rank_order=rank_order,
+    )
+
+
+@operator_router.get("/tools")
+async def usage_tools(
+    reads: UsageReadServiceDep,
+    filters: Annotated[UsageReadFilters, Depends()],
+) -> UsageTools:
+    """Calls, failures, spend and requests per gateway-run tool over the window.
+
+    The ``by_tool`` breakdown of ``/summary`` on its own, so a dashboard can show
+    the other figures without waiting for it: each tool reads its meters off
+    every row in the window. Same filters and window as ``/summary``.
+    """
+    start, end = summary_window(filters, grid=None)
+    return await reads.tools(
+        start=start, end=end, conditions=filters.conditions(start_date=start, end_date=end, scope=None)
     )
 
 
