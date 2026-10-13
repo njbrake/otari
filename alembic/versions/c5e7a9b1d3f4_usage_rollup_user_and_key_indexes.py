@@ -8,7 +8,7 @@ refresh that writes the rollups is not held up; an invalid index left by a
 failed build is dropped and built again, as in ``a3d5f7b9c1e2``.
 
 Revision ID: c5e7a9b1d3f4
-Revises: b4d6f8a0c2e3
+Revises: a9c3e5f7b1d2
 Create Date: 2026-10-13
 """
 
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c5e7a9b1d3f4"
-down_revision: str | Sequence[str] | None = "b4d6f8a0c2e3"
+down_revision: str | Sequence[str] | None = "a9c3e5f7b1d2"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
