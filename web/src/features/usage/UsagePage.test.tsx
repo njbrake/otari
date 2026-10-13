@@ -478,7 +478,7 @@ describe("UsagePage", () => {
       // window's totals hold the bar as one series until they do.
       const loading = await readout()
       expect(within(loading).queryByText("Jordan M.")).toBeNull()
-      expect(within(loading).getByText("All usage")).toBeInTheDocument()
+      expect(within(loading).getByText("All groups")).toBeInTheDocument()
       expect(loading.querySelectorAll("[aria-hidden]")).toHaveLength(1)
 
       releaseSeries()

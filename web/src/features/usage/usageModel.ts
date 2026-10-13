@@ -316,12 +316,12 @@ export function foldSeries(
 }
 
 /**
- * The window's totals as one series, for the chart while a new breakdown's
- * series loads: the summary already holds every bucket for the same window and
- * filters, and they do not depend on the breakdown, so the bars keep their
- * shape and only their colors arrive later. Tokens are billed input plus
- * output, the figure a grouped point's `tokens` is, so the bars do not move
- * when the groups land.
+ * The summary's totals as one series, for the chart until the breakdown's own
+ * series arrives. The totals do not depend on the breakdown, so after a switch
+ * the bars keep their shape and only their colors arrive later; where the
+ * filters moved too, they are the last filters' totals, as the tiles are, until
+ * the new summary lands. Tokens are billed input plus output, the figure a
+ * grouped point's `tokens` is, so the bars do not move when the groups land.
  */
 export function totalSeries(
   points: readonly UsageSeriesPoint[],
@@ -329,7 +329,7 @@ export function totalSeries(
   withSubscription: boolean,
 ): FoldedSeries {
   return {
-    series: [{ key: totalKey, label: "All usage", color: OTHER_COLOR }],
+    series: [{ key: totalKey, label: "All groups", color: OTHER_COLOR }],
     points: points.map((point) => ({
       start: Date.parse(point.bucket_start),
       values: {

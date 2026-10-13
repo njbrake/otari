@@ -98,7 +98,8 @@ export function UsagePage() {
     filters: [...data.filters, ...data.idleFilters],
     viewer,
   })
-  // While another breakdown's series loads, the window's totals hold the bars.
+  // Until this breakdown's series arrives (a switch, a first load, a failed
+  // read), the summary's totals hold the bars.
   const folded =
     !data.grouped && summary
       ? totalSeries(summary.series, metric, withSubscription)

@@ -207,7 +207,7 @@ describe("totalSeries", () => {
       100,
     )
     expect(totalSeries([point], "requests", true).series).toEqual([
-      expect.objectContaining({ key: "total", label: "All usage" }),
+      expect.objectContaining({ key: "total", label: "All groups" }),
     ])
   })
 })
