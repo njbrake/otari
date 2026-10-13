@@ -38,7 +38,7 @@ from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 from gateway.services.tenancy.workspace_service import WorkspaceService
 
-from .tenancy_helpers import membership_writes
+from .tenancy_helpers import membership_writes, visibility_service
 
 _ENDPOINT = f"{API_ROOT}/overview"
 
@@ -464,6 +464,7 @@ def _service(db: AsyncSession) -> OverviewService:
         OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener()),
         DeploymentUserService(db),
         WorkspaceService(db, **membership_writes(db)),
+        visibility_service(db),
         GatewayConfig(),
     )
 

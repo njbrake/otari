@@ -532,7 +532,19 @@ class WorkspaceSpendPublic(BaseModel):
 
     workspace_id: uuid.UUID
     max_budget: float | None
-    spent: float
+    spent: float | None = Field(
+        description=(
+            "USD counted against the cap: settled spend plus holds in flight. Null for a member who does not "
+            "manage the workspace when its managers keep its totals from members; `used_fraction` still says "
+            "how much of the cap is used."
+        )
+    )
+    used_fraction: float | None = Field(
+        description=(
+            "The share of `max_budget` used, 1.0 or more at or past it; null when the ceiling caps no dollars. "
+            "A zero cap with anything counted against it reads 1.0. Rounded to a whole percent where `spent` is null."
+        )
+    )
     period_start: str | None
     period_end: str | None
 
@@ -542,15 +554,17 @@ class WorkspaceSpendPublic(BaseModel):
         workspace_id: uuid.UUID,
         budget: Budget,
         *,
-        spent: float,
+        spent: float | None,
+        used_fraction: float | None,
         period_start: datetime | None,
         period_end: datetime | None,
     ) -> WorkspaceSpendPublic:
-        """Read a workspace ceiling's budget, with the spend and window the caller derived for now."""
+        """Read a workspace ceiling's budget, with the spend, share and window the caller derived for now."""
         return cls(
             workspace_id=workspace_id,
             max_budget=as_float(budget.max_budget),
             spent=spent,
+            used_fraction=used_fraction,
             period_start=period_start.isoformat() if period_start else None,
             period_end=period_end.isoformat() if period_end else None,
         )

@@ -313,6 +313,33 @@ class SignupRegistrationUnresolvedError(TenancyError):
         super().__init__("A signup address was released while it was being registered")
 
 
+class WorkspaceTotalsHiddenError(TenancyForbiddenError):
+    """A member asked for a workspace's totals and its managers keep them from members.
+
+    Refused rather than narrowed to the member's own rows, so a page never labels
+    their own figures as the workspace's.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("This workspace's managers do not share its totals with members")
+
+
+class WorkspaceTotalsNarrowingError(TenancyForbiddenError):
+    """A member asked for a workspace's totals split or narrowed by a parameter their reader does not allow."""
+
+    def __init__(self, parameter: str) -> None:
+        super().__init__(f"Workspace totals are not shared with members by `{parameter}`")
+
+
+class WorkspaceTotalsWorkspaceRequiredError(TenancyValidationError):
+    """A member asked for workspace totals without naming the workspace."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def __init__(self) -> None:
+        super().__init__("workspace_totals needs a workspace_id")
+
+
 __all__ = [
     "ForeignTenancyError",
     "InvalidRoleError",
@@ -347,4 +374,7 @@ __all__ = [
     "WorkspaceMemberNotFoundError",
     "WorkspaceNameRequiredError",
     "WorkspaceNotFoundError",
+    "WorkspaceTotalsHiddenError",
+    "WorkspaceTotalsNarrowingError",
+    "WorkspaceTotalsWorkspaceRequiredError",
 ]

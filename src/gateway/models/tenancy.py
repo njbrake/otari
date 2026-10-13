@@ -67,6 +67,7 @@ from sqlalchemy import (
     Uuid,
     func,
     text,
+    true,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlmodel import Field, SQLModel
@@ -976,6 +977,10 @@ class Workspace(WorkspaceBase, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, 
     # lives here because the overlay adds no tables of its own, so the column
     # has to exist in the one schema both editions boot.
     activation_classification: str = Field(default="eligible", max_length=32)
+    # Whether a member who does not manage the workspace may read its aggregate
+    # usage (totals, series, by model or provider) and its budget's dollars. Never
+    # anyone else's rows, keys or limits; see ``services/organizations``.
+    members_see_workspace_totals: bool = Field(default=True, sa_column_kwargs={"server_default": true()})
 
 
 class WorkspaceMemberBase(SQLModel):

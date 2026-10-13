@@ -16,11 +16,14 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import API_ROOT, GatewayConfig
+from gateway.exceptions.organizations_exceptions import WorkspaceTotalsHiddenError
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import ALIGN_MONTH, ALIGN_WEEK, SCOPE_API_TOKEN, SCOPE_WORKSPACE, Budget, ScopedBudget
+from gateway.models.platform import RuntimeSetting
 from gateway.models.tenancy import Organization, User, Workspace
 from gateway.models.usage import UsageLog
 from gateway.models.users import User as ApiUser
@@ -33,13 +36,15 @@ from gateway.repositories.tenancy import (
     WorkspaceRepository,
 )
 from gateway.services.model_discovery_service import ProviderDiscovery, get_model_cache
+from gateway.services.organizations import UsageReach
 from gateway.services.overview.overview_service import Month, OverviewService, OverviewSummary
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.organization_service import OrganizationService
+from gateway.services.tenancy.provisioning_service import BOOTSTRAP_IDENTITY_KEY
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 from gateway.services.tenancy.workspace_service import WorkspaceService
 
-from .tenancy_helpers import membership_writes
+from .tenancy_helpers import hide_totals, membership_writes, visibility_service
 
 NOW = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
 JULY = Month.current(NOW)
@@ -158,6 +163,7 @@ def _service(db: AsyncSession, config: GatewayConfig | None = None) -> OverviewS
         OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener()),
         DeploymentUserService(db),
         WorkspaceService(db, **membership_writes(db)),
+        visibility_service(db),
         config or GatewayConfig(),
     )
 
@@ -244,11 +250,82 @@ async def test_a_past_month_reads_only_its_own_usage(async_db: AsyncSession) -> 
 
 
 @pytest.mark.asyncio
-async def test_a_member_asking_for_the_workspace_or_organization_reads_their_own(async_db: AsyncSession) -> None:
-    _, _, member, _, workspace = await _team(async_db, "acme-fallback")
+async def test_a_superuser_member_reads_everyone_whatever_the_workspace_shares(async_db: AsyncSession) -> None:
+    """A deployment operator who is only a member of the workspace still reads every row in it."""
 
-    assert (await _summary(async_db, member, workspace=workspace, scope="workspace")).scope == "you"
+    _, _, member, other, workspace = await _team(async_db, "acme-reach-superuser")
+    member.is_superuser = True
+    await hide_totals(async_db, workspace)
+    visibility = visibility_service(async_db)
+
+    reach = await visibility.usage_reach(
+        user=member, workspace=workspace, workspace_totals=True, breakdowns=["user"], filters=["user_id"]
+    )
+
+    assert reach == UsageReach("everyone")
+    with pytest.raises(WorkspaceTotalsHiddenError):
+        await visibility.usage_reach(
+            user=other, workspace=workspace, workspace_totals=True, breakdowns=["model"], filters=[]
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_bootstrap_operator_reads_everyone_though_not_a_superuser(async_db: AsyncSession) -> None:
+    """The deployment's bootstrap identity operates it, superuser flag or not, as everywhere else."""
+
+    _, _, member, _, workspace = await _team(async_db, "acme-reach-bootstrap")
+    assert not member.is_superuser
+    async_db.add(RuntimeSetting(key=BOOTSTRAP_IDENTITY_KEY, value=str(member.id)))
+    await hide_totals(async_db, workspace)
+    await async_db.flush()
+
+    reach = await visibility_service(async_db).usage_reach(
+        user=member, workspace=workspace, workspace_totals=True, breakdowns=["user"], filters=["user_id"]
+    )
+
+    assert reach == UsageReach("everyone")
+
+
+@pytest.mark.asyncio
+async def test_a_member_asking_for_the_organization_reads_their_own(async_db: AsyncSession) -> None:
+    _, _, member, _, workspace = await _team(async_db, "acme-fallback-org")
+
     assert (await _summary(async_db, member, workspace=workspace, scope="organization")).scope == "you"
+
+
+@pytest.mark.asyncio
+async def test_a_member_reads_the_workspace_while_its_managers_share_its_totals(async_db: AsyncSession) -> None:
+    _, _, member, _, workspace = await _team(async_db, "acme-shown")
+
+    summary = await _summary(async_db, member, workspace=workspace, scope="workspace")
+
+    assert summary.scope == "workspace"
+    assert summary.visibility is not None and summary.visibility.members_see_workspace_totals is True
+
+
+@pytest.mark.asyncio
+async def test_a_member_asking_for_a_workspace_that_hides_its_totals_reads_their_own(async_db: AsyncSession) -> None:
+    _, _, member, _, workspace = await _team(async_db, "acme-fallback")
+    await hide_totals(async_db, workspace)
+
+    summary = await _summary(async_db, member, workspace=workspace, scope="workspace")
+
+    assert summary.scope == "you"
+    assert summary.visibility is not None and summary.visibility.members_see_workspace_totals is False
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_owner_reads_a_workspace_that_hides_its_totals(async_db: AsyncSession) -> None:
+    """The setting is about members; the people who manage the workspace read it whole."""
+
+    _, owner, member, _, workspace = await _team(async_db, "acme-hidden-owner")
+    _key(async_db, workspace, member, "sk-member")
+    await hide_totals(async_db, workspace)
+
+    summary = await _summary(async_db, owner, workspace=workspace, scope="workspace")
+
+    assert summary.scope == "workspace"
+    assert [row.id for row in summary.limits.rows] == ["sk-member"]
 
 
 @pytest.mark.asyncio
@@ -296,7 +373,7 @@ async def test_a_member_sees_only_their_own_keys_with_their_limits(async_db: Asy
     _ceiling(async_db, organization, scope_type=SCOPE_API_TOKEN, scope_id="sk-mine", limit=50, spent=10)
     _ceiling(async_db, organization, scope_type=SCOPE_API_TOKEN, scope_id="sk-theirs", limit=20, spent=20)
 
-    summary = await _summary(async_db, member, workspace=workspace, scope="workspace")
+    summary = await _summary(async_db, member, workspace=workspace, scope="you")
 
     assert summary.limits.kind == "keys"
     assert [row.id for row in summary.limits.rows] == ["sk-mine"]
@@ -304,6 +381,26 @@ async def test_a_member_sees_only_their_own_keys_with_their_limits(async_db: Asy
     assert (row.is_mine, row.limit, row.limit_spent, row.owner_name) == (True, 50.0, 10.0, "Member")
     # Their key is over its limit; neither the row nor the alert reaches a member.
     assert "key_over_limit" not in _kinds(summary)
+
+
+@pytest.mark.asyncio
+async def test_a_member_reading_the_workspace_totals_sees_no_key_in_the_rail(async_db: AsyncSession) -> None:
+    """The workspace's keys are other people's, so the rail is empty; the member's own key still reaches attention."""
+
+    organization, _, member, other, workspace = await _team(async_db, "acme-member-rail")
+    _key(async_db, workspace, member, "sk-mine")
+    _key(async_db, workspace, other, "sk-theirs")
+    _ceiling(async_db, organization, scope_type=SCOPE_API_TOKEN, scope_id="sk-mine", limit=10, spent=10)
+    _ceiling(async_db, organization, scope_type=SCOPE_API_TOKEN, scope_id="sk-theirs", limit=20, spent=20)
+    await async_db.flush()
+    _usage(async_db, workspace, api_key_id="sk-theirs", cost=5.0)
+
+    summary = await _summary(async_db, member, workspace=workspace, scope="workspace")
+
+    assert summary.scope == "workspace"
+    assert (summary.limits.kind, summary.limits.rows) == ("keys", [])
+    over = [item.subject_id for item in summary.attention if item.kind == "key_over_limit"]
+    assert over == ["sk-mine"]
 
 
 @pytest.mark.asyncio
@@ -748,7 +845,127 @@ async def test_a_members_error_rate_counts_only_their_own_requests(async_db: Asy
     _usage(async_db, workspace, count=20, status="error", user_id=str(other.id))
     _usage(async_db, workspace, count=20, user_id=str(member.id))
 
-    assert "error_rate" not in _kinds(await _summary(async_db, member, workspace=workspace))
+    assert "error_rate" not in _kinds(await _summary(async_db, member, workspace=workspace, scope="you"))
+
+
+@pytest.mark.asyncio
+async def test_a_member_reading_the_workspace_totals_hears_the_workspaces_error_rate(async_db: AsyncSession) -> None:
+    _, _, member, other, workspace = await _team(async_db, "acme-errors-workspace")
+    _usage(async_db, workspace, count=20, status="error", user_id=str(other.id))
+    _usage(async_db, workspace, count=20, user_id=str(member.id))
+
+    item = _item(await _summary(async_db, member, workspace=workspace, scope="workspace"), "error_rate")
+
+    assert (item.count, item.fraction) == (20, 0.5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("spent", "kind"), [(100, "budget_over"), (85.1234, "budget_near")])
+async def test_a_member_of_a_workspace_that_hides_its_totals_reads_the_budget_as_a_share(
+    async_db: AsyncSession, spent: float, kind: str
+) -> None:
+    organization, owner, member, _, workspace = await _team(async_db, f"acme-hidden-budget-{spent}")
+    _ceiling(async_db, organization, scope_type=SCOPE_WORKSPACE, scope_id=str(workspace.id), limit=100, spent=spent)
+    await hide_totals(async_db, workspace)
+
+    hidden = _item(await _summary(async_db, member, workspace=workspace, scope="you"), kind)
+    managed = _item(await _summary(async_db, owner, workspace=workspace, scope="you"), kind)
+
+    # A whole percent, so the share times the cap does not give the spend back.
+    assert (hidden.used, hidden.limit, hidden.fraction) == (None, 100.0, round(spent / 100, 2))
+    assert (managed.used, managed.limit) == (pytest.approx(spent), 100.0)
+    assert managed.fraction == pytest.approx(spent / 100)
+
+
+@pytest.mark.asyncio
+async def test_budget_pace_hides_the_spend_from_a_member_of_a_workspace_that_hides_its_totals(
+    async_db: AsyncSession,
+) -> None:
+    organization, _, member, _, workspace = await _team(async_db, "acme-hidden-pace")
+    _weekly(async_db, organization, workspace, spent=60, reserved=5)
+    await hide_totals(async_db, workspace)
+
+    item = _item(await _summary(async_db, member, workspace=workspace, scope="you", now=PACE_NOW), "budget_pace")
+
+    assert (item.used, item.limit, item.fraction) == (None, 100.0, 0.65)
+    # 60 in 3.5 days crosses 100 at 20:00 on the 25th; a member reads only the day, since the
+    # exact time, the cap and the period's start would give the spend back.
+    assert item.at == datetime(2026, 7, 25, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_a_hidden_readers_pace_moves_only_with_the_share_they_already_read(async_db: AsyncSession) -> None:
+    """Spends and holds that make one rounded share project one day, though their exact crossings differ.
+
+    Each is 63% of 100 used: 57.6 settled with 5 held, 58.4 with 5, and 61.4 with
+    1.6. Exactly, the first two cross either side of midnight on the 25th and the
+    holds move the third, so a day taken from the exact figures would tell a
+    member polling it which side of a boundary the spend, or someone's request
+    in flight, is on. Read from the share alone, 63 used in 3.5 days crosses 100
+    on the 25th for all three.
+    """
+
+    days = []
+    for slug, spent, reserved in (
+        ("acme-pace-low", 57.6, 5),
+        ("acme-pace-high", 58.4, 5),
+        ("acme-pace-held", 61.4, 1.6),
+    ):
+        organization, _, member, _, workspace = await _team(async_db, slug)
+        _weekly(async_db, organization, workspace, spent=spent, reserved=reserved)
+        await hide_totals(async_db, workspace)
+        item = _item(await _summary(async_db, member, workspace=workspace, scope="you", now=PACE_NOW), "budget_pace")
+        assert item.fraction == 0.63
+        days.append(item.at)
+
+    assert days == [datetime(2026, 7, 25, tzinfo=UTC)] * 3
+
+
+@pytest.mark.asyncio
+async def test_budget_pace_keeps_the_exact_crossing_for_a_manager_of_a_workspace_that_hides_its_totals(
+    async_db: AsyncSession,
+) -> None:
+    organization, owner, _, _, workspace = await _team(async_db, "acme-hidden-pace-owner")
+    _weekly(async_db, organization, workspace, spent=60, reserved=5)
+    await hide_totals(async_db, workspace)
+
+    item = _item(await _summary(async_db, owner, workspace=workspace, scope="you", now=PACE_NOW), "budget_pace")
+
+    assert item.at == datetime(2026, 7, 25, 20, 0, tzinfo=UTC)
+
+
+async def _statements(db: AsyncSession, identity: User, workspace: Workspace, scope: Any) -> int:
+    """How many statements one summary runs."""
+
+    await db.flush()
+    count = 0
+
+    def _counted(*_: Any) -> None:
+        nonlocal count
+        count += 1
+
+    connection = (await db.connection()).sync_connection
+    event.listen(connection, "before_cursor_execute", _counted)
+    try:
+        await _summary(db, identity, workspace=workspace, scope=scope)
+    finally:
+        event.remove(connection, "before_cursor_execute", _counted)
+    return count
+
+
+@pytest.mark.asyncio
+async def test_the_setting_is_read_with_the_workspace_and_costs_no_statement(async_db: AsyncSession) -> None:
+    """The setting is a column of the workspace row the summary already resolves.
+
+    The same scope with the setting on and off, so the reads differ only in it.
+    """
+
+    _, _, member, _, workspace = await _team(async_db, "acme-statements")
+    shown = await _statements(async_db, member, workspace, "you")
+    await hide_totals(async_db, workspace)
+    hidden = await _statements(async_db, member, workspace, "you")
+
+    assert shown == hidden
 
 
 @pytest.fixture
@@ -828,6 +1045,25 @@ def test_the_overview_reports_the_month_and_scope_it_read(
     assert body["scope"] == "organization"
     assert body["limits"]["kind"] == "workspaces"
     assert isinstance(body["attention"], list)
+    # No workspace named, so there is no workspace visibility to report.
+    assert body["visibility"] is None
+
+
+def test_the_overview_says_whether_the_named_workspace_shares_its_totals(
+    client: TestClient, master_key_header: dict[str, str]
+) -> None:
+    workspace_id = client.get(f"{API_ROOT}/workspaces", headers=master_key_header).json()["data"][0]["id"]
+    hidden = client.patch(
+        f"{API_ROOT}/workspaces/{workspace_id}/visibility",
+        json={"members_see_workspace_totals": False},
+        headers=master_key_header,
+    )
+    assert hidden.status_code == 200, hidden.text
+
+    response = client.get(_ENDPOINT, params={"workspace_id": workspace_id}, headers=master_key_header)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["visibility"] == {"members_see_workspace_totals": False}
 
 
 def test_the_current_month_is_the_default(client: TestClient, master_key_header: dict[str, str]) -> None:

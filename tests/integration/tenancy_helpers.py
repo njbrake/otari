@@ -23,7 +23,9 @@ from gateway.repositories.tenancy import (
 )
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets import BudgetMembershipListener, BudgetService
+from gateway.services.organizations import WorkspaceVisibilityService
 from gateway.services.tenancy.authorization import WorkspaceAccess
+from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.membership_listener import MembershipListener
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener, WorkspaceListener
@@ -57,7 +59,24 @@ def budget_service(db: AsyncSession) -> BudgetService:
         organizations,
         ApiKeyService(ApiKeyRepository(uow)),
         WorkspaceAccess(db, organizations),
+        visibility_service(db, uow),
     )
+
+
+def visibility_service(db: AsyncSession, uow: UnitOfWork | None = None) -> WorkspaceVisibilityService:
+    """Build the workspace-visibility service over ``db``, as ``get_workspace_visibility_service`` does."""
+    uow = uow or UnitOfWork(db)
+    organizations = OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener())
+    return WorkspaceVisibilityService(
+        uow, WorkspaceRepository(uow), WorkspaceAccess(db, organizations), DeploymentUserService(db)
+    )
+
+
+async def hide_totals(db: AsyncSession, workspace: Workspace) -> None:
+    """Stop the workspace sharing its totals with members, as a manager's change would."""
+    workspace.members_see_workspace_totals = False
+    db.add(workspace)
+    await db.commit()
 
 
 async def create_organization(db: AsyncSession, *, slug: str) -> Organization:

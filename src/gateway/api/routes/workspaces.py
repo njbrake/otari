@@ -10,7 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
-from gateway.api.deps import CurrentIdentity, WorkspaceServiceDep, verify_master_key
+from gateway.api.deps import CurrentIdentity, WorkspaceServiceDep, WorkspaceVisibilityServiceDep, verify_master_key
 from gateway.api.routes.organizations import Message
 from gateway.core.surface import Surface
 from gateway.models.tenancy import (
@@ -22,6 +22,7 @@ from gateway.models.tenancy import (
     WorkspacesPublic,
     WorkspaceUpdate,
 )
+from gateway.schemas.organizations import WorkspaceVisibility, WorkspaceVisibilityUpdate
 
 # Auth is declared on the router, not left to arrive through `CurrentIdentity`:
 # every handler here happens to take one today, and a future handler that did
@@ -155,3 +156,35 @@ async def remove_workspace_member(
     """Remove a member from a workspace. Idempotent."""
     await service.remove_member(user=current_identity, workspace_id=workspace_id, user_id=user_id)
     return Message(message="Workspace member removed")
+
+
+@router.get("/{workspace_id}/visibility")
+async def get_workspace_visibility(
+    service: WorkspaceVisibilityServiceDep,
+    current_identity: CurrentIdentity,
+    workspace_id: uuid.UUID,
+) -> WorkspaceVisibility:
+    """Read what the workspace shows members who do not manage it.
+
+    Any member of the workspace may read it, because the dashboard picks a
+    member's layout from it; a workspace the caller cannot see is not found.
+    """
+    return await service.get_visibility(user=current_identity, workspace_id=workspace_id)
+
+
+@router.patch("/{workspace_id}/visibility")
+async def update_workspace_visibility(
+    service: WorkspaceVisibilityServiceDep,
+    current_identity: CurrentIdentity,
+    workspace_id: uuid.UUID,
+    body: WorkspaceVisibilityUpdate,
+) -> WorkspaceVisibility:
+    """Change what members who do not manage the workspace see; only the fields sent change.
+
+    An organization owner or admin, or an owner or admin of this workspace, may
+    change it. With totals shown, a member may read the workspace's aggregate
+    usage and its budget in dollars; hidden, only their own usage and the budget
+    as a share of its cap. Neither ever shows a member anyone else's requests,
+    keys or limits. Answers with every setting after the change.
+    """
+    return await service.update_visibility(user=current_identity, workspace_id=workspace_id, request=body)

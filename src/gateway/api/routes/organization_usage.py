@@ -32,8 +32,18 @@ reading of the same rows:
   (``users.user_id`` is their identity's id, the row their own keys bill
   through), even in a workspace they share with other people. Managing one
   workspace widens that workspace and no other, so a workspace admin reading
-  across the organization sees the rest of it as a member does. A superuser
-  reads everyone's rows in a workspace they name.
+  across the organization sees the rest of it as a member does. A deployment
+  operator reads everyone's rows in a workspace they name.
+* **A member may ask for a workspace's totals** with ``workspace_totals=true``
+  and a ``workspace_id``, on the summary, the series and the groups. Granted
+  only while the workspace's managers share its totals with members, and only
+  split by model, provider or status code, with no filter that names a person,
+  key or session; anything else is a 403, never a quiet narrowing to their own
+  rows. The list and the count take no such parameter, so a member never reads
+  anyone else's rows. ``WorkspaceVisibilityService.usage_reach`` decides it
+  from the breakdowns (``MEMBER_TOTALS_BREAKDOWNS`` maps the parameters that
+  are one) and the filters a read sets. ``MEMBER_TOTALS_NEUTRAL`` names the
+  parameters that do neither, for the unit test that classifies every one.
 * **``workspace_id`` still narrows, and cannot widen.** It is put through
   ``resolve_workspace_in_organization``, the same resolver every other
   workspace-scoped read uses, so a workspace outside the caller's scope answers
@@ -49,6 +59,8 @@ different answer to the same question.
 """
 
 import uuid
+from collections.abc import Callable, Collection
+from dataclasses import fields
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
@@ -56,7 +68,13 @@ from sqlalchemy import ColumnElement, and_, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
-from gateway.api.deps import CurrentIdentity, UsageReadServiceDep, get_db, verify_master_key
+from gateway.api.deps import (
+    CurrentIdentity,
+    UsageReadServiceDep,
+    WorkspaceVisibilityServiceDep,
+    get_db,
+    verify_master_key,
+)
 from gateway.api.routes._usage_common import (
     COUNT_SORT_DESC,
     DIMENSIONS_DESC,
@@ -82,6 +100,7 @@ from gateway.api.routes.usage import UsageCount, UsageEntry
 from gateway.core.sql import UsageBucketGrain
 from gateway.core.surface import Surface
 from gateway.core.usage_filters import MAX_SEARCH_LENGTH, SortOrder, UsageSort, list_window, resolve_window
+from gateway.exceptions.organizations_exceptions import WorkspaceTotalsWorkspaceRequiredError
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
 from gateway.models.usage import UsageLog
@@ -98,9 +117,9 @@ from gateway.schemas.usage import (
     UsageRankBy,
     UsageSummary,
 )
+from gateway.services.organizations import WorkspaceVisibilityService
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import (
-    has_workspace_management_access,
     resolve_managed_workspace_ids,
     resolve_visible_workspace_scope,
     resolve_workspace_in_organization,
@@ -123,9 +142,73 @@ router = APIRouter(
 SURFACE = Surface("organization_usage", standalone=False)
 
 
+WORKSPACE_TOTALS_DESC = (
+    "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. "
+    "Granted while the workspace's managers share its totals with members, split by model, provider or status "
+    "code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and "
+    "whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is "
+    "refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates "
+    "the deployment."
+)
+
+WorkspaceTotalsQuery = Annotated[bool, Query(description=WORKSPACE_TOTALS_DESC)]
+
+# How a member's workspace-totals read treats the query parameters of the
+# summary, the series and the groups that are not filters. A breakdown is judged
+# by the dimensions it splits by. A neutral parameter shapes the answer without
+# choosing whose rows it reads: ``session_details`` adds only to the breakdown by
+# session, which a member may not ask for, and the groups' ``search`` matches only
+# values of the grouped dimension, which for a member is the model. Every filter
+# is judged by name against the reader's allowlist, so one added to
+# ``UsageReadFilters`` is refused until it is allowlisted.
+# ``tests/unit/test_member_totals_parameters.py`` holds every parameter to a class.
+MEMBER_TOTALS_BREAKDOWNS: dict[str, Callable[[Any], list[str]]] = {
+    "dimensions": lambda value: [dimension for dimension in value if dimension != "none"],
+    "group_by": lambda value: [value],
+    "p95_by": lambda value: [value],
+    # Grouping by a tag key is a breakdown by tag, whichever key it names.
+    "group_by_tag": lambda _: ["tag"],
+}
+MEMBER_TOTALS_NEUTRAL = frozenset(
+    {
+        "bucket",
+        "include_p95",
+        "session_details",
+        "rank_by",
+        "rank_order",
+        "search",
+        "order",
+        "skip",
+        "limit",
+        "workspace_totals",
+    }
+)
+
+
 def _own_requests(user: TenancyUser) -> ColumnElement[bool]:
     """The rows billed to this identity's attribution user, which is keyed on its id."""
     return col(UsageLog.user_id) == str(user.id)
+
+
+def _filters_set(filters: UsageReadFilters) -> list[str]:
+    """The name of every filter this read sets, so the visibility rule can refuse one that names a person.
+
+    Set means sent, whatever the value: ``source=`` is a filter on the empty source.
+    """
+    named = [
+        field.name for field in fields(filters) if field.name != "refine" and getattr(filters, field.name) is not None
+    ]
+    return named + [name for name, value in filters.refine.model_dump().items() if value is not None]
+
+
+def _breakdowns(**parameters: Any) -> list[str]:
+    """The dimensions the breakdown parameters sent split by, as ``MEMBER_TOTALS_BREAKDOWNS`` reads them."""
+    return [
+        dimension
+        for name, value in parameters.items()
+        if value is not None
+        for dimension in MEMBER_TOTALS_BREAKDOWNS[name](value)
+    ]
 
 
 async def _scope_condition(
@@ -133,12 +216,21 @@ async def _scope_condition(
     *,
     user: TenancyUser,
     workspace_id: uuid.UUID | None,
-) -> ColumnElement[bool]:
-    """The WHERE clause that confines a read to what this caller may see.
+    visibility: WorkspaceVisibilityService,
+    workspace_totals: bool = False,
+    breakdowns: Collection[str] = (),
+    filters: UsageReadFilters | None = None,
+) -> tuple[ColumnElement[bool], tuple[SummaryDimension, ...] | None]:
+    """The WHERE clause that confines a read to what this caller may see, and a member's default totals breakdowns.
 
     Resolved per request rather than cached on the session: a membership can be
     suspended or a role changed between two requests, and the cheaper answer is
     the one that goes stale in the unsafe direction.
+
+    ``workspace_totals`` is a member's ask for the named workspace's aggregates,
+    with the ``breakdowns`` the read splits by and the ``filters`` it applies;
+    the list and the count never pass it. The breakdowns returned are what a
+    granted totals summary splits by when it names none; None otherwise.
     """
     organizations = OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener())
 
@@ -169,28 +261,35 @@ async def _scope_condition(
             organizations=organizations,
         )
         workspace_rows = col(UsageLog.workspace_id) == workspace_id
-        if user.is_superuser or await has_workspace_management_access(
-            db, user=user, workspace=workspace, organizations=organizations
-        ):
-            return workspace_rows
-        return and_(workspace_rows, _own_requests(user))
+        reach = await visibility.usage_reach(
+            user=user,
+            workspace=workspace,
+            workspace_totals=workspace_totals,
+            breakdowns=breakdowns,
+            filters=_filters_set(filters) if filters is not None else (),
+        )
+        if reach.rows == "own":
+            return and_(workspace_rows, _own_requests(user)), None
+        return workspace_rows, reach.dimensions
 
+    if workspace_totals:
+        raise WorkspaceTotalsWorkspaceRequiredError
     scope = await resolve_visible_workspace_scope(db, user=user, organizations=organizations)
     if scope.sees_every_workspace:
         return col(UsageLog.workspace_id).in_(
             select(col(Workspace.id)).where(col(Workspace.organization_id) == scope.organization.id)
-        )
+        ), None
     if not scope.workspace_ids:
         # Belongs to no workspace yet. An empty result, and deliberately not a
         # 403: nothing was refused, there is simply nothing here.
-        return false()
+        return false(), None
     # Not the management arm above, so a member of the organization: everyone's
     # requests in the workspaces they manage, and their own in the rest of theirs.
     visible = col(UsageLog.workspace_id).in_(scope.workspace_ids)
     managed = await resolve_managed_workspace_ids(db, user=user, scope=scope)
     if not managed:
-        return and_(visible, _own_requests(user))
-    return and_(visible, or_(col(UsageLog.workspace_id).in_(managed), _own_requests(user)))
+        return and_(visible, _own_requests(user)), None
+    return and_(visible, or_(col(UsageLog.workspace_id).in_(managed), _own_requests(user))), None
 
 
 @router.get("")
@@ -198,6 +297,7 @@ async def list_organization_usage(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
     reads: UsageReadServiceDep,
+    visibility: WorkspaceVisibilityServiceDep,
     filters: Annotated[UsageListFilters, Depends()],
     sort: Annotated[UsageSort, Query(description=SORT_DESC)] = "timestamp",
     order: Annotated[SortOrder, Query(description=ORDER_DESC)] = "desc",
@@ -210,7 +310,7 @@ async def list_organization_usage(
     JSON array, same separate ``/count`` for a paginator's total, confined to
     what the caller's membership lets them see. Scope is never a parameter here.
     """
-    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    scope, _ = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id, visibility=visibility)
     start_date, end_date = list_window(filters.start_date, filters.end_date, q=filters.q, sort=sort)
     conditions = filters.conditions(start_date=start_date, end_date=end_date, scope=scope)
     rows = await reads.page(conditions, scope=scope, sort=sort, order=order, skip=skip, limit=limit)
@@ -221,6 +321,7 @@ async def list_organization_usage(
 async def count_organization_usage(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
+    visibility: WorkspaceVisibilityServiceDep,
     filters: Annotated[UsageListFilters, Depends()],
     sort: Annotated[UsageSort, Query(description=COUNT_SORT_DESC)] = "timestamp",
 ) -> UsageCount:
@@ -234,7 +335,7 @@ async def count_organization_usage(
     this surface has none. So this total keeps matching the list beside it.
     """
     start_date, end_date = list_window(filters.start_date, filters.end_date, q=filters.q, sort=sort)
-    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    scope, _ = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id, visibility=visibility)
     conditions = filters.conditions(start_date=start_date, end_date=end_date, scope=scope)
     stmt: Any = select(func.count()).select_from(UsageLog).where(*conditions)
     return UsageCount(total=(await db.execute(stmt)).scalar_one())
@@ -245,6 +346,7 @@ async def organization_usage_summary(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
     reads: UsageReadServiceDep,
+    visibility: WorkspaceVisibilityServiceDep,
     filters: Annotated[UsageReadFilters, Depends()],
     bucket: UsageBucketGrain = Query(default="day", description=SUMMARY_BUCKET_DESC),
     dimensions: list[SummaryDimension] | None = Query(default=None, description=DIMENSIONS_DESC),
@@ -254,6 +356,7 @@ async def organization_usage_summary(
     rank_by: Annotated[UsageBreakdownRankBy, Query(description=RANK_BY_DESC)] = "cost",
     rank_order: Annotated[SortOrder, Query(description=RANK_ORDER_DESC)] = "desc",
     group_by_tag: GroupByTag = None,
+    workspace_totals: WorkspaceTotalsQuery = False,
 ) -> UsageSummary:
     """Aggregate spend, tokens and request volume for the caller's organization.
 
@@ -261,9 +364,21 @@ async def organization_usage_summary(
     aggregation over a narrower row set: the same bounded window, the same
     breakdowns, the same ``dimensions`` selector for paying only for the passes a
     caller reads. The breakdown by user names the people inside the caller's own
-    scope, which is the roster they can already read.
+    scope, which is the roster they can already read. A member reading a
+    workspace's totals (``workspace_totals``) gets the breakdowns by model,
+    provider and status code when ``dimensions`` is left out.
     """
-    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    scope, totals_dimensions = await _scope_condition(
+        db,
+        user=identity,
+        workspace_id=filters.workspace_id,
+        visibility=visibility,
+        workspace_totals=workspace_totals,
+        breakdowns=_breakdowns(dimensions=dimensions, p95_by=p95_by, group_by_tag=group_by_tag),
+        filters=filters,
+    )
+    if totals_dimensions is not None and dimensions is None:
+        dimensions = list(totals_dimensions)
     start, end = summary_window(filters, grid=bucket if bucket == "5min" else None)
     return await reads.summary(
         start=start,
@@ -286,10 +401,12 @@ async def organization_usage_series(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
     reads: UsageReadServiceDep,
+    visibility: WorkspaceVisibilityServiceDep,
     filters: Annotated[UsageReadFilters, Depends()],
     group_by: SeriesGroupBy = Query(description=SERIES_GROUP_BY_DESC),
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
     rank_by: Annotated[UsageRankBy, Query(description=SERIES_RANK_BY_DESC)] = "cost",
+    workspace_totals: WorkspaceTotalsQuery = False,
 ) -> UsageGroupedSeries:
     """Time series split by one dimension, for the caller's organization.
 
@@ -298,7 +415,15 @@ async def organization_usage_series(
     dashboard serializes one filter object for both, so a filter one of them
     ignored would make the stacked chart disagree with the tiles beside it.
     """
-    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    scope, _ = await _scope_condition(
+        db,
+        user=identity,
+        workspace_id=filters.workspace_id,
+        visibility=visibility,
+        workspace_totals=workspace_totals,
+        breakdowns=_breakdowns(group_by=group_by),
+        filters=filters,
+    )
     start, end = summary_window(filters, grid=bucket)
     return await reads.grouped_series(
         start=start,
@@ -316,12 +441,14 @@ async def organization_usage_activity_groups(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
     reads: UsageReadServiceDep,
+    visibility: WorkspaceVisibilityServiceDep,
     filters: Annotated[UsageReadFilters, Depends()],
     group_by: ActivityGroupBy = Query(description=GROUP_BY_DESC),
     search: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=GROUP_SEARCH_DESC)] = None,
     order: Annotated[ActivityGroupOrder, Query(description=GROUP_ORDER_DESC)] = "recent",
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    workspace_totals: WorkspaceTotalsQuery = False,
 ) -> UsageActivityGroups:
     """The caller's organization's activity log, one row per API key, session, model, user, policy or alias.
 
@@ -329,7 +456,15 @@ async def organization_usage_activity_groups(
     aggregation over the rows this caller may read.
     """
     start, end = resolve_window(filters.start_date, filters.end_date)
-    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    scope, _ = await _scope_condition(
+        db,
+        user=identity,
+        workspace_id=filters.workspace_id,
+        visibility=visibility,
+        workspace_totals=workspace_totals,
+        breakdowns=_breakdowns(group_by=group_by),
+        filters=filters,
+    )
     conditions = filters.conditions(start_date=start, end_date=end, scope=scope)
     return await reads.activity_groups(
         group_by=group_by,

@@ -13,7 +13,7 @@ make the API own UI copy and freeze the page's wording into four SDKs.
 
 import calendar
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -31,9 +31,11 @@ from gateway.repositories.overview.overview_repository import (
     OverviewRepository,
     WorkspaceSpend,
 )
+from gateway.schemas.organizations import WorkspaceVisibility
 from gateway.schemas.overview import AttentionKind, OverviewScope
 from gateway.services.budgets import effective_period
 from gateway.services.model_discovery_service import get_model_cache
+from gateway.services.organizations import WorkspaceReader, WorkspaceVisibilityService
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_service import WorkspaceService
@@ -171,6 +173,7 @@ class OverviewSummary:
     scope: OverviewScope
     attention: list[AttentionItem]
     limits: Limits
+    visibility: WorkspaceVisibility | None
 
 
 def _utilization(row: Allocation) -> float:
@@ -225,12 +228,14 @@ class OverviewService:
         organizations: OrganizationService,
         operators: DeploymentUserService,
         workspaces: WorkspaceService,
+        visibility: WorkspaceVisibilityService,
         config: GatewayConfig,
     ):
         self._repository = repository
         self._organizations = organizations
         self._operators = operators
         self._workspaces = workspaces
+        self._visibility = visibility
         # Read only for the providers an operator's reachability covers.
         self._config = config
 
@@ -281,13 +286,11 @@ class OverviewService:
                 )
             except WorkspaceNotFoundError:
                 workspace = None
-        used_scope = await self._allowed_scope(
-            scope,
-            identity=identity,
-            workspace=workspace,
-            manages_spend=manages_spend,
-            is_operator=is_deployment_operator,
-        )
+        reader = await self._visibility.reader(user=identity, workspace=workspace) if workspace else None
+        used_scope = _allowed_scope(scope, reader=reader, manages_spend=manages_spend)
+        # A member reading a workspace's totals: the workspace's figures, and
+        # nobody else's keys.
+        member_totals = used_scope == "workspace" and reader is not None and not reader.sees_everyone
 
         budgets = None
         if is_deployment_operator:
@@ -318,9 +321,11 @@ class OverviewService:
         if used_scope == "organization":
             limits, found, (requests, failures) = await self._workspace_rail(organization, month, now)
         else:
-            limits, found = await self._key_rail(identity, organization, workspace, used_scope, month, now)
-            if workspace is not None:
-                attention += await self._workspace_budget(workspace, month, now)
+            limits, found = await self._key_rail(
+                identity, organization, workspace, used_scope, month, now, own_keys_only=member_totals
+            )
+            if workspace is not None and reader is not None:
+                attention += await self._workspace_budget(workspace, month, now, reader=reader)
             requests, failures = await self._repository.requests_and_failures(
                 organization_id=organization.id,
                 workspace_id=workspace.id if workspace else None,
@@ -344,32 +349,8 @@ class OverviewService:
             scope=used_scope,
             attention=attention,
             limits=limits,
+            visibility=WorkspaceVisibility.of(workspace) if workspace else None,
         )
-
-    async def _allowed_scope(
-        self,
-        asked: OverviewScope,
-        *,
-        identity: TenancyUser,
-        workspace: Workspace | None,
-        manages_spend: bool,
-        is_operator: bool,
-    ) -> OverviewScope:
-        """The scope this caller may read: the one asked, or ``you``.
-
-        The organization is an organization owner's or admin's, the line the
-        ceilings route draws; a workspace is its managers', the line the usage
-        reads draw for everyone's requests in it.
-        """
-
-        if asked == "organization":
-            return "organization" if manages_spend else "you"
-        if asked == "workspace" and workspace is not None:
-            if is_operator or manages_spend:
-                return "workspace"
-            if await self._workspaces.manages(user=identity, workspace=workspace):
-                return "workspace"
-        return "you"
 
     def _unreachable_providers(self) -> list[AttentionItem]:
         """One item per provider whose last reachability check failed, read from the discovery cache.
@@ -408,18 +389,23 @@ class OverviewService:
         scope: OverviewScope,
         month: Month,
         now: datetime,
+        *,
+        own_keys_only: bool,
     ) -> tuple[Limits, list[AttentionItem]]:
         """The most billed of the caller's keys, or of a managed workspace's; and the keys worth a word.
 
         Keys past the rail are read only when they may need attention, so a
         small key about to expire is still said without reading every key.
+        ``own_keys_only`` is a member reading a workspace's totals: their own
+        keys are judged for attention, and the rail lists no key at all, since
+        the workspace's keys are other people's.
         """
 
         mine = str(identity.id)
         keys = await self._repository.keys_with_spend(
             organization_id=organization.id,
             workspace_id=workspace.id if workspace else None,
-            owner_user_id=mine if scope == "you" else None,
+            owner_user_id=mine if scope == "you" or own_keys_only else None,
             start=month.start,
             end=month.end,
             rail_rows=LIMIT_ROWS,
@@ -438,7 +424,7 @@ class OverviewService:
             expires_at = utc_bound(key.expires_at)
             if expires_at is not None and now < expires_at <= now + KEY_EXPIRY_NOTICE:
                 attention.append(_item("key_expiring", "warn", key.id, key.name, at=expires_at))
-        rows = [_key_row(key, mine=mine, now=now) for key in keys if key.in_rail]
+        rows = [] if own_keys_only else [_key_row(key, mine=mine, now=now) for key in keys if key.in_rail]
         return Limits(kind="keys", rows=rows), attention
 
     async def _workspace_rail(
@@ -466,12 +452,16 @@ class OverviewService:
         rows = [_workspace_row(ws, now) for ws in found.workspaces if ws.in_rail]
         return Limits(kind="workspaces", rows=rows), attention, (found.requests, found.failures)
 
-    async def _workspace_budget(self, workspace: Workspace, month: Month, now: datetime) -> list[AttentionItem]:
+    async def _workspace_budget(
+        self, workspace: Workspace, month: Month, now: datetime, *, reader: WorkspaceReader
+    ) -> list[AttentionItem]:
         """The workspace ceiling the caller spends against: over, near, or on pace to pass it.
 
         Any member may read it (the workspace budget surface), so it is judged in
         every scope that names the workspace. Pace only for the current month,
-        since a month that has ended has no run left to project.
+        since a month that has ended has no run left to project. A ``reader`` the
+        dollars are kept from gets what the budget surface gives them: the cap and
+        the share to a whole percent, and a pace projected from that share alone.
         """
 
         ceiling = await self._repository.workspace_ceiling(workspace.organization_id, workspace.id)
@@ -482,9 +472,16 @@ class OverviewService:
         items = _limit_items(
             standing, over="budget_over", near="budget_near", subject_id=subject[0], subject_name=subject[1]
         )
+        if not reader.shows_spend:
+            items = [replace(item, used=None, fraction=reader.share(item.fraction)) for item in items]
         if items or now >= month.end:
             return items
-        crossing = _projected_crossing(standing, now)
+        if reader.shows_spend:
+            crossing = _projected_crossing(standing, now)
+        else:
+            crossing = _projected_crossing(_as_shared(standing, reader), now)
+            # And to the day, so the moment it rolls over says no more than the share does.
+            crossing = crossing.replace(hour=0, minute=0, second=0, microsecond=0) if crossing else None
         if crossing is None:
             return []
         return [
@@ -492,9 +489,9 @@ class OverviewService:
                 "budget_pace",
                 "warn",
                 *subject,
-                used=standing.used,
+                used=standing.used if reader.shows_spend else None,
                 limit=standing.limit,
-                fraction=standing.fraction,
+                fraction=reader.share(standing.fraction),
                 at=crossing,
             )
         ]
@@ -516,6 +513,21 @@ class OverviewService:
         except NotAuthorizedError:
             return False
         return True
+
+
+def _allowed_scope(asked: OverviewScope, *, reader: WorkspaceReader | None, manages_spend: bool) -> OverviewScope:
+    """The scope this caller may read: the one asked, or ``you``.
+
+    The organization is an organization owner's or admin's, the line the
+    ceilings route draws. A workspace is for whoever its ``reader`` lets read
+    its totals, the line the usage reads draw.
+    """
+
+    if asked == "organization":
+        return "organization" if manages_spend else "you"
+    if asked == "workspace" and reader is not None and reader.reads_workspace_totals:
+        return "workspace"
+    return "you"
 
 
 @dataclass(frozen=True)
@@ -625,6 +637,19 @@ def _limit_items(
             fraction=standing.fraction,
         )
     ]
+
+
+def _as_shared(standing: _Standing, reader: WorkspaceReader) -> _Standing:
+    """The standing as a reader who sees only the share knows it: the rounded share of the cap, settled.
+
+    Holds are not taken off, as the real pace does, because the exact holds
+    would move the projection with other people's requests in flight. Counting
+    them makes this pace a little early, and makes it move only when the share
+    the reader already sees does.
+    """
+
+    used = (reader.share(standing.fraction) or 0.0) * standing.limit
+    return replace(standing, settled=used, reserved=0.0)
 
 
 def _projected_crossing(standing: _Standing, now: datetime) -> datetime | None:

@@ -65,6 +65,8 @@ from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 
+from .tenancy_helpers import hide_totals, visibility_service
+
 _BUDGETS = f"{API_ROOT}/organizations/me/budgets"
 _CEILINGS = f"{API_ROOT}/organizations/me/spend-ceilings"
 
@@ -557,6 +559,7 @@ def _service(async_db: AsyncSession) -> BudgetService:
             async_db,
             OrganizationService(async_db, membership_listener=None, workspace_listener=NullWorkspaceListener()),
         ),
+        visibility_service(async_db, uow),
     )
 
 
@@ -1262,8 +1265,75 @@ async def test_a_member_reads_the_workspace_ceiling_with_holds_in_flight(async_d
     assert "name" not in spend.model_dump(), "a ceiling's name is an administrator's label"
     # What the gate enforces against: settled spend plus holds in flight.
     assert spend.spent == pytest.approx(22.0)
+    assert spend.used_fraction == pytest.approx(0.22)
     assert spend.period_start is not None
     assert spend.period_end is not None
+
+
+@pytest.mark.asyncio
+async def test_a_zero_ceiling_with_anything_counted_against_it_reads_as_all_used(async_db: AsyncSession) -> None:
+    service, owner, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-zero", max_budget=0)
+    await _set_counters(async_db, ceiling_id, current_spend=Decimal("3"))
+
+    spend = await service.workspace_spend(user=owner, workspace_id=workspace.id)
+
+    assert spend is not None
+    assert (spend.max_budget, spend.used_fraction) == (0.0, 1.0)
+
+
+@pytest.mark.asyncio
+async def test_the_share_a_member_reads_is_a_whole_percent_so_it_does_not_give_the_spend_back(
+    async_db: AsyncSession,
+) -> None:
+    service, owner, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-rounded")
+    member = await _joined(async_db, workspace)
+    await _set_counters(async_db, ceiling_id, current_spend=Decimal("64.1234"))
+    await hide_totals(async_db, workspace)
+
+    hidden = await service.workspace_spend(user=member, workspace_id=workspace.id)
+    managed = await service.workspace_spend(user=owner, workspace_id=workspace.id)
+
+    assert hidden is not None and hidden.used_fraction == 0.64
+    assert managed is not None and managed.used_fraction == pytest.approx(0.641234)
+
+
+@pytest.mark.asyncio
+async def test_a_member_of_a_workspace_that_hides_its_totals_reads_the_ceiling_as_a_share(
+    async_db: AsyncSession,
+) -> None:
+    service, owner, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-hidden")
+    member = await _joined(async_db, workspace)
+    await _set_counters(async_db, ceiling_id, current_spend=Decimal("64"))
+    await hide_totals(async_db, workspace)
+
+    hidden = await service.workspace_spend(user=member, workspace_id=workspace.id)
+    managed = await service.workspace_spend(user=owner, workspace_id=workspace.id)
+
+    assert hidden is not None
+    assert (hidden.max_budget, hidden.spent) == (100.0, None)
+    assert hidden.used_fraction == pytest.approx(0.64)
+    assert hidden.period_end is not None
+    assert managed is not None
+    assert managed.spent == pytest.approx(64.0)
+    assert managed.used_fraction == pytest.approx(0.64)
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_admin_reads_the_dollars_of_a_workspace_that_hides_its_totals(
+    async_db: AsyncSession,
+) -> None:
+    service, _, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-ws-admin")
+    organization = await async_db.get(Organization, workspace.organization_id)
+    assert organization is not None
+    lead = await _member(async_db, organization, role="member", full_name="Lead")
+    await WorkspaceMemberRepository(async_db).create(workspace_id=workspace.id, user_id=lead.id, role="admin")
+    await _set_counters(async_db, ceiling_id, current_spend=Decimal("10"))
+    await hide_totals(async_db, workspace)
+
+    spend = await service.workspace_spend(user=lead, workspace_id=workspace.id)
+
+    assert spend is not None
+    assert spend.spent == pytest.approx(10.0)
 
 
 @pytest.mark.asyncio
@@ -1327,6 +1397,7 @@ async def test_a_budget_that_caps_no_dollars_reads_with_no_limit(async_db: Async
 
     assert spend is not None
     assert spend.max_budget is None
+    assert spend.used_fraction is None
 
 
 @pytest.mark.asyncio

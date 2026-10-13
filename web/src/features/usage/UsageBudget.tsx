@@ -17,7 +17,8 @@ const AT_LIMIT = 0.9
  * workspace without a dollar ceiling.
  */
 export function UsageBudget({ spend }: { spend: WorkspaceSpend | undefined }) {
-  if (!spend?.max_budget) return null
+  // A null `spent` is withheld from this caller, so there is no dollar figure to show.
+  if (!spend?.max_budget || spend.spent === null) return null
   const share = spend.spent / spend.max_budget
   const period = describeBudgetPeriod(spend)
   return (

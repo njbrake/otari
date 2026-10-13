@@ -42,6 +42,7 @@ from gateway.services.budgets._reservation_moves import (
 from gateway.services.budgets._reservations import EstimateInputs, ReservationHandle, _normalize_strategy
 from gateway.services.budgets._scopes import ScopeOwnership
 from gateway.services.budgets._workspace_surface import _WorkspaceSurface
+from gateway.services.organizations import WorkspaceVisibilityService
 from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.types.attempt import Attempt
@@ -60,12 +61,13 @@ class BudgetService:
         organizations: OrganizationService,
         api_keys: ApiKeyService,
         workspace_access: WorkspaceAccess,
+        visibility: WorkspaceVisibilityService,
     ) -> None:
         self._uow = uow
         self._budgets = repositories.budgets
         self._api_keys = api_keys
         self._organization = _OrganizationSurface(repositories, ScopeOwnership(organizations, api_keys), organizations)
-        self._workspace = _WorkspaceSurface(repositories, workspace_access)
+        self._workspace = _WorkspaceSurface(repositories, workspace_access, visibility)
         self._end_users = _EndUsers(repositories)
         self._deployment = _DeploymentSurface(repositories)
         self._member_policies = _MemberPolicies(repositories, organizations, workspace_access)
@@ -274,7 +276,11 @@ class BudgetService:
             return await self._organization.update_ceiling(user=user, ceiling_id=ceiling_id, request=request)
 
     async def workspace_spend(self, *, user: User, workspace_id: uuid.UUID) -> WorkspaceSpendPublic | None:
-        """Return the workspace's own spend ceiling for any member of it, or None when it has none."""
+        """Return the workspace's own spend ceiling for any member of it, or None when it has none.
+
+        A member who does not manage the workspace reads its spend only as a share
+        of the cap while the workspace keeps its totals from members.
+        """
         async with self._uow:
             return await self._workspace.spend(user=user, workspace_id=workspace_id, now=datetime.now(UTC))
 

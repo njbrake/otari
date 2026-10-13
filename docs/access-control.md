@@ -260,6 +260,30 @@ membership: an owner or admin sees every request in their scope, and a member or
 viewer sees only the requests billed to them, even in a workspace they share.
 Deployment operators can read the deployment-wide usage API.
 
+A workspace's managers (an owner or admin of the organization or of the
+workspace) also choose whether members see the workspace's totals, with
+`PATCH /api/v1/workspaces/{workspace_id}/visibility`, which changes only the
+fields sent; any member may read the settings with `GET` on the same path. It is
+on by default, including for workspaces that existed before the setting. While
+it is on, a member or viewer may ask the organization usage summary, series and
+groups for the workspace's aggregates with `workspace_totals=true` and a
+`workspace_id`: totals and the time series, split by model, provider or status
+code, and narrowed only by the window, model, provider, endpoint, outcome,
+status code, pricing and whether it counts toward the budget. Any other
+breakdown or filter (user, API key, source, channel, session, policy, tag,
+tool, the `q` search, thresholds) is refused with 403, and the request list and
+count stay the member's own. The groups' `search` is allowed, because it only
+matches values of the grouped dimension, which for a member is the model. Totals
+still say something about the people behind them: in a two-person workspace,
+the totals less a member's own spend are the other person's. Turn the setting
+off where that matters. While it is off, the same ask is refused with 403
+rather than narrowed, and the workspace budget
+(`GET /api/v1/workspaces/{workspace_id}/budget`) gives a member or viewer its
+cap and `used_fraction`, rounded to a whole percent, but not the dollars spent;
+the overview's budget items likewise give them a rounded share and a projected
+crossing to the day, projected from that rounded share.
+Managers and deployment operators read everything either way.
+
 Routing fallback and built-in tools can create several internal attempts, but a
 successful request remains one caller-visible request. The activity log records
 the attempt group and the model that served it.

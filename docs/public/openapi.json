@@ -12559,7 +12559,7 @@
                 "type": "null"
               }
             ],
-            "description": "USD spent against the limit in its current period.",
+            "description": "USD spent against the limit in its current period. Null on a workspace budget item for a member of a workspace that keeps its totals from members, which still carries `limit` and `fraction`.",
             "title": "Used"
           }
         },
@@ -12697,7 +12697,7 @@
         "type": "object"
       },
       "OverviewLimitsResponse": {
-        "description": "The rail: the caller's keys, a workspace's keys, or the organization's workspaces.\n\nAt most eight, most billed first.",
+        "description": "The rail: the caller's keys, a workspace's keys, or the organization's workspaces.\n\nAt most eight, most billed first. Empty for a member reading a workspace's\ntotals, because the workspace's keys are other people's.",
         "properties": {
           "kind": {
             "enum": [
@@ -12810,6 +12810,17 @@
             ],
             "title": "Scope",
             "type": "string"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkspaceVisibility"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the named workspace shows members who do not manage it; null when no workspace is named. A member reading the workspace scope of one that shares its totals sees them and an empty rail."
           }
         },
         "required": [
@@ -12820,7 +12831,8 @@
           "month",
           "scope",
           "attention",
-          "limits"
+          "limits",
+          "visibility"
         ],
         "title": "OverviewSummaryResponse",
         "type": "object"
@@ -23511,8 +23523,28 @@
             "title": "Period Start"
           },
           "spent": {
-            "title": "Spent",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "USD counted against the cap: settled spend plus holds in flight. Null for a member who does not manage the workspace when its managers keep its totals from members; `used_fraction` still says how much of the cap is used.",
+            "title": "Spent"
+          },
+          "used_fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The share of `max_budget` used, 1.0 or more at or past it; null when the ceiling caps no dollars. A zero cap with anything counted against it reads 1.0. Rounded to a whole percent where `spent` is null.",
+            "title": "Used Fraction"
           },
           "workspace_id": {
             "format": "uuid",
@@ -23524,6 +23556,7 @@
           "workspace_id",
           "max_budget",
           "spent",
+          "used_fraction",
           "period_start",
           "period_end"
         ],
@@ -23558,6 +23591,40 @@
           }
         },
         "title": "WorkspaceUpdate",
+        "type": "object"
+      },
+      "WorkspaceVisibility": {
+        "description": "What a workspace shows members who do not manage it.",
+        "properties": {
+          "members_see_workspace_totals": {
+            "description": "Whether members may read the workspace's aggregate usage (totals, series, and breakdowns by model, provider or status code) and its budget's dollar figures. Never anyone else's requests, keys or limits. When false, a member reads only their own usage and the budget as a percentage.",
+            "title": "Members See Workspace Totals",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "members_see_workspace_totals"
+        ],
+        "title": "WorkspaceVisibility",
+        "type": "object"
+      },
+      "WorkspaceVisibilityUpdate": {
+        "description": "A change to what a workspace shows its members: only the fields sent change.",
+        "properties": {
+          "members_see_workspace_totals": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether members may read the workspace's aggregate usage (totals, series, and breakdowns by model, provider or status code) and its budget's dollar figures. Never anyone else's requests, keys or limits. When false, a member reads only their own usage and the budget as a percentage.",
+            "title": "Members See Workspace Totals"
+          }
+        },
+        "title": "WorkspaceVisibilityUpdate",
         "type": "object"
       },
       "WorkspaceWebSearchConfigPublic": {
@@ -34671,6 +34738,18 @@
             }
           },
           {
+            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+            "in": "query",
+            "name": "workspace_totals",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+              "title": "Workspace Totals",
+              "type": "boolean"
+            }
+          },
+          {
             "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
             "in": "query",
             "name": "start_date",
@@ -35441,6 +35520,18 @@
             }
           },
           {
+            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+            "in": "query",
+            "name": "workspace_totals",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+              "title": "Workspace Totals",
+              "type": "boolean"
+            }
+          },
+          {
             "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
             "in": "query",
             "name": "start_date",
@@ -36151,7 +36242,7 @@
     },
     "/api/v1/organizations/me/usage/summary": {
       "get": {
-        "description": "Aggregate spend, tokens and request volume for the caller's organization.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage/summary``, running the same\naggregation over a narrower row set: the same bounded window, the same\nbreakdowns, the same ``dimensions`` selector for paying only for the passes a\ncaller reads. The breakdown by user names the people inside the caller's own\nscope, which is the roster they can already read.",
+        "description": "Aggregate spend, tokens and request volume for the caller's organization.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage/summary``, running the same\naggregation over a narrower row set: the same bounded window, the same\nbreakdowns, the same ``dimensions`` selector for paying only for the passes a\ncaller reads. The breakdown by user names the people inside the caller's own\nscope, which is the roster they can already read. A member reading a\nworkspace's totals (``workspace_totals``) gets the breakdowns by model,\nprovider and status code when ``dimensions`` is left out.",
         "operationId": "organization-usage-organization_usage_summary",
         "parameters": [
           {
@@ -36317,6 +36408,18 @@
               ],
               "description": "A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key.",
               "title": "Group By Tag"
+            }
+          },
+          {
+            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+            "in": "query",
+            "name": "workspace_totals",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+              "title": "Workspace Totals",
+              "type": "boolean"
             }
           },
           {
@@ -37462,13 +37565,13 @@
             }
           },
           {
-            "description": "Whose spend to read: the caller's own, the workspace's, or the organization's. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used.",
+            "description": "Whose spend to read: the caller's own, the workspace's, or the organization's. A member may read the workspace's while its managers share its totals with members. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used.",
             "in": "query",
             "name": "scope",
             "required": false,
             "schema": {
               "default": "workspace",
-              "description": "Whose spend to read: the caller's own, the workspace's, or the organization's. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used.",
+              "description": "Whose spend to read: the caller's own, the workspace's, or the organization's. A member may read the workspace's while its managers share its totals with members. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used.",
               "enum": [
                 "you",
                 "workspace",
@@ -49052,6 +49155,118 @@
         "summary": "Update Saved View",
         "tags": [
           "saved-views"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/visibility": {
+      "get": {
+        "description": "Read what the workspace shows members who do not manage it.\n\nAny member of the workspace may read it, because the dashboard picks a\nmember's layout from it; a workspace the caller cannot see is not found.",
+        "operationId": "workspaces-get_workspace_visibility",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceVisibility"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Workspace Visibility",
+        "tags": [
+          "workspaces"
+        ]
+      },
+      "patch": {
+        "description": "Change what members who do not manage the workspace see; only the fields sent change.\n\nAn organization owner or admin, or an owner or admin of this workspace, may\nchange it. With totals shown, a member may read the workspace's aggregate\nusage and its budget in dollars; hidden, only their own usage and the budget\nas a share of its cap. Neither ever shows a member anyone else's requests,\nkeys or limits. Answers with every setting after the change.",
+        "operationId": "workspaces-update_workspace_visibility",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceVisibilityUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceVisibility"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Update Workspace Visibility",
+        "tags": [
+          "workspaces"
         ]
       }
     },

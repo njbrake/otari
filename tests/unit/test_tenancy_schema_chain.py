@@ -1106,3 +1106,47 @@ def test_the_guardrail_definitions_revision_round_trips(sqlite_at_head: tuple[Co
     assert _DEFINITIONS_TABLE in set(inspector.get_table_names())
     assert "definition_id" in {column["name"] for column in inspector.get_columns(_MANDATES_TABLE)}
     assert _MANDATES_DEFINITION_FK in {fk["name"] for fk in inspector.get_foreign_keys(_MANDATES_TABLE)}
+
+
+_MEMBER_TOTALS_REVISION = "a9c3e5f7b1d2"
+
+
+def test_a_workspace_from_before_the_member_totals_column_shares_its_totals(tmp_path: Path) -> None:
+    """Existing workspaces read the server default, and the downgrade drops the column and nothing else."""
+    database_url = f"sqlite:///{tmp_path / 'member-totals.db'}"
+    config = _alembic_config(database_url)
+    before = _parent_of(_MEMBER_TOTALS_REVISION)
+    command.upgrade(config, before)
+    engine = create_engine(database_url)
+    organization_id, workspace_id = uuid.uuid4().hex, uuid.uuid4().hex
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO organization (id, name, slug, created_at) VALUES (:id, 'Acme', 'acme', '2026-01-01')"
+                ),
+                {"id": organization_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO workspace (id, name, organization_id, activation_classification, created_at) "
+                    "VALUES (:id, 'Team', :org, 'eligible', '2026-01-01')"
+                ),
+                {"id": workspace_id, "org": organization_id},
+            )
+
+        command.upgrade(config, _MEMBER_TOTALS_REVISION)
+        with engine.connect() as conn:
+            shown = conn.execute(
+                text("SELECT members_see_workspace_totals FROM workspace WHERE id = :id"), {"id": workspace_id}
+            ).scalar_one()
+        assert bool(shown) is True
+
+        command.downgrade(config, before)
+        inspector = inspect(engine)
+        assert "members_see_workspace_totals" not in {column["name"] for column in inspector.get_columns("workspace")}
+        checks = {check["name"] for check in inspector.get_check_constraints("workspace")}
+        assert "check_workspace_activation_classification" in checks
+        command.upgrade(config, "head")
+    finally:
+        engine.dispose()

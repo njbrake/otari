@@ -96,7 +96,14 @@ from gateway.services.tenancy.workspace_activation_service import (
 )
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 
-from .tenancy_helpers import MembershipWrites, budget_service, create_budget, create_member, membership_writes
+from .tenancy_helpers import (
+    MembershipWrites,
+    budget_service,
+    create_budget,
+    create_member,
+    membership_writes,
+    visibility_service,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -614,6 +621,7 @@ def _budget_service(db: AsyncSession, organizations: OrganizationService | None 
         organizations,
         ApiKeyService(ApiKeyRepository(uow)),
         WorkspaceAccess(db, organizations),
+        visibility_service(db, uow),
     )
 
 

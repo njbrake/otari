@@ -34,7 +34,8 @@ export function WorkspaceBudget({
   /** A phone's lane, where the meter takes the width the words leave. */
   isFullWidth?: boolean
 }) {
-  if (!spend?.max_budget) return null
+  // A null `spent` is withheld from this caller, so there is no dollar figure to show.
+  if (!spend?.max_budget || spend.spent === null) return null
   const period = describeBudgetPeriod(spend)
   return (
     <span

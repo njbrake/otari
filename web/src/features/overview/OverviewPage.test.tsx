@@ -203,6 +203,7 @@ function overviewBody(over: Partial<OverviewSummary> = {}): OverviewSummary {
     scope: "workspace",
     attention: [],
     limits: { kind: "keys", rows: [] },
+    visibility: { members_see_workspace_totals: true },
     ...over,
   }
 }
@@ -378,6 +379,7 @@ const BUDGET: WorkspaceSpend = {
   workspace_id: WORKSPACE_A,
   max_budget: 1000,
   spent: 300,
+  used_fraction: 0.3,
   period_start: "2026-10-01T00:00:00Z",
   period_end: "2026-11-01T00:00:00Z",
 }

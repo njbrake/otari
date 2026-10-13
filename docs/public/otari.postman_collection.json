@@ -6355,6 +6355,12 @@
                   "value": ""
                 },
                 {
+                  "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+                  "disabled": true,
+                  "key": "workspace_totals",
+                  "value": ""
+                },
+                {
                   "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
                   "disabled": true,
                   "key": "start_date",
@@ -6547,7 +6553,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/groups?group_by=api_key&search=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/groups?group_by=api_key&search=&order=&skip=&limit=&workspace_totals=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -6589,6 +6595,12 @@
                   "value": ""
                 },
                 {
+                  "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+                  "disabled": true,
+                  "key": "workspace_totals",
+                  "value": ""
+                },
+                {
                   "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
                   "disabled": true,
                   "key": "start_date",
@@ -6781,14 +6793,14 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/series?group_by=model&bucket=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/series?group_by=model&bucket=&rank_by=&workspace_totals=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
         {
           "name": "Organization Usage Summary",
           "request": {
-            "description": "Aggregate spend, tokens and request volume for the caller's organization.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage/summary``, running the same\naggregation over a narrower row set: the same bounded window, the same\nbreakdowns, the same ``dimensions`` selector for paying only for the passes a\ncaller reads. The breakdown by user names the people inside the caller's own\nscope, which is the roster they can already read.",
+            "description": "Aggregate spend, tokens and request volume for the caller's organization.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage/summary``, running the same\naggregation over a narrower row set: the same bounded window, the same\nbreakdowns, the same ``dimensions`` selector for paying only for the passes a\ncaller reads. The breakdown by user names the people inside the caller's own\nscope, which is the roster they can already read. A member reading a\nworkspace's totals (``workspace_totals``) gets the breakdowns by model,\nprovider and status code when ``dimensions`` is left out.",
             "header": [],
             "method": "GET",
             "url": {
@@ -6853,6 +6865,12 @@
                   "value": ""
                 },
                 {
+                  "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+                  "disabled": true,
+                  "key": "workspace_totals",
+                  "value": ""
+                },
+                {
                   "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
                   "disabled": true,
                   "key": "start_date",
@@ -7045,7 +7063,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&rank_order=&group_by_tag=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&rank_order=&group_by_tag=&workspace_totals=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }
@@ -7450,7 +7468,7 @@
                   "value": ""
                 },
                 {
-                  "description": "Whose spend to read: the caller's own, the workspace's, or the organization's. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used.",
+                  "description": "Whose spend to read: the caller's own, the workspace's, or the organization's. A member may read the workspace's while its managers share its totals with members. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used.",
                   "disabled": true,
                   "key": "scope",
                   "value": ""
@@ -11907,6 +11925,76 @@
                 {
                   "description": "path parameter",
                   "key": "user_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Workspace Visibility",
+          "request": {
+            "description": "Read what the workspace shows members who do not manage it.\n\nAny member of the workspace may read it, because the dashboard picks a\nmember's layout from it; a workspace the caller cannot see is not found.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                ":workspace_id",
+                "visibility"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/visibility",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "workspace_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Workspace Visibility",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"members_see_workspace_totals\": false\n}"
+            },
+            "description": "Change what members who do not manage the workspace see; only the fields sent change.\n\nAn organization owner or admin, or an owner or admin of this workspace, may\nchange it. With totals shown, a member may read the workspace's aggregate\nusage and its budget in dollars; hidden, only their own usage and the budget\nas a share of its cap. Neither ever shows a member anyone else's requests,\nkeys or limits. Answers with every setting after the change.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                ":workspace_id",
+                "visibility"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/visibility",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "workspace_id",
                   "value": ""
                 }
               ]

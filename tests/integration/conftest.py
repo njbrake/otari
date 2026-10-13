@@ -86,7 +86,11 @@ def _reset_engine(database_url: str) -> Engine:
 def _build_reset_plan(database_url: str) -> _ResetPlan:
     """Record the schema's tables, and whatever the migrations seeded into them."""
     with _reset_engine(database_url).connect() as conn:
-        tables = [name for name in inspect(conn).get_table_names() if name != "alembic_version"]
+        # Parents before children, so the seeds go back in an order their foreign
+        # keys accept. ``get_table_names`` follows the catalog's physical order,
+        # which an ``ALTER TABLE`` can reshuffle.
+        sorted_names = inspect(conn).get_sorted_table_and_fkc_names()
+        tables = [name for name, _ in sorted_names if name is not None and name != "alembic_version"]
         seeds = tuple(
             (table, rows)
             for table in tables

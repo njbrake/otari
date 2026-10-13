@@ -70,6 +70,7 @@ async def get_overview(
         Query(
             description=(
                 "Whose spend to read: the caller's own, the workspace's, or the organization's. "
+                "A member may read the workspace's while its managers share its totals with members. "
                 "A scope the caller may not read falls back to `you`; `scope` in the answer says which was used."
             )
         ),

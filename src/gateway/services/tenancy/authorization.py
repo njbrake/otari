@@ -122,6 +122,12 @@ class WorkspaceAccess:
             self._db, user=user, workspace_id=workspace_id, organizations=self._organizations
         )
 
+    async def manages(self, *, user: User, workspace: Workspace) -> bool:
+        """See :func:`has_workspace_management_access`."""
+        return await has_workspace_management_access(
+            self._db, user=user, workspace=workspace, organizations=self._organizations
+        )
+
     async def require_workspace_management_access(self, *, user: User, workspace: Workspace) -> None:
         """See :func:`require_workspace_management_access`."""
         await require_workspace_management_access(

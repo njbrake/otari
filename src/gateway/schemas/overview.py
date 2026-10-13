@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from gateway.schemas.organizations import WorkspaceVisibility
+
 # Which numbers the overview reads: the caller's own, one workspace's, or every
 # workspace in the organization.
 OverviewScope = Literal["you", "workspace", "organization"]
@@ -75,7 +77,13 @@ class OverviewAttentionItemResponse(BaseModel):
     severity: Literal["alert", "warn"]
     subject_id: str | None = Field(description="The key, workspace or provider instance the item is about.")
     subject_name: str | None
-    used: float | None = Field(default=None, description="USD spent against the limit in its current period.")
+    used: float | None = Field(
+        default=None,
+        description=(
+            "USD spent against the limit in its current period. Null on a workspace budget item for a member "
+            "of a workspace that keeps its totals from members, which still carries `limit` and `fraction`."
+        ),
+    )
     limit: float | None = Field(default=None, description="The limit, in USD.")
     fraction: float | None = None
     at: datetime | None = None
@@ -110,7 +118,8 @@ class OverviewLimitRowResponse(BaseModel):
 class OverviewLimitsResponse(BaseModel):
     """The rail: the caller's keys, a workspace's keys, or the organization's workspaces.
 
-    At most eight, most billed first.
+    At most eight, most billed first. Empty for a member reading a workspace's
+    totals, because the workspace's keys are other people's.
     """
 
     kind: Literal["keys", "workspaces"]
@@ -136,3 +145,9 @@ class OverviewSummaryResponse(BaseModel):
     )
     attention: list[OverviewAttentionItemResponse] = Field(description="Most severe first.")
     limits: OverviewLimitsResponse
+    visibility: WorkspaceVisibility | None = Field(
+        description=(
+            "What the named workspace shows members who do not manage it; null when no workspace is named. "
+            "A member reading the workspace scope of one that shares its totals sees them and an empty rail."
+        )
+    )

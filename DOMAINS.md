@@ -101,6 +101,14 @@ every other deployment `NullWorkspaceListener`. It also owns
 `models/users.py`, `repositories/users_repository.py` and
 `services/workspace_scope.py`.
 
+Its first code in the target shape is `WorkspaceVisibilityService`
+(`services/organizations/` and `schemas/organizations.py`, writing through
+`WorkspaceRepository`): what a workspace shows members who do not manage it,
+columns on `workspace`, and the `WorkspaceReader` that decides, for one caller
+and one workspace row, what they read of its usage and budget. Budgets, the
+organization usage reads and the overview ask it for that reader, the overview
+with the workspace row it already holds.
+
 ### api-keys
 
 The deployment's and the members' API keys, and which models a key may reach.

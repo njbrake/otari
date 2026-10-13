@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import LabelJoin
 from gateway.models.tenancy import (
     User,
@@ -29,7 +30,7 @@ def workspace_label(workspace_id: Any) -> LabelJoin:
 class WorkspaceRepository(BaseRepository[Workspace, WorkspaceCreate, WorkspaceUpdate]):
     """Repository for workspace rows."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession | UnitOfWork):
         super().__init__(db, Workspace)
 
     async def lock(self, workspace_id: uuid.UUID) -> None:
@@ -65,6 +66,10 @@ class WorkspaceRepository(BaseRepository[Workspace, WorkspaceCreate, WorkspaceUp
         load-bearing.
         """
         await self.db.execute(select(col(Workspace.id)).where(col(Workspace.id) == workspace_id).with_for_update())
+
+    async def update_visibility(self, workspace: Workspace, changes: dict[str, bool]) -> Workspace:
+        """Stage a change to what the workspace shows members who do not manage it: only the columns named."""
+        return await self.update(workspace, changes)
 
     async def get_by_ids(self, workspace_ids: Collection[uuid.UUID]) -> Sequence[Workspace]:
         """Return the workspaces named by a batch of ids (order unspecified).
