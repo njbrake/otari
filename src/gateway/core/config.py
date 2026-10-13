@@ -614,6 +614,16 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSett
             "metering is not starved by traffic. No overflow above this."
         ),
     )
+    usage_read_concurrency: Annotated[int, Shown(SettingsGroup.SERVER)] = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Heavy usage reads (summaries, breakdowns, p95 latency, tools, grouped series) one "
+            "worker runs at once; the rest wait their turn. Each can sort or group a large window "
+            "of usage rows, and a dashboard page asks for several together, so this bounds the "
+            "database memory one page load can take."
+        ),
+    )
     db_ingest_pool_size: Annotated[int, Shown(SettingsGroup.SERVER)] = Field(
         default=4,
         ge=1,

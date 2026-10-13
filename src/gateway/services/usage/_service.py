@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import cast
@@ -59,10 +60,22 @@ class UsageReadService:
     tenant scope, so a filter is read one way however the rows are asked for.
     """
 
-    def __init__(self, uow: UnitOfWork, reads: UsageReadRepository, summaries: UsageSummaryRepository) -> None:
+    def __init__(
+        self,
+        uow: UnitOfWork,
+        reads: UsageReadRepository,
+        summaries: UsageSummaryRepository,
+        heavy_reads: asyncio.Semaphore,
+    ) -> None:
         self._uow = uow
         self._reads = reads
         self._summaries = summaries
+        # Shared by every request this worker serves: a dashboard page asks for
+        # several aggregates at once, and each can sort or group a large window,
+        # so running them all together is what runs a small database out of memory.
+        # Taken before the step's block opens, so a read waiting its turn holds no
+        # connection.
+        self._heavy_reads = heavy_reads
 
     async def page(
         self,
@@ -97,7 +110,7 @@ class UsageReadService:
 
     async def p95_latency_ms(self, conditions: list[UsageCondition]) -> int | None:
         """Nearest-rank 95th-percentile latency over the requests the conditions leave."""
-        async with self._uow:
+        async with self._heavy_reads, self._uow:
             return await self._reads.p95_latency_ms(conditions)
 
     async def activity_groups(
@@ -114,7 +127,7 @@ class UsageReadService:
         limit: int,
     ) -> UsageActivityGroups:
         """A page of the log's groups over an already-resolved window, and how many groups the filters leave."""
-        async with self._uow:
+        async with self._heavy_reads, self._uow:
             rows, total = await self._reads.activity_groups(
                 group_by=group_by,
                 conditions=conditions,
@@ -160,7 +173,7 @@ class UsageReadService:
         # ``none`` is dropped rather than rejected: it exists only so a caller can send
         # an empty selection, and it never contributes a dimension of its own.
         requested: set[str] = ALL_SUMMARY_DIMENSIONS if dimensions is None else {d for d in dimensions if d != "none"}
-        async with self._uow:
+        async with self._heavy_reads, self._uow:
             totals = await self._summaries.totals(conditions, status)
             breakdowns = {
                 name: with_fold(
@@ -279,7 +292,7 @@ class UsageReadService:
         session breakdown's 250 keys never travel in a query string. The ranking
         breaks ties by key, so the groups match the summary's for the same window.
         """
-        async with self._uow:
+        async with self._heavy_reads, self._uow:
             if group_by is None:
                 overall = await self._reads.p95_latency_ms(conditions)
                 rows: list[UsageGroupRow] = []
@@ -307,7 +320,7 @@ class UsageReadService:
 
     async def tools(self, *, start: datetime, end: datetime, conditions: list[UsageCondition]) -> UsageTools:
         """The window's per-tool calls, failures, spend and requests, the summary's ``by_tool`` on its own."""
-        async with self._uow:
+        async with self._heavy_reads, self._uow:
             rows = await self._tool_breakdown(conditions)
         return UsageTools(start_date=start.isoformat(), end_date=end.isoformat(), tools=rows)
 
@@ -340,7 +353,7 @@ class UsageReadService:
     ) -> UsageGroupedSeries:
         """The window's top groups by ``rank_by``, each a series of its own, and the rest folded into ``other``."""
         dimension = SERIES_BREAKDOWNS[group_by]
-        async with self._uow:
+        async with self._heavy_reads, self._uow:
             totals = await self._summaries.totals(conditions, status)
             top = await self._summaries.breakdown(
                 dimension, conditions, limit=SERIES_TOP_N, status_filter=status, rank_by=rank_by

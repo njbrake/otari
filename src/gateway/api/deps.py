@@ -1196,9 +1196,11 @@ def get_saved_view_service(
 SavedViewServiceDep = Annotated[SavedViewService, Depends(get_saved_view_service)]
 
 
-def get_usage_read_service(uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> UsageReadService:
+def get_usage_read_service(request: Request, uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> UsageReadService:
     """Build the request's usage-log read service on the request's Unit of Work."""
-    return UsageReadService(uow, UsageReadRepository(uow), UsageSummaryRepository(uow))
+    return UsageReadService(
+        uow, UsageReadRepository(uow), UsageSummaryRepository(uow), request.app.state.heavy_usage_reads
+    )
 
 
 UsageReadServiceDep = Annotated[UsageReadService, Depends(get_usage_read_service)]

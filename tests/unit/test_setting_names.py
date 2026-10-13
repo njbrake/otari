@@ -150,6 +150,7 @@ _SETTING_NAMES = frozenset(
         "terms_url",
         "tools_header",
         "ui_base_url",
+        "usage_read_concurrency",
         "vision_describe_max_tokens",
         "vision_describe_model",
         "vision_strategy",

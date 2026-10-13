@@ -676,6 +676,8 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
                 # Persisted dashboard overrides win over config/env; apply them
                 # before pricing init so default-pricing behavior is consistent.
                 await apply_overrides_from_db(config, session)
+                # After the overrides, so a limit set in the dashboard is the one served.
+                app.state.heavy_usage_reads = asyncio.Semaphore(config.usage_read_concurrency)
                 # Checked when serving starts rather than when the app is built,
                 # so a tool that only reads the schema needs no pepper, and after
                 # the overrides, so it sees the copy setting this process serves.

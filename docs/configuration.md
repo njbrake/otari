@@ -115,6 +115,7 @@ non-secret effective set through `GET /api/v1/settings`.
 | `db_lock_timeout_ms` | How long a statement waits for a lock another transaction holds. Must be below the statement ceiling; `0` disables. |
 | `db_log_pool_size` | Connections reserved for usage logging, separate from the pool above. |
 | `db_ingest_pool_size` | Connections telemetry ingest may use, separate from the pool above and with no overflow. |
+| `usage_read_concurrency` | Heavy usage reads (summaries, breakdowns, p95, tools) one worker runs at once; default `2`. |
 
 The pool sizes bound concurrent *database* work, not concurrent provider calls:
 a request hands its connection back before the upstream call. Raise them for a
@@ -133,6 +134,14 @@ transaction's lock is not slow, and the two ceilings above cannot tell the
 difference: without a lock timeout it holds its pooled connection until one of
 them fires, and the requests needing a connection wait for the whole of it. The
 contended write fails in seconds instead, for a caller that can retry it.
+
+`usage_read_concurrency` bounds the database memory the dashboard can take. The
+Usage, Activity and Overview pages each ask for several aggregates at once, and
+each can sort or group every usage row in a long window; run together on a small
+database they can exhaust its memory and get a query killed, which restarts
+PostgreSQL and fails every request open at the time. Reads past the limit wait
+their turn without holding a connection, so a page fills in more slowly rather
+than failing. Raise it for a database with memory to spare.
 
 `db_ingest_pool_size` is what keeps a telemetry import off that critical path.
 The OTLP endpoints and `POST /api/v1/usage/external-events` draw from it rather

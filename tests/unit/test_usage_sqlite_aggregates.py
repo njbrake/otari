@@ -32,7 +32,7 @@ WORKSPACE = uuid.uuid4()
 
 def _reads(db: AsyncSession) -> UsageReadService:
     uow = UnitOfWork(db)
-    return UsageReadService(uow, UsageReadRepository(uow), UsageSummaryRepository(uow))
+    return UsageReadService(uow, UsageReadRepository(uow), UsageSummaryRepository(uow), asyncio.Semaphore(2))
 
 
 def _run[T](body: Callable[[AsyncSession], Awaitable[T]]) -> T:
