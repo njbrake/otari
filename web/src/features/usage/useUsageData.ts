@@ -171,10 +171,13 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
   // the chart's window on screen; its rows are that breakdown's, so none show.
   const answer = breakdown.data
   const isCurrent = answer?.dimension === def.summary
-  // Another window's latencies are never set beside this one's rows, so the
-  // column stays empty until this window's arrive.
+  // Another window's latencies are never set beside this one's rows, nor this
+  // window's beside the last one's, so the column stays empty until both match.
   const p95 =
-    !byP95 && latency.data && !latency.isPlaceholderData
+    !byP95 &&
+    latency.data &&
+    !latency.isPlaceholderData &&
+    !breakdown.isPlaceholderData
       ? new Map(latency.data.groups.map((g) => [g.key, g.p95_latency_ms]))
       : undefined
   const rows = isCurrent ? (def.rows(answer.summary) ?? []) : []

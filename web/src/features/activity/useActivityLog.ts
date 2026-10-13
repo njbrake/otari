@@ -363,9 +363,14 @@ export function useActivityLog({
     isFetchingRows: logs.isFetching,
     rowsUpdatedAt: logs.dataUpdatedAt,
     total: count.isSuccess ? count.data.total : null,
+    // Totals and p95 arrive apart, so one window's p95 is never set beside
+    // another's totals.
     totals: totals.data && {
       ...totals.data.totals,
-      p95_latency_ms: latency.data?.p95_latency_ms ?? null,
+      p95_latency_ms:
+        latency.isPlaceholderData || totals.isPlaceholderData
+          ? null
+          : (latency.data?.p95_latency_ms ?? null),
     },
     series: chartRead.data?.series ?? [],
     spend: spend.data ?? undefined,

@@ -69,7 +69,9 @@ def test_the_windows_p95_matches_the_summarys_and_leaves_absorbed_attempts_out(
 def test_each_groups_p95_matches_the_summarys_null_group_included(
     client: TestClient, master_key_header: dict[str, str], db_session: Session
 ) -> None:
-    db_session.add(APIKey(id="k-app", key_hash="hash-k-app", key_name="app", workspace_id=seed_workspace_id(db_session)))
+    db_session.add(
+        APIKey(id="k-app", key_hash="hash-k-app", key_name="app", workspace_id=seed_workspace_id(db_session))
+    )
     db_session.flush()
     _row(db_session, api_key_id="k-app", latency_ms=400, cost=1.0)
     _row(db_session, latency_ms=900)

@@ -149,8 +149,8 @@ async def _scope_condition(
         # Only the organization is resolved on this branch. The full scope would
         # also build the caller's workspace-id set, which is deliberately
         # unpaged, and the branch below discards it: the Activity page issues a
-        # list, a count, a summary and a series per filter change, so resolving
-        # it here would be four unbounded reads an interaction, for nothing.
+        # list, a count, a summary, a latency and a series per filter change, so
+        # resolving it here would be five unbounded reads an interaction, for nothing.
         # ``get_active_organization_for_user`` is the same refusal the full scope
         # opens with, so a pointer with no live membership behind it still stops
         # here rather than reaching the resolver below.
