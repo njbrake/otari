@@ -17,6 +17,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from gateway.api.deps import CurrentIdentity, OverviewServiceDep, verify_master_key
+from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.schemas.overview import OverviewScope, OverviewSummaryResponse
 from gateway.services.overview import Month
 
@@ -29,6 +30,7 @@ router = APIRouter(
     prefix="/overview",
     tags=["overview"],
     dependencies=[Depends(verify_master_key)],
+    route_class=CancelOnDisconnectRoute,
 )
 
 

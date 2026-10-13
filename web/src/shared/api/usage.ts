@@ -33,7 +33,12 @@ import type {
   UsageSummary,
   UsageTools,
 } from "@/client"
-import { ApiError, apiFetch, longRequestSignal } from "@/shared/api/client"
+import {
+  ApiError,
+  apiFetch,
+  heavyReadSignal,
+  longRequestSignal,
+} from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
 import { USAGE } from "@/shared/api/queryKeys"
 import { isoAgo } from "@/shared/helpers/timeRange"
@@ -151,6 +156,13 @@ export function useUsageScope(scope: UsageScope = "caller"): {
     isDeploymentWide,
   }
 }
+
+/**
+ * What every usage aggregate the gateway runs a few at a time shares: no retry.
+ * A busy refusal, a failed query or a read past its deadline would put the same
+ * work back in the same queue, so a failed one waits for the page's refresh.
+ */
+export const HEAVY_READ = { retry: false } as const
 
 export interface UsageSort {
   key: UsageSortKey
@@ -459,7 +471,7 @@ export function useUnpricedUsage(
       workspaceId,
       windowSeconds,
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams({
         workspace_id: workspaceId || undefined,
         status: "success",
@@ -471,6 +483,7 @@ export function useUnpricedUsage(
       params.append("dimensions", "model")
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
@@ -586,7 +599,7 @@ export function useUsageSummary(
       bucket,
       dimensions ?? "all",
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams(filters)
       params.set("bucket", bucket)
       // A repeated query param has no empty-list form, so an empty selection goes
@@ -599,11 +612,13 @@ export function useUsageSummary(
       }
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -628,17 +643,19 @@ export function useActivityTotals(
       summaryFilters,
       bucket,
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams(summaryFilters)
       params.set("bucket", bucket)
       params.append("dimensions", "none")
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 10_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -691,7 +708,7 @@ export function useActivityGroups(
       order,
       groupBy,
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams(groupFilters)
       params.set("group_by", groupBy)
       params.set("limit", String(ACTIVITY_GROUP_LIMIT))
@@ -699,12 +716,14 @@ export function useActivityGroups(
       if (order !== "recent") params.set("order", order)
       return apiFetch<UsageActivityGroups>(
         `${scope.base}/groups?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey.at(-1) === groupBy ? previous : undefined,
     staleTime: 10_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -745,7 +764,7 @@ export function useUsageBreakdown(
       rank.order,
       dimension,
     ],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const params = usageParams(filters)
       params.set("bucket", bucket)
       params.append("dimensions", dimension)
@@ -754,6 +773,7 @@ export function useUsageBreakdown(
       if (dimension === "source_label") params.set("session_details", "true")
       const summary = await apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
       return { dimension, summary }
     },
@@ -764,6 +784,7 @@ export function useUsageBreakdown(
     // last order's rows on screen until the server's arrive.
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -798,7 +819,7 @@ export function useUsageLatency(
       rank?.by ?? null,
       rank?.order ?? null,
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams(latencyFilters)
       if (groupBy) params.set("group_by", groupBy)
       if (rank) {
@@ -807,11 +828,13 @@ export function useUsageLatency(
       }
       return apiFetch<UsageLatency>(
         `${scope.base}/latency?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -824,13 +847,15 @@ export function useUsageTools(
   const scope = useUsageScope(usageScope)
   return useQuery({
     queryKey: [USAGE, "tools", scope.base, filters],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiFetch<UsageTools>(
         `${scope.base}/tools?${usageParams(filters).toString()}`,
+        { signal: heavyReadSignal(signal) },
       ),
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -848,13 +873,14 @@ export function useUsageGroupedSeries(
   return useQuery({
     // The grouping ends the key, which is what the placeholder compares.
     queryKey: [USAGE, "series", scope.base, filters, bucket, rankBy, groupBy],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams(filters)
       params.set("bucket", bucket)
       params.set("group_by", groupBy)
       params.set("rank_by", rankBy)
       return apiFetch<UsageGroupedSeries>(
         `${scope.base}/series?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
@@ -863,9 +889,6 @@ export function useUsageGroupedSeries(
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey.at(-1) === groupBy ? previous : undefined,
     staleTime: 30_000,
-    // A 404 is version skew (a gateway older than this dashboard, e.g. not yet
-    // restarted onto the build that ships it); retrying cannot fix that.
-    retry: (failureCount, error) =>
-      !(error instanceof ApiError && error.status === 404) && failureCount < 3,
+    ...HEAVY_READ,
   })
 }

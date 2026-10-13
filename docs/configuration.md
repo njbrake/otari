@@ -142,7 +142,9 @@ database they can exhaust its memory and get a query killed, which restarts
 PostgreSQL and fails every request open at the time. Reads past the limit wait
 their turn without holding a connection, so a page fills in more slowly rather
 than failing, and one that waits more than 30 seconds is answered `503` with
-"Usage reads are busy; try again shortly". The limit is per worker: the database
+"Usage reads are busy; try again shortly". A read whose caller disconnects is
+cancelled, query included, so a page that was reloaded or left gives its turns
+back rather than holding them until its reads finish. The limit is per worker: the database
 sees up to workers × replicas × `usage_read_concurrency` of these reads at once.
 Raise it for a database with memory to spare.
 

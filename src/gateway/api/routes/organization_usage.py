@@ -57,6 +57,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.api.deps import CurrentIdentity, UsageReadServiceDep, get_db, verify_master_key
+from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.api.routes._usage_common import (
     COUNT_SORT_DESC,
     DIMENSIONS_DESC,
@@ -118,6 +119,7 @@ router = APIRouter(
     # is the pattern the tenant-scoped routers already follow and the reason the
     # deployment operator gate does not belong here.
     dependencies=[Depends(verify_master_key)],
+    route_class=CancelOnDisconnectRoute,
 )
 
 # Published by hosted only, and no dashboard page gates on it any more: these routes

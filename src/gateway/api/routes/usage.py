@@ -23,6 +23,7 @@ from gateway.api.deps import (
     verify_api_key_or_master_key,
 )
 from gateway.api.routes._billing_schemas import ChargeLine, MeterMap
+from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.api.routes._usage_common import (
     COUNT_SORT_DESC,
     DIMENSIONS_DESC,
@@ -105,6 +106,7 @@ operator_router = APIRouter(
     prefix="/usage",
     tags=["usage"],
     dependencies=[Depends(require_deployment_operator)],
+    route_class=CancelOnDisconnectRoute,
 )
 key_router = APIRouter(
     prefix="/usage",
