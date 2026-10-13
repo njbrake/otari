@@ -74,9 +74,9 @@ function OperatorOverview() {
   // Imported usage lands without a provider, so "no providers" alone does not
   // mean nothing has happened: the strip waits on the log being empty too.
   const anyUsage = useUsageLogs({}, 0, 1, { enabled: needsSetup })
-  if (providers.isLoading) {
-    return <PageLoading />
-  }
+  // Not held behind the provider list: the month's reads start beside it rather
+  // than after it, and the strip and the guide, which only a gateway with no
+  // provider shows, appear once it answers.
   return (
     <OverviewPage
       isOperator

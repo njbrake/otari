@@ -161,6 +161,8 @@ interface Bodies {
   holdSummaryFrom?: { day: string; until: Promise<void> }
   /** Held open for the workspace's own month, read beside a manager's at You. */
   holdWorkspace?: Promise<void>
+  /** Held open for the operator's provider list. */
+  holdProviders?: Promise<void>
   /** The overview summary per scope asked for, over `overview`. */
   overviewByScope?: Partial<Record<string, Partial<OverviewSummary>>>
   /** The first day of the month the page reads, if not October. */
@@ -294,6 +296,7 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
       )
     }
     if (url.includes(`${API_ROOT}/providers`)) {
+      await b.holdProviders
       return jsonResponse({
         providers: b.providers ?? [{ provider: "openai" }],
       })
@@ -579,6 +582,25 @@ describe("the Overview's numbers", () => {
     expect(await screen.findByText(/budget exploded/)).toBeInTheDocument()
     expect(tile("Total at API prices")).toHaveAttribute("aria-busy", "true")
     expect(tile("Requests")).toHaveAttribute("aria-busy", "true")
+    release()
+  })
+
+  it("asks for the month without waiting on the provider list", async () => {
+    let release = () => {}
+    const holdProviders = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const requested = mockApi({ holdProviders })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/usage/summary"))).toBe(
+        true,
+      ),
+    )
+    expect(
+      screen.getByRole("heading", { name: "Overview" }),
+    ).toBeInTheDocument()
     release()
   })
 
