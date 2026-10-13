@@ -248,6 +248,9 @@ class OverviewService:
         self._heavy_reads = heavy_reads
         # Builds the month's usage relation, from hourly rollups where they are current.
         self._usage = usage
+        self._month_relations: dict[
+            tuple[uuid.UUID, uuid.UUID | None, datetime, str | None, str | None], UsageRows
+        ] = {}
         # Read only for the providers an operator's reachability covers.
         self._config = config
 
@@ -479,7 +482,11 @@ class OverviewService:
         user_id: str | None = None,
         owner_user_id: str | None = None,
     ) -> UsageRows:
-        """The month's usage rows in one workspace or the organization, for one user or one owner's keys."""
+        """The month's usage rows in one workspace or the organization, for one user or one owner's keys.
+
+        Built once per set of arguments: a workspace's key rail and its error rate
+        read the same rows.
+        """
 
         conditions = self._repository.month_rows(
             organization_id=organization_id,
@@ -489,7 +496,10 @@ class OverviewService:
             user_id=user_id,
             owner_user_id=owner_user_id,
         )
-        return await self._usage.rows(conditions, month.start, month.end)
+        key = (organization_id, workspace_id, month.start, user_id, owner_user_id)
+        if key not in self._month_relations:
+            self._month_relations[key] = await self._usage.rows(conditions, month.start, month.end)
+        return self._month_relations[key]
 
     async def _workspace_budget(
         self, workspace: Workspace, month: Month, now: datetime, *, reader: WorkspaceReader

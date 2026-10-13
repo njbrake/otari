@@ -298,7 +298,13 @@ class UsageRollup(Base):
     """
 
     __tablename__ = "usage_rollups"
-    __table_args__ = (Index("ix_usage_rollups_workspace_id_hour", "workspace_id", "hour"),)
+    __table_args__ = (
+        Index("ix_usage_rollups_workspace_id_hour", "workspace_id", "hour"),
+        # A read narrowed to one user or to one owner's keys (the Overview's own
+        # scope) finds its rollups here rather than scanning a month of them.
+        Index("ix_usage_rollups_user_id_hour", "user_id", "hour"),
+        Index("ix_usage_rollups_api_key_id_hour", "api_key_id", "hour"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

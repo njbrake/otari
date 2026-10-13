@@ -577,8 +577,9 @@ def window_rows(
 
 # The aggregates below read a usage relation: the rows of a window, each standing
 # for ``rows`` usage rows, with every measure summed (``UsageRollupRepository.rows``
-# builds it, from an hour's rollups where they are current). Each counts what its
-# namesake above counts over ``usage_logs``.
+# builds it, from an hour's rollups where they are current). ``_requests`` and
+# ``_failures`` count what ``request_count()`` and ``status_count("error")`` count
+# over ``usage_logs``, and ``_served_cost`` the cost of the rows served here.
 
 
 def _served_cost(rows: Any) -> Any:
