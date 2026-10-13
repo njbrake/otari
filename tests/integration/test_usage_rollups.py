@@ -8,7 +8,6 @@ match to the cent and the row.
 
 from __future__ import annotations
 
-import asyncio
 import math
 import random
 import uuid
@@ -19,44 +18,20 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
 from conftest import seed_workspace_id
 from gateway.core.config import API_ROOT, GatewayConfig
-from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import TOOL_METER_NAMESPACE
 from gateway.models.api_keys import APIKey
 from gateway.models.tenancy import Workspace
 from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT, UsageLog, UsageRollup, UsageRollupDirtyHour
 from gateway.models.users import User
-from gateway.repositories.usage import UsageRollupRepository
 
-from .conftest import _to_async_url
+from .conftest import refresh_usage_rollups
 
 T0 = datetime(2026, 9, 1, tzinfo=UTC)
 USAGE = f"{API_ROOT}/usage"
-
-
-def _refresh(config: GatewayConfig) -> int:
-    """Run refreshes until no hour is marked, and return how many hours they built."""
-
-    async def main() -> int:
-        engine = create_async_engine(_to_async_url(config.database_url))
-        built = 0
-        try:
-            async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-                uow = UnitOfWork(session)
-                while True:
-                    async with uow:
-                        done = await UsageRollupRepository(uow).refresh(24, now=datetime.now(UTC))
-                    built += done
-                    if not done:
-                        return built
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(main())
 
 
 def _meters(rng: random.Random, prompt: int | None, completion: int | None) -> dict[str, Any] | None:
@@ -220,7 +195,7 @@ def test_every_read_answers_the_same_from_the_rollups_as_from_the_rows(
     assert _count(db_session, UsageRollupDirtyHour) > 0
     from_rows = _read_all(client, master_key_header)
 
-    assert _refresh(test_config) == 6
+    assert refresh_usage_rollups(test_config.database_url) == 6
     assert _count(db_session, UsageRollupDirtyHour) == 0
     assert _count(db_session, UsageRollup) > 0
     from_rollups = _read_all(client, master_key_header)
@@ -246,7 +221,7 @@ def test_the_overview_month_answers_the_same_from_the_rollups_as_from_the_rows(
     workspace = seed_workspace_id(db_session)
     from_rows = _overviews(client, master_key_header, workspace)
 
-    _refresh(test_config)
+    refresh_usage_rollups(test_config.database_url)
     assert _count(db_session, UsageRollupDirtyHour) == 0
     from_rollups = _overviews(client, master_key_header, workspace)
 
@@ -258,7 +233,7 @@ def test_a_write_after_a_refresh_is_read_at_once_and_folded_in_by_the_next(
     client: TestClient, master_key_header: dict[str, str], db_session: Session, test_config: GatewayConfig
 ) -> None:
     _seed(db_session, seed=11)
-    _refresh(test_config)
+    refresh_usage_rollups(test_config.database_url)
     # A late import into an hour already built, a reprice, and a delete.
     _seed_more(db_session)
     rows = db_session.execute(select(UsageLog.id).where(UsageLog.timestamp < T0 + timedelta(hours=1))).scalars().all()
@@ -268,7 +243,7 @@ def test_a_write_after_a_refresh_is_read_at_once_and_folded_in_by_the_next(
     assert _count(db_session, UsageRollupDirtyHour) > 0
     mixed = _read_all(client, master_key_header)
 
-    _refresh(test_config)
+    refresh_usage_rollups(test_config.database_url)
     rebuilt = _read_all(client, master_key_header)
 
     for (path, params), left, right in zip(READS, mixed, rebuilt, strict=True):
@@ -330,7 +305,7 @@ def test_a_write_marks_every_hour_it_touched(
     )
     db_session.commit()
     assert _marked(db_session) == {T0}
-    _refresh(test_config)
+    refresh_usage_rollups(test_config.database_url)
     assert _marked(db_session) == set()
 
     change(db_session, row)
@@ -343,7 +318,7 @@ def test_a_whole_hour_is_read_from_its_rollups(
     client: TestClient, master_key_header: dict[str, str], db_session: Session, test_config: GatewayConfig
 ) -> None:
     _seed(db_session, hours=3, per_hour=10)
-    _refresh(test_config)
+    refresh_usage_rollups(test_config.database_url)
     params = {**_window(T0, T0 + timedelta(hours=3)), "dimensions": ["model"]}
     before = client.get(f"{USAGE}/summary", params=params, headers=master_key_header).json()
     overviews = _overviews(client, master_key_header, seed_workspace_id(db_session))
@@ -362,11 +337,11 @@ def test_a_whole_hour_is_read_from_its_rollups(
 
 def test_an_hour_whose_rows_are_all_gone_loses_its_rollups(db_session: Session, test_config: GatewayConfig) -> None:
     _seed(db_session, hours=2, per_hour=5)
-    _refresh(test_config)
+    refresh_usage_rollups(test_config.database_url)
     db_session.execute(delete(UsageLog).where(UsageLog.timestamp < T0 + timedelta(hours=1)))
     db_session.commit()
 
-    _refresh(test_config)
+    refresh_usage_rollups(test_config.database_url)
 
     db_session.expire_all()
     hours = set(db_session.execute(select(UsageRollup.hour).distinct()).scalars())

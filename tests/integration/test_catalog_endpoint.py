@@ -5,7 +5,6 @@ without dialing a provider, and models.dev is a mocked fetch: what is under
 test is the fold and the join, not the sources.
 """
 
-import asyncio
 import uuid
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta
@@ -16,18 +15,15 @@ import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_ROOT, GatewayConfig
-from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.pricing import OrganizationModelPricing
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User
-from gateway.repositories.usage import UsageRollupRepository
 from gateway.services import model_catalog_service as mcs
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
-from .conftest import _to_async_url, build_test_client
+from .conftest import build_test_client, refresh_usage_rollups
 from .hosted_port_helpers import HostedModelProvider, bind_model_provider
 
 # Two providers serving one model under two spellings, one of them Fireworks'
@@ -676,24 +672,6 @@ def test_a_signed_in_caller_sees_their_own_usage_of_an_offering(
     assert by_selector[_FIREWORKS_GLM]["usage_30d"] is None
 
 
-def _refresh_rollups(postgres_url: str) -> None:
-    """Build every marked hour's usage rollups, as the background refresher would."""
-
-    async def main() -> None:
-        engine = create_async_engine(_to_async_url(postgres_url))
-        try:
-            async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-                uow = UnitOfWork(session)
-                while True:
-                    async with uow:
-                        if not await UsageRollupRepository(uow).refresh(24, now=datetime.now(UTC)):
-                            return
-        finally:
-            await engine.dispose()
-
-    asyncio.run(main())
-
-
 def test_an_offerings_usage_reads_whole_hours_from_the_rollups(
     priced: TestClient,
     master_header: dict[str, str],
@@ -748,7 +726,7 @@ def test_an_offerings_usage_reads_whole_hours_from_the_rollups(
     assert from_rows[_NEBIUS_GLM]["total_tokens"] == 3000
     assert from_rows[_NEBIUS_GLM]["cache_hit_rate"] == 0.5
 
-    _refresh_rollups(postgres_url)
+    refresh_usage_rollups(postgres_url)
     # Gone from the rows without a mark, which only the rollups still remember.
     session = db_session_factory()
     try:

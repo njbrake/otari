@@ -120,8 +120,9 @@ class UsageReadService:
         """The usage rows ``conditions`` leave in ``[start, end)``, as one relation, for another domain's aggregates.
 
         Whole hours come from their rollups where those are current. Building it
-        reads which hours are, in a block of its own or the caller's open one; the
-        caller aggregates it under its own turn at the heavy-read gate.
+        reads which hours are, in a block of its own or the caller's open one. A
+        caller whose aggregate spans a whole scope takes its own turn at the
+        heavy-read gate first.
         """
         async with self._uow:
             return await self._rollups.rows(conditions, start, end, bucket="hour")

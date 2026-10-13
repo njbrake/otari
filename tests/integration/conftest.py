@@ -7,6 +7,7 @@ import threading
 import time
 from collections.abc import AsyncGenerator, Callable, Generator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,9 +40,11 @@ from gateway.api.deps import (
 )
 from gateway.container import build_container
 from gateway.core.config import API_KEY_HEADER, API_ROOT, GatewayConfig
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.db import get_db
 from gateway.main import create_app, install_rate_limits
 from gateway.rate_limit import RateLimiter
+from gateway.repositories.usage import UsageRollupRepository
 
 MODEL_NAME = "gemini:gemini-2.5-flash"
 
@@ -146,6 +149,27 @@ def _to_async_url(database_url: str) -> str:
     if database_url.startswith("sqlite:///") and not database_url.startswith("sqlite+aiosqlite"):
         return database_url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
     return database_url
+
+
+def refresh_usage_rollups(database_url: str) -> int:
+    """Rebuild every marked hour's usage rollups, as the background refresher would, and return how many."""
+
+    async def main() -> int:
+        engine = create_async_engine(_to_async_url(database_url))
+        built = 0
+        try:
+            async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+                uow = UnitOfWork(session)
+                while True:
+                    async with uow:
+                        done = await UsageRollupRepository(uow).refresh(24, now=datetime.now(UTC))
+                    built += done
+                    if not done:
+                        return built
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(main())
 
 
 def build_async_session_override(
