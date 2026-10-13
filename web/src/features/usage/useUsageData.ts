@@ -209,7 +209,9 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
       : rows,
     tools: tools.data?.tools ?? [],
     isFetchingTools: tools.isFetching,
-    isLoadingP95: !byP95 && !p95 && !latency.error,
+    // Ranked by p95, the column waits on the breakdown: until it answers, the
+    // rows are the last ranking's, which may carry no p95 at all.
+    isLoadingP95: byP95 ? breakdown.isPlaceholderData : !p95 && !latency.error,
     previous: hasSpan ? undefined : previous.data?.totals,
     grouped: grouped.data,
     spend: spend.data ?? undefined,

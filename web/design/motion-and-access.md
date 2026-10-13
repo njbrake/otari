@@ -17,9 +17,7 @@ utility.
 sweeping the first-run sheet's own border (`Dialog`'s `isScanning`) and the orb
 in the listening panel pinned above its footer. They are the shape of the
 exception rather than licence to add more, and what makes them one exception
-rather than two is that neither outlives the wait. `Skeleton`'s pulse and the
-shell's `LoadingBar` follow the same rule from the other side: each runs only
-until a read answers, and each holds still under `prefers-reduced-motion`. Both run
+rather than two is that neither outlives the wait. Both run
 only while the product is watching for a request that has not arrived, both stop
 when it does, and neither carries anything that is not also in the text beside
 it.
@@ -29,6 +27,10 @@ machinery. The arc is CSS, so it holds still on its last frame. The orb is a
 canvas the stylesheet cannot reach, so `SetupOrb` reads the preference itself
 and passes `paused`. Anything else that would animate forever is decoration. See
 [feedback.md](feedback.md).
+
+`Skeleton`'s pulse and the shell's `LoadingBar` are not exceptions to this, since
+neither runs forever: each runs only until a read answers, and each holds still
+under `prefers-reduced-motion`.
 
 ## Press
 

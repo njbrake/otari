@@ -486,7 +486,6 @@ function AppShellChrome() {
   const isVisible = useNavVisibility()
   const recordNavigation = useRecordNavigation()
   const { pathname } = useLocation()
-  const isPageLoading = usePageLoading()
   const navigate = useNavigate()
   useDocumentTitle(navLabelForPath(pathname) ?? CHROME_TITLES[pathname])
   // A gated-off destination is still reachable by bookmark or shared URL, so the
@@ -1180,7 +1179,7 @@ function AppShellChrome() {
               <Breadcrumbs pathname={pathname} />
             </div>
             <TopBarActions />
-            <LoadingBar isActive={isPageLoading} />
+            <PageLoadingBar />
           </header>
           <main
             ref={mainRef}
@@ -1220,4 +1219,13 @@ function AppShellChrome() {
       </div>
     </div>
   )
+}
+
+/**
+ * The page's loading bar, apart from the chrome: `usePageLoading` re-renders
+ * on every first read that starts or settles anywhere, and the rest of the
+ * shell has no reason to render again with it.
+ */
+function PageLoadingBar() {
+  return <LoadingBar isActive={usePageLoading()} />
 }

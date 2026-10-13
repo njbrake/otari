@@ -265,6 +265,35 @@ describe("UsagePage", () => {
       )
     })
 
+    it("holds the p95 cells as skeletons while a p95 ranking loads, not dashes", async () => {
+      const user = userEvent.setup()
+      mockUsageApi({
+        viewer: "member",
+        hold: (kind, params) =>
+          kind === "summary" && params.get("rank_by") === "p95"
+            ? new Promise<void>(() => {})
+            : undefined,
+      })
+      page()
+      await waitFor(async () =>
+        expect(
+          within(await rowNamed(/deepseek-v4-flash/)).getByText("1.85 s"),
+        ).toBeInTheDocument(),
+      )
+
+      await user.click(
+        screen.getByRole("columnheader", { name: /^p95 Latency/ }),
+      )
+      await waitFor(async () =>
+        expect(
+          (await rowNamed(/deepseek-v4-flash/)).querySelector(".animate-pulse"),
+        ).not.toBeNull(),
+      )
+      expect(
+        within(await rowNamed(/deepseek-v4-flash/)).queryByText("1.85 s"),
+      ).toBeNull()
+    })
+
     it("holds the tiles as skeletons until the summary answers, rather than zeros", async () => {
       let releaseSummary = () => {}
       const summaryHeld = new Promise<void>((resolve) => {
