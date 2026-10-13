@@ -156,7 +156,12 @@ export function useActivityLog({
   const isUnbounded =
     sort.key === NEWEST_FIRST.key && !isSubstringSearch(listed.q)
   const filters = isUnbounded ? listed : withStart
-  const aggregateFilters = withStart
+  // The totals and their p95 read the list's window as the chart's clock last
+  // took it, so live mode moves them only every `LIVE_AGGREGATE_MS`.
+  const aggregated = toUsageFilters(url, time.aggregate, activityScope)
+  const aggregateFilters: UsageFilters = aggregated.start_date
+    ? aggregated
+    : { ...aggregated, start_date: time.chart.start }
   // What a bulk action on imported rows reaches, closed at the moment the
   // window was taken: an open window would otherwise reach rows that land
   // between the count the dialog states and the write it confirms.

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ActivityPage } from "@/features/activity/ActivityPage"
+import { LIVE_AGGREGATE_MS } from "@/features/activity/useActivityWindow"
 import { API_ROOT } from "@/shared/api/client"
 import {
   CALLER_IDENTITY,
@@ -183,7 +184,7 @@ describe("ActivityPage", () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       try {
         let latencyReads = 0
-        const { calls } = mockApi({
+        mockApi({
           rows: [entry()],
           totals: { p95_latency_ms: 1200 },
           // Every latency read after the first waits, so the tick's own p95
@@ -193,14 +194,40 @@ describe("ActivityPage", () => {
         })
         renderPage(<ActivityPage />)
         expect(await screen.findByText("P95 1.20 s")).toBeInTheDocument()
+
+        // Past the point where a tick moves the aggregates as well as the rows.
+        await vi.advanceTimersByTimeAsync(LIVE_AGGREGATE_MS + 500)
+        await waitFor(() => expect(latencyReads).toBeGreaterThan(1))
+        expect(screen.getByText("P95 1.20 s")).toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("moves the rows on every tick and the aggregates only once a minute", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const { calls } = mockApi({ rows: [entry()], viewer: "member" })
+        renderPage(<ActivityPage />)
+        await rowOf("gpt-4o")
+        const reads = (path: string) =>
+          calls.filter((call) => call.url.includes(path)).length
+        const summaries = reads("/usage/summary")
+        const latencies = reads("/usage/latency")
         const first = lastList(calls).get("start_date")
 
         await vi.advanceTimersByTimeAsync(10_500)
         await waitFor(() =>
           expect(lastList(calls).get("start_date")).not.toBe(first),
         )
-        expect(latencyReads).toBeGreaterThan(1)
-        expect(screen.getByText("P95 1.20 s")).toBeInTheDocument()
+        expect(reads("/usage/summary")).toBe(summaries)
+        expect(reads("/usage/latency")).toBe(latencies)
+
+        await vi.advanceTimersByTimeAsync(LIVE_AGGREGATE_MS)
+        await waitFor(() =>
+          expect(reads("/usage/summary")).toBeGreaterThan(summaries),
+        )
+        expect(reads("/usage/latency")).toBeGreaterThan(latencies)
       } finally {
         vi.useRealTimers()
       }

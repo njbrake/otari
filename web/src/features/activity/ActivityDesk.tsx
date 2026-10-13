@@ -103,7 +103,7 @@ export function ActivityDesk({
     log.series,
     log.time.chart,
     log.time.chartGrain,
-    log.time.now,
+    log.time.chartNow,
   )
   const barMs = barSpanMs(bars)
   const panel = (entry: NonNullable<typeof open>) => (
