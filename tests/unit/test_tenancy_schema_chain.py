@@ -1111,7 +1111,7 @@ def test_the_guardrail_definitions_revision_round_trips(sqlite_at_head: tuple[Co
 _MEMBER_TOTALS_REVISION = "a9c3e5f7b1d2"
 
 
-def test_a_workspace_from_before_the_member_totals_column_shares_its_totals(tmp_path: Path) -> None:
+def test_a_workspace_from_before_the_member_totals_column_keeps_its_totals(tmp_path: Path) -> None:
     """Existing workspaces read the server default, and the downgrade drops the column and nothing else."""
     database_url = f"sqlite:///{tmp_path / 'member-totals.db'}"
     config = _alembic_config(database_url)
@@ -1140,7 +1140,7 @@ def test_a_workspace_from_before_the_member_totals_column_shares_its_totals(tmp_
             shown = conn.execute(
                 text("SELECT members_see_workspace_totals FROM workspace WHERE id = :id"), {"id": workspace_id}
             ).scalar_one()
-        assert bool(shown) is True
+        assert bool(shown) is False
 
         command.downgrade(config, before)
         inspector = inspect(engine)

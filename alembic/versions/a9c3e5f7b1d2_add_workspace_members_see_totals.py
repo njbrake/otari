@@ -1,8 +1,8 @@
 """Let a workspace's managers choose whether members see its totals.
 
-One boolean on ``workspace``. Every existing workspace reads ``true``, so its
-members start seeing the workspace's aggregate usage and its budget's dollars;
-a manager can turn that off.
+One boolean on ``workspace``. Every existing workspace reads ``false``, so its
+members see no more than before until a manager turns it on, and see the
+workspace budget as a share of its cap rather than in dollars.
 
 Revision ID: a9c3e5f7b1d2
 Revises: b4d6f8a0c2e3
@@ -24,7 +24,7 @@ def upgrade() -> None:
     """Upgrade schema."""
     op.add_column(
         "workspace",
-        sa.Column("members_see_workspace_totals", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("members_see_workspace_totals", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
 
 

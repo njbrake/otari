@@ -65,9 +65,9 @@ from sqlalchemy import (
     Index,
     UniqueConstraint,
     Uuid,
+    false,
     func,
     text,
-    true,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlmodel import Field, SQLModel
@@ -979,8 +979,9 @@ class Workspace(WorkspaceBase, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, 
     activation_classification: str = Field(default="eligible", max_length=32)
     # Whether a member who does not manage the workspace may read its aggregate
     # usage (totals, series, by model or provider) and its budget's dollars. Never
-    # anyone else's rows, keys or limits; see ``services/organizations``.
-    members_see_workspace_totals: bool = Field(default=True, sa_column_kwargs={"server_default": true()})
+    # anyone else's rows, keys or limits; see ``services/organizations``. Off
+    # until a manager turns it on.
+    members_see_workspace_totals: bool = Field(default=False, sa_column_kwargs={"server_default": false()})
 
 
 class WorkspaceMemberBase(SQLModel):

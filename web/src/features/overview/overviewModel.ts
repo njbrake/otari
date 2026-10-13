@@ -511,6 +511,7 @@ export function readBudget({
     isManager,
     canSetBudgets,
     // A null `spent` is a figure this caller may not read: unknown, not zero.
+    // A null `spend` (no budget) stays null, apart from undefined (not read yet).
     spend:
       spend?.spent === null
         ? undefined

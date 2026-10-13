@@ -151,10 +151,10 @@ SURFACE = Surface("organization_usage", standalone=False)
 WORKSPACE_TOTALS_DESC = (
     "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. "
     "Granted while the workspace's managers share its totals with members, split by model, provider or status "
-    "code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and "
-    "whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is "
-    "refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates "
-    "the deployment."
+    "code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, "
+    "source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs "
+    "`workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or "
+    "operates the deployment."
 )
 
 WorkspaceTotalsQuery = Annotated[bool, Query(description=WORKSPACE_TOTALS_DESC)]

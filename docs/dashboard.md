@@ -148,10 +148,9 @@ and never budget-exempt.
 
 Overview splits the same way. It reads one calendar month in UTC, this one
 unless the month menu picks one of the eleven before it (any other range is
-Usage's), and one scope: someone who manages the workspace switches between the
-Workspace, You and, if they manage the organization, the whole Organization; a
-member reads You, and the Workspace too while its managers share the workspace's
-totals with members. A line at the top names what needs
+Usage's), and one scope: a member sees their own usage, while someone who
+manages the workspace switches between the Workspace, You and, if they manage
+the organization, the whole Organization. A line at the top names what needs
 acting on now, as the gateway judges it for your role (a provider down, a key or
 budget near its limit or on pace to pass it, a key about to expire), each
 linking where it is fixed. Three numbers follow: the total at API prices, split
@@ -168,19 +167,15 @@ keys, or the organization's workspaces against their ceilings. A deployment
 operator also sees whether each provider answers. The scope and month live in
 the URL.
 
-Whether members see workspace totals is a per-workspace setting its managers
-change, and it starts on. While it is on, a member's Workspace scope reads the
-workspace's figures (the tiles, the chart and its budget line, requests and
-failures, and the error rate) but lists no keys in the limits, since the
-workspace's keys are other people's; what needs attention names the workspace
-budget and the member's own keys only. While it is off, a member reads only
-their own usage, so their chart is their own running total alone, with no budget
-line or projection: their share cannot show how close the workspace is to its
-budget. The Budget tile then gives them the workspace budget for the month
-running as a share of its cap, without the dollars spent. A month that has ended is drawn
-against today's budget and today's limits, since past ones are not stored, so it
-carries no verdict: no crossing date, no severity, and limits named ("Limit
-today") rather than measured against the month.
+A member sees no workspace spend by day, so their chart is their own running
+total alone, with no budget line or projection: their share cannot show how
+close the workspace is to its budget. The Budget tile gives them the workspace
+budget's figures for the month running while the workspace shares its totals
+with members (see [Access control](access-control.md#workspace-scoped-spend)),
+and is left out otherwise. A month that has ended is drawn against today's
+budget and today's limits, since past ones are not stored, so it carries no
+verdict: no crossing date, no severity, and limits named ("Limit today") rather
+than measured against the month.
 
 Before anything has been sent, Overview opens with a getting-started strip. A
 deployment operator sees it on a gateway with no providers and no usage, with a
@@ -235,10 +230,11 @@ Whose requests they show follows workspace management. In a workspace you
 manage, as an owner or admin of the organization or of that workspace itself,
 you see everyone's requests and can narrow to your own; in any other workspace
 you belong to, you see only your own. Managing one workspace widens that
-workspace and no other. While a workspace shares its totals with members (the
-default), the organization usage API also gives a member its aggregates when
-asked (`workspace_totals=true`): totals and the time series, split by model,
-provider or status code, never another person's requests, keys or sessions. See
+workspace and no other. While a workspace shares its totals with members (off
+until a manager turns it on), the organization usage API also gives a member its
+aggregates when asked (`workspace_totals=true`): totals, the time series and the
+p95 latency, split by model, provider or status code, never another person's
+requests, keys or sessions. See
 [Access control](access-control.md#workspace-scoped-spend).
 
 Filter Activity from the log itself: each column header sorts and holds that

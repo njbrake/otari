@@ -295,7 +295,11 @@ class OverviewService:
                 )
             except WorkspaceNotFoundError:
                 workspace = None
-        reader = await self._visibility.reader(user=identity, workspace=workspace) if workspace else None
+        reader = (
+            await self._visibility.reader(user=identity, workspace=workspace, is_operator=is_deployment_operator)
+            if workspace
+            else None
+        )
         used_scope = _allowed_scope(scope, reader=reader, manages_spend=manages_spend)
         # A member reading a workspace's totals: the workspace's figures, and
         # nobody else's keys.
@@ -478,20 +482,21 @@ class OverviewService:
         if ceiling is None:
             return []
         standing = _standing(ceiling, now)
+        # Judged from the share the reader sees, so near and over agree with the
+        # percent on the item and say nothing finer about the spend.
+        judged = standing if reader.shows_spend else _as_shared(standing, reader)
         subject = (str(workspace.id), workspace.name)
         items = _limit_items(
-            standing, over="budget_over", near="budget_near", subject_id=subject[0], subject_name=subject[1]
+            judged, over="budget_over", near="budget_near", subject_id=subject[0], subject_name=subject[1]
         )
         if not reader.shows_spend:
             items = [replace(item, used=None, fraction=reader.share(item.fraction)) for item in items]
         if items or now >= month.end:
             return items
-        if reader.shows_spend:
-            crossing = _projected_crossing(standing, now)
-        else:
-            crossing = _projected_crossing(_as_shared(standing, reader), now)
+        crossing = _projected_crossing(judged, now)
+        if not reader.shows_spend and crossing is not None:
             # And to the day, so the moment it rolls over says no more than the share does.
-            crossing = crossing.replace(hour=0, minute=0, second=0, microsecond=0) if crossing else None
+            crossing = crossing.replace(hour=0, minute=0, second=0, microsecond=0)
         if crossing is None:
             return []
         return [

@@ -46,7 +46,7 @@ from gateway.services.tenancy.provisioning_service import BOOTSTRAP_IDENTITY_KEY
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 from gateway.services.tenancy.workspace_service import WorkspaceService
 
-from .tenancy_helpers import hide_totals, membership_writes, visibility_service
+from .tenancy_helpers import hide_totals, membership_writes, share_totals, visibility_service
 
 NOW = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
 JULY = Month.current(NOW)
@@ -300,6 +300,7 @@ async def test_a_member_asking_for_the_organization_reads_their_own(async_db: As
 @pytest.mark.asyncio
 async def test_a_member_reads_the_workspace_while_its_managers_share_its_totals(async_db: AsyncSession) -> None:
     _, _, member, _, workspace = await _team(async_db, "acme-shown")
+    await share_totals(async_db, workspace)
 
     summary = await _summary(async_db, member, workspace=workspace, scope="workspace")
 
@@ -392,6 +393,7 @@ async def test_a_member_reading_the_workspace_totals_sees_no_key_in_the_rail(asy
     """The workspace's keys are other people's, so the rail is empty; the member's own key still reaches attention."""
 
     organization, _, member, other, workspace = await _team(async_db, "acme-member-rail")
+    await share_totals(async_db, workspace)
     _key(async_db, workspace, member, "sk-mine")
     _key(async_db, workspace, other, "sk-theirs")
     _ceiling(async_db, organization, scope_type=SCOPE_API_TOKEN, scope_id="sk-mine", limit=10, spent=10)
@@ -622,6 +624,7 @@ async def test_the_workspace_ceiling_is_judged_for_everyone_in_it(
     """A member may read the workspace budget, so its state reaches them too."""
 
     organization, _, member, _, workspace = await _team(async_db, f"acme-budget-{spent}")
+    await share_totals(async_db, workspace)
     _ceiling(async_db, organization, scope_type=SCOPE_WORKSPACE, scope_id=str(workspace.id), limit=100, spent=spent)
 
     summary = await _summary(async_db, member, workspace=workspace, scope="you")
@@ -855,6 +858,7 @@ async def test_a_members_error_rate_counts_only_their_own_requests(async_db: Asy
 @pytest.mark.asyncio
 async def test_a_member_reading_the_workspace_totals_hears_the_workspaces_error_rate(async_db: AsyncSession) -> None:
     _, _, member, other, workspace = await _team(async_db, "acme-errors-workspace")
+    await share_totals(async_db, workspace)
     _usage(async_db, workspace, count=20, status="error", user_id=str(other.id))
     _usage(async_db, workspace, count=20, user_id=str(member.id))
 
@@ -864,7 +868,16 @@ async def test_a_member_reading_the_workspace_totals_hears_the_workspaces_error_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("spent", "kind"), [(100, "budget_over"), (85.1234, "budget_near")])
+@pytest.mark.parametrize(
+    ("spent", "kind"),
+    [
+        (100, "budget_over"),
+        (85.1234, "budget_near"),
+        # Judged on the share the member reads, so the kind agrees with the percent shown.
+        (99.6, "budget_over"),
+        (79.6, "budget_near"),
+    ],
+)
 async def test_a_member_of_a_workspace_that_hides_its_totals_reads_the_budget_as_a_share(
     async_db: AsyncSession, spent: float, kind: str
 ) -> None:
@@ -873,12 +886,18 @@ async def test_a_member_of_a_workspace_that_hides_its_totals_reads_the_budget_as
     await hide_totals(async_db, workspace)
 
     hidden = _item(await _summary(async_db, member, workspace=workspace, scope="you"), kind)
-    managed = _item(await _summary(async_db, owner, workspace=workspace, scope="you"), kind)
 
     # A whole percent, so the share times the cap does not give the spend back.
     assert (hidden.used, hidden.limit, hidden.fraction) == (None, 100.0, round(spent / 100, 2))
-    assert (managed.used, managed.limit) == (pytest.approx(spent), 100.0)
-    assert managed.fraction == pytest.approx(spent / 100)
+    managed = await _summary(async_db, owner, workspace=workspace, scope="you")
+    exact = [item for item in managed.attention if item.kind in ("budget_over", "budget_near")]
+    if spent >= 80:
+        assert len(exact) == 1
+        assert exact[0].used == pytest.approx(spent)
+        assert exact[0].limit == 100.0
+        assert exact[0].fraction == pytest.approx(spent / 100)
+    else:
+        assert exact == []
 
 
 @pytest.mark.asyncio

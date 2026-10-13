@@ -50,9 +50,7 @@ ALLOWLISTED = {
     "exclude_model",
     "requested_model",
     "provider",
-    "endpoint",
     "priced",
-    "counts_toward_budget",
 }
 
 REFUSED = {
@@ -71,6 +69,8 @@ REFUSED = {
     "is_null": "no key, user or session isolates the rows that have one",
     "tag": "a tag value can name a person or a team of one",
     "tool": "a tool can be one person's",
+    "endpoint": "the Playground's endpoint is the Playground channel, a person at the dashboard",
+    "counts_toward_budget": "rows that do not count are imported ones, which is a source",
     "q": "searches the request rows, prompts and names included",
     "tokens_gt": "a threshold can isolate one request, and so its sender",
     "cost_gt": "a threshold can isolate one request, and so its sender",
@@ -113,7 +113,8 @@ def _filter_names() -> set[str]:
 
 
 def _member_reader() -> WorkspaceReader:
-    return WorkspaceReader.of(Workspace(name="Shared", organization_id=uuid.uuid4()), sees_everyone=False)
+    shared = Workspace(name="Shared", organization_id=uuid.uuid4(), members_see_workspace_totals=True)
+    return WorkspaceReader.of(shared, sees_everyone=False)
 
 
 def test_the_classes_do_not_overlap() -> None:
