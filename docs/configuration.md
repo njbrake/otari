@@ -115,7 +115,7 @@ non-secret effective set through `GET /api/v1/settings`.
 | `db_lock_timeout_ms` | How long a statement waits for a lock another transaction holds. Must be below the statement ceiling; `0` disables. |
 | `db_log_pool_size` | Connections reserved for usage logging, separate from the pool above. |
 | `db_ingest_pool_size` | Connections telemetry ingest may use, separate from the pool above and with no overflow. |
-| `usage_read_concurrency` | Heavy usage reads (summaries, breakdowns, p95, tools) one worker runs at once; default `2`. |
+| `usage_read_concurrency` | Heavy usage reads (summaries, breakdowns, p95, tools, the Overview's month) one worker runs at once; default `2`. |
 
 The pool sizes bound concurrent *database* work, not concurrent provider calls:
 a request hands its connection back before the upstream call. Raise them for a
@@ -141,7 +141,10 @@ each can sort or group every usage row in a long window; run together on a small
 database they can exhaust its memory and get a query killed, which restarts
 PostgreSQL and fails every request open at the time. Reads past the limit wait
 their turn without holding a connection, so a page fills in more slowly rather
-than failing. Raise it for a database with memory to spare.
+than failing, and one that waits more than 30 seconds is answered `503` with
+"Usage reads are busy; try again shortly". The limit is per worker: the database
+sees up to workers × replicas × `usage_read_concurrency` of these reads at once.
+Raise it for a database with memory to spare.
 
 `db_ingest_pool_size` is what keeps a telemetry import off that critical path.
 The OTLP endpoints and `POST /api/v1/usage/external-events` draw from it rather

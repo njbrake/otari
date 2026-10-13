@@ -11,6 +11,7 @@ into the words on the strip is presentation, and putting it on the wire would
 make the API own UI copy and freeze the page's wording into four SDKs.
 """
 
+import asyncio
 import calendar
 import uuid
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from typing import Literal
 
 from gateway.core.config import GatewayConfig
 from gateway.core.sql import utc_bound
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.organizations_exceptions import NotAuthorizedError, WorkspaceNotFoundError
 from gateway.models.tenancy import Organization, Workspace
 from gateway.models.tenancy import User as TenancyUser
@@ -37,6 +39,7 @@ from gateway.services.model_discovery_service import get_model_cache
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_service import WorkspaceService
+from gateway.services.usage import heavy_usage_read
 
 # The thresholds every needs-attention item is judged by, in one place so the page
 # never judges one itself.
@@ -226,11 +229,17 @@ class OverviewService:
         operators: DeploymentUserService,
         workspaces: WorkspaceService,
         config: GatewayConfig,
+        uow: UnitOfWork,
+        heavy_reads: asyncio.Semaphore,
     ):
         self._repository = repository
         self._organizations = organizations
         self._operators = operators
         self._workspaces = workspaces
+        # The month's spend and failures are grouped passes over its usage rows,
+        # so they take a turn among the worker's heavy usage reads.
+        self._uow = uow
+        self._heavy_reads = heavy_reads
         # Read only for the providers an operator's reachability covers.
         self._config = config
 
@@ -315,19 +324,20 @@ class OverviewService:
         attention: list[AttentionItem] = []
         if is_deployment_operator:
             attention += self._unreachable_providers()
-        if used_scope == "organization":
-            limits, found, (requests, failures) = await self._workspace_rail(organization, month, now)
-        else:
-            limits, found = await self._key_rail(identity, organization, workspace, used_scope, month, now)
-            if workspace is not None:
-                attention += await self._workspace_budget(workspace, month, now)
-            requests, failures = await self._repository.requests_and_failures(
-                organization_id=organization.id,
-                workspace_id=workspace.id if workspace else None,
-                user_id=str(identity.id) if used_scope == "you" else None,
-                start=month.start,
-                end=month.end,
-            )
+        async with heavy_usage_read(self._uow, self._heavy_reads):
+            if used_scope == "organization":
+                limits, found, (requests, failures) = await self._workspace_rail(organization, month, now)
+            else:
+                limits, found = await self._key_rail(identity, organization, workspace, used_scope, month, now)
+                if workspace is not None:
+                    attention += await self._workspace_budget(workspace, month, now)
+                requests, failures = await self._repository.requests_and_failures(
+                    organization_id=organization.id,
+                    workspace_id=workspace.id if workspace else None,
+                    user_id=str(identity.id) if used_scope == "you" else None,
+                    start=month.start,
+                    end=month.end,
+                )
         attention += found
         attention += _error_rate(requests, failures)
         attention.sort(key=lambda item: _ATTENTION_ORDER.index(item.kind))

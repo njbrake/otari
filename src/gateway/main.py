@@ -676,7 +676,6 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
                 # Persisted dashboard overrides win over config/env; apply them
                 # before pricing init so default-pricing behavior is consistent.
                 await apply_overrides_from_db(config, session)
-                # After the overrides, so a limit set in the dashboard is the one served.
                 app.state.heavy_usage_reads = asyncio.Semaphore(config.usage_read_concurrency)
                 # Checked when serving starts rather than when the app is built,
                 # so a tool that only reads the schema needs no pepper, and after
@@ -818,7 +817,7 @@ async def _tenancy_error_handler(_: Request, exc: Exception) -> Response:
     answered.
 
     A 4xx message is written for the caller and is rendered as it is. A 5xx one
-    is not: it describes the deployment rather than the request, and
+    is not, unless its class sets ``detail_is_public``: it describes the deployment rather than the request, and
     ``ForeignTenancyError`` already interpolates organization names and slugs
     read out of the database. That message goes to the log, where an operator
     can act on it, and the response carries the generic detail the rest of this
@@ -827,7 +826,7 @@ async def _tenancy_error_handler(_: Request, exc: Exception) -> Response:
     """
     if not isinstance(exc, TenancyError):  # pragma: no cover - registered for TenancyError only
         raise exc
-    if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+    if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR and not exc.detail_is_public:
         logger.error("Tenancy request failed: %s", exc.message)
         return JSONResponse(
             status_code=exc.status_code,

@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import cast
@@ -7,6 +9,7 @@ from gateway.core.series import SERIES_TOP_N, dense_series
 from gateway.core.sql import UsageBucketGrain
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import SortOrder, UsageCondition, UsageSort
+from gateway.exceptions.shared_exceptions import UsageReadsBusyError
 from gateway.models.usage import UsageLog
 from gateway.repositories.usage import UsageReadRepository, UsageSummaryRepository
 from gateway.schemas.usage import (
@@ -42,6 +45,38 @@ from gateway.services.usage._summary import (
     with_fold,
 )
 
+# How long a heavy read waits for its turn before the caller is told to come back.
+# A dashboard page that has waited this long has usually been left or reloaded, and
+# a read nobody is waiting for should not keep its place in the queue.
+HEAVY_READ_WAIT_S = 30.0
+
+
+@asynccontextmanager
+async def heavy_usage_read(uow: UnitOfWork, gate: asyncio.Semaphore) -> AsyncIterator[None]:
+    """Hold one of this worker's heavy usage reads for the body.
+
+    A dashboard page asks for several aggregates at once, and each can sort or
+    group every usage row in a long window, so running them all together is
+    what runs a small database out of memory; ``gate`` admits only so many.
+
+    Authentication and scope resolution have already read on the request's
+    session, and its transaction holds a pooled connection until something ends
+    it. The empty block ends it first, so a read waiting its turn holds no
+    connection. A read that waits past ``HEAVY_READ_WAIT_S`` is refused rather
+    than queued for good.
+    """
+    async with uow:
+        pass
+    try:
+        async with asyncio.timeout(HEAVY_READ_WAIT_S):
+            await gate.acquire()
+    except TimeoutError:
+        raise UsageReadsBusyError from None
+    try:
+        yield
+    finally:
+        gate.release()
+
 
 @dataclass(frozen=True)
 class UsagePageRow:
@@ -70,12 +105,14 @@ class UsageReadService:
         self._uow = uow
         self._reads = reads
         self._summaries = summaries
-        # Shared by every request this worker serves: a dashboard page asks for
-        # several aggregates at once, and each can sort or group a large window,
-        # so running them all together is what runs a small database out of memory.
-        # Taken before the step's block opens, so a read waiting its turn holds no
-        # connection.
+        # Shared by every request this worker serves; see `heavy_usage_read`.
         self._heavy_reads = heavy_reads
+
+    @asynccontextmanager
+    async def _heavy_read(self) -> AsyncIterator[None]:
+        """One block of the Unit of Work, opened once this worker's gate admits it."""
+        async with heavy_usage_read(self._uow, self._heavy_reads), self._uow:
+            yield
 
     async def page(
         self,
@@ -110,7 +147,7 @@ class UsageReadService:
 
     async def p95_latency_ms(self, conditions: list[UsageCondition]) -> int | None:
         """Nearest-rank 95th-percentile latency over the requests the conditions leave."""
-        async with self._heavy_reads, self._uow:
+        async with self._heavy_read():
             return await self._reads.p95_latency_ms(conditions)
 
     async def activity_groups(
@@ -127,7 +164,7 @@ class UsageReadService:
         limit: int,
     ) -> UsageActivityGroups:
         """A page of the log's groups over an already-resolved window, and how many groups the filters leave."""
-        async with self._heavy_reads, self._uow:
+        async with self._heavy_read():
             rows, total = await self._reads.activity_groups(
                 group_by=group_by,
                 conditions=conditions,
@@ -173,7 +210,7 @@ class UsageReadService:
         # ``none`` is dropped rather than rejected: it exists only so a caller can send
         # an empty selection, and it never contributes a dimension of its own.
         requested: set[str] = ALL_SUMMARY_DIMENSIONS if dimensions is None else {d for d in dimensions if d != "none"}
-        async with self._heavy_reads, self._uow:
+        async with self._heavy_read():
             totals = await self._summaries.totals(conditions, status)
             breakdowns = {
                 name: with_fold(
@@ -292,7 +329,7 @@ class UsageReadService:
         session breakdown's 250 keys never travel in a query string. The ranking
         breaks ties by key, so the groups match the summary's for the same window.
         """
-        async with self._heavy_reads, self._uow:
+        async with self._heavy_read():
             if group_by is None:
                 overall = await self._reads.p95_latency_ms(conditions)
                 rows: list[UsageGroupRow] = []
@@ -320,7 +357,7 @@ class UsageReadService:
 
     async def tools(self, *, start: datetime, end: datetime, conditions: list[UsageCondition]) -> UsageTools:
         """The window's per-tool calls, failures, spend and requests, the summary's ``by_tool`` on its own."""
-        async with self._heavy_reads, self._uow:
+        async with self._heavy_read():
             rows = await self._tool_breakdown(conditions)
         return UsageTools(start_date=start.isoformat(), end_date=end.isoformat(), tools=rows)
 
@@ -353,7 +390,7 @@ class UsageReadService:
     ) -> UsageGroupedSeries:
         """The window's top groups by ``rank_by``, each a series of its own, and the rest folded into ``other``."""
         dimension = SERIES_BREAKDOWNS[group_by]
-        async with self._heavy_reads, self._uow:
+        async with self._heavy_read():
             totals = await self._summaries.totals(conditions, status)
             top = await self._summaries.breakdown(
                 dimension, conditions, limit=SERIES_TOP_N, status_filter=status, rank_by=rank_by
