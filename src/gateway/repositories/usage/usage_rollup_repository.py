@@ -20,7 +20,7 @@ it since its sums were built.
 """
 
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Never
 
 from sqlalchemy import (
@@ -43,7 +43,7 @@ from sqlalchemy import (
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.visitors import iterate, replacement_traverse
 
-from gateway.core.sql import UsageBucketGrain, dialect_name
+from gateway.core.sql import UsageBucketGrain, dialect_name, utc_bound
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import TOOL_METER_NAMESPACE, billed_meter, needs_pricing_condition, tool_calls_expr
 from gateway.models.usage import UsageLog, UsageRollup, UsageRollupDirtyHour
@@ -196,12 +196,13 @@ def _is_bound(condition: ColumnElement[bool], operator: Any, value: datetime) ->
 
 
 def _ceil_hour(moment: datetime) -> datetime:
-    floor = moment.replace(minute=0, second=0, microsecond=0)
-    return floor if floor == moment else floor + _HOUR
+    floor = _floor_hour(moment)
+    return floor if floor == utc_bound(moment) else floor + _HOUR
 
 
 def _floor_hour(moment: datetime) -> datetime:
-    return moment.replace(minute=0, second=0, microsecond=0)
+    """The UTC hour ``moment`` falls in. In UTC because an offset of half an hour has its own hours."""
+    return utc_bound(moment).astimezone(UTC).replace(minute=0, second=0, microsecond=0)
 
 
 def _spans(hours: Sequence[datetime]) -> list[tuple[datetime, datetime]]:
@@ -293,8 +294,13 @@ class UsageRollupRepository(BaseRepository[UsageRollup, Never, Never]):
                 return None
         return summed
 
-    async def refresh(self, max_hours: int) -> int:
-        """Rebuild up to ``max_hours`` of the earliest marked hours from their rows, and return how many.
+    async def refresh(self, max_hours: int, *, now: datetime) -> int:
+        """Rebuild up to ``max_hours`` of the latest marked hours before ``now``'s, and return how many.
+
+        Latest first, so after the rollups first appear the weeks a dashboard reads
+        are built before the history. The hour ``now`` falls in is left marked: a
+        window that ends now reads it from its rows as a partial hour anyway, and
+        it is built once it is over.
 
         One refresh at a time, under a transaction-scoped advisory lock: two building
         the same hour would each delete the sums the other has not committed yet and
@@ -304,10 +310,15 @@ class UsageRollupRepository(BaseRepository[UsageRollup, Never, Never]):
         """
         await self.db.execute(select(func.pg_advisory_xact_lock(_REFRESH_LOCK)))
         dirty = UsageRollupDirtyHour.__table__.c
-        earliest = select(dirty.hour).distinct().order_by(dirty.hour).limit(max_hours).scalar_subquery()
-        taken = await self.db.execute(
-            delete(UsageRollupDirtyHour).where(dirty.hour.in_(earliest)).returning(dirty.hour)
+        latest = (
+            select(dirty.hour)
+            .where(dirty.hour < _floor_hour(now))
+            .distinct()
+            .order_by(dirty.hour.desc())
+            .limit(max_hours)
+            .scalar_subquery()
         )
+        taken = await self.db.execute(delete(UsageRollupDirtyHour).where(dirty.hour.in_(latest)).returning(dirty.hour))
         hours = sorted(set(taken.scalars()))
         if not hours:
             return 0

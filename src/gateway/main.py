@@ -271,8 +271,8 @@ def _start_telemetry_retention_sweeper(config: GatewayConfig, container: Contain
 
 
 def _start_usage_rollup_refresher(config: GatewayConfig, _container: Container) -> Coroutine[Any, Any, None] | None:
-    """Return the usage rollup refresh, or None where the interval disables it or the database is not PostgreSQL."""
-    if config.usage_rollup_refresh_interval_sec <= 0 or not is_postgresql(config.database_url):
+    """Return the usage rollup refresh, or None where the database is not PostgreSQL."""
+    if not is_postgresql(config.database_url):
         return None
 
     @asynccontextmanager

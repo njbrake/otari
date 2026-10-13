@@ -532,7 +532,8 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
                 select(u.status_code, failures)
                 .where(u.status == "error")
                 .group_by(u.status_code)
-                .order_by(failures.desc())
+                # The code breaks a tie, so the order and the cut at ``limit`` hold however the rows were read.
+                .order_by(failures.desc(), u.status_code.asc().nulls_last())
                 .limit(limit)
             )
         ).all()

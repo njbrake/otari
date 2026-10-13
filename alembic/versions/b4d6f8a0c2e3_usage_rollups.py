@@ -8,7 +8,7 @@ in the same transaction as the change, and the gateway's refresh rebuilds a
 marked hour from the rows. The trigger knows nothing of what an hour's sums
 are, so how a row is counted is defined once, in the gateway.
 
-Every hour that already has rows is marked here, after the trigger is in place
+Every hour from the first row's to the last's is marked here, after the trigger is in place
 and in the same transaction, so the refresh builds the history and no write
 lands between the two unmarked. SQLite gets the tables alone: the reads there
 never use them.
@@ -117,7 +117,15 @@ def upgrade() -> None:
             f"CREATE TRIGGER {_name(event)} AFTER {event} ON usage_logs "
             f"REFERENCING {_REFERENCING[event]} FOR EACH STATEMENT EXECUTE FUNCTION {_name(event)}()"
         )
-    op.execute(f"INSERT INTO usage_rollup_dirty_hours (hour) SELECT {_HOUR} FROM usage_logs GROUP BY 1")
+    # Every hour from the first row's to the last's, read off the timestamp index
+    # rather than grouping every row, so writes wait on the trigger's lock only
+    # briefly. An hour with no rows builds to nothing.
+    first, last = (_HOUR.replace('"timestamp"', bound) for bound in ("first_at", "last_at"))
+    op.execute(
+        "INSERT INTO usage_rollup_dirty_hours (hour) "
+        f"SELECT generate_series({first}, {last}, interval '1 hour') "
+        'FROM (SELECT min("timestamp") AS first_at, max("timestamp") AS last_at FROM usage_logs) AS bounds'
+    )
 
 
 def downgrade() -> None:

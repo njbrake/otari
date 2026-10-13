@@ -116,7 +116,7 @@ non-secret effective set through `GET /api/v1/settings`.
 | `db_log_pool_size` | Connections reserved for usage logging, separate from the pool above. |
 | `db_ingest_pool_size` | Connections telemetry ingest may use, separate from the pool above and with no overflow. |
 | `usage_read_concurrency` | Heavy usage reads (summaries, breakdowns, p95, tools, the Overview's month) one worker runs at once; default `2`. |
-| `usage_rollup_refresh_interval_sec` | Seconds between rebuilds of the hourly usage rollups (PostgreSQL only); default `30`, `0` disables. |
+| `usage_rollup_refresh_interval_sec` | Seconds between rebuilds of the hourly usage rollups (PostgreSQL only); default `30`, must be above `0`. |
 
 The pool sizes bound concurrent *database* work, not concurrent provider calls:
 a request hands its connection back before the upstream call. Raise them for a
@@ -161,8 +161,10 @@ interval only decides how much of a window a read still scans. Reads that rank
 single requests (p95 latency) or filter on something the rollups do not keep
 (a request id, a tag, a tool, a cost or latency threshold, whether a row is
 priced) scan the rows as before. After an upgrade the gateway builds the
-history in the background, about a day of usage per pass; until it finishes, a
-read whose window still holds more than 48 unbuilt hours scans its rows.
+history in the background, newest first, about a day of usage per pass; until
+it finishes, a read whose window still holds more than 48 unbuilt hours scans its
+rows. The trigger adds one small insert to every write of usage, and the
+rebuild is what removes it again, which is why the interval cannot be `0`.
 
 `db_ingest_pool_size` is what keeps a telemetry import off that critical path.
 The OTLP endpoints and `POST /api/v1/usage/external-events` draw from it rather

@@ -13,7 +13,7 @@ import math
 import random
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -32,6 +32,8 @@ from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT, UsageLog, UsageRollu
 from gateway.models.users import User
 from gateway.repositories.usage import UsageRollupRepository
 
+from .conftest import _to_async_url
+
 T0 = datetime(2026, 9, 1, tzinfo=UTC)
 USAGE = f"{API_ROOT}/usage"
 
@@ -40,14 +42,14 @@ def _refresh(config: GatewayConfig) -> int:
     """Run refreshes until no hour is marked, and return how many hours they built."""
 
     async def main() -> int:
-        engine = create_async_engine(config.database_url.replace("postgresql://", "postgresql+asyncpg://", 1))
+        engine = create_async_engine(_to_async_url(config.database_url))
         built = 0
         try:
             async with async_sessionmaker(engine, expire_on_commit=False)() as session:
                 uow = UnitOfWork(session)
                 while True:
                     async with uow:
-                        done = await UsageRollupRepository(uow).refresh(24)
+                        done = await UsageRollupRepository(uow).refresh(24, now=datetime.now(UTC))
                     built += done
                     if not done:
                         return built
@@ -132,6 +134,11 @@ def _window(start: datetime, end: datetime) -> dict[str, str]:
 
 
 EDGES = _window(T0 - timedelta(minutes=37), T0 + timedelta(hours=5, minutes=13))
+# Bounds in a zone half an hour off UTC, whose hours are not the rollups' hours.
+INDIA = timezone(timedelta(hours=5, minutes=30))
+OFFSET = _window(
+    (T0 + timedelta(minutes=10)).astimezone(INDIA), (T0 + timedelta(hours=4, minutes=50)).astimezone(INDIA)
+)
 WHOLE = _window(T0, T0 + timedelta(hours=6))
 
 # Each read the Usage page makes, and the variations a filter or a sort gives it.
@@ -161,6 +168,7 @@ READS: list[tuple[str, dict[str, Any]]] = [
     ("summary", {**EDGES, "is_null": "user_id", "source": "gateway"}),
     ("summary", {**EDGES, "cost_gt": "0.1"}),
     ("summary", {**EDGES, "requested_model": "fast", "endpoint": "/v1/messages"}),
+    ("summary", {**OFFSET, "bucket": "hour"}),
     ("latency", {**EDGES, "group_by": "model"}),
     ("latency", {**EDGES, "group_by": "channel", "rank_by": "errors"}),
     ("latency", {**EDGES}),

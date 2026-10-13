@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
+from datetime import UTC, datetime
 
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.log_config import logger
@@ -26,10 +27,10 @@ class UsageRollupService:
         self._uow = uow
         self._rollups = rollups
 
-    async def refresh(self, max_hours: int = HOURS_PER_PASS) -> int:
-        """Rebuild up to ``max_hours`` marked hours in one transaction, and return how many."""
+    async def refresh(self, max_hours: int = HOURS_PER_PASS, *, now: datetime | None = None) -> int:
+        """Rebuild up to ``max_hours`` marked hours that are over, in one transaction, and return how many."""
         async with self._uow:
-            return await self._rollups.refresh(max_hours)
+            return await self._rollups.refresh(max_hours, now=now or datetime.now(UTC))
 
 
 async def run_usage_rollup_refresher(
