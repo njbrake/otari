@@ -66,6 +66,12 @@ describe("a member's Usage while the workspace shares its totals", () => {
     expect(lastBreakdown(calls).getAll("dimensions")).toEqual(["model"])
     const series = usageReads(calls, "series").at(-1)
     expect(series?.get("workspace_totals")).toBe("true")
+    // The tools read is a breakdown by tool, so no ask for it carries the totals.
+    expect(
+      usageReads(calls, "tools").some(
+        (params) => params.get("workspace_totals") === "true",
+      ),
+    ).toBe(false)
     expect(series?.get("group_by")).toBe("model")
     // The window before is the workspace's too.
     const previous = usageReads(calls, "summary").filter((params) =>
@@ -103,6 +109,7 @@ describe("a member's Usage while the workspace shares its totals", () => {
     )
     const sent = [
       ...usageReads(calls, "summary"),
+      ...usageReads(calls, "latency"),
       ...usageReads(calls, "series"),
     ].filter((params) => params.get("workspace_totals") === "true")
     expect(sent.length).toBeGreaterThan(0)
@@ -115,7 +122,9 @@ describe("a member's Usage while the workspace shares its totals", () => {
     // A model narrows the totals as it would anyone's.
     expect(lastBreakdown(calls).getAll("model")).toEqual(["claude-opus-5-5"])
     // The breakdown the URL named is not on offer, so the first one stands in.
-    expect(lastBreakdown(calls).get("p95_by")).toBe("model")
+    const latency = usageReads(calls, "latency").at(-1)
+    expect(latency?.get("workspace_totals")).toBe("true")
+    expect(latency?.get("group_by")).toBe("model")
     // The filters wait in the URL for a scope that has them.
     expect(screen.getAllByText("not in this scope").length).toBe(5)
   })

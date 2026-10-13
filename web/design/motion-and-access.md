@@ -28,6 +28,10 @@ canvas the stylesheet cannot reach, so `SetupOrb` reads the preference itself
 and passes `paused`. Anything else that would animate forever is decoration. See
 [feedback.md](feedback.md).
 
+`Skeleton`'s pulse and the shell's `LoadingBar` are not exceptions to this, since
+neither runs forever: each runs only until a read answers, and each holds still
+under `prefers-reduced-motion`.
+
 ## Press
 
 `scale(0.98)` at every size. One value, not a ladder: the ladder deepened with

@@ -37,7 +37,8 @@ test.describe("overview", () => {
     await expect(page.getByText("Get started with Otari")).toBeHidden()
 
     const requests = tileValue(page, "Requests")
-    await expect(requests).not.toHaveText("—")
+    // A count, not the dash of a failed read nor the placeholder of one in flight.
+    await expect(requests).toHaveText(/^\d[\d,]*$/)
     if (FIXTURE_IN_THIS_MONTH) {
       const counted = Number((await requests.innerText()).replaceAll(",", ""))
       expect(counted).toBeGreaterThanOrEqual(SEEDED)

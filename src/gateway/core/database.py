@@ -42,6 +42,11 @@ _ASYNC_TO_SYNC_DRIVER = {
 }
 
 
+def is_postgresql(database_url: str) -> bool:
+    """Whether ``database_url`` names a PostgreSQL database, whichever driver it spells."""
+    return make_url(database_url).get_backend_name() == "postgresql"
+
+
 def _to_async_url(database_url: str) -> tuple[str, dict[str, Any]]:
     """Convert a sync SQLAlchemy URL into its async equivalent."""
 

@@ -1,3 +1,4 @@
+import { useState } from "react"
 import type {
   UsageActivityGroup,
   UsageActivityGroups,
@@ -17,6 +18,7 @@ import {
   useLiveUsageCount,
   useUsageBatches,
   useUsageCount,
+  useUsageLatency,
   useUsageLogs,
   useUsagePreviews,
   useUsageRow,
@@ -45,7 +47,7 @@ import {
 } from "./activityRows"
 import { phoneBarSpec } from "./chartBars"
 import type { useActivityViewer } from "./useActivityViewer"
-import { useActivityWindow } from "./useActivityWindow"
+import { LIVE_AGGREGATE_MS, useActivityWindow } from "./useActivityWindow"
 
 // How often live mode brings the window up to now. The phone has no live mode,
 // so it does so only on a return to the tab, once its window is this old.
@@ -98,9 +100,10 @@ function groupList(read: {
  *   time, so "All" sends the chart's year-long extent instead. A list the
  *   server bounds the same way (sorted by anything but time, or searched by
  *   substring) sends it too.
- * - Live mode brings the windows up to now on a clock (`useLiveClock`), which
- *   moves every key once a tick, and holds still while the reader pages back,
- *   has a request open, or is looking at a window that has ended.
+ * - Live mode brings the windows up to now on a clock (`useLiveClock`): the rows
+ *   and count every tick, the aggregates once a minute (`useActivityWindow`).
+ *   It holds still while the reader pages back, has a request open, or is
+ *   looking at a window that has ended.
  */
 export function useActivityLog({
   url,
@@ -131,7 +134,11 @@ export function useActivityLog({
     isPhone ? PHONE_REFRESH_MS : LIVE_POLL_MS,
     { isPolling: !isPhone },
   )
-  const time = useActivityWindow(url, liveClock)
+  const time = useActivityWindow(
+    url,
+    liveClock,
+    isPhone ? 0 : LIVE_AGGREGATE_MS,
+  )
   const memberLabels = useMemberAttributionLabels()
 
   const wantsOwn = viewer.isManager && url.get("scope") === "you"
@@ -154,7 +161,15 @@ export function useActivityLog({
   const isUnbounded =
     sort.key === NEWEST_FIRST.key && !isSubstringSearch(listed.q)
   const filters = isUnbounded ? listed : withStart
-  const aggregateFilters = withStart
+  // The aggregates (totals, p95, groups, column menus) read the list's window as
+  // the chart's clock last took it, so live mode moves them only every
+  // `LIVE_AGGREGATE_MS`. An open group's rows read it too, so they agree with
+  // the heading they sit under.
+  const aggregated = toUsageFilters(url, time.aggregate, activityScope)
+  const aggregateFilters: UsageFilters = aggregated.start_date
+    ? aggregated
+    : { ...aggregated, start_date: time.chart.start }
+  const groupedFilters = isUnbounded ? aggregated : aggregateFilters
   // What a bulk action on imported rows reaches, closed at the moment the
   // window was taken: an open window would otherwise reach rows that land
   // between the count the dialog states and the write it confirms.
@@ -188,7 +203,11 @@ export function useActivityLog({
   const count = useUsageCount(filters, isReady && !isGrouping, sort)
   const totals = useActivityTotals(aggregateFilters, grain, {
     enabled: isReady,
-    withP95: true,
+  })
+  // The totals line's p95, read apart so the rest of the line is not held
+  // behind its sort. The phone's line has no latency figure.
+  const latency = useUsageLatency(aggregateFilters, {
+    enabled: isReady && !isPhone,
   })
   // With no span the chart and the totals read one window, so the totals'
   // series draws the bars; a span narrows the totals, and the chart keeps the
@@ -272,7 +291,7 @@ export function useActivityLog({
     ? groupRows.filter((row) => expanded.has(row.key ?? ""))
     : []
   const previews = useUsagePreviews(
-    openGroups.map((row) => groupFilters(filters, groupBy, row)),
+    openGroups.map((row) => groupFilters(groupedFilters, groupBy, row)),
     GROUP_PREVIEW,
   )
   const previewRows = new Map(
@@ -328,10 +347,34 @@ export function useActivityLog({
     }
     if (!aggregatesMove) {
       void totals.refetch()
+      if (!isPhone) void latency.refetch()
       if (isGrouping) void groups.refetch()
     }
     if (time.hasSpan && !isOpen) void chart.refetch()
   }
+
+  // Totals and p95 arrive apart, so a p95 is set beside totals only once both
+  // answer for the same window. A live tick moves the window by seconds, which
+  // is not a change the reader made, so the last p95 for the same view stays up
+  // through it rather than blinking to a placeholder every ten seconds.
+  const p95View = JSON.stringify([
+    time.range,
+    url.get("start_date"),
+    url.get("end_date"),
+    { ...aggregateFilters, start_date: undefined, end_date: undefined },
+  ])
+  const freshP95 =
+    latency.data && !latency.isPlaceholderData && !totals.isPlaceholderData
+      ? { view: p95View, value: latency.data.p95_latency_ms ?? null }
+      : undefined
+  const [lastP95, setLastP95] = useState(freshP95)
+  if (
+    freshP95 &&
+    (lastP95?.view !== freshP95.view || lastP95.value !== freshP95.value)
+  ) {
+    setLastP95(freshP95)
+  }
+  const shownP95 = freshP95 ?? (lastP95?.view === p95View ? lastP95 : undefined)
 
   return {
     viewer,
@@ -357,7 +400,13 @@ export function useActivityLog({
     isFetchingRows: logs.isFetching,
     rowsUpdatedAt: logs.dataUpdatedAt,
     total: count.isSuccess ? count.data.total : null,
-    totals: totals.data?.totals,
+    totals: totals.data && {
+      ...totals.data.totals,
+      p95_latency_ms: shownP95?.value ?? null,
+    },
+    isLoadingTotals: !totals.data && !totals.error,
+    isLoadingP95:
+      !isPhone && !totals.error && !latency.error && shownP95 === undefined,
     series: chartRead.data?.series ?? [],
     spend: spend.data ?? undefined,
     inFlight:
@@ -408,6 +457,7 @@ export function useActivityLog({
       rowsRead.error ??
       count.error ??
       totals.error ??
+      latency.error ??
       chartRead.error ??
       policies.error ??
       previews.find((preview) => preview.error)?.error ??

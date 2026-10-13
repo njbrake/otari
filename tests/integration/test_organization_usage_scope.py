@@ -959,6 +959,68 @@ def test_the_organization_summarys_per_group_extras_read_only_the_callers_rows(
     assert [row["key"] for row in body["by_source_label"]] == ["task-1", None]
 
 
+def test_the_organization_latency_and_tools_read_only_the_callers_rows(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """The p95, overall and per group, and the tool spend come from the rows in scope, not the whole workspace."""
+    session = db_session_factory()
+    try:
+        member = str(world.users["alpha_member"])
+        tool_meters = {"tools": {"web_search": {"billed": 2, "errors": 0, "unit_rate": 0.01}}}
+        for latency, user_id, meters in (
+            (100, member, None),
+            (200, member, None),
+            # Someone else's requests in the same workspace: slower, and running a tool.
+            (90_000, None, tool_meters),
+            (90_000, None, tool_meters),
+            (90_000, None, tool_meters),
+        ):
+            session.add(
+                UsageLog(
+                    id=str(uuid.uuid4()),
+                    workspace_id=world.workspaces["alpha_one"],
+                    user_id=user_id,
+                    model="alpha-one-member",
+                    provider="p",
+                    endpoint="/v1/chat/completions",
+                    source="gateway",
+                    status="success",
+                    latency_ms=latency,
+                    billing_meters=meters,
+                    timestamp=datetime.now(UTC),
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    base = f"{API_ROOT}/organizations/me/usage"
+    code, overall = _as(client, world, "alpha_member", f"{base}/latency")
+    assert code == status.HTTP_200_OK, overall
+    assert isinstance(overall, dict)
+    assert overall["p95_latency_ms"] == 200
+    code, grouped = _as(client, world, "alpha_member", f"{base}/latency?group_by=model")
+    assert code == status.HTTP_200_OK, grouped
+    assert isinstance(grouped, dict)
+    assert {group["key"]: group["p95_latency_ms"] for group in grouped["groups"]} == {"alpha-one-member": 200}
+    code, tools = _as(client, world, "alpha_member", f"{base}/tools")
+    assert code == status.HTTP_200_OK, tools
+    assert isinstance(tools, dict)
+    assert tools["tools"] == []
+    # The owner manages the workspace, so the same reads include everyone's rows.
+    code, owner_tools = _as(client, world, "alpha_owner", f"{base}/tools")
+    assert code == status.HTTP_200_OK, owner_tools
+    assert isinstance(owner_tools, dict)
+    assert [(row["tool"], row["calls"]) for row in owner_tools["tools"]] == [("web_search", 6)]
+
+
+def test_the_deployment_wide_latency_and_tools_refuse_a_tenant(client: TestClient, world: _World) -> None:
+    """Like the deployment-wide summary, they read every tenant's rows, so only an operator reaches them."""
+    for path in ("latency", "tools"):
+        code, _ = _as(client, world, "alpha_owner", f"{API_ROOT}/usage/{path}")
+        assert code == status.HTTP_403_FORBIDDEN, path
+
+
 # =============================================================================
 # Workspace totals for members
 # =============================================================================
@@ -1052,6 +1114,12 @@ def test_a_member_who_asks_reads_the_workspaces_series(client: TestClient, world
     assert sum(group["requests"] for group in body["groups"]) == len(_ALPHA_ONE_EVERYONE)
 
 
+@pytest.mark.parametrize("group_by", ["", "&group_by=model", "&group_by=provider"])
+def test_a_member_who_asks_reads_the_workspaces_latency(client: TestClient, world: _World, group_by: str) -> None:
+    code, body = _as(client, world, "alpha_member", f"{_USAGE}/latency?{_totals(world)}{group_by}")
+    assert code == status.HTTP_200_OK, body
+
+
 def test_a_member_who_asks_reads_the_workspaces_groups_by_model(client: TestClient, world: _World) -> None:
     code, body = _as(client, world, "alpha_member", f"{_USAGE}/groups?group_by=model&{_totals(world)}")
     assert code == status.HTTP_200_OK, body
@@ -1073,6 +1141,11 @@ def test_a_member_who_asks_reads_the_workspaces_groups_by_model(client: TestClie
         "/summary?dimensions=model&dimensions=api_key",
         "/summary?dimensions=source_label",
         "/summary?dimensions=none&p95_by=user",
+        "/latency?group_by=user",
+        "/latency?group_by=api_key",
+        "/latency?group_by=model&user_id={member}",
+        # Tools are not a breakdown a member may read, so the tools read is refused whole.
+        "/tools?model=gpt-4",
         "/summary?user_id={member}",
         "/summary?exclude_user_id={member}",
         "/summary?api_key_id=sk-anything",
@@ -1148,7 +1221,10 @@ def test_without_asking_a_member_still_reads_their_own(client: TestClient, world
     assert [group["key"] for group in groups["groups"]] == [str(world.users["alpha_member"])]
 
 
-@pytest.mark.parametrize("path", ["/summary?dimensions=model", "/series?group_by=model", "/groups?group_by=model"])
+@pytest.mark.parametrize(
+    "path",
+    ["/summary?dimensions=model", "/latency?group_by=model", "/series?group_by=model", "/groups?group_by=model"],
+)
 def test_asking_for_the_totals_of_a_workspace_that_hides_them_is_refused(
     client: TestClient, world: _World, path: str
 ) -> None:
@@ -1179,7 +1255,13 @@ def test_asking_changes_nothing_for_a_manager(client: TestClient, world: _World,
 def test_a_member_cannot_ask_for_the_totals_of_a_workspace_they_do_not_belong_to(
     client: TestClient, world: _World, workspace: str
 ) -> None:
-    for path in ("/summary?dimensions=model", "/series?group_by=model", "/groups?group_by=model"):
+    for path in (
+        "/summary?dimensions=model",
+        "/latency?group_by=model",
+        "/tools?model=gpt-4",
+        "/series?group_by=model",
+        "/groups?group_by=model",
+    ):
         code, _ = _as(client, world, "alpha_member", f"{_USAGE}{path}&{_totals(world, workspace)}")
         assert code == status.HTTP_404_NOT_FOUND, path
 

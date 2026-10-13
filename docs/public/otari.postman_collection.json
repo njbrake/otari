@@ -6558,6 +6558,246 @@
           }
         },
         {
+          "name": "Organization Usage Latency",
+          "request": {
+            "description": "The 95th-percentile latency over the window, or per group of one breakdown, for the caller's organization.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage/latency``.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "usage",
+                "latency"
+              ],
+              "query": [
+                {
+                  "description": "Report each group's p95 in this breakdown instead of the window's: the groups '/summary' would rank into its top N for the same 'rank_by' and 'rank_order', fold row excluded.",
+                  "disabled": true,
+                  "key": "group_by",
+                  "value": ""
+                },
+                {
+                  "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last. 'p95' reads the latency of every group in the window, not just the top N, so it costs the most.",
+                  "disabled": true,
+                  "key": "rank_by",
+                  "value": ""
+                },
+                {
+                  "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+                  "disabled": true,
+                  "key": "rank_order",
+                  "value": ""
+                },
+                {
+                  "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+                  "disabled": true,
+                  "key": "workspace_totals",
+                  "value": ""
+                },
+                {
+                  "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "start_date",
+                  "value": ""
+                },
+                {
+                  "description": "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "end_date",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+                  "disabled": true,
+                  "key": "status",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly",
+                  "disabled": true,
+                  "key": "status_code",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "model",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single endpoint (e.g. '/v1/chat/completions')",
+                  "disabled": true,
+                  "key": "endpoint",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provider (e.g. 'openai')",
+                  "disabled": true,
+                  "key": "provider",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')",
+                  "disabled": true,
+                  "key": "source",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single session/project label (the source_label carried by imported usage)",
+                  "disabled": true,
+                  "key": "source_label",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing.",
+                  "disabled": true,
+                  "key": "priced",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
+                  "disabled": true,
+                  "key": "tool",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
+                  "disabled": true,
+                  "key": "counts_toward_budget",
+                  "value": ""
+                },
+                {
+                  "description": "Only usage recorded in this workspace.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a case-insensitive substring of the served model, the model name the caller sent, the session label, the API key's name, or the billed user's alias. At most 200 characters. A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+                  "disabled": true,
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "requested_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/latency?group_by=&rank_by=&rank_order=&workspace_totals=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+            }
+          }
+        },
+        {
           "name": "Organization Usage Series",
           "request": {
             "description": "Time series split by one dimension, for the caller's organization.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage/series``, and kept in\nlockstep with the summary above for the reason that endpoint gives: the\ndashboard serializes one filter object for both, so a filter one of them\nignored would make the stacked chart disagree with the tiles beside it.",
@@ -7064,6 +7304,228 @@
                 }
               ],
               "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&rank_order=&group_by_tag=&workspace_totals=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+            }
+          }
+        },
+        {
+          "name": "Organization Usage Tools",
+          "request": {
+            "description": "Spend and volume per gateway-run tool, for the caller's organization.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage/tools``. A member's\nworkspace-totals ask is a breakdown by tool, so it is refused while tools\nare not among the dimensions a member may split by.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "usage",
+                "tools"
+              ],
+              "query": [
+                {
+                  "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+                  "disabled": true,
+                  "key": "workspace_totals",
+                  "value": ""
+                },
+                {
+                  "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "start_date",
+                  "value": ""
+                },
+                {
+                  "description": "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "end_date",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+                  "disabled": true,
+                  "key": "status",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly",
+                  "disabled": true,
+                  "key": "status_code",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "model",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single endpoint (e.g. '/v1/chat/completions')",
+                  "disabled": true,
+                  "key": "endpoint",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provider (e.g. 'openai')",
+                  "disabled": true,
+                  "key": "provider",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')",
+                  "disabled": true,
+                  "key": "source",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single session/project label (the source_label carried by imported usage)",
+                  "disabled": true,
+                  "key": "source_label",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing.",
+                  "disabled": true,
+                  "key": "priced",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
+                  "disabled": true,
+                  "key": "tool",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
+                  "disabled": true,
+                  "key": "counts_toward_budget",
+                  "value": ""
+                },
+                {
+                  "description": "Only usage recorded in this workspace.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a case-insensitive substring of the served model, the model name the caller sent, the session label, the API key's name, or the billed user's alias. At most 200 characters. A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+                  "disabled": true,
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "requested_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/tools?workspace_totals=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }
@@ -10708,6 +11170,238 @@
           }
         },
         {
+          "name": "Usage Latency",
+          "request": {
+            "description": "The 95th-percentile latency over the window, or per group of one breakdown.\n\nThe values ``/summary`` adds with ``include_p95`` and ``p95_by``, on their own,\nso a dashboard can show the totals and breakdowns first: sorting the window's\nlatencies is the slowest part of a summary. Same filters and window as ``/summary``.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "usage",
+                "latency"
+              ],
+              "query": [
+                {
+                  "description": "Report each group's p95 in this breakdown instead of the window's: the groups '/summary' would rank into its top N for the same 'rank_by' and 'rank_order', fold row excluded.",
+                  "disabled": true,
+                  "key": "group_by",
+                  "value": ""
+                },
+                {
+                  "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), 'requests', 'imported' (imported_cost), 'errors' (error_count), 'name' (the group's label where it has one, else its key, ignoring case) or 'p95' (the group's p95_latency_ms, which every row then carries). A group with no value to rank by comes last; ties fall back to the key, the group with no key last. 'p95' reads the latency of every group in the window, not just the top N, so it costs the most.",
+                  "disabled": true,
+                  "key": "rank_by",
+                  "value": ""
+                },
+                {
+                  "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+                  "disabled": true,
+                  "key": "rank_order",
+                  "value": ""
+                },
+                {
+                  "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "start_date",
+                  "value": ""
+                },
+                {
+                  "description": "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "end_date",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+                  "disabled": true,
+                  "key": "status",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly",
+                  "disabled": true,
+                  "key": "status_code",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "model",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single endpoint (e.g. '/v1/chat/completions')",
+                  "disabled": true,
+                  "key": "endpoint",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provider (e.g. 'openai')",
+                  "disabled": true,
+                  "key": "provider",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')",
+                  "disabled": true,
+                  "key": "source",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single session/project label (the source_label carried by imported usage)",
+                  "disabled": true,
+                  "key": "source_label",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing.",
+                  "disabled": true,
+                  "key": "priced",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
+                  "disabled": true,
+                  "key": "tool",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
+                  "disabled": true,
+                  "key": "counts_toward_budget",
+                  "value": ""
+                },
+                {
+                  "description": "Only usage recorded in this workspace.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a case-insensitive substring of the served model, the model name the caller sent, the session label, the API key's name, or the billed user's alias. At most 200 characters. A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+                  "disabled": true,
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "requested_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/usage/latency?group_by=&rank_by=&rank_order=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+            }
+          }
+        },
+        {
           "name": "Get Request Settlement",
           "request": {
             "description": "Look up a request's settled cost by the ``Otari-Request-ID`` it was sent (standalone).\n\nThis is how a caller recovers the cost of a request whose response never\ncarried one: a stream that failed or was disconnected mid-response, or a\nrequest that errored. An API key sees only the requests it made; the master\nkey sees any. Returns 404 until the request has settled (its rows are written\nby a background writer, so a lookup made the instant a stream closes can\nprecede them), and for an id that is unknown or belongs to another key, with\nno way to tell those apart. A stream that ended before the provider reported\nusage, and ran no gateway tools, writes no row, so its id stays 404.",
@@ -11260,6 +11954,220 @@
                 }
               ],
               "raw": "{{baseUrl}}/api/v1/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&rank_order=&group_by_tag=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+            }
+          }
+        },
+        {
+          "name": "Usage Tools",
+          "request": {
+            "description": "Calls, failures, spend and requests per gateway-run tool over the window.\n\nThe ``by_tool`` breakdown of ``/summary`` on its own, so a dashboard can show\nthe other figures without waiting for it: each tool reads its meters off\nevery row in the window. Same filters and window as ``/summary``.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "usage",
+                "tools"
+              ],
+              "query": [
+                {
+                  "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "start_date",
+                  "value": ""
+                },
+                {
+                  "description": "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)",
+                  "disabled": true,
+                  "key": "end_date",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+                  "disabled": true,
+                  "key": "status",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly",
+                  "disabled": true,
+                  "key": "status_code",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "model",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single endpoint (e.g. '/v1/chat/completions')",
+                  "disabled": true,
+                  "key": "endpoint",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provider (e.g. 'openai')",
+                  "disabled": true,
+                  "key": "provider",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')",
+                  "disabled": true,
+                  "key": "source",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to a single session/project label (the source_label carried by imported usage)",
+                  "disabled": true,
+                  "key": "source_label",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "tag",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
+                  "disabled": true,
+                  "key": "api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing.",
+                  "disabled": true,
+                  "key": "priced",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
+                  "disabled": true,
+                  "key": "tool",
+                  "value": ""
+                },
+                {
+                  "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
+                  "disabled": true,
+                  "key": "counts_toward_budget",
+                  "value": ""
+                },
+                {
+                  "description": "Only usage recorded in this workspace.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "Free-text search. An Otari-Request-ID or a usage row id matches exactly; otherwise a case-insensitive substring of the served model, the model name the caller sent, the session label, the API key's name, or the billed user's alias. At most 200 characters. A substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+                  "disabled": true,
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "description": "Filter to one or more model names as the caller sent them, before an alias or routing policy resolved them; repeatable. Rows written before the name was recorded carry none and never match. At most 50 per call.",
+                  "disabled": true,
+                  "key": "requested_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served by these models. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_model",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_user_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_api_key_id",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows from these provenance sources. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_source",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows with these statuses.",
+                  "disabled": true,
+                  "key": "exclude_status",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows served through these routing policies. At most 50 per call.",
+                  "disabled": true,
+                  "key": "policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+                  "disabled": true,
+                  "key": "exclude_policy_name",
+                  "value": ""
+                },
+                {
+                  "description": "true: only requests a routing policy served; false: only requests that named a model.",
+                  "disabled": true,
+                  "key": "routed",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows where these columns are empty (no key, user or session).",
+                  "disabled": true,
+                  "key": "is_null",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows billed for more than this many tokens (input plus output).",
+                  "disabled": true,
+                  "key": "tokens_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows that cost more than this many USD.",
+                  "disabled": true,
+                  "key": "cost_gt",
+                  "value": ""
+                },
+                {
+                  "description": "Only rows whose total latency exceeded this many milliseconds.",
+                  "disabled": true,
+                  "key": "latency_ms_gt",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/usage/tools?start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&tag=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }

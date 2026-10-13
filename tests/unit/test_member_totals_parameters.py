@@ -1,9 +1,9 @@
 """Every query parameter of a member's workspace-totals reads, classified.
 
 A member who asks for a workspace's totals (``workspace_totals=true`` on the
-organization usage summary, series and groups) may narrow and split them only in
-ways that name no person, key or session. This holds each query parameter of
-those three routes, read from the routes themselves, to one class:
+organization usage summary, latency, tools, series and groups) may narrow and
+split them only in ways that name no person, key or session. This holds each
+query parameter of those five routes, read from the routes themselves, to one class:
 
 * **allowlisted**: a filter the reader allows, ``MEMBER_TOTALS_FILTERS``;
 * **refused**: a filter the reader refuses, with why;
@@ -31,7 +31,13 @@ from gateway.exceptions.organizations_exceptions import WorkspaceTotalsNarrowing
 from gateway.models.tenancy import Workspace
 from gateway.services.organizations import MEMBER_TOTALS_FILTERS, WorkspaceReader
 
-_ROUTES = ("/organizations/me/usage/summary", "/organizations/me/usage/series", "/organizations/me/usage/groups")
+_ROUTES = (
+    "/organizations/me/usage/summary",
+    "/organizations/me/usage/latency",
+    "/organizations/me/usage/tools",
+    "/organizations/me/usage/series",
+    "/organizations/me/usage/groups",
+)
 
 ALLOWLISTED = {
     "start_date",

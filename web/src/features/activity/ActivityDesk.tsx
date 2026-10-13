@@ -103,7 +103,7 @@ export function ActivityDesk({
     log.series,
     log.time.chart,
     log.time.chartGrain,
-    log.time.now,
+    log.time.chartNow,
   )
   const barMs = barSpanMs(bars)
   const panel = (entry: NonNullable<typeof open>) => (
@@ -234,6 +234,8 @@ export function ActivityDesk({
 
         <ActivityTotals
           totals={log.totals}
+          isLoading={log.isLoadingTotals}
+          isLoadingP95={log.isLoadingP95}
           isFiltered={log.isFiltered}
           isCompact={isCompact}
           onUnpriced={act.unpriced}

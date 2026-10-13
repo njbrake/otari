@@ -233,7 +233,7 @@ export function mockUsageApi(
     revokesTotals?: boolean
     /** A promise a read waits on before it answers, to hold one back. */
     hold?: (
-      kind: "summary" | "series",
+      kind: "summary" | "series" | "latency" | "tools",
       params: URLSearchParams,
     ) => Promise<void> | undefined
   } = {},
@@ -298,15 +298,26 @@ export function mockUsageApi(
         // As the server does: only the breakdowns asked for are filled, and
         // `rank_order=asc` lists them from the other end, the rows with no key
         // and the fold still last. The fixture's rows are in descending order.
+        // A row carries its p95 only where `p95_by` named its breakdown or the
+        // ranking is by p95, as on the server.
         const asked = new Set(params.getAll("dimensions"))
         const isAscending = params.get("rank_order") === "asc"
+        const withP95 = (dimension: string, rows: UsageBreakdownRow[]) =>
+          params.get("p95_by") === dimension || params.get("rank_by") === "p95"
+            ? rows
+            : rows.map((row) => ({ ...row, p95_latency_ms: null }))
         return jsonResponse(
           Object.fromEntries(
             Object.entries(summary).map(([field, value]) => {
               if (!field.startsWith("by_")) return [field, value]
               if (!asked.has(field.slice(3))) return [field, []]
-              if (!isAscending || !Array.isArray(value)) return [field, value]
-              const rows = value as UsageBreakdownRow[]
+              if (field === "by_tool") return [field, value]
+              const ranked = withP95(
+                field.slice(3),
+                value as UsageBreakdownRow[],
+              )
+              if (!isAscending) return [field, ranked]
+              const rows = ranked
               const isRanked = (row: UsageBreakdownRow) =>
                 !row.is_other && row.key !== null
               return [
@@ -319,6 +330,37 @@ export function mockUsageApi(
             }),
           ),
         )
+      }
+      // The latency and the tools are read apart from the summary, so they
+      // answer from the same fixture: each group's p95 off its breakdown row.
+      if (url.includes("/usage/latency")) {
+        await opts.hold?.("latency", params)
+        const groupBy = params.get("group_by")
+        const rows = groupBy
+          ? ((summary as unknown as Record<string, UsageBreakdownRow[]>)[
+              `by_${groupBy}`
+            ] ?? [])
+          : []
+        return jsonResponse({
+          start_date: summary.start_date,
+          end_date: summary.end_date,
+          p95_latency_ms: groupBy ? null : summary.totals.p95_latency_ms,
+          group_by: groupBy,
+          groups: rows
+            .filter((row) => !row.is_other)
+            .map((row) => ({
+              key: row.key,
+              p95_latency_ms: row.p95_latency_ms ?? null,
+            })),
+        })
+      }
+      if (url.includes("/usage/tools")) {
+        await opts.hold?.("tools", params)
+        return jsonResponse({
+          start_date: summary.start_date,
+          end_date: summary.end_date,
+          tools: summary.by_tool,
+        })
       }
       if (url.includes("/usage/series")) {
         await opts.hold?.("series", params)
@@ -387,10 +429,10 @@ export function mockUsageApi(
   return { mock, calls }
 }
 
-/** Every usage read of one kind (`summary`, `series`), as parameters, oldest first. */
+/** Every usage read of one kind, as parameters, oldest first. */
 export function usageReads(
   calls: readonly FetchCall[],
-  kind: "summary" | "series",
+  kind: "summary" | "series" | "latency" | "tools",
 ): URLSearchParams[] {
   return calls
     .filter((call) => call.url.includes(`/usage/${kind}`))

@@ -191,18 +191,18 @@ describe("UsagePage", () => {
       page()
       // A manager's workspace view leads with Member.
       await waitFor(() =>
-        expect(lastBreakdown(calls).get("p95_by")).toBe("user"),
+        expect(lastBreakdown(calls).getAll("dimensions")).toEqual(["user"]),
       )
       await user.click(screen.getByRole("button", { name: "Model" }))
+      // Only the breakdown on screen: each dimension is a GROUP BY over the
+      // window. Its p95 and the tools are their own reads, so they never hold
+      // the table back.
       await waitFor(() =>
-        expect(lastBreakdown(calls).get("p95_by")).toBe("model"),
+        expect(lastBreakdown(calls).getAll("dimensions")).toEqual(["model"]),
       )
-      // Only the breakdown on screen and the tools under it: each dimension is
-      // a GROUP BY over the window.
-      expect(lastBreakdown(calls).getAll("dimensions")).toEqual([
-        "model",
-        "tool",
-      ])
+      expect(lastBreakdown(calls).get("p95_by")).toBeNull()
+      expect(usageReads(calls, "latency").at(-1)?.get("group_by")).toBe("model")
+      expect(usageReads(calls, "tools")).not.toHaveLength(0)
       expect(lastBreakdown(calls).get("session_details")).toBeNull()
       expect(usageReads(calls, "series").at(-1)?.get("group_by")).toBe("model")
       expect(pageUrl().textContent).toContain("by=model")
@@ -218,7 +218,7 @@ describe("UsagePage", () => {
         await screen.findByRole("menuitemradio", { name: "Policy" }),
       )
       await waitFor(() =>
-        expect(lastBreakdown(calls).get("p95_by")).toBe("policy"),
+        expect(lastBreakdown(calls).getAll("dimensions")).toEqual(["policy"]),
       )
       // A menu trigger, not a toggle: its name says what it holds.
       expect(
@@ -237,6 +237,101 @@ describe("UsagePage", () => {
       expect(within(opus).getByText("$22.40")).toBeInTheDocument()
       expect(within(opus).getByText("$1,101.35")).toBeInTheDocument()
       expect(within(opus).getByText("98% cached")).toBeInTheDocument()
+    })
+
+    it("lists the breakdown before its p95 arrives, then fills the column in", async () => {
+      let releaseLatency = () => {}
+      const latencyHeld = new Promise<void>((resolve) => {
+        releaseLatency = resolve
+      })
+      mockUsageApi({
+        viewer: "member",
+        hold: (kind) => (kind === "latency" ? latencyHeld : undefined),
+      })
+      page()
+      const row = await rowNamed(/deepseek-v4-flash/)
+      expect(within(row).getByText("$28.61")).toBeInTheDocument()
+      expect(within(row).queryByText("1.85 s")).toBeNull()
+      // A skeleton holds the cell, not the dash that means "none recorded".
+      expect(row.querySelector(".animate-pulse")).not.toBeNull()
+
+      releaseLatency()
+      await waitFor(() =>
+        expect(
+          within(
+            screen.getByRole("row", { name: /deepseek-v4-flash/ }),
+          ).getByText("1.85 s"),
+        ).toBeInTheDocument(),
+      )
+    })
+
+    it("holds the p95 cells as skeletons while a p95 ranking loads, not dashes", async () => {
+      const user = userEvent.setup()
+      mockUsageApi({
+        viewer: "member",
+        hold: (kind, params) =>
+          kind === "summary" && params.get("rank_by") === "p95"
+            ? new Promise<void>(() => {})
+            : undefined,
+      })
+      page()
+      await waitFor(async () =>
+        expect(
+          within(await rowNamed(/deepseek-v4-flash/)).getByText("1.85 s"),
+        ).toBeInTheDocument(),
+      )
+
+      await user.click(
+        screen.getByRole("columnheader", { name: /^p95 Latency/ }),
+      )
+      await waitFor(async () =>
+        expect(
+          (await rowNamed(/deepseek-v4-flash/)).querySelector(".animate-pulse"),
+        ).not.toBeNull(),
+      )
+      expect(
+        within(await rowNamed(/deepseek-v4-flash/)).queryByText("1.85 s"),
+      ).toBeNull()
+    })
+
+    it("holds the tiles as skeletons until the summary answers, rather than zeros", async () => {
+      let releaseSummary = () => {}
+      const summaryHeld = new Promise<void>((resolve) => {
+        releaseSummary = resolve
+      })
+      mockUsageApi({
+        viewer: "member",
+        hold: (kind) => (kind === "summary" ? summaryHeld : undefined),
+      })
+      const { container } = page()
+      await waitFor(() =>
+        expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(
+          3,
+        ),
+      )
+      // The tile's line under its figure waits too, rather than describing zeros.
+      expect(screen.queryByText(/from cache/)).toBeNull()
+
+      releaseSummary()
+      await rowNamed(/deepseek-v4-flash/)
+      expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(0)
+      expect(screen.getByText(/from cache/)).toBeInTheDocument()
+    })
+
+    it("keeps the tiles waiting on the summary when a read beside it fails first", async () => {
+      mockUsageApi({
+        viewer: "member",
+        hold: (kind) =>
+          kind === "summary"
+            ? new Promise<void>(() => {})
+            : kind === "tools"
+              ? Promise.reject(new Error("tools exploded"))
+              : undefined,
+      })
+      const { container } = page()
+
+      expect(await screen.findByRole("alert")).toBeInTheDocument()
+      expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(3)
     })
 
     it("pins the rows with no value last, explained", async () => {
@@ -346,7 +441,10 @@ describe("UsagePage", () => {
       mockUsageApi({
         viewer: "workspaceAdmin",
         hold: (kind, params) => {
-          if (kind === "summary" && params.get("p95_by") === "model") {
+          if (
+            kind === "summary" &&
+            params.getAll("dimensions").includes("model")
+          ) {
             return summaryHeld
           }
           if (kind === "series" && params.get("group_by") === "model") {
@@ -376,9 +474,12 @@ describe("UsagePage", () => {
       await rowNamed("claude-opus-5-5")
       screen.getByRole("slider", { name: /Filter by date/ }).focus()
       await user.keyboard("{ArrowRight}")
-      // The members' series are not drawn under Model while its own load.
-      const swatches = (await readout()).querySelectorAll("[aria-hidden]")
-      expect(swatches).toHaveLength(0)
+      // The members' series are not drawn under Model while its own load; the
+      // window's totals hold the bar as one series until they do.
+      const loading = await readout()
+      expect(within(loading).queryByText("Jordan M.")).toBeNull()
+      expect(within(loading).getByText("All groups")).toBeInTheDocument()
+      expect(loading.querySelectorAll("[aria-hidden]")).toHaveLength(1)
 
       releaseSeries()
       await waitFor(async () =>

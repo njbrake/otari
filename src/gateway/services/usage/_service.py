@@ -1,3 +1,6 @@
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import cast
@@ -6,8 +9,9 @@ from gateway.core.series import SERIES_TOP_N, dense_series
 from gateway.core.sql import UsageBucketGrain
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import SortOrder, UsageCondition, UsageSort
+from gateway.exceptions.shared_exceptions import UsageReadsBusyError
 from gateway.models.usage import UsageLog
-from gateway.repositories.usage import UsageReadRepository, UsageSummaryRepository
+from gateway.repositories.usage import UsageReadRepository, UsageRollupRepository, UsageRows, UsageSummaryRepository
 from gateway.schemas.usage import (
     ActivityGroupBy,
     ActivityGroupOrder,
@@ -19,12 +23,15 @@ from gateway.schemas.usage import (
     UsageActivityGroups,
     UsageBreakdownRankBy,
     UsageGroupedSeries,
+    UsageGroupLatency,
     UsageGroupRow,
+    UsageLatency,
     UsageRankBy,
     UsageSeriesGroup,
     UsageSessionRow,
     UsageSummary,
     UsageToolRow,
+    UsageTools,
 )
 from gateway.services.usage._summary import (
     ALL_SUMMARY_DIMENSIONS,
@@ -37,6 +44,38 @@ from gateway.services.usage._summary import (
     empty_usage_point,
     with_fold,
 )
+
+# How long a heavy read waits for its turn before the caller is told to come back.
+# A dashboard page that has waited this long has usually been left or reloaded, and
+# a read nobody is waiting for should not keep its place in the queue.
+HEAVY_READ_WAIT_S = 30.0
+
+
+@asynccontextmanager
+async def heavy_usage_read(uow: UnitOfWork, gate: asyncio.Semaphore) -> AsyncIterator[None]:
+    """Hold one of this worker's heavy usage reads for the body.
+
+    A dashboard page asks for several aggregates at once, and each can sort or
+    group every usage row in a long window, so running them all together is
+    what runs a small database out of memory; ``gate`` admits only so many.
+
+    Authentication and scope resolution have already read on the request's
+    session, and its transaction holds a pooled connection until something ends
+    it. The empty block ends it first, so a read waiting its turn holds no
+    connection. A read that waits past ``HEAVY_READ_WAIT_S`` is refused rather
+    than queued for good.
+    """
+    async with uow:
+        pass
+    try:
+        async with asyncio.timeout(HEAVY_READ_WAIT_S):
+            await gate.acquire()
+    except TimeoutError:
+        raise UsageReadsBusyError from None
+    try:
+        yield
+    finally:
+        gate.release()
 
 
 @dataclass(frozen=True)
@@ -56,10 +95,26 @@ class UsageReadService:
     tenant scope, so a filter is read one way however the rows are asked for.
     """
 
-    def __init__(self, uow: UnitOfWork, reads: UsageReadRepository, summaries: UsageSummaryRepository) -> None:
+    def __init__(
+        self,
+        uow: UnitOfWork,
+        reads: UsageReadRepository,
+        summaries: UsageSummaryRepository,
+        rollups: UsageRollupRepository,
+        heavy_reads: asyncio.Semaphore,
+    ) -> None:
         self._uow = uow
         self._reads = reads
         self._summaries = summaries
+        self._rollups = rollups
+        # Shared by every request this worker serves; see `heavy_usage_read`.
+        self._heavy_reads = heavy_reads
+
+    @asynccontextmanager
+    async def _heavy_read(self) -> AsyncIterator[None]:
+        """One block of the Unit of Work, opened once this worker's gate admits it."""
+        async with heavy_usage_read(self._uow, self._heavy_reads), self._uow:
+            yield
 
     async def page(
         self,
@@ -94,7 +149,7 @@ class UsageReadService:
 
     async def p95_latency_ms(self, conditions: list[UsageCondition]) -> int | None:
         """Nearest-rank 95th-percentile latency over the requests the conditions leave."""
-        async with self._uow:
+        async with self._heavy_read():
             return await self._reads.p95_latency_ms(conditions)
 
     async def activity_groups(
@@ -111,7 +166,7 @@ class UsageReadService:
         limit: int,
     ) -> UsageActivityGroups:
         """A page of the log's groups over an already-resolved window, and how many groups the filters leave."""
-        async with self._uow:
+        async with self._heavy_read():
             rows, total = await self._reads.activity_groups(
                 group_by=group_by,
                 conditions=conditions,
@@ -157,12 +212,15 @@ class UsageReadService:
         # ``none`` is dropped rather than rejected: it exists only so a caller can send
         # an empty selection, and it never contributes a dimension of its own.
         requested: set[str] = ALL_SUMMARY_DIMENSIONS if dimensions is None else {d for d in dimensions if d != "none"}
-        async with self._uow:
-            totals = await self._summaries.totals(conditions, status)
+        async with self._heavy_read():
+            # Ranked by p95, every breakdown ranks single rows, so none of them reads the rollups.
+            rows = await self._rollups.rows(conditions, start, end, bucket=bucket, exact=rank_by == "p95")
+            totals = await self._summaries.totals(rows, status)
             breakdowns = {
                 name: with_fold(
                     await self._breakdown(
                         name,
+                        rows,
                         conditions,
                         limit=cap,
                         status=status,
@@ -181,11 +239,11 @@ class UsageReadService:
             # no status code; capped rather than folded, since a null key would collide
             # with the real "no code recorded" group.
             errors_by_status_code = (
-                await self._summaries.errors_by_status_code(conditions, limit=BREAKDOWN_TOP_N)
+                await self._summaries.errors_by_status_code(rows, limit=BREAKDOWN_TOP_N)
                 if ERROR_TAXONOMY_DIMENSION in requested
                 else []
             )
-            by_tool = await self._tool_breakdown(conditions) if TOOL_DIMENSION in requested else []
+            by_tool = await self._tool_breakdown(rows) if TOOL_DIMENSION in requested else []
             by_tag = (
                 with_fold(
                     await self._summaries.tag_breakdown(
@@ -199,7 +257,7 @@ class UsageReadService:
             )
             if include_p95:
                 totals = totals.model_copy(update={"p95_latency_ms": await self._reads.p95_latency_ms(conditions)})
-            populated = await self._summaries.series(conditions, status_filter=status, bucket=bucket)
+            populated = await self._summaries.series(rows, status_filter=status, bucket=bucket)
         return UsageSummary(
             start_date=start.isoformat(),
             end_date=end.isoformat(),
@@ -226,6 +284,7 @@ class UsageReadService:
     async def _breakdown(
         self,
         dimension: BreakdownDimension,
+        rows: UsageRows,
         conditions: list[UsageCondition],
         *,
         limit: int,
@@ -241,8 +300,9 @@ class UsageReadService:
         key name are the extra pass ``with_details`` asks for.
         """
         is_session = dimension == "source_label"
-        rows = await self._summaries.breakdown(
+        groups = await self._summaries.breakdown(
             dimension,
+            rows,
             conditions,
             limit=limit,
             status_filter=status,
@@ -250,16 +310,70 @@ class UsageReadService:
             rank_by=rank_by,
             rank_order=rank_order,
         )
-        keys = [row.key for row in rows]
+        keys = [group.key for group in groups]
         if with_p95:
             p95 = await self._summaries.group_p95_latency_ms(dimension, keys, conditions)
-            rows = [row.model_copy(update={"p95_latency_ms": p95.get(row.key)}) for row in rows]
+            groups = [group.model_copy(update={"p95_latency_ms": p95.get(group.key)}) for group in groups]
         if is_session and with_details:
-            details = await self._summaries.session_details(keys, conditions, status_filter=status)
-            rows = [row.model_copy(update=asdict(details[row.key])) if row.key in details else row for row in rows]
-        return rows
+            details = await self._summaries.session_details(keys, rows, status_filter=status)
+            groups = [
+                group.model_copy(update=asdict(details[group.key])) if group.key in details else group
+                for group in groups
+            ]
+        return groups
 
-    async def _tool_breakdown(self, conditions: list[UsageCondition]) -> list[UsageToolRow]:
+    async def latency(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        conditions: list[UsageCondition],
+        status: str | None,
+        group_by: BreakdownDimension | None,
+        rank_by: UsageBreakdownRankBy = "cost",
+        rank_order: SortOrder = "desc",
+    ) -> UsageLatency:
+        """The window's p95 latency, or that of each group ``summary`` would rank into ``group_by``'s top N.
+
+        The groups are ranked again here rather than named by the caller, so a
+        session breakdown's 250 keys never travel in a query string. The ranking
+        breaks ties by key, so the groups match the summary's for the same window.
+        """
+        async with self._heavy_read():
+            if group_by is None:
+                overall = await self._reads.p95_latency_ms(conditions)
+                rows: list[UsageGroupRow] = []
+            else:
+                overall = None
+                usage = await self._rollups.rows(conditions, start, end, bucket="hour", exact=rank_by == "p95")
+                rows = await self._summaries.breakdown(
+                    group_by,
+                    usage,
+                    conditions,
+                    limit=SUMMARY_BREAKDOWNS[group_by],
+                    status_filter=status,
+                    rank_by=rank_by,
+                    rank_order=rank_order,
+                )
+                # Ranked by p95, the breakdown already carries every row's.
+                if rank_by != "p95":
+                    p95 = await self._summaries.group_p95_latency_ms(group_by, [row.key for row in rows], conditions)
+                    rows = [row.model_copy(update={"p95_latency_ms": p95.get(row.key)}) for row in rows]
+        return UsageLatency(
+            start_date=start.isoformat(),
+            end_date=end.isoformat(),
+            p95_latency_ms=overall,
+            group_by=group_by,
+            groups=[UsageGroupLatency(key=row.key, p95_latency_ms=row.p95_latency_ms) for row in rows],
+        )
+
+    async def tools(self, *, start: datetime, end: datetime, conditions: list[UsageCondition]) -> UsageTools:
+        """The window's per-tool calls, failures, spend and requests, the summary's ``by_tool`` on its own."""
+        async with self._heavy_read():
+            tools = await self._tool_breakdown(await self._rollups.rows(conditions, start, end, bucket="hour"))
+        return UsageTools(start_date=start.isoformat(), end_date=end.isoformat(), tools=tools)
+
+    async def _tool_breakdown(self, rows: UsageRows) -> list[UsageToolRow]:
         """Per-tool calls, failures, spend and requests, biggest spend first.
 
         A tool no row ran is left out, so a deployment that never ran one gets an
@@ -272,8 +386,8 @@ class UsageReadService:
         requests, so the two answer different questions on purpose: "how much tool work
         did we do" and "how many requests used a tool".
         """
-        rows = [await self._summaries.tool_usage(tool, conditions) for tool in GATEWAY_TOOL_NAMES]
-        return sorted((row for row in rows if row is not None), key=lambda r: r.cost, reverse=True)
+        tools = await self._summaries.tool_usage(GATEWAY_TOOL_NAMES, rows)
+        return sorted(tools, key=lambda tool: tool.cost, reverse=True)
 
     async def grouped_series(
         self,
@@ -288,10 +402,11 @@ class UsageReadService:
     ) -> UsageGroupedSeries:
         """The window's top groups by ``rank_by``, each a series of its own, and the rest folded into ``other``."""
         dimension = SERIES_BREAKDOWNS[group_by]
-        async with self._uow:
-            totals = await self._summaries.totals(conditions, status)
+        async with self._heavy_read():
+            rows = await self._rollups.rows(conditions, start, end, bucket=bucket)
+            totals = await self._summaries.totals(rows, status)
             top = await self._summaries.breakdown(
-                dimension, conditions, limit=SERIES_TOP_N, status_filter=status, rank_by=rank_by
+                dimension, rows, conditions, limit=SERIES_TOP_N, status_filter=status, rank_by=rank_by
             )
             groups = with_fold(
                 [UsageSeriesGroup.model_validate(row.model_dump(exclude={"p95_latency_ms"})) for row in top],
@@ -300,7 +415,7 @@ class UsageReadService:
             )
             points = await self._summaries.grouped_series(
                 dimension,
-                conditions,
+                rows,
                 status_filter=status,
                 bucket=bucket,
                 named={g.key for g in groups if g.key is not None},

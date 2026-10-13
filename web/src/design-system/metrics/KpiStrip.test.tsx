@@ -12,7 +12,7 @@ function track(label: string): HTMLElement {
 describe("KpiStrip", () => {
   it("lays five tracks by default", () => {
     render(
-      <KpiStrip isEmpty={false}>
+      <KpiStrip>
         <span>cell</span>
       </KpiStrip>,
     )
@@ -25,7 +25,7 @@ describe("KpiStrip", () => {
     // the end of the row, which is what the tenant Overview would get where it
     // withholds the budget cell from a member.
     render(
-      <KpiStrip isEmpty={false} columns={4}>
+      <KpiStrip columns={4}>
         <span>cell</span>
       </KpiStrip>,
     )
@@ -41,7 +41,7 @@ describe("KpiStrip", () => {
     // right rule on every cell but the last ruled off the end of each wrapped
     // row against nothing.
     render(
-      <KpiStrip isEmpty={false}>
+      <KpiStrip>
         <KpiCell label="Spend" value="$1" />
         <KpiCell label="Requests" value="2" />
       </KpiStrip>,

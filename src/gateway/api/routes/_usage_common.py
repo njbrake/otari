@@ -159,6 +159,10 @@ P95_BY_DESC = (
     "'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. "
     "Implied for every breakdown by 'rank_by=p95'."
 )
+LATENCY_GROUP_BY_DESC = (
+    "Report each group's p95 in this breakdown instead of the window's: the groups '/summary' would rank "
+    "into its top N for the same 'rank_by' and 'rank_order', fold row excluded."
+)
 RANK_BY_DESC = (
     "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' "
     "(all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output), "

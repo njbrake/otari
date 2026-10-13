@@ -262,6 +262,7 @@ export interface FoldedSeries {
 }
 
 const otherKey = "other"
+const totalKey = "total"
 const groupKey = (key: string | null) => `g:${key ?? ""}`
 
 /**
@@ -311,6 +312,40 @@ export function foldSeries(
       row.is_other
         ? OTHER_COLOR
         : (colors.get(groupKey(row.key)) ?? OTHER_COLOR),
+  }
+}
+
+/**
+ * The summary's totals as one series, for the chart until the breakdown's own
+ * series arrives. The totals do not depend on the breakdown, so after a switch
+ * the bars keep their shape and only their colors arrive later; where the
+ * filters moved too, they are the last filters' totals, as the tiles are, until
+ * the new summary lands. Tokens are billed input plus output, the figure a
+ * grouped point's `tokens` is, so the bars do not move when the groups land.
+ */
+export function totalSeries(
+  points: readonly UsageSeriesPoint[],
+  metric: Metric,
+  withSubscription: boolean,
+): FoldedSeries {
+  return {
+    series: [{ key: totalKey, label: "All groups", color: OTHER_COLOR }],
+    points: points.map((point) => ({
+      start: Date.parse(point.bucket_start),
+      values: {
+        [totalKey]: metricOf(
+          {
+            cost: point.cost,
+            imported_cost: point.imported_cost,
+            tokens: point.input_tokens + point.output_tokens,
+            requests: point.requests,
+          },
+          metric,
+          withSubscription,
+        ),
+      },
+    })),
+    colorOf: () => OTHER_COLOR,
   }
 }
 

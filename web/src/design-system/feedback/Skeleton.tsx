@@ -31,8 +31,10 @@ export function Skeleton({
         : { "aria-hidden": true })}
       // `animate-pulse` guarded, like every other transition in the product:
       // an animation that runs until data arrives is exactly the kind a
-      // vestibular disorder cannot dismiss.
-      className={`block animate-pulse bg-surface-subtle motion-reduce:animate-none ${className}`}
+      // vestibular disorder cannot dismiss. The fill is an alpha token, so it
+      // shows on whichever ground it lands on: an opaque surface step vanished
+      // on a band painted the same step (Activity's totals line).
+      className={`block animate-pulse bg-border-strong motion-reduce:animate-none ${className}`}
     />
   )
 }

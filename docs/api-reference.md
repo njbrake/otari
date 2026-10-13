@@ -182,12 +182,12 @@ Anthropic accepts there, which also names the billed user, as it always has, and
 is not a tag. Responses forwards `metadata` as before, minus
 `spend_logs_metadata`, because the Responses API stores it.
 
-The usage endpoints (`GET /api/v1/usage`, `/count`, `/summary`, `/series`, and
-their `/api/v1/organizations/me/usage` counterparts) filter by tag with a
-repeatable `tag=key:value`. Values for the same key match any of them, and
-different keys must all match. `/summary` also takes `group_by_tag=<key>` and
-returns spend by that tag's values as `by_tag`, with untagged rows under a null
-key:
+The usage endpoints (`GET /api/v1/usage`, `/count`, `/summary`, `/series`,
+`/latency`, `/tools`, and their `/api/v1/organizations/me/usage` counterparts)
+filter by tag with a repeatable `tag=key:value`. Values for the same key match
+any of them, and different keys must all match. `/summary` also takes
+`group_by_tag=<key>` and returns spend by that tag's values as `by_tag`, with
+untagged rows under a null key:
 
 ```
 GET /api/v1/usage/summary?group_by_tag=purpose&dimensions=none

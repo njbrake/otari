@@ -11,6 +11,7 @@ layer, with identities built at whatever role a case needs, because the API
 cannot act as a plain member.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -20,6 +21,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import API_ROOT, GatewayConfig
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import Budget, ScopedBudget
 from gateway.models.tenancy import Organization, User, Workspace
@@ -466,6 +468,8 @@ def _service(db: AsyncSession) -> OverviewService:
         WorkspaceService(db, **membership_writes(db)),
         visibility_service(db),
         GatewayConfig(),
+        UnitOfWork(db),
+        asyncio.Semaphore(2),
     )
 
 

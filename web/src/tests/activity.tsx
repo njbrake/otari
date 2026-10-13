@@ -180,6 +180,8 @@ export function mockApi(
     spend?: WorkspaceSpend | null
     /** Fail these reads, by a substring of their path. */
     failing?: string[]
+    /** A promise a read waits on before it answers, to hold one back. */
+    hold?: (read: "latency", params: URLSearchParams) => Promise<void>
   } = {},
 ) {
   const rows = opts.rows ?? []
@@ -256,6 +258,16 @@ export function mockApi(
           end_date: "",
           groups,
           total: term ? groups.length : (opts.groupsTotal ?? groups.length),
+        })
+      }
+      if (url.includes("/usage/latency")) {
+        await opts.hold?.("latency", params)
+        return jsonResponse({
+          start_date: "",
+          end_date: "",
+          p95_latency_ms: totals(opts.totals).p95_latency_ms,
+          group_by: null,
+          groups: [],
         })
       }
       if (url.includes("/usage/summary")) {

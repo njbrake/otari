@@ -22,7 +22,7 @@ from gateway.core.sql import bucket_expr, canonical_bucket
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import SortOrder, UsageRefinements, refinement_conditions, usage_search_condition
 from gateway.models.usage import UsageLog
-from gateway.repositories.usage import UsageReadRepository, UsageSummaryRepository
+from gateway.repositories.usage import UsageReadRepository, UsageRollupRepository, UsageRows, UsageSummaryRepository
 from gateway.repositories.usage.usage_read_repository import _ordering
 from gateway.services.usage import UsageReadService
 
@@ -32,7 +32,14 @@ WORKSPACE = uuid.uuid4()
 
 def _reads(db: AsyncSession) -> UsageReadService:
     uow = UnitOfWork(db)
-    return UsageReadService(uow, UsageReadRepository(uow), UsageSummaryRepository(uow))
+    return UsageReadService(
+        uow, UsageReadRepository(uow), UsageSummaryRepository(uow), UsageRollupRepository(uow), asyncio.Semaphore(2)
+    )
+
+
+async def _rows(uow: UnitOfWork) -> UsageRows:
+    """Every row, which on SQLite is always the rows themselves."""
+    return await UsageRollupRepository(uow).rows([], T0 - timedelta(days=1), T0 + timedelta(days=1), bucket="hour")
 
 
 def _run[T](body: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -223,7 +230,7 @@ def test_the_channel_breakdown_on_sqlite_tells_the_three_channels_apart() -> Non
         await db.commit()
         uow = UnitOfWork(db)
         async with uow:
-            rows = await UsageSummaryRepository(uow).breakdown("channel", [], limit=None)
+            rows = await UsageSummaryRepository(uow).breakdown("channel", await _rows(uow), [], limit=None)
         return {row.key: row.requests for row in rows}
 
     assert _run(body) == {"imported": 1, "playground": 2, "api": 2}
@@ -252,10 +259,10 @@ def test_ranking_by_p95_on_sqlite_orders_as_postgresql_does() -> None:
             repo = UsageSummaryRepository(uow)
             ranked = {}
             for order in ("desc", "asc"):
-                rows = await repo.breakdown("policy", [], limit=None, rank_by="p95", rank_order=order)
+                rows = await repo.breakdown("policy", await _rows(uow), [], limit=None, rank_by="p95", rank_order=order)
                 ranked[order] = [(row.key, row.p95_latency_ms) for row in rows]
             # The limit applies after the ranking, so it keeps the slowest.
-            rows = await repo.breakdown("policy", [], limit=2, rank_by="p95")
+            rows = await repo.breakdown("policy", await _rows(uow), [], limit=2, rank_by="p95")
             ranked["top"] = [(row.key, row.p95_latency_ms) for row in rows]
         return ranked
 
@@ -279,7 +286,7 @@ def test_ranking_sessions_by_p95_on_sqlite_keeps_their_span() -> None:
         uow = UnitOfWork(db)
         async with uow:
             rows = await UsageSummaryRepository(uow).breakdown(
-                "source_label", [], limit=None, with_span=True, rank_by="p95"
+                "source_label", await _rows(uow), [], limit=None, with_span=True, rank_by="p95"
             )
         return [(row.key, row.p95_latency_ms, getattr(row, "first_at", None)) for row in rows]
 
@@ -301,7 +308,10 @@ def test_ranking_by_name_on_sqlite_reads_the_label_and_ignores_case() -> None:
             orders: tuple[SortOrder, ...] = ("asc", "desc")
             return {
                 order: [
-                    row.key for row in await repo.breakdown("api_key", [], limit=None, rank_by="name", rank_order=order)
+                    row.key
+                    for row in await repo.breakdown(
+                        "api_key", await _rows(uow), [], limit=None, rank_by="name", rank_order=order
+                    )
                 ]
                 for order in orders
             }
@@ -316,8 +326,8 @@ def test_ranking_by_failures_on_sqlite_brings_a_cheap_group_into_the_top_n() -> 
         uow = UnitOfWork(db)
         async with uow:
             repo = UsageSummaryRepository(uow)
-            by_cost = await repo.breakdown("model", [], limit=1)
-            by_errors = await repo.breakdown("model", [], limit=1, rank_by="errors")
+            by_cost = await repo.breakdown("model", await _rows(uow), [], limit=1)
+            by_errors = await repo.breakdown("model", await _rows(uow), [], limit=1, rank_by="errors")
         return [row.key for row in by_cost], [row.key for row in by_errors]
 
     assert _run(body) == (["dear"], ["flaky"])

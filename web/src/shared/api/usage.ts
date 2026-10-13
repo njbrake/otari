@@ -8,6 +8,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query"
 import type {
+  BreakdownDimension,
   InFlightResponse,
   SummaryDimension,
   UsageActivityGroupBy,
@@ -21,6 +22,7 @@ import type {
   UsageGroupBy,
   UsageGroupedSeries,
   UsageGroupRow,
+  UsageLatency,
   UsageMutationSelection,
   UsageRankBy,
   UsageRankOrder,
@@ -29,8 +31,14 @@ import type {
   UsageSetPriceResult,
   UsageSortKey,
   UsageSummary,
+  UsageTools,
 } from "@/client"
-import { ApiError, apiFetch, longRequestSignal } from "@/shared/api/client"
+import {
+  ApiError,
+  apiFetch,
+  heavyReadSignal,
+  longRequestSignal,
+} from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
 import {
   ORGANIZATION_SPEND_CEILINGS,
@@ -155,12 +163,19 @@ export function useUsageScope(scope: UsageScope = "caller"): {
 }
 
 /**
+ * What every usage aggregate the gateway runs a few at a time shares: no retry.
+ * A busy refusal, a failed query or a read past its deadline would put the same
+ * work back in the same queue, so a failed one waits for the page's refresh.
+ */
+export const HEAVY_READ = { retry: false } as const
+
+/**
  * A usage scope, or a member's ask for a workspace's aggregates
- * (`workspace_totals=true`), which only the organization surface's summary and
- * series take. The server grants it while the workspace shares its totals with
- * members, split by model, provider or status code and with no filter naming a
- * person, key or session; the list and the count have no such ask, so a member
- * never reads anyone else's rows.
+ * (`workspace_totals=true`), which the organization surface's summary, latency,
+ * series and groups take. The server grants it while the workspace shares its
+ * totals with members, split by model, provider or status code and with no
+ * filter naming a person, key or session; the list and the count have no such
+ * ask, so a member never reads anyone else's rows.
  */
 export type TotalsScope = UsageScope | "workspace_totals"
 
@@ -185,9 +200,15 @@ function useTotalsScope(scope: TotalsScope) {
      * totals says the setting the page was laid out from has moved, so the
      * workspace's visibility is read again, with the overview that carries it.
      */
-    read: async <T>(path: string, filters: UsageFilters): Promise<T> => {
+    read: async <T>(
+      path: string,
+      filters: UsageFilters,
+      signal: AbortSignal,
+    ): Promise<T> => {
       try {
-        return await apiFetch<T>(`${resolved.base}${path}`)
+        return await apiFetch<T>(`${resolved.base}${path}`, {
+          signal: heavyReadSignal(signal),
+        })
       } catch (error) {
         const workspaceId = filters.workspace_id
         if (
@@ -527,7 +548,7 @@ export function useUnpricedUsage(
       workspaceId,
       windowSeconds,
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams({
         workspace_id: workspaceId || undefined,
         status: "success",
@@ -539,6 +560,7 @@ export function useUnpricedUsage(
       params.append("dimensions", "model")
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
@@ -654,7 +676,7 @@ export function useUsageSummary(
       bucket,
       dimensions ?? "all",
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = scope.params(filters)
       params.set("bucket", bucket)
       // A repeated query param has no empty-list form, so an empty selection goes
@@ -665,26 +687,28 @@ export function useUsageSummary(
           params.append("dimensions", dimension)
         })
       }
-      return scope.read<UsageSummary>(`/summary?${params.toString()}`, filters)
+      return scope.read<UsageSummary>(
+        `/summary?${params.toString()}`,
+        filters,
+        signal,
+      )
     },
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+    ...HEAVY_READ,
   })
 }
 
 // The Activity page's totals line and chart: the series and the totals, and
-// no breakdowns. The 95th-percentile latency sorts the window's latencies, so
-// the server computes it only when asked: the totals line asks, the chart does
-// not. `include_absorbed` is the list's and count's alone, so it is not sent:
-// the totals count earlier failed attempts separately either way.
+// no breakdowns. The totals line's p95 is `useUsageLatency`'s, read apart so
+// these figures are not held behind its sort. `include_absorbed` is the list's
+// and count's alone, so it is not sent: the totals count earlier failed
+// attempts separately either way.
 export function useActivityTotals(
   filters: UsageFilters,
   bucket: UsageBucket,
-  {
-    enabled = true,
-    withP95 = false,
-  }: { enabled?: boolean; withP95?: boolean } = {},
+  { enabled = true }: { enabled?: boolean } = {},
 ) {
   const scope = useUsageScope()
   const summaryFilters = withoutListOnly(filters)
@@ -696,20 +720,20 @@ export function useActivityTotals(
       scope.base,
       summaryFilters,
       bucket,
-      withP95,
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams(summaryFilters)
       params.set("bucket", bucket)
       params.append("dimensions", "none")
-      if (withP95) params.set("include_p95", "true")
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 10_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -762,7 +786,7 @@ export function useActivityGroups(
       order,
       groupBy,
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams(groupFilters)
       params.set("group_by", groupBy)
       params.set("limit", String(ACTIVITY_GROUP_LIMIT))
@@ -770,12 +794,14 @@ export function useActivityGroups(
       if (order !== "recent") params.set("order", order)
       return apiFetch<UsageActivityGroups>(
         `${scope.base}/groups?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey.at(-1) === groupBy ? previous : undefined,
     staleTime: 10_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -791,29 +817,20 @@ export type UsageBreakdownRow = UsageGroupRow &
     Pick<UsageSessionRow, "first_at" | "last_at" | "source" | "api_key_name">
   >
 
-// The Usage page's one summary: the totals and series, the breakdown on screen
-// with its per-group p95 (and a session's origin, for the session breakdown),
-// ranked and ordered by the table's sort, and the tools the page lists under
-// it. No other dimension, since each one is a GROUP BY over the window.
-//
-// `allowedDimensions` is the reader's reach where it limits the splits (a
-// member's ask for a workspace's totals): the tools pass is asked for only
-// where it is among them. Left out, any split is allowed; an empty list would
-// say none is.
+// The Usage page's one summary: the totals and series, and the breakdown on
+// screen (with a session's origin, for the session breakdown), ranked and
+// ordered by the table's sort. No other dimension, since each one is a GROUP BY
+// over the window. The per-group p95 and the tools are `useUsageLatency`'s and
+// `useUsageTools`', read apart because they are the slow passes.
 export function useUsageBreakdown(
   filters: UsageFilters,
   bucket: UsageBucket,
-  dimension: SummaryDimension,
+  dimension: BreakdownDimension,
   rank: { by: UsageBreakdownRankBy; order: UsageRankOrder },
   {
     enabled = true,
     usageScope = "caller",
-    allowedDimensions,
-  }: {
-    enabled?: boolean
-    usageScope?: TotalsScope
-    allowedDimensions?: readonly SummaryDimension[]
-  } = {},
+  }: { enabled?: boolean; usageScope?: TotalsScope } = {},
 ) {
   const scope = useTotalsScope(usageScope)
   return useQuery({
@@ -826,26 +843,19 @@ export function useUsageBreakdown(
       bucket,
       rank.by,
       rank.order,
-      allowedDimensions ?? "any",
       dimension,
     ],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const params = scope.params(filters)
       params.set("bucket", bucket)
-      const withTools = allowedDimensions?.includes("tool") ?? true
-      const dimensions: SummaryDimension[] = withTools
-        ? [dimension, "tool"]
-        : [dimension]
-      for (const one of new Set(dimensions)) {
-        params.append("dimensions", one)
-      }
-      params.set("p95_by", dimension)
+      params.append("dimensions", dimension)
       params.set("rank_by", rank.by)
       params.set("rank_order", rank.order)
       if (dimension === "source_label") params.set("session_details", "true")
       const summary = await scope.read<UsageSummary>(
         `/summary?${params.toString()}`,
         filters,
+        signal,
       )
       return { dimension, summary }
     },
@@ -856,6 +866,79 @@ export function useUsageBreakdown(
     // last order's rows on screen until the server's arrive.
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+    ...HEAVY_READ,
+  })
+}
+
+// The 95th-percentile latency over the window, or with `groupBy` that of each
+// group the breakdown ranked by `rank` lists. Its own request because it sorts
+// the window's latencies, the slowest part of a summary, so the figures beside
+// it need not wait. Tagged with what it answers, like the breakdown, so a
+// previous grouping's values are never matched to this one's rows.
+export function useUsageLatency(
+  filters: UsageFilters,
+  {
+    groupBy,
+    rank,
+    enabled = true,
+    usageScope = "caller",
+  }: {
+    groupBy?: BreakdownDimension
+    rank?: { by: UsageBreakdownRankBy; order: UsageRankOrder }
+    enabled?: boolean
+    usageScope?: TotalsScope
+  } = {},
+) {
+  const scope = useTotalsScope(usageScope)
+  const latencyFilters = withoutListOnly(filters)
+  return useQuery({
+    queryKey: [
+      USAGE,
+      "latency",
+      scope.keyBase,
+      latencyFilters,
+      groupBy ?? null,
+      rank?.by ?? null,
+      rank?.order ?? null,
+    ],
+    queryFn: ({ signal }) => {
+      const params = scope.params(latencyFilters)
+      if (groupBy) params.set("group_by", groupBy)
+      if (rank) {
+        params.set("rank_by", rank.by)
+        params.set("rank_order", rank.order)
+      }
+      return scope.read<UsageLatency>(
+        `/latency?${params.toString()}`,
+        latencyFilters,
+        signal,
+      )
+    },
+    enabled: enabled && scope.isReady,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    ...HEAVY_READ,
+  })
+}
+
+// The gateway-run tools the Usage page lists under its breakdown. Its own
+// request because each tool reads its meters off every row in the window.
+export function useUsageTools(
+  filters: UsageFilters,
+  { enabled = true, usageScope = "caller" as UsageScope } = {},
+) {
+  const scope = useUsageScope(usageScope)
+  return useQuery({
+    queryKey: [USAGE, "tools", scope.base, filters],
+    queryFn: ({ signal }) =>
+      apiFetch<UsageTools>(
+        `${scope.base}/tools?${usageParams(filters).toString()}`,
+        { signal: heavyReadSignal(signal) },
+      ),
+    enabled: enabled && scope.isReady,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -881,7 +964,7 @@ export function useUsageGroupedSeries(
       rankBy,
       groupBy,
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = scope.params(filters)
       params.set("bucket", bucket)
       params.set("group_by", groupBy)
@@ -889,6 +972,7 @@ export function useUsageGroupedSeries(
       return scope.read<UsageGroupedSeries>(
         `/series?${params.toString()}`,
         filters,
+        signal,
       )
     },
     enabled: enabled && scope.isReady,
@@ -897,9 +981,6 @@ export function useUsageGroupedSeries(
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey.at(-1) === groupBy ? previous : undefined,
     staleTime: 30_000,
-    // A 404 is version skew (a gateway older than this dashboard, e.g. not yet
-    // restarted onto the build that ships it); retrying cannot fix that.
-    retry: (failureCount, error) =>
-      !(error instanceof ApiError && error.status === 404) && failureCount < 3,
+    ...HEAVY_READ,
   })
 }

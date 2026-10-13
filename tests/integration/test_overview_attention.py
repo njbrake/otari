@@ -9,6 +9,7 @@ The HTTP surface is covered at the end: month parsing, the future-month
 refusal and the fields the page reads.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -20,6 +21,7 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import API_ROOT, GatewayConfig
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.organizations_exceptions import WorkspaceTotalsHiddenError
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import ALIGN_MONTH, ALIGN_WEEK, SCOPE_API_TOKEN, SCOPE_WORKSPACE, Budget, ScopedBudget
@@ -165,6 +167,8 @@ def _service(db: AsyncSession, config: GatewayConfig | None = None) -> OverviewS
         WorkspaceService(db, **membership_writes(db)),
         visibility_service(db),
         config or GatewayConfig(),
+        UnitOfWork(db),
+        asyncio.Semaphore(2),
     )
 
 

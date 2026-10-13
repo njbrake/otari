@@ -478,8 +478,18 @@ class LabelJoin(NamedTuple):
     label: Any
 
 
-USER_LABEL = LabelJoin(entity=User, on=User.user_id == UsageLog.user_id, label=User.alias)
-API_KEY_LABEL = LabelJoin(entity=APIKey, on=APIKey.id == UsageLog.api_key_id, label=APIKey.key_name)
+def user_label(user_id: Any) -> LabelJoin:
+    """Name the billed user ``user_id`` holds, in the same GROUP BY as the usage rows."""
+    return LabelJoin(entity=User, on=User.user_id == user_id, label=User.alias)
+
+
+def api_key_label(api_key_id: Any) -> LabelJoin:
+    """Name the API key ``api_key_id`` holds, in the same GROUP BY as the usage rows."""
+    return LabelJoin(entity=APIKey, on=APIKey.id == api_key_id, label=APIKey.key_name)
+
+
+USER_LABEL = user_label(UsageLog.user_id)
+API_KEY_LABEL = api_key_label(UsageLog.api_key_id)
 
 # The row's API key, aliased so it never collides with the key label join, for the
 # credential half of the Playground rule. The channel breakdown groups by the channel,

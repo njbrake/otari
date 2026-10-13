@@ -53,7 +53,12 @@ from gateway.repositories.tools import (
     WorkspaceCodeExecutionPolicyRepository,
     WorkspaceWebSearchKeyOverrideRepository,
 )
-from gateway.repositories.usage import UsageReadRepository, UsageRetentionRepository, UsageSummaryRepository
+from gateway.repositories.usage import (
+    UsageReadRepository,
+    UsageRetentionRepository,
+    UsageRollupRepository,
+    UsageSummaryRepository,
+)
 from gateway.repositories.users_repository import get_active_user
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets import BudgetMembershipListener, BudgetService
@@ -89,7 +94,7 @@ from gateway.services.tools import (
     WorkspaceCodeExecutionPolicyService,
     WorkspaceSearchKeys,
 )
-from gateway.services.usage import TelemetryRetentionService, UsageReadService
+from gateway.services.usage import TelemetryRetentionService, UsageReadService, UsageRollupService
 from gateway.services.workspace_scope import default_workspace_id
 
 # Legacy module-level fallback. Config now lives on ``app.state.config`` (set in
@@ -737,6 +742,11 @@ def build_telemetry_retention_service(uow: UnitOfWork, storage: TelemetryStorage
     return TelemetryRetentionService(uow, UsageRetentionRepository(uow), storage)
 
 
+def build_usage_rollup_service(uow: UnitOfWork) -> UsageRollupService:
+    """Build the usage rollup refresh for one worker pass."""
+    return UsageRollupService(uow, UsageRollupRepository(uow))
+
+
 def build_sandbox_file_bridge(
     *,
     raw_request: Request,
@@ -1146,6 +1156,7 @@ WorkspaceVisibilityServiceDep = Annotated[WorkspaceVisibilityService, Depends(ge
 
 
 def get_overview_service(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     uow: UnitOfWorkDep,
@@ -1167,6 +1178,8 @@ def get_overview_service(
         WorkspaceService(db, uow=uow, membership_listener=membership_listener, workspace_listener=workspace_listener),
         visibility,
         config,
+        uow,
+        request.app.state.heavy_usage_reads,
     )
 
 
@@ -1214,9 +1227,15 @@ def get_saved_view_service(
 SavedViewServiceDep = Annotated[SavedViewService, Depends(get_saved_view_service)]
 
 
-def get_usage_read_service(uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> UsageReadService:
+def get_usage_read_service(request: Request, uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> UsageReadService:
     """Build the request's usage-log read service on the request's Unit of Work."""
-    return UsageReadService(uow, UsageReadRepository(uow), UsageSummaryRepository(uow))
+    return UsageReadService(
+        uow,
+        UsageReadRepository(uow),
+        UsageSummaryRepository(uow),
+        UsageRollupRepository(uow),
+        request.app.state.heavy_usage_reads,
+    )
 
 
 UsageReadServiceDep = Annotated[UsageReadService, Depends(get_usage_read_service)]

@@ -8,6 +8,7 @@ import {
   NEWEST_FIRST,
   useUsageLogs,
   useUsagePreviews,
+  useUsageTools,
   withoutListOnly,
 } from "@/shared/api/usage"
 
@@ -25,9 +26,9 @@ function respond() {
   })
 }
 
-function wrapper() {
+function wrapper(retry: boolean | number = false) {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry, retryDelay: 0 } },
   })
   return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -102,5 +103,59 @@ describe("withoutListOnly", () => {
     expect(withoutListOnly({ model: ["a"], include_absorbed: true })).toEqual({
       model: ["a"],
     })
+  })
+})
+
+describe("a usage aggregate", () => {
+  function toolsReads(fetch: { mock: { calls: unknown[][] } }) {
+    return fetch.mock.calls.filter(([input]) =>
+      String(input).includes("/usage/tools"),
+    )
+  }
+
+  it("is abandoned, so the gateway can cancel it, once nothing wants it", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        if (String(input).endsWith("/organizations/me")) {
+          return new Response(JSON.stringify({ deployment_operator: false }), {
+            headers: { "Content-Type": "application/json" },
+          })
+        }
+        return new Promise<Response>(() => {})
+      })
+    const { unmount } = renderHook(() => useUsageTools({}), {
+      wrapper: wrapper(),
+    })
+    await waitFor(() => expect(toolsReads(fetch)).toHaveLength(1))
+    const signal = (toolsReads(fetch)[0][1] as RequestInit).signal
+    expect(signal?.aborted).toBe(false)
+
+    unmount()
+
+    await waitFor(() => expect(signal?.aborted).toBe(true))
+  })
+
+  it("is not asked again when it fails, whatever the client's default", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) =>
+        String(input).endsWith("/organizations/me")
+          ? new Response(JSON.stringify({ deployment_operator: false }), {
+              headers: { "Content-Type": "application/json" },
+            })
+          : new Response(
+              JSON.stringify({
+                detail: "Usage reads are busy; try again shortly",
+              }),
+              { status: 503, headers: { "Content-Type": "application/json" } },
+            ),
+      )
+    const { result } = renderHook(() => useUsageTools({}), {
+      wrapper: wrapper(3),
+    })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(toolsReads(fetch)).toHaveLength(1)
   })
 })

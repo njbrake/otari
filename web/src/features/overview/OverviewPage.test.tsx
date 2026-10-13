@@ -173,6 +173,8 @@ interface Bodies {
    * is refused, and the overview says they are hidden from then on.
    */
   revokesTotals?: boolean
+  /** Held open for the operator's provider list. */
+  holdProviders?: Promise<void>
   /** The overview summary per scope asked for, over `overview`. */
   overviewByScope?: Partial<Record<string, Partial<OverviewSummary>>>
   /** The first day of the month the page reads, if not October. */
@@ -335,6 +337,7 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
       )
     }
     if (url.includes(`${API_ROOT}/providers`)) {
+      await b.holdProviders
       return jsonResponse({
         providers: b.providers ?? [{ provider: "openai" }],
       })
@@ -552,6 +555,148 @@ describe("the Overview's numbers", () => {
       "href",
       "/budgets",
     )
+  })
+
+  it("holds the tiles as skeletons, not dashes, while the month's summary is out", async () => {
+    let release = () => {}
+    const until = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    mockApi({ holdSummaryFrom: { day: "2026-10-01", until } })
+    const { container } = renderPage(<OverviewIndex />, {
+      workspace: WORKSPACE_A,
+    })
+
+    await waitFor(() =>
+      expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(3),
+    )
+    expect(screen.queryByText("no data")).toBeNull()
+    expect(screen.queryByText("—")).toBeNull()
+
+    release()
+    await waitFor(() =>
+      expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(0),
+    )
+  })
+
+  it("does not hold the budget tile for a budget read that never runs", async () => {
+    // No workspace is selected, so the budget read is disabled and stays
+    // pending: it is not a wait.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith(`${API_ROOT}/organizations/me`)) {
+        return jsonResponse({ detail: "context exploded" }, 500)
+      }
+      if (url.includes(`${API_ROOT}/usage/summary`)) {
+        return jsonResponse(summary({ cost: 200, request_count: 2000 }))
+      }
+      if (url.includes(`${API_ROOT}/overview`))
+        return jsonResponse(overviewBody())
+      if (url.includes(`${API_ROOT}/providers`) && !url.includes("health")) {
+        return jsonResponse({ providers: [{ provider: "openai" }] })
+      }
+      return jsonResponse([])
+    })
+    const { container } = renderPage(<OverviewIndex />)
+
+    expect((await screen.findAllByText("$200.00")).length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(0)
+    expect(
+      within(tile("Workspace budget")).getByText("no data"),
+    ).toBeInTheDocument()
+  })
+
+  it("keeps the totals loading when another read fails first", async () => {
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith(`${API_ROOT}/organizations/me`)) {
+        return jsonResponse(organizationContext(TWO_WORKSPACES))
+      }
+      if (url.includes("/budget")) {
+        return jsonResponse({ detail: "budget exploded" }, 500)
+      }
+      if (url.includes("/usage/summary")) {
+        await held
+        return jsonResponse({ detail: "late" }, 500)
+      }
+      if (url.includes(`${API_ROOT}/providers`) && !url.includes("health")) {
+        return jsonResponse({ providers: [{ provider: "openai" }] })
+      }
+      return jsonResponse(url.includes("/overview") ? overviewBody() : [])
+    })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    expect(await screen.findByText(/budget exploded/)).toBeInTheDocument()
+    expect(tile("Total at API prices")).toHaveAttribute("aria-busy", "true")
+    expect(tile("Requests")).toHaveAttribute("aria-busy", "true")
+    release()
+  })
+
+  it("asks for the month without waiting on the provider list", async () => {
+    let release = () => {}
+    const holdProviders = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const requested = mockApi({ holdProviders })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/usage/summary"))).toBe(
+        true,
+      ),
+    )
+    expect(
+      screen.getByRole("heading", { name: "Overview" }),
+    ).toBeInTheDocument()
+    release()
+  })
+
+  it("adds the getting-started strip once a held, empty provider list answers", async () => {
+    let release = () => {}
+    const holdProviders = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const requested = mockApi({ providers: [], holdProviders })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/usage/summary"))).toBe(
+        true,
+      ),
+    )
+    expect(screen.queryByText("Get started with Otari")).toBeNull()
+    release()
+    expect(
+      await screen.findByText("Get started with Otari"),
+    ).toBeInTheDocument()
+  })
+
+  it("offers the setup guide once a held provider list names a provider", async () => {
+    let release = () => {}
+    const holdProviders = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const requested = mockApi({
+      context: TWO_WORKSPACES,
+      activation: workspaceActivation(),
+      holdProviders,
+    })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/usage/summary"))).toBe(
+        true,
+      ),
+    )
+    expect(requested.some((url) => url.includes("/activation"))).toBe(false)
+    release()
+    expect(
+      await screen.findByRole("heading", { name: "Send your first request" }),
+    ).toBeInTheDocument()
   })
 
   it("shows a dash, not a zero, for a summary that failed", async () => {

@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { OverviewSummary } from "@/client"
-import { apiFetch } from "@/shared/api/client"
+import { apiFetch, heavyReadSignal } from "@/shared/api/client"
 import { OVERVIEW, workspaceVisibilityKey } from "@/shared/api/queryKeys"
+import { HEAVY_READ } from "@/shared/api/usage"
 
 export type OverviewScope = OverviewSummary["scope"]
 
@@ -27,10 +28,13 @@ export function useOverviewSummary({
   const queryClient = useQueryClient()
   return useQuery({
     queryKey: [OVERVIEW, workspaceId ?? null, month, scope],
-    queryFn: async () => {
+    // Its month aggregate waits its turn with the Usage page's reads.
+    queryFn: async ({ signal }) => {
       const params = new URLSearchParams({ month, scope })
       if (workspaceId) params.set("workspace_id", workspaceId)
-      const answer = await apiFetch<OverviewSummary>(`/overview?${params}`)
+      const answer = await apiFetch<OverviewSummary>(`/overview?${params}`, {
+        signal: heavyReadSignal(signal),
+      })
       // The workspace's visibility rides along, and is the one answer every
       // page reads it from (`useWorkspaceVisibility`). Only the answer about
       // the workspace this read named seeds it.
@@ -43,6 +47,7 @@ export function useOverviewSummary({
       return answer
     },
     staleTime: 60_000,
+    ...HEAVY_READ,
     // The last answer stays up while another scope or month loads, so the
     // attention line, the rail and the budget do not drop out and back.
     placeholderData: (previous) => previous,

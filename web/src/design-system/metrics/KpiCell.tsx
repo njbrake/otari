@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { Skeleton } from "@/design-system/feedback/Skeleton"
 import { type Severity, SeverityMark } from "./SeverityMark"
 
 export function KpiCell({
@@ -8,6 +9,7 @@ export function KpiCell({
   subline,
   delta,
   graphic,
+  isLoading = false,
 }: {
   label: string
   value: string
@@ -21,6 +23,11 @@ export function KpiCell({
   subline?: ReactNode
   delta?: ReactNode
   graphic?: ReactNode
+  /**
+   * The read behind the value has not answered: the value and the line under it
+   * hold their space as skeletons rather than showing a figure nobody has read.
+   */
+  isLoading?: boolean
 }) {
   return (
     // `grid-rows-subgrid` over `row-span-4` is what keeps the five values on one
@@ -42,13 +49,23 @@ export function KpiCell({
     // beside it (218px at 1280, since the track shrinks and the string does
     // not). Bounding the column is what makes the truncation and the
     // sparkline's `w-full` mean anything.
-    <div className="grid row-span-4 min-w-0 grid-rows-subgrid grid-cols-[minmax(0,1fr)] gap-1.5 border-border px-7 py-[1.125rem]">
+    <div
+      aria-busy={isLoading || undefined}
+      className="grid row-span-4 min-w-0 grid-rows-subgrid grid-cols-[minmax(0,1fr)] gap-1.5 border-border px-7 py-[1.125rem]"
+    >
       <span className="flex items-end text-overline">{label}</span>
       {/* 400, deliberately, where the rest of the page's emphasis is 550: at
           30px the size is already the hierarchy, and a heavier numeral here
           would out-weigh the page title above it. */}
       <span className="text-mono-figure font-normal text-foreground">
-        {value}
+        {isLoading ? (
+          <>
+            <Skeleton className="h-[1lh] w-32" />
+            <span className="sr-only">Loading</span>
+          </>
+        ) : (
+          value
+        )}
       </span>
       {/* One line, always present, so no cell is shorter than its neighbors,
           and never wrapped, which would undo the subgrid's shared baseline.
@@ -57,18 +74,24 @@ export function KpiCell({
           only thing that gives, and it truncates, because its facts also live
           in the breakdown tables while a delta lives nowhere else. */}
       <span className="flex min-h-[1.125rem] items-center gap-2 text-xs text-nowrap text-muted">
-        {severity ? <SeverityMark severity={severity} /> : null}
-        {severity && delta ? <Separator /> : null}
-        {delta}
-        {(severity || delta) && subline ? <Separator /> : null}
-        {subline ? (
-          <span
-            className="min-w-0 truncate"
-            title={typeof subline === "string" ? subline : undefined}
-          >
-            {subline}
-          </span>
-        ) : null}
+        {isLoading ? (
+          <Skeleton className="h-3 w-24" />
+        ) : (
+          <>
+            {severity ? <SeverityMark severity={severity} /> : null}
+            {severity && delta ? <Separator /> : null}
+            {delta}
+            {(severity || delta) && subline ? <Separator /> : null}
+            {subline ? (
+              <span
+                className="min-w-0 truncate"
+                title={typeof subline === "string" ? subline : undefined}
+              >
+                {subline}
+              </span>
+            ) : null}
+          </>
+        )}
       </span>
       {/* Reserved rather than conditional: an absent sparkline must not make one
           cell shorter than the four beside it. Dropped in the empty state by
@@ -77,7 +100,9 @@ export function KpiCell({
           more (a split with its legend): the subgrid gives every cell in the
           row the tallest one's height, so the baselines still line up. */}
       {graphic ? (
-        <span className="flex min-h-10 items-center">{graphic}</span>
+        <span className="flex min-h-10 items-center">
+          {isLoading ? <Skeleton className="h-2 w-full" /> : graphic}
+        </span>
       ) : null}
     </div>
   )

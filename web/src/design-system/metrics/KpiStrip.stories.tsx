@@ -20,7 +20,7 @@ import { TrendChip } from "./TrendChip"
 const meta = {
   title: "Design system/Metrics/KpiStrip",
   component: KpiStrip,
-  args: { isEmpty: false, children: null },
+  args: { children: null },
   parameters: { layout: "padded" },
 } satisfies Meta<typeof KpiStrip>
 
@@ -30,7 +30,7 @@ type Story = StoryObj<typeof meta>
 
 export const Default: Story = {
   render: () => (
-    <KpiStrip isEmpty={false} columns={4}>
+    <KpiStrip columns={4}>
       <KpiCell label="Spend" value="$412.08" subline="This month" />
       <KpiCell label="Requests" value="1,284,901" subline="This month" />
       <KpiCell label="Tokens" value="94.2M" subline="This month" />
@@ -46,7 +46,7 @@ export const Default: Story = {
  */
 export const WithDeltaAndGraphic: Story = {
   render: () => (
-    <KpiStrip isEmpty={false} columns={4}>
+    <KpiStrip columns={4}>
       <KpiCell
         label="Spend"
         value="$412.08"
@@ -81,7 +81,7 @@ export const WithDeltaAndGraphic: Story = {
  */
 export const WithSeverity: Story = {
   render: () => (
-    <KpiStrip isEmpty={false} columns={4}>
+    <KpiStrip columns={4}>
       <KpiCell
         label="Budget"
         value="$1,041.20"
@@ -106,13 +106,15 @@ export const WithSeverity: Story = {
 }
 
 /**
- * `empty` for a deployment that has served nothing yet. Every cell still says
- * what it is and why it is empty: an em dash with nothing under it makes the
- * reader guess whether the number is missing or zero.
+ * A deployment that has served nothing yet. No cell passes a graphic, so the
+ * strip is one row shorter without any cell changing shape against its
+ * neighbors. Every cell still says what it is and why it is empty: an em dash
+ * with nothing under it makes the reader guess whether the number is missing
+ * or zero.
  */
 export const Empty: Story = {
   render: () => (
-    <KpiStrip isEmpty columns={4}>
+    <KpiStrip columns={4}>
       <KpiCell label="Spend" value="—" subline="No requests yet" />
       <KpiCell label="Requests" value="—" subline="No requests yet" />
       <KpiCell label="Tokens" value="—" subline="No requests yet" />
@@ -129,7 +131,7 @@ export const Empty: Story = {
  */
 export const FiveColumns: Story = {
   render: () => (
-    <KpiStrip isEmpty={false} columns={5}>
+    <KpiStrip columns={5}>
       <KpiCell label="Spend" value="$412.08" subline="This month" />
       <KpiCell label="Requests" value="1,284,901" subline="This month" />
       <KpiCell label="Tokens" value="94.2M" subline="This month" />
@@ -157,7 +159,7 @@ export const Wrapped: Story = {
  */
 export const ThreeColumns: Story = {
   render: () => (
-    <KpiStrip isEmpty={false} columns={3}>
+    <KpiStrip columns={3}>
       <KpiCell
         label="Total at API prices"
         value="$1,215.07"
@@ -179,4 +181,18 @@ export const ThreeColumns: Story = {
 export const ThreeColumnsStacked: Story = {
   ...ThreeColumns,
   globals: { viewport: { value: "mobile2", isRotated: false } },
+}
+
+/**
+ * `isLoading` holds each part of a cell as a skeleton until its read answers,
+ * rather than a zero nobody has read; the graphic slot keeps its height.
+ */
+export const Loading: Story = {
+  render: () => (
+    <KpiStrip columns={3}>
+      <KpiCell label="Spend" value="" graphic={<span />} isLoading />
+      <KpiCell label="Requests" value="" graphic={<span />} isLoading />
+      <KpiCell label="Tokens" value="" graphic={<span />} isLoading />
+    </KpiStrip>
+  ),
 }

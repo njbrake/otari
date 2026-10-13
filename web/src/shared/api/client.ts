@@ -412,6 +412,26 @@ export function longRequestSignal(): AbortSignal {
   return AbortSignal.timeout(LONG_REQUEST_TIMEOUT_MS)
 }
 
+// For the usage aggregates the gateway runs a few at a time. One waits up to 30s
+// for its turn and then runs its statements, each bounded at 60s, so the 30s
+// bound above gave up on every read slower than that, and the gateway finished
+// it for nobody. Not a ceiling on the read: a slow summary of several statements
+// can still outrun it.
+const HEAVY_READ_TIMEOUT_MS = 100_000
+
+/**
+ * Signal for a heavy usage read: aborted past its deadline or once `query`
+ * aborts, which TanStack does when nothing on screen wants the answer any more.
+ * The gateway cancels a read whose caller has gone, so either frees its turn.
+ */
+export function heavyReadSignal(query: AbortSignal): AbortSignal {
+  const deadline = AbortSignal.timeout(HEAVY_READ_TIMEOUT_MS)
+  // Safari before 17.4 has no `any`; there the deadline alone applies.
+  return typeof AbortSignal.any === "function"
+    ? AbortSignal.any([query, deadline])
+    : deadline
+}
+
 // A TimeoutError from AbortSignal.timeout means we gave up, not that the gateway
 // is unreachable; saying so points at the right thing to look at. It can surface
 // from either await: fetch() resolves once headers arrive, so a body that then
