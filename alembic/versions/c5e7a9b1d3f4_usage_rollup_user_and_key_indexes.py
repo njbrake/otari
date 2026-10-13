@@ -23,7 +23,10 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _TABLE = "usage_rollups"
-_INDEXES = {"ix_usage_rollups_user_id_hour": ["user_id", "hour"], "ix_usage_rollups_api_key_id_hour": ["api_key_id", "hour"]}
+_INDEXES = {
+    "ix_usage_rollups_user_id_hour": ["user_id", "hour"],
+    "ix_usage_rollups_api_key_id_hour": ["api_key_id", "hour"],
+}
 
 
 def upgrade() -> None:
