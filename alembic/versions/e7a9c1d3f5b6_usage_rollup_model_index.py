@@ -6,8 +6,8 @@ the organization's month to keep one model's.
 Built ``CONCURRENTLY`` on PostgreSQL, outside the chain's transaction, as in
 ``c5e7a9b1d3f4``.
 
-Revision ID: d6f8b0c2e4a5
-Revises: c5e7a9b1d3f4
+Revision ID: e7a9c1d3f5b6
+Revises: d6f8b0c2e4a5
 Create Date: 2026-10-13
 """
 
@@ -16,8 +16,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "d6f8b0c2e4a5"
-down_revision: str | Sequence[str] | None = "c5e7a9b1d3f4"
+revision: str = "e7a9c1d3f5b6"
+down_revision: str | Sequence[str] | None = "d6f8b0c2e4a5"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -28,10 +28,12 @@ from sqlalchemy import (
     BinaryExpression,
     Column,
     ColumnElement,
+    Integer,
     Select,
     Subquery,
     and_,
     case,
+    cast,
     delete,
     func,
     insert,
@@ -40,6 +42,7 @@ from sqlalchemy import (
     select,
     union_all,
 )
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.visitors import iterate, replacement_traverse
 
@@ -79,6 +82,7 @@ MAX_DIRTY_HOURS = 48
 UsageRows = Subquery
 
 _HOUR = timedelta(hours=1)
+_NO_INTEGERS = cast(postgresql.array([], type_=Integer), postgresql.ARRAY(Integer))
 # Any fixed number serves; it only has to be this refresh's alone.
 _REFRESH_LOCK = 0x7573_6167_6572_6F6C  # "usagerol"
 
@@ -133,10 +137,14 @@ def _hour_of(timestamp: Any) -> Any:
     return func.timezone("UTC", func.date_trunc("hour", func.timezone("UTC", timestamp)))
 
 
-def _raw(conditions: Sequence[ColumnElement[bool]]) -> Select[Any]:
-    """The rows the conditions leave, each standing for itself."""
+def _raw(conditions: Sequence[ColumnElement[bool]], *, with_latencies: bool) -> Select[Any]:
+    """The rows the conditions leave, each standing for itself.
+
+    ``with_latencies`` adds each row's latency as a one-value list beside a
+    count of one (PostgreSQL only), the shape the rollups keep theirs in.
+    """
     values = _row_values()
-    return select(
+    stmt = select(
         *(getattr(UsageLog, key).label(key) for key in KEYS),
         needs_pricing_condition().label("needs_pricing"),
         UsageLog.timestamp.label("ts"),
@@ -145,6 +153,12 @@ def _raw(conditions: Sequence[ColumnElement[bool]]) -> Select[Any]:
         UsageLog.timestamp.label("last_at"),
         *(values[name].label(name) for name in _MEASURES),
     ).where(*conditions)
+    if with_latencies:
+        stmt = stmt.add_columns(
+            postgresql.array([UsageLog.latency_ms]).label("latency_values"),
+            postgresql.array([literal(1, Integer)]).label("latency_counts"),
+        )
+    return stmt
 
 
 def _summed(conditions: Sequence[ColumnElement[bool]]) -> Select[Any]:
@@ -158,6 +172,8 @@ def _summed(conditions: Sequence[ColumnElement[bool]]) -> Select[Any]:
         rollup.first_at,
         rollup.last_at,
         *(rollup[name] for name in _MEASURES),
+        rollup.latency_values,
+        rollup.latency_counts,
     ).where(*conditions)
 
 
@@ -239,14 +255,17 @@ class UsageRollupRepository(BaseRepository[UsageRollup, Never, Never]):
 
         ``conditions`` include the window, as ``timestamp >= start`` and
         ``timestamp < end``. ``exact`` asks for every row on its own, for a read
-        that ranks single rows (a percentile).
+        that ranks single rows (a ranking by percentile). On PostgreSQL every
+        relation row carries its latencies (``latency_values``, ``latency_counts``),
+        so a percentile reads them from either source.
         """
+        postgres = dialect_name(self.db) == "postgresql"
         summed_conditions = self._rollup_conditions(conditions, start, end) if not exact else None
-        if summed_conditions is None or bucket == "5min" or dialect_name(self.db) != "postgresql":
-            return _raw(conditions).subquery("usage_rows")
+        if summed_conditions is None or bucket == "5min" or not postgres:
+            return _raw(conditions, with_latencies=postgres).subquery("usage_rows")
         whole_start, whole_end = _ceil_hour(start), _floor_hour(end)
         if whole_start >= whole_end:
-            return _raw(conditions).subquery("usage_rows")
+            return _raw(conditions, with_latencies=postgres).subquery("usage_rows")
         dirty = UsageRollupDirtyHour.__table__.c
         marked = list(
             (
@@ -256,7 +275,7 @@ class UsageRollupRepository(BaseRepository[UsageRollup, Never, Never]):
             ).scalars()
         )
         if len(marked) > MAX_DIRTY_HOURS:
-            return _raw(conditions).subquery("usage_rows")
+            return _raw(conditions, with_latencies=postgres).subquery("usage_rows")
         marked_spans = _spans(marked)
         rollup = UsageRollup.__table__.c
         current = [rollup.hour >= whole_start, rollup.hour < whole_end]
@@ -269,7 +288,7 @@ class UsageRollupRepository(BaseRepository[UsageRollup, Never, Never]):
         )
         return union_all(
             _summed([*summed_conditions, *current]),
-            _raw([*conditions, from_rows]),
+            _raw([*conditions, from_rows], with_latencies=True),
         ).subquery("usage_rows")
 
     @staticmethod
@@ -328,20 +347,51 @@ class UsageRollupRepository(BaseRepository[UsageRollup, Never, Never]):
         values = _row_values()
         hour = _hour_of(UsageLog.timestamp)
         needs_pricing = needs_pricing_condition()
-        groups = [*(getattr(UsageLog, key) for key in KEYS), needs_pricing, hour]
+        # Grouped twice: first by every key and the latency, so each distinct
+        # latency is counted, then by the keys alone, which gathers those counts
+        # into the hour's two lists beside the other sums.
+        by_latency = (
+            select(
+                *(getattr(UsageLog, key).label(key) for key in KEYS),
+                needs_pricing.label("needs_pricing"),
+                hour.label("hour"),
+                UsageLog.latency_ms.label("latency"),
+                func.count().label("rows"),
+                func.min(UsageLog.timestamp).label("first_at"),
+                func.max(UsageLog.timestamp).label("last_at"),
+                *(func.sum(values[name]).label(name) for name in _MEASURES),
+            )
+            .where(or_(*_in_spans(UsageLog.timestamp, spans)))
+            .group_by(*(getattr(UsageLog, key) for key in KEYS), needs_pricing, hour, UsageLog.latency_ms)
+            .subquery()
+        )
+        counted = by_latency.c
+        measured = counted.latency.is_not(None)
+        groups = [*(counted[key] for key in KEYS), counted.needs_pricing, counted.hour]
         summed = select(
-            *(getattr(UsageLog, key) for key in KEYS),
-            needs_pricing,
-            hour,
-            func.count(),
-            func.min(UsageLog.timestamp),
-            func.max(UsageLog.timestamp),
-            *(func.sum(values[name]) for name in _MEASURES),
-        ).where(or_(*_in_spans(UsageLog.timestamp, spans)))
+            *groups,
+            func.sum(counted.rows),
+            func.min(counted.first_at),
+            func.max(counted.last_at),
+            *(func.sum(counted[name]) for name in _MEASURES),
+            # Empty, not NULL, for an hour whose rows recorded no latency.
+            func.coalesce(func.array_agg(counted.latency).filter(measured), _NO_INTEGERS),
+            func.coalesce(func.array_agg(cast(counted.rows, Integer)).filter(measured), _NO_INTEGERS),
+        ).group_by(*groups)
         await self.db.execute(
             insert(UsageRollup).from_select(
-                [*KEYS, "needs_pricing", "hour", "rows", "first_at", "last_at", *_MEASURES],
-                summed.group_by(*groups),
+                [
+                    *KEYS,
+                    "needs_pricing",
+                    "hour",
+                    "rows",
+                    "first_at",
+                    "last_at",
+                    *_MEASURES,
+                    "latency_values",
+                    "latency_counts",
+                ],
+                summed,
             )
         )
         return len(hours)

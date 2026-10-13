@@ -19,7 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from gateway.models.base import Base
@@ -287,6 +287,10 @@ class UsageLog(Base):
         }
 
 
+# A PostgreSQL integer array; SQLite, where the rollups are never read, keeps JSON.
+_INT_ARRAY = ARRAY(Integer).with_variant(JSON(), "sqlite")
+
+
 class UsageRollup(Base):
     """The usage rows of one hour that share every key a usage read filters or groups by, summed.
 
@@ -342,6 +346,10 @@ class UsageRollup(Base):
     billed_cache_write_tokens: Mapped[int] = mapped_column(BigInteger)
     latency_ms: Mapped[int | None] = mapped_column(BigInteger)
     latency_count: Mapped[int] = mapped_column(BigInteger)
+    # Every latency the rows recorded, as distinct values and how many rows took
+    # each, so a percentile over hours of them is the one their rows would give.
+    latency_values: Mapped[list[int]] = mapped_column(_INT_ARRAY)
+    latency_counts: Mapped[list[int]] = mapped_column(_INT_ARRAY)
     # One set per gateway-run tool (``services/usage/_summary.GATEWAY_TOOL_NAMES``):
     # the billable calls, the failed calls, the spend and the rows that ran it.
     web_search_calls: Mapped[int | None] = mapped_column(BigInteger)

@@ -15,7 +15,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any, Never
 
-from sqlalchemy import ColumnElement, String, Subquery, case, cast, func, null, or_, select
+from sqlalchemy import ColumnElement, String, Subquery, case, cast, func, literal, null, or_, select, true
 
 from gateway.core.sql import UsageBucketGrain, bucket_expr, canonical_bucket, dialect_name, utc_bound
 from gateway.core.unit_of_work import UnitOfWork
@@ -349,23 +349,78 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
             groups = _ranked_by_p95(groups, rank_order)[:limit]
         return groups
 
+    async def p95_latency_ms(self, rows: Subquery, conditions: list[ColumnElement[bool]]) -> int | None:
+        """Nearest-rank 95th-percentile latency over the requests in ``rows``, absorbed attempts left out.
+
+        On PostgreSQL it is read from the latencies every relation row carries
+        (:meth:`_p95_by_group`); SQLite ranks the rows ``conditions`` leave.
+        """
+        if dialect_name(self.db) != "sqlite":
+            return (await self._p95_by_group(rows, None, [])).get(None)
+        return (await self._group_p95(_Breakdown(literal(None)), conditions)).get(None)
+
     async def group_p95_latency_ms(
         self,
         dimension: BreakdownDimension,
         keys: Collection[str | None],
+        rows: Subquery,
         conditions: list[ColumnElement[bool]],
     ) -> dict[str | None, int]:
-        """Each of these groups' nearest-rank 95th-percentile latency, in one grouped pass over the rows.
+        """Each of these groups' nearest-rank 95th-percentile latency, in one grouped pass.
 
-        The same value the totals' p95 takes over the window (``percentile_disc``,
-        absorbed attempts left out), per group. SQLite has no ordered-set aggregate,
-        so there each group's latencies are ranked with window functions and the row
-        at rank ``ceil(0.95 * n)`` kept, which is the value ``percentile_disc`` returns.
+        The same value the totals' p95 takes over the window, per group. PostgreSQL
+        reads it from the latencies the relation's rows carry; SQLite ranks each
+        group's rows with window functions and keeps the row at rank
+        ``ceil(0.95 * n)``, which is the value ``percentile_disc`` returns.
         """
         if not keys:
             return {}
+        if dialect_name(self.db) != "sqlite":
+            spec = _breakdown(dimension, rows.c)
+            return await self._p95_by_group(rows, spec, [_in_keys(spec, keys)])
         spec = _breakdown(dimension, UsageLog)
         return await self._group_p95(spec, [*conditions, _in_keys(spec, keys)])
+
+    async def _p95_by_group(
+        self, rows: Subquery, spec: _Breakdown | None, conditions: list[ColumnElement[bool]]
+    ) -> dict[str | None, int]:
+        """The nearest-rank p95 of each group's latencies (one group, ``None``, without ``spec``), from ``rows``.
+
+        Each relation row lists the latencies it stands for with how many rows took
+        each, so the counts summed per latency give every group's distribution, and
+        its p95 is the least latency whose running count reaches 95% of the group's:
+        the row at rank ``ceil(0.95 * n)``, the value ``percentile_disc`` returns
+        over the rows themselves.
+        """
+        u = rows.c
+        # A function in FROM may read the items before it, so the join needs no LATERAL.
+        latencies = (
+            func.unnest(u.latency_values, u.latency_counts).table_valued("value", "n").render_derived("latencies")
+        )
+        group = (spec.column if spec is not None else null()).label("group_key")
+        counted = select(group, latencies.c.value, func.sum(latencies.c.n).label("n")).select_from(rows)
+        counted = counted.join(latencies, true())
+        if spec is not None:
+            counted = _joined(counted, spec, with_label=False)
+        per_value = (
+            counted.where(u.status != "absorbed", latencies.c.value.is_not(None), *conditions)
+            .group_by(*([group] if spec is not None else []), latencies.c.value)
+            .subquery()
+        )
+        ranked = select(
+            per_value.c.group_key,
+            per_value.c.value,
+            func.sum(per_value.c.n)
+            .over(partition_by=per_value.c.group_key, order_by=per_value.c.value)
+            .label("reached"),
+            func.sum(per_value.c.n).over(partition_by=per_value.c.group_key).label("total"),
+        ).subquery()
+        found = await self.db.execute(
+            select(ranked.c.group_key, func.min(ranked.c.value))
+            .where(ranked.c.reached * 100 >= ranked.c.total * 95)
+            .group_by(ranked.c.group_key)
+        )
+        return {_key(key): int(value) for key, value in found.all()}
 
     async def _group_p95(self, spec: _Breakdown, conditions: list[ColumnElement[bool]]) -> dict[str | None, int]:
         """The p95 of every group the conditions leave, for :meth:`group_p95_latency_ms` and the SQLite p95 ranking."""

@@ -158,10 +158,12 @@ each hour an insert, update or delete touched, in the same transaction, and a
 marked hour is read from its rows until the gateway rebuilds it, every
 `usage_rollup_refresh_interval_sec`; the partial hours at either end of a window
 are always read from the rows. So the figures are the same either way, and the
-interval only decides how much of a window a read still scans. Reads that rank
-single requests (p95 latency) or filter on something the rollups do not keep
-(a request id, a tag, a tool, a cost or latency threshold, whether a row is
-priced) scan the rows as before. After an upgrade the gateway builds the
+interval only decides how much of a window a read still scans. Each rollup row
+also keeps every latency its rows recorded, as distinct values and their counts,
+so a p95 is the same nearest-rank value the rows give without reading them.
+Ranking a breakdown by p95, and filters on something the rollups do not keep (a
+request id, a tag, a tool, a cost or latency threshold, whether a row is
+priced), scan the rows as before. After an upgrade the gateway builds the
 history in the background, newest first, about a day of usage per pass; until
 it finishes, a read whose window still holds more than 48 unbuilt hours scans its
 rows. The trigger adds one small insert to every write of usage, and the
