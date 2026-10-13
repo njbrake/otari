@@ -116,6 +116,16 @@ class UsageReadService:
         async with heavy_usage_read(self._uow, self._heavy_reads), self._uow:
             yield
 
+    async def rows(self, conditions: list[UsageCondition], start: datetime, end: datetime) -> UsageRows:
+        """The usage rows ``conditions`` leave in ``[start, end)``, as one relation, for another domain's aggregates.
+
+        Whole hours come from their rollups where those are current. Building it
+        reads which hours are, in a block of its own or the caller's open one; the
+        caller aggregates it under its own turn at the heavy-read gate.
+        """
+        async with self._uow:
+            return await self._rollups.rows(conditions, start, end, bucket="hour")
+
     async def page(
         self,
         conditions: list[UsageCondition],

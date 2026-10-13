@@ -4,6 +4,7 @@ Also the sweep that keeps imported telemetry to its retention window, and the
 refresh that keeps the hourly rollups the summary reads current.
 """
 
+from gateway.repositories.usage import UsageRows
 from gateway.services.usage._retention import RetentionSweep, TelemetryRetentionService
 from gateway.services.usage._rollups import UsageRollupService, run_usage_rollup_refresher
 from gateway.services.usage._service import HEAVY_READ_WAIT_S, UsagePageRow, UsageReadService, heavy_usage_read
@@ -18,6 +19,7 @@ __all__ = [
     "UsagePageRow",
     "UsageReadService",
     "UsageRollupService",
+    "UsageRows",
     "heavy_usage_read",
     "run_telemetry_retention_sweeper",
     "run_usage_rollup_refresher",

@@ -1180,6 +1180,13 @@ def get_overview_service(
         config,
         uow,
         request.app.state.heavy_usage_reads,
+        UsageReadService(
+            uow,
+            UsageReadRepository(uow),
+            UsageSummaryRepository(uow),
+            UsageRollupRepository(uow),
+            request.app.state.heavy_usage_reads,
+        ),
     )
 
 

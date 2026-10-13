@@ -264,11 +264,6 @@ def status_count(status: str) -> Any:
     return func.coalesce(func.sum(case((UsageLog.status == status, 1), else_=0)), 0)
 
 
-def billed_cost_sum() -> Any:
-    """The cost of the rows in scope this deployment served: what it billed, imported usage left out."""
-    return func.coalesce(func.sum(case((UsageLog.source == SERVED_HERE_SLUG, UsageLog.cost), else_=0)), 0.0)
-
-
 def imported_cost_sum() -> Any:
     """The cost of the rows in scope this deployment did not serve: imported usage, never charged to a budget."""
     return func.coalesce(func.sum(case((UsageLog.source != SERVED_HERE_SLUG, UsageLog.cost), else_=0)), 0.0)
@@ -580,37 +575,54 @@ def window_rows(
     return where
 
 
-def spend_by_key(conditions: Sequence[UsageCondition]) -> Subquery:
-    """Each key's billed spend over ``conditions``, with its row count and how many rows were served here."""
+# The aggregates below read a usage relation: the rows of a window, each standing
+# for ``rows`` usage rows, with every measure summed (``UsageRollupRepository.rows``
+# builds it, from an hour's rollups where they are current). Each counts what its
+# namesake above counts over ``usage_logs``.
+
+
+def _served_cost(rows: Any) -> Any:
+    return func.coalesce(func.sum(case((rows.c.source == SERVED_HERE_SLUG, rows.c.cost), else_=0)), 0.0)
+
+
+def _requests(rows: Any) -> Any:
+    return func.coalesce(func.sum(case((rows.c.status != "absorbed", rows.c.rows), else_=0)), 0)
+
+
+def _failures(rows: Any) -> Any:
+    return func.coalesce(func.sum(case((rows.c.status == "error", rows.c.rows), else_=0)), 0)
+
+
+def spend_by_key(rows: Subquery) -> Subquery:
+    """Each key's billed spend over a usage relation, with its row count and how many rows were served here."""
     return (
         select(
-            UsageLog.api_key_id.label("key_id"),
-            billed_cost_sum().label("billed"),
-            func.count().label("rows"),
-            func.coalesce(func.sum(case((UsageLog.source == SERVED_HERE_SLUG, 1), else_=0)), 0).label("served"),
+            rows.c.api_key_id.label("key_id"),
+            _served_cost(rows).label("billed"),
+            func.coalesce(func.sum(rows.c.rows), 0).label("rows"),
+            func.coalesce(func.sum(case((rows.c.source == SERVED_HERE_SLUG, rows.c.rows), else_=0)), 0).label("served"),
         )
-        .where(*conditions, UsageLog.api_key_id.is_not(None))
-        .group_by(UsageLog.api_key_id)
+        .where(rows.c.api_key_id.is_not(None))
+        .group_by(rows.c.api_key_id)
         .subquery()
     )
 
 
-def spend_by_workspace(conditions: Sequence[UsageCondition]) -> Subquery:
-    """Each workspace's billed spend over ``conditions``, with its requests, failures and last request."""
+def spend_by_workspace(rows: Subquery) -> Subquery:
+    """Each workspace's billed spend over a usage relation, with its requests, failures and last request."""
     return (
         select(
-            UsageLog.workspace_id.label("workspace_id"),
-            billed_cost_sum().label("billed"),
-            request_count().label("requests"),
-            status_count("error").label("failures"),
-            func.max(UsageLog.timestamp).label("last_used_at"),
+            rows.c.workspace_id.label("workspace_id"),
+            _served_cost(rows).label("billed"),
+            _requests(rows).label("requests"),
+            _failures(rows).label("failures"),
+            func.max(rows.c.last_at).label("last_used_at"),
         )
-        .where(*conditions)
-        .group_by(UsageLog.workspace_id)
+        .group_by(rows.c.workspace_id)
         .subquery()
     )
 
 
-def requests_and_failures(conditions: Sequence[UsageCondition]) -> Select[tuple[int, int]]:
-    """Requests and failures over ``conditions``, counted as every usage read counts them."""
-    return select(request_count(), status_count("error")).where(*conditions)
+def requests_and_failures(rows: Subquery) -> Select[tuple[int, int]]:
+    """Requests and failures over a usage relation, counted as every usage read counts them."""
+    return select(_requests(rows), _failures(rows))

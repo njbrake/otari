@@ -41,7 +41,7 @@ from gateway.services.organizations import WorkspaceReader, WorkspaceVisibilityS
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_service import WorkspaceService
-from gateway.services.usage import heavy_usage_read
+from gateway.services.usage import UsageReadService, UsageRows, heavy_usage_read
 
 # The thresholds every needs-attention item is judged by, in one place so the page
 # never judges one itself.
@@ -235,6 +235,7 @@ class OverviewService:
         config: GatewayConfig,
         uow: UnitOfWork,
         heavy_reads: asyncio.Semaphore,
+        usage: UsageReadService,
     ):
         self._repository = repository
         self._organizations = organizations
@@ -245,6 +246,8 @@ class OverviewService:
         # so they take a turn among the worker's heavy usage reads.
         self._uow = uow
         self._heavy_reads = heavy_reads
+        # Builds the month's usage relation, from hourly rollups where they are current.
+        self._usage = usage
         # Read only for the providers an operator's reachability covers.
         self._config = config
 
@@ -341,11 +344,12 @@ class OverviewService:
                 if workspace is not None and reader is not None:
                     attention += await self._workspace_budget(workspace, month, now, reader=reader)
                 requests, failures = await self._repository.requests_and_failures(
-                    organization_id=organization.id,
-                    workspace_id=workspace.id if workspace else None,
-                    user_id=str(identity.id) if used_scope == "you" else None,
-                    start=month.start,
-                    end=month.end,
+                    await self._month_rows(
+                        organization.id,
+                        workspace.id if workspace else None,
+                        month,
+                        user_id=str(identity.id) if used_scope == "you" else None,
+                    )
                 )
         attention += found
         attention += _error_rate(requests, failures)
@@ -416,12 +420,13 @@ class OverviewService:
         """
 
         mine = str(identity.id)
+        workspace_id = workspace.id if workspace else None
+        owner = mine if scope == "you" or own_keys_only else None
         keys = await self._repository.keys_with_spend(
+            await self._month_rows(organization.id, workspace_id, month, owner_user_id=owner),
             organization_id=organization.id,
-            workspace_id=workspace.id if workspace else None,
-            owner_user_id=mine if scope == "you" or own_keys_only else None,
-            start=month.start,
-            end=month.end,
+            workspace_id=workspace_id,
+            owner_user_id=owner,
             rail_rows=LIMIT_ROWS,
             candidates=_candidates(now),
         )
@@ -447,9 +452,8 @@ class OverviewService:
         """The organization's most billed workspaces, the ceilings worth a word, and its requests and failures."""
 
         found = await self._repository.workspaces_with_spend(
+            await self._month_rows(organization.id, None, month),
             organization_id=organization.id,
-            start=month.start,
-            end=month.end,
             rail_rows=LIMIT_ROWS,
             candidates=_candidates(now),
         )
@@ -465,6 +469,27 @@ class OverviewService:
                 )
         rows = [_workspace_row(ws, now) for ws in found.workspaces if ws.in_rail]
         return Limits(kind="workspaces", rows=rows), attention, (found.requests, found.failures)
+
+    async def _month_rows(
+        self,
+        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID | None,
+        month: Month,
+        *,
+        user_id: str | None = None,
+        owner_user_id: str | None = None,
+    ) -> UsageRows:
+        """The month's usage rows in one workspace or the organization, for one user or one owner's keys."""
+
+        conditions = self._repository.month_rows(
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            start=month.start,
+            end=month.end,
+            user_id=user_id,
+            owner_user_id=owner_user_id,
+        )
+        return await self._usage.rows(conditions, month.start, month.end)
 
     async def _workspace_budget(
         self, workspace: Workspace, month: Month, now: datetime, *, reader: WorkspaceReader

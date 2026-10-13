@@ -229,6 +229,31 @@ def test_every_read_answers_the_same_from_the_rollups_as_from_the_rows(
         _assert_same(left, right, f"{path} {params}")
 
 
+def _overviews(client: TestClient, headers: dict[str, str], workspace: uuid.UUID) -> list[Any]:
+    answers = []
+    for scope in ("organization", "workspace", "you"):
+        params = {"month": "2026-09", "scope": scope, "workspace_id": str(workspace)}
+        response = client.get(f"{API_ROOT}/overview", params=params, headers=headers)
+        assert response.status_code == 200, (scope, response.text)
+        answers.append(response.json())
+    return answers
+
+
+def test_the_overview_month_answers_the_same_from_the_rollups_as_from_the_rows(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session, test_config: GatewayConfig
+) -> None:
+    _seed(db_session, seed=5)
+    workspace = seed_workspace_id(db_session)
+    from_rows = _overviews(client, master_key_header, workspace)
+
+    _refresh(test_config)
+    assert _count(db_session, UsageRollupDirtyHour) == 0
+    from_rollups = _overviews(client, master_key_header, workspace)
+
+    _assert_same(from_rows, from_rollups)
+    assert any(answer["limits"]["rows"] for answer in from_rollups)
+
+
 def test_a_write_after_a_refresh_is_read_at_once_and_folded_in_by_the_next(
     client: TestClient, master_key_header: dict[str, str], db_session: Session, test_config: GatewayConfig
 ) -> None:
@@ -321,6 +346,7 @@ def test_a_whole_hour_is_read_from_its_rollups(
     _refresh(test_config)
     params = {**_window(T0, T0 + timedelta(hours=3)), "dimensions": ["model"]}
     before = client.get(f"{USAGE}/summary", params=params, headers=master_key_header).json()
+    overviews = _overviews(client, master_key_header, seed_workspace_id(db_session))
     # Gone from the rows without a mark, which only the rollups still remember.
     db_session.execute(text("ALTER TABLE usage_logs DISABLE TRIGGER USER"))
     db_session.execute(delete(UsageLog).where(UsageLog.timestamp < T0 + timedelta(hours=1)))
@@ -330,6 +356,7 @@ def test_a_whole_hour_is_read_from_its_rollups(
     after = client.get(f"{USAGE}/summary", params=params, headers=master_key_header).json()
 
     _assert_same(before, after)
+    _assert_same(overviews, _overviews(client, master_key_header, seed_workspace_id(db_session)))
     assert before["totals"]["request_count"] > 0
 
 

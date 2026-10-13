@@ -34,11 +34,13 @@ from gateway.repositories.tenancy import (
     WorkspaceMemberRepository,
     WorkspaceRepository,
 )
+from gateway.repositories.usage import UsageReadRepository, UsageRollupRepository, UsageSummaryRepository
 from gateway.services.overview.overview_service import Month, OverviewService, OverviewSummary, judge
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 from gateway.services.tenancy.workspace_service import WorkspaceService
+from gateway.services.usage import UsageReadService
 
 from .tenancy_helpers import membership_writes, visibility_service
 
@@ -460,6 +462,12 @@ async def _workspace_in(db: AsyncSession, organization_id: uuid.UUID, *, name: s
     return workspace
 
 
+def _usage_reads(db: AsyncSession) -> UsageReadService:
+    uow = UnitOfWork(db)
+    repositories = UsageReadRepository(uow), UsageSummaryRepository(uow), UsageRollupRepository(uow)
+    return UsageReadService(uow, *repositories, asyncio.Semaphore(2))
+
+
 def _service(db: AsyncSession) -> OverviewService:
     return OverviewService(
         OverviewRepository(db),
@@ -470,6 +478,7 @@ def _service(db: AsyncSession) -> OverviewService:
         GatewayConfig(),
         UnitOfWork(db),
         asyncio.Semaphore(2),
+        _usage_reads(db),
     )
 
 

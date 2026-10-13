@@ -37,6 +37,7 @@ from gateway.repositories.tenancy import (
     WorkspaceMemberRepository,
     WorkspaceRepository,
 )
+from gateway.repositories.usage import UsageReadRepository, UsageRollupRepository, UsageSummaryRepository
 from gateway.services.model_discovery_service import ProviderDiscovery, get_model_cache
 from gateway.services.organizations import UsageReach
 from gateway.services.overview.overview_service import Month, OverviewService, OverviewSummary
@@ -45,6 +46,7 @@ from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.provisioning_service import BOOTSTRAP_IDENTITY_KEY
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 from gateway.services.tenancy.workspace_service import WorkspaceService
+from gateway.services.usage import UsageReadService
 
 from .tenancy_helpers import hide_totals, membership_writes, share_totals, visibility_service
 
@@ -159,6 +161,12 @@ def _ceiling(
     )
 
 
+def _usage_reads(db: AsyncSession) -> UsageReadService:
+    uow = UnitOfWork(db)
+    repositories = UsageReadRepository(uow), UsageSummaryRepository(uow), UsageRollupRepository(uow)
+    return UsageReadService(uow, *repositories, asyncio.Semaphore(2))
+
+
 def _service(db: AsyncSession, config: GatewayConfig | None = None) -> OverviewService:
     return OverviewService(
         OverviewRepository(db),
@@ -169,6 +177,7 @@ def _service(db: AsyncSession, config: GatewayConfig | None = None) -> OverviewS
         config or GatewayConfig(),
         UnitOfWork(db),
         asyncio.Semaphore(2),
+        _usage_reads(db),
     )
 
 

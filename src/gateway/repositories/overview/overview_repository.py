@@ -15,7 +15,13 @@ from sqlalchemy import ColumnElement, Row, String, Subquery, and_, case, cast, f
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
-from gateway.core.usage_filters import requests_and_failures, spend_by_key, spend_by_workspace, window_rows
+from gateway.core.usage_filters import (
+    UsageCondition,
+    requests_and_failures,
+    spend_by_key,
+    spend_by_workspace,
+    window_rows,
+)
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import RESET_ALIGNMENTS, SCOPE_API_TOKEN, SCOPE_WORKSPACE, Budget, ScopedBudget
 from gateway.models.tenancy import Workspace, WorkspaceMember
@@ -370,14 +376,34 @@ class OverviewRepository:
         stmt = select(func.count()).select_from(Budget).where(_owned_by(owner_organization_id))
         return int(await self.db.scalar(stmt) or 0)
 
+    @staticmethod
+    def month_rows(
+        *,
+        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID | None,
+        start: datetime,
+        end: datetime,
+        user_id: str | None = None,
+        owner_user_id: str | None = None,
+    ) -> list[UsageCondition]:
+        """The usage rows a window's figures read: one workspace or the organization, one user or one owner's keys.
+
+        The conditions the usage reads build their relation from; the reads below
+        aggregate that relation.
+        """
+
+        # Narrowed to the owner's keys, so the grouped pass does not sum the
+        # whole organization's month to answer for one owner.
+        owned = select(APIKey.id).where(APIKey.user_id == owner_user_id) if owner_user_id is not None else None
+        return window_rows(start, end, _in_scope(organization_id, workspace_id), user_id=user_id, api_key_ids=owned)
+
     async def keys_with_spend(
         self,
+        rows: Subquery,
         *,
         organization_id: uuid.UUID,
         workspace_id: uuid.UUID | None,
         owner_user_id: str | None,
-        start: datetime,
-        end: datetime,
         rail_rows: int,
         candidates: Candidates,
     ) -> list[KeySpend]:
@@ -387,14 +413,11 @@ class OverviewRepository:
         might need attention: a ceiling near its cap, or an expiry close. Never
         every key, so the read stays bounded however many keys a workspace has.
         Internal keys are left out, as the key lists leave them out. One
-        statement: the spend is a grouped pass over the window, and the ceiling
-        an outer join.
+        statement: the spend is a grouped pass over ``rows`` (:meth:`month_rows`
+        with the same owner), and the ceiling an outer join.
         """
 
-        # Narrow the grouped pass to the rows the outer query can keep, so it
-        # does not sum the whole organization's month to answer for one owner.
-        owned = select(APIKey.id).where(APIKey.user_id == owner_user_id) if owner_user_id is not None else None
-        spend = spend_by_key(window_rows(start, end, _in_scope(organization_id, workspace_id), api_key_ids=owned))
+        spend = spend_by_key(rows)
         ceilings = _ceilings(organization_id, SCOPE_API_TOKEN)
         billed = func.coalesce(spend.c.billed, 0.0)
         keys = (
@@ -454,23 +477,22 @@ class OverviewRepository:
 
     async def workspaces_with_spend(
         self,
+        rows: Subquery,
         *,
         organization_id: uuid.UUID,
-        start: datetime,
-        end: datetime,
         rail_rows: int,
         candidates: Candidates,
     ) -> WorkspaceSpends:
         """The organization's most billed workspaces, those whose ceiling is near its cap, and the window's totals.
 
-        One statement. The grouped pass that sums each workspace's spend also
-        counts its requests and failures, and a window over every workspace adds
-        those up before the rail is cut, so the organization's error rate needs
-        no second read of its month. Imported rows count toward both, as the
-        usage reads count them.
+        One statement over ``rows``, the organization's :meth:`month_rows`. The
+        grouped pass that sums each workspace's spend also counts its requests
+        and failures, and a window over every workspace adds those up before the
+        rail is cut, so the organization's error rate needs no second read of its
+        month. Imported rows count toward both, as the usage reads count them.
         """
 
-        spend = spend_by_workspace(window_rows(start, end, _in_scope(organization_id, None)))
+        spend = spend_by_workspace(rows)
         ceilings = _ceilings(organization_id, SCOPE_WORKSPACE)
         billed = func.coalesce(spend.c.billed, 0.0)
         ranked = (
@@ -495,7 +517,7 @@ class OverviewRepository:
             .order_by(ranked.c.rank)
             .limit(rail_rows + candidates.limit)
         )
-        rows = (await self.db.execute(stmt)).all()
+        found = (await self.db.execute(stmt)).all()
         return WorkspaceSpends(
             workspaces=[
                 WorkspaceSpend(
@@ -506,10 +528,10 @@ class OverviewRepository:
                     ceiling=_ceiling(row),
                     in_rail=row.rank <= rail_rows,
                 )
-                for row in rows
+                for row in found
             ],
-            requests=int(rows[0].all_requests) if rows else 0,
-            failures=int(rows[0].all_failures) if rows else 0,
+            requests=int(found[0].all_requests) if found else 0,
+            failures=int(found[0].all_failures) if found else 0,
         )
 
     async def workspace_ceiling(self, organization_id: uuid.UUID, workspace_id: uuid.UUID) -> Ceiling | None:
@@ -519,22 +541,13 @@ class OverviewRepository:
         row = (await self.db.execute(select(ceilings).where(ceilings.c.scope_id == str(workspace_id)))).first()
         return _ceiling(row) if row is not None else None
 
-    async def requests_and_failures(
-        self,
-        *,
-        organization_id: uuid.UUID,
-        workspace_id: uuid.UUID | None,
-        user_id: str | None,
-        start: datetime,
-        end: datetime,
-    ) -> tuple[int, int]:
-        """Requests in the window (one workspace, else the organization; one user, else everyone) and failures.
+    async def requests_and_failures(self, rows: Subquery) -> tuple[int, int]:
+        """Requests in ``rows`` (:meth:`month_rows`) and failures.
 
         Requests are counted the way every usage read counts them: an attempt a
         routing policy recovered from is part of the request it served. Imported
         rows count too, as they do on the Usage page.
         """
 
-        where = window_rows(start, end, _in_scope(organization_id, workspace_id), user_id=user_id)
-        row = (await self.db.execute(requests_and_failures(where))).one()
+        row = (await self.db.execute(requests_and_failures(rows))).one()
         return int(row[0] or 0), int(row[1] or 0)
