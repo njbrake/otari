@@ -209,6 +209,7 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
       : rows,
     tools: tools.data?.tools ?? [],
     isFetchingTools: tools.isFetching,
+    isLoadingP95: !byP95 && !p95 && !latency.error,
     previous: hasSpan ? undefined : previous.data?.totals,
     grouped: grouped.data,
     spend: spend.data ?? undefined,

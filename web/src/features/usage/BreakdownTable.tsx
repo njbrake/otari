@@ -3,6 +3,7 @@ import type { SortDescriptor } from "react-aria-components"
 import { FiArrowUpRight } from "react-icons/fi"
 import { Button } from "@/design-system/actions/Button"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
+import { Skeleton } from "@/design-system/feedback/Skeleton"
 import { Chip } from "@/design-system/indicators/Chip"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { Tooltip } from "@/design-system/overlays/Tooltip"
@@ -64,6 +65,7 @@ export function BreakdownTable({
   onOpen,
   canOpen,
   isLoading,
+  isLoadingP95 = false,
   emptyContent,
 }: {
   dimension: DimensionKey
@@ -80,6 +82,8 @@ export function BreakdownTable({
   /** Whether Activity can show a row's requests; a row it cannot is inert. */
   canOpen: (row: UsageBreakdownRow) => boolean
   isLoading: boolean
+  /** The rows are in and their p95 is still being read. */
+  isLoadingP95?: boolean
   emptyContent: ReactNode
 }) {
   const [isShowingAll, setIsShowingAll] = useState(false)
@@ -241,13 +245,16 @@ export function BreakdownTable({
       ),
       align: "end",
       allowsSorting: true,
-      cell: (row) => (
-        <span className="text-mono-caption">
-          {formatLatency(row.p95_latency_ms) ?? (
-            <span className="text-subtle">—</span>
-          )}
-        </span>
-      ),
+      cell: (row) =>
+        isLoadingP95 && !row.is_other ? (
+          <Skeleton className="ml-auto h-3 w-12" />
+        ) : (
+          <span className="text-mono-caption">
+            {formatLatency(row.p95_latency_ms) ?? (
+              <span className="text-subtle">—</span>
+            )}
+          </span>
+        ),
     },
     {
       id: "open",

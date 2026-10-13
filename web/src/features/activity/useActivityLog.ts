@@ -372,6 +372,14 @@ export function useActivityLog({
           ? null
           : (latency.data?.p95_latency_ms ?? null),
     },
+    isLoadingTotals: !totals.data && !totals.error,
+    isLoadingP95:
+      !isPhone &&
+      !totals.error &&
+      !latency.error &&
+      (latency.isPending ||
+        latency.isPlaceholderData ||
+        totals.isPlaceholderData),
     series: chartRead.data?.series ?? [],
     spend: spend.data ?? undefined,
     inFlight:

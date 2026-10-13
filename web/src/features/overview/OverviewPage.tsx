@@ -294,6 +294,7 @@ function OverviewPage({
           todayCost={month.isCurrent ? costOnDay(series, data.now) : undefined}
           budget={budget}
           failuresSearch={data.failuresSearch}
+          isLoading={!totals && !data.error}
         />
       </div>
 

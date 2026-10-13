@@ -22,7 +22,9 @@ Is the destination empty?
       └── EmptyMessage      (one line, inside the section that already has a heading)
 Is it loading?
  ├── The whole route -> PageLoading
- └── One section    -> the section's own isLoading, which keeps the heading
+ ├── One section    -> the section's own isLoading, which keeps the heading
+ ├── A value whose shape is known (a KPI, a table cell) -> Skeleton in its place
+ └── The page as a whole -> LoadingBar, which the shell already mounts
 Did the page fail to render at all?
  └── PageError             (the catch boundaries' panel; see below)
 Does the action delete a record?
@@ -46,6 +48,7 @@ EmptyState: { title, description?, actionLabel?, onAction?, isActionDisabled?,
   children? }
 EmptyMessage: { children, minHeight? }
 PageLoading: { label = "Loading…" }
+LoadingBar: { isActive }
 PageError: { error: unknown, children? }
 ConfirmDialog: { isOpen, onOpenChange, heading, body, confirmLabel, onConfirm,
   confirmVariant = "danger", isPending?, error? }
@@ -58,6 +61,11 @@ Dialog: { isOpen, onOpenChange, title, description?, size = "md",
 DialogSection: { className?, children }
 ErrorBoundary: { children, resetKey? }
 ```
+
+`LoadingBar` is not one a page reaches for either: the shell lays it over the top
+bar's bottom rule and turns it on while the reads the last move started (opening the
+page, or changing its URL) have no answer yet. A poll, and live mode's clock, do not
+turn it on, because nothing the reader did is waiting on them.
 
 `PageError` is `PageLoading`'s counterpart, for a failure that took the whole page
 rather than a band inside one: a gateway that never answered, and the two catch

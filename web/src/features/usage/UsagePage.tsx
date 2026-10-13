@@ -259,6 +259,7 @@ export function UsagePage() {
               previous={data.previous}
               windowLabel={data.preset.label}
               unpricedSearch={unpricedSearch}
+              isLoading={!summary && !data.error}
             />
           </div>
 
@@ -360,6 +361,7 @@ export function UsagePage() {
               onOpen={(row) => open(rowSearch(row))}
               canOpen={(row) => rowSearch(row) !== undefined}
               isLoading={data.isLoading}
+              isLoadingP95={data.isLoadingP95}
               emptyContent={
                 isFiltered ? (
                   <>

@@ -29,6 +29,7 @@ export function OverviewTiles({
   todayCost,
   budget,
   failuresSearch,
+  isLoading = false,
 }: {
   totals: UsageTotals | undefined
   series: readonly UsageSeriesPoint[]
@@ -41,6 +42,8 @@ export function OverviewTiles({
   budget: BudgetView
   /** Activity's search for the month's failed requests, where it can show them. */
   failuresSearch: DashboardSearch | undefined
+  /** The totals have not answered yet, as opposed to not being available. */
+  isLoading?: boolean
 }) {
   const total = totals?.cost ?? 0
   const subscription = totals?.imported_cost ?? 0
@@ -57,6 +60,7 @@ export function OverviewTiles({
     <KpiStrip isEmpty={false} columns={3}>
       <KpiCell
         label="Total at API prices"
+        isLoading={isLoading}
         value={totals ? formatUsd(total) : "—"}
         delta={
           previousCost !== undefined ? (
@@ -85,6 +89,7 @@ export function OverviewTiles({
       <BudgetCell budget={budget} />
       <KpiCell
         label="Requests"
+        isLoading={isLoading}
         value={totals ? formatNumber(requests) : "—"}
         severity={
           errors.status === "neutral"

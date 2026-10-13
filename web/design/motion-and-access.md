@@ -17,7 +17,9 @@ utility.
 sweeping the first-run sheet's own border (`Dialog`'s `isScanning`) and the orb
 in the listening panel pinned above its footer. They are the shape of the
 exception rather than licence to add more, and what makes them one exception
-rather than two is that neither outlives the wait. Both run
+rather than two is that neither outlives the wait. `Skeleton`'s pulse and the
+shell's `LoadingBar` follow the same rule from the other side: each runs only
+until a read answers, and each holds still under `prefers-reduced-motion`. Both run
 only while the product is watching for a request that has not arrived, both stop
 when it does, and neither carries anything that is not also in the text beside
 it.

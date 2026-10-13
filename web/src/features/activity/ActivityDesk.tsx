@@ -234,6 +234,8 @@ export function ActivityDesk({
 
         <ActivityTotals
           totals={log.totals}
+          isLoading={log.isLoadingTotals}
+          isLoadingP95={log.isLoadingP95}
           isFiltered={log.isFiltered}
           isCompact={isCompact}
           onUnpriced={act.unpriced}

@@ -183,7 +183,11 @@ export function ActivityPhone({
               />
             </div>
           ) : null}
-          <ActivityTotals totals={log.totals} variant="phone" />
+          <ActivityTotals
+            totals={log.totals}
+            isLoading={log.isLoadingTotals}
+            variant="phone"
+          />
         </div>
 
         {log.isLoadingRows ? (

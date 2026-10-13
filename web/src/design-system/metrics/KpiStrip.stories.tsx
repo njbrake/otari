@@ -180,3 +180,17 @@ export const ThreeColumnsStacked: Story = {
   ...ThreeColumns,
   globals: { viewport: { value: "mobile2", isRotated: false } },
 }
+
+/**
+ * `isLoading` holds each part of a cell as a skeleton until its read answers,
+ * rather than a zero nobody has read; the graphic slot keeps its height.
+ */
+export const Loading: Story = {
+  render: () => (
+    <KpiStrip isEmpty={false} columns={3}>
+      <KpiCell label="Spend" value="" graphic={<span />} isLoading />
+      <KpiCell label="Requests" value="" graphic={<span />} isLoading />
+      <KpiCell label="Tokens" value="" graphic={<span />} isLoading />
+    </KpiStrip>
+  ),
+}

@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from "react"
 import type { UsageTotals } from "@/client"
 import { TextButton } from "@/design-system/actions/TextButton"
+import { Skeleton } from "@/design-system/feedback/Skeleton"
 import { billedTokenTotal } from "@/features/usage/usageTotals"
 import {
   formatLatency,
@@ -28,6 +29,8 @@ export function ActivityTotals({
   isCompact = false,
   onUnpriced,
   trailing,
+  isLoading = false,
+  isLoadingP95 = false,
 }: {
   totals: UsageTotals | undefined
   variant?: "desk" | "phone"
@@ -35,6 +38,10 @@ export function ActivityTotals({
   isCompact?: boolean
   onUnpriced?: () => void
   trailing?: ReactNode
+  /** No totals have answered yet, so there is nothing to count. */
+  isLoading?: boolean
+  /** The totals are in and their p95 is still being read. */
+  isLoadingP95?: boolean
 }) {
   const isPhone = variant === "phone"
   const count = totals?.request_count ?? 0
@@ -76,8 +83,28 @@ export function ActivityTotals({
         cached)
       </span>
     ),
-    isBrief || !p95 ? null : <span key="p95">P95 {p95}</span>,
+    isBrief ? null : isLoadingP95 ? (
+      <span key="p95" className="flex items-center gap-1.5">
+        P95 <Skeleton className="h-3 w-10" />
+      </span>
+    ) : p95 ? (
+      <span key="p95">P95 {p95}</span>
+    ) : null,
   ].filter((part) => part !== null)
+  if (isLoading) {
+    // The line's own height, held by two bars where the count and its parts go.
+    return isPhone ? (
+      <div className="flex gap-x-2.5 border-t border-border-subtle bg-surface-subtle px-4 py-[0.4375rem] text-mono-micro">
+        <Skeleton className="h-[1lh] w-48" />
+      </div>
+    ) : (
+      <div className="-mx-4 flex min-h-10 items-center gap-2.5 border-b border-border bg-surface-subtle px-4 py-1.5 md:-mx-6 md:px-6">
+        <Skeleton className="h-3 w-24" />
+        <Skeleton className="h-3 w-72 max-w-[50%]" />
+        {trailing ? <span className="ml-auto">{trailing}</span> : null}
+      </div>
+    )
+  }
   if (isPhone) {
     return (
       <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 border-t border-border-subtle bg-surface-subtle px-4 py-[0.4375rem] text-mono-micro whitespace-nowrap text-subtle">

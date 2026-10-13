@@ -252,6 +252,8 @@ describe("UsagePage", () => {
       const row = await rowNamed(/deepseek-v4-flash/)
       expect(within(row).getByText("$28.61")).toBeInTheDocument()
       expect(within(row).queryByText("1.85 s")).toBeNull()
+      // A skeleton holds the cell, not the dash that means "none recorded".
+      expect(row.querySelector(".animate-pulse")).not.toBeNull()
 
       releaseLatency()
       await waitFor(() =>
@@ -261,6 +263,30 @@ describe("UsagePage", () => {
           ).getByText("1.85 s"),
         ).toBeInTheDocument(),
       )
+    })
+
+    it("holds the tiles as skeletons until the summary answers, rather than zeros", async () => {
+      let releaseSummary = () => {}
+      const summaryHeld = new Promise<void>((resolve) => {
+        releaseSummary = resolve
+      })
+      mockUsageApi({
+        viewer: "member",
+        hold: (kind) => (kind === "summary" ? summaryHeld : undefined),
+      })
+      const { container } = page()
+      await waitFor(() =>
+        expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(
+          3,
+        ),
+      )
+      // The tile's line under its figure waits too, rather than describing zeros.
+      expect(screen.queryByText(/from cache/)).toBeNull()
+
+      releaseSummary()
+      await rowNamed(/deepseek-v4-flash/)
+      expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(0)
+      expect(screen.getByText(/from cache/)).toBeInTheDocument()
     })
 
     it("pins the rows with no value last, explained", async () => {

@@ -265,7 +265,8 @@ describe("ActivityPage", () => {
       expect(
         await screen.findByText("115 filtered requests"),
       ).toBeInTheDocument()
-      expect(screen.queryByText(/^P95/)).not.toBeInTheDocument()
+      // The figure waits as a skeleton beside its label.
+      expect(screen.getByText("P95")).toBeInTheDocument()
       release()
       expect(await screen.findByText("P95 2.00 s")).toBeInTheDocument()
     })
