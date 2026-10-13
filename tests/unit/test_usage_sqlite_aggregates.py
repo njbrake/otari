@@ -207,7 +207,9 @@ def test_a_groups_p95_on_sqlite_is_the_nearest_rank_value_postgresql_returns() -
         await db.commit()
         uow = UnitOfWork(db)
         async with uow:
-            return await UsageSummaryRepository(uow).group_p95_latency_ms("model", ["steady", "once", "unmeasured"], [])
+            return await UsageSummaryRepository(uow).group_p95_latency_ms(
+                "model", ["steady", "once", "unmeasured"], await _rows(uow), []
+            )
 
     assert _run(body) == {"steady": 1900, "once": 700}
 
@@ -352,8 +354,12 @@ def test_a_groups_p95_on_sqlite_by_channel_and_by_workspace() -> None:
         uow = UnitOfWork(db)
         async with uow:
             repo = UsageSummaryRepository(uow)
-            channels = await repo.group_p95_latency_ms("channel", ["imported", "playground", "api"], [])
-            workspaces = await repo.group_p95_latency_ms("workspace", [str(WORKSPACE), str(other)], [])
+            channels = await repo.group_p95_latency_ms(
+                "channel", ["imported", "playground", "api"], await _rows(uow), []
+            )
+            workspaces = await repo.group_p95_latency_ms(
+                "workspace", [str(WORKSPACE), str(other)], await _rows(uow), []
+            )
         return channels, workspaces
 
     channels, workspaces = _run(body)

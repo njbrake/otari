@@ -266,7 +266,8 @@ class UsageReadService:
                 else []
             )
             if include_p95:
-                totals = totals.model_copy(update={"p95_latency_ms": await self._reads.p95_latency_ms(conditions)})
+                p95 = await self._summaries.p95_latency_ms(rows, conditions)
+                totals = totals.model_copy(update={"p95_latency_ms": p95})
             populated = await self._summaries.series(rows, status_filter=status, bucket=bucket)
         return UsageSummary(
             start_date=start.isoformat(),
@@ -322,7 +323,7 @@ class UsageReadService:
         )
         keys = [group.key for group in groups]
         if with_p95:
-            p95 = await self._summaries.group_p95_latency_ms(dimension, keys, conditions)
+            p95 = await self._summaries.group_p95_latency_ms(dimension, keys, rows, conditions)
             groups = [group.model_copy(update={"p95_latency_ms": p95.get(group.key)}) for group in groups]
         if is_session and with_details:
             details = await self._summaries.session_details(keys, rows, status_filter=status)
@@ -350,12 +351,14 @@ class UsageReadService:
         breaks ties by key, so the groups match the summary's for the same window.
         """
         async with self._heavy_read():
+            usage = await self._rollups.rows(
+                conditions, start, end, bucket="hour", exact=group_by is not None and rank_by == "p95"
+            )
             if group_by is None:
-                overall = await self._reads.p95_latency_ms(conditions)
+                overall = await self._summaries.p95_latency_ms(usage, conditions)
                 rows: list[UsageGroupRow] = []
             else:
                 overall = None
-                usage = await self._rollups.rows(conditions, start, end, bucket="hour", exact=rank_by == "p95")
                 rows = await self._summaries.breakdown(
                     group_by,
                     usage,
@@ -367,7 +370,8 @@ class UsageReadService:
                 )
                 # Ranked by p95, the breakdown already carries every row's.
                 if rank_by != "p95":
-                    p95 = await self._summaries.group_p95_latency_ms(group_by, [row.key for row in rows], conditions)
+                    keys = [row.key for row in rows]
+                    p95 = await self._summaries.group_p95_latency_ms(group_by, keys, usage, conditions)
                     rows = [row.model_copy(update={"p95_latency_ms": p95.get(row.key)}) for row in rows]
         return UsageLatency(
             start_date=start.isoformat(),

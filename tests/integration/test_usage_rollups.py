@@ -14,7 +14,7 @@ import random
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,7 +30,9 @@ from gateway.models.api_keys import APIKey
 from gateway.models.tenancy import Workspace
 from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT, UsageLog, UsageRollup, UsageRollupDirtyHour
 from gateway.models.users import User
-from gateway.repositories.usage import UsageRollupRepository
+from gateway.repositories.usage import UsageReadRepository, UsageRollupRepository, UsageSummaryRepository
+from gateway.repositories.usage.usage_summary_repository import _breakdown, _in_keys
+from gateway.schemas.usage import BreakdownDimension
 
 from .conftest import _to_async_url
 
@@ -371,3 +373,65 @@ def test_an_hour_whose_rows_are_all_gone_loses_its_rollups(db_session: Session, 
     db_session.expire_all()
     hours = set(db_session.execute(select(UsageRollup.hour).distinct()).scalars())
     assert hours == {T0 + timedelta(hours=1)}
+
+
+def _p95s(config: GatewayConfig, start: datetime, end: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Every p95 the reads offer over ``[start, end)``, from the relation and from ``percentile_disc`` over rows."""
+
+    async def main() -> tuple[dict[str, Any], dict[str, Any]]:
+        engine = create_async_engine(_to_async_url(config.database_url))
+        try:
+            async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+                uow = UnitOfWork(session)
+                async with uow:
+                    window = [UsageLog.timestamp >= start, UsageLog.timestamp < end]
+                    summaries = UsageSummaryRepository(uow)
+                    relation: dict[str, Any] = {}
+                    rows: dict[str, Any] = {}
+                    for name, extra in (("all", []), ("gateway", [UsageLog.source == "gateway"])):
+                        conditions = [*window, *extra]
+                        usage = await UsageRollupRepository(uow).rows(conditions, start, end, bucket="hour")
+                        assert "usage_rollups" in str(usage.compile())
+                        relation[name] = await summaries.p95_latency_ms(usage, conditions)
+                        rows[name] = await UsageReadRepository(uow).p95_latency_ms(conditions)
+                        for dimension in get_args(BreakdownDimension):
+                            groups = await summaries.breakdown(dimension, usage, conditions, limit=None)
+                            keys = [group.key for group in groups]
+                            relation[f"{name}/{dimension}"] = await summaries.group_p95_latency_ms(
+                                dimension, keys, usage, conditions
+                            )
+                            rows[f"{name}/{dimension}"] = await summaries._group_p95(
+                                _breakdown(dimension, UsageLog),
+                                [*conditions, _in_keys(_breakdown(dimension, UsageLog), keys)],
+                            )
+                    return relation, rows
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(main())
+
+
+def test_every_p95_from_the_rollups_is_the_one_percentile_disc_gives_over_the_rows(
+    db_session: Session, test_config: GatewayConfig
+) -> None:
+    _seed(db_session, seed=13)
+    # Ties, so a percentile that lands inside a run of equal latencies is covered.
+    for _ in range(30):
+        db_session.add(
+            UsageLog(
+                id=str(uuid.uuid4()),
+                workspace_id=seed_workspace_id(db_session),
+                timestamp=T0 + timedelta(hours=2, minutes=5),
+                model="alpha",
+                endpoint="/v1/messages",
+                status="success",
+                latency_ms=4242,
+            )
+        )
+    db_session.commit()
+    _refresh(test_config)
+
+    relation, rows = _p95s(test_config, T0 - timedelta(minutes=37), T0 + timedelta(hours=5, minutes=13))
+
+    assert relation == rows
+    assert relation["all"] is not None
