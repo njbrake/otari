@@ -151,6 +151,7 @@ _SETTING_NAMES = frozenset(
         "tools_header",
         "ui_base_url",
         "usage_read_concurrency",
+        "usage_rollup_refresh_interval_sec",
         "vision_describe_max_tokens",
         "vision_describe_model",
         "vision_strategy",

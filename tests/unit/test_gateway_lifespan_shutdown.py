@@ -220,6 +220,8 @@ def _full_config(**overrides: Any) -> GatewayConfig:
         "master_key": "sk-test-master",
         "sandbox_url": "http://sandbox:8080",
         "telemetry_retention_days": 90,
+        # The rollup refresh runs on PostgreSQL alone; nothing here connects to it.
+        "database_url": "postgresql://otari@localhost/otari",
     }
     return GatewayConfig(**{**settings, **overrides})
 
@@ -292,6 +294,24 @@ async def test_the_container_sweeper_stops_without_a_sandbox_or_without_reuse(
 
     assert "sandbox container sweep" not in names
     assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "sandbox container sweep"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config",
+    [
+        _full_config(usage_rollup_refresh_interval_sec=0),
+        _full_config(database_url="sqlite:///./otari.db"),
+    ],
+)
+async def test_the_usage_rollup_refresh_stops_with_its_interval_or_off_postgresql(
+    monkeypatch: pytest.MonkeyPatch, config: GatewayConfig
+) -> None:
+    """No trigger marks an hour outside PostgreSQL, so there is nothing to rebuild."""
+    names, _called = await _started_worker_names(config, monkeypatch)
+
+    assert "usage rollup refresh" not in names
+    assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "usage rollup refresh"]
 
 
 @pytest.mark.asyncio

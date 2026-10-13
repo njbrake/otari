@@ -116,6 +116,7 @@ non-secret effective set through `GET /api/v1/settings`.
 | `db_log_pool_size` | Connections reserved for usage logging, separate from the pool above. |
 | `db_ingest_pool_size` | Connections telemetry ingest may use, separate from the pool above and with no overflow. |
 | `usage_read_concurrency` | Heavy usage reads (summaries, breakdowns, p95, tools, the Overview's month) one worker runs at once; default `2`. |
+| `usage_rollup_refresh_interval_sec` | Seconds between rebuilds of the hourly usage rollups (PostgreSQL only); default `30`, `0` disables. |
 
 The pool sizes bound concurrent *database* work, not concurrent provider calls:
 a request hands its connection back before the upstream call. Raise them for a
@@ -147,6 +148,21 @@ cancelled, query included, so a page that was reloaded or left gives its turns
 back rather than holding them until its reads finish. The limit is per worker: the database
 sees up to workers × replicas × `usage_read_concurrency` of these reads at once.
 Raise it for a database with memory to spare.
+
+On PostgreSQL those reads take a whole hour's sums from `usage_rollups` rather
+than scanning the hour's rows, so a month-long window reads a row per hour for
+each combination of model, user, key, session and the other keys a read groups
+by, instead of a row per request. A trigger on `usage_logs` marks
+each hour an insert, update or delete touched, in the same transaction, and a
+marked hour is read from its rows until the gateway rebuilds it, every
+`usage_rollup_refresh_interval_sec`; the partial hours at either end of a window
+are always read from the rows. So the figures are the same either way, and the
+interval only decides how much of a window a read still scans. Reads that rank
+single requests (p95 latency) or filter on something the rollups do not keep
+(a request id, a tag, a tool, a cost or latency threshold, whether a row is
+priced) scan the rows as before. After an upgrade the gateway builds the
+history in the background, about a day of usage per pass; until it finishes, a
+read whose window still holds more than 48 unbuilt hours scans its rows.
 
 `db_ingest_pool_size` is what keeps a telemetry import off that critical path.
 The OTLP endpoints and `POST /api/v1/usage/external-events` draw from it rather

@@ -1132,6 +1132,7 @@ DOMAIN_NAME_BASELINE: dict[str, tuple[str, ...]] = {
         "__init__.py",
         "usage_read_repository.py",
         "usage_retention_repository.py",
+        "usage_rollup_repository.py",
         "usage_summary_repository.py",
     ),
     "gateway/schemas/usage.py": (),
@@ -1186,6 +1187,7 @@ DOMAIN_NAME_BASELINE: dict[str, tuple[str, ...]] = {
     "gateway/services/usage/": (
         "__init__.py",
         "_retention.py",
+        "_rollups.py",
         "_service.py",
         "_summary.py",
         "_sweeper.py",
@@ -1798,6 +1800,14 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
             "gateway/repositories/tenancy/user_merge_repository.py",
         ),
     },
+    "gateway.models.usage.UsageRollup": {
+        "repository": "gateway/repositories/usage/usage_rollup_repository.py",
+        "baseline": (),
+    },
+    "gateway.models.usage.UsageRollupDirtyHour": {
+        "repository": "gateway/repositories/usage/usage_rollup_repository.py",
+        "baseline": (),
+    },
     "gateway.models.usage.UsageLog": {
         "repository": None,
         "baseline": (
@@ -1815,6 +1825,7 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
             "gateway/repositories/tenancy/user_merge_repository.py",
             "gateway/repositories/usage/usage_read_repository.py",
             "gateway/repositories/usage/usage_retention_repository.py",
+            "gateway/repositories/usage/usage_rollup_repository.py",
             "gateway/repositories/usage/usage_summary_repository.py",
             "gateway/repositories/users_repository.py",
             "gateway/services/external_usage_service.py",

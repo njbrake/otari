@@ -11,7 +11,7 @@ from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import SortOrder, UsageCondition, UsageSort
 from gateway.exceptions.shared_exceptions import UsageReadsBusyError
 from gateway.models.usage import UsageLog
-from gateway.repositories.usage import UsageReadRepository, UsageSummaryRepository
+from gateway.repositories.usage import UsageReadRepository, UsageRollupRepository, UsageRows, UsageSummaryRepository
 from gateway.schemas.usage import (
     ActivityGroupBy,
     ActivityGroupOrder,
@@ -100,11 +100,13 @@ class UsageReadService:
         uow: UnitOfWork,
         reads: UsageReadRepository,
         summaries: UsageSummaryRepository,
+        rollups: UsageRollupRepository,
         heavy_reads: asyncio.Semaphore,
     ) -> None:
         self._uow = uow
         self._reads = reads
         self._summaries = summaries
+        self._rollups = rollups
         # Shared by every request this worker serves; see `heavy_usage_read`.
         self._heavy_reads = heavy_reads
 
@@ -211,11 +213,14 @@ class UsageReadService:
         # an empty selection, and it never contributes a dimension of its own.
         requested: set[str] = ALL_SUMMARY_DIMENSIONS if dimensions is None else {d for d in dimensions if d != "none"}
         async with self._heavy_read():
-            totals = await self._summaries.totals(conditions, status)
+            # Ranked by p95, every breakdown ranks single rows, so none of them reads the rollups.
+            rows = await self._rollups.rows(conditions, start, end, bucket=bucket, exact=rank_by == "p95")
+            totals = await self._summaries.totals(rows, status)
             breakdowns = {
                 name: with_fold(
                     await self._breakdown(
                         name,
+                        rows,
                         conditions,
                         limit=cap,
                         status=status,
@@ -234,11 +239,11 @@ class UsageReadService:
             # no status code; capped rather than folded, since a null key would collide
             # with the real "no code recorded" group.
             errors_by_status_code = (
-                await self._summaries.errors_by_status_code(conditions, limit=BREAKDOWN_TOP_N)
+                await self._summaries.errors_by_status_code(rows, limit=BREAKDOWN_TOP_N)
                 if ERROR_TAXONOMY_DIMENSION in requested
                 else []
             )
-            by_tool = await self._tool_breakdown(conditions) if TOOL_DIMENSION in requested else []
+            by_tool = await self._tool_breakdown(rows) if TOOL_DIMENSION in requested else []
             by_tag = (
                 with_fold(
                     await self._summaries.tag_breakdown(
@@ -252,7 +257,7 @@ class UsageReadService:
             )
             if include_p95:
                 totals = totals.model_copy(update={"p95_latency_ms": await self._reads.p95_latency_ms(conditions)})
-            populated = await self._summaries.series(conditions, status_filter=status, bucket=bucket)
+            populated = await self._summaries.series(rows, status_filter=status, bucket=bucket)
         return UsageSummary(
             start_date=start.isoformat(),
             end_date=end.isoformat(),
@@ -279,6 +284,7 @@ class UsageReadService:
     async def _breakdown(
         self,
         dimension: BreakdownDimension,
+        rows: UsageRows,
         conditions: list[UsageCondition],
         *,
         limit: int,
@@ -294,8 +300,9 @@ class UsageReadService:
         key name are the extra pass ``with_details`` asks for.
         """
         is_session = dimension == "source_label"
-        rows = await self._summaries.breakdown(
+        groups = await self._summaries.breakdown(
             dimension,
+            rows,
             conditions,
             limit=limit,
             status_filter=status,
@@ -303,14 +310,17 @@ class UsageReadService:
             rank_by=rank_by,
             rank_order=rank_order,
         )
-        keys = [row.key for row in rows]
+        keys = [group.key for group in groups]
         if with_p95:
             p95 = await self._summaries.group_p95_latency_ms(dimension, keys, conditions)
-            rows = [row.model_copy(update={"p95_latency_ms": p95.get(row.key)}) for row in rows]
+            groups = [group.model_copy(update={"p95_latency_ms": p95.get(group.key)}) for group in groups]
         if is_session and with_details:
-            details = await self._summaries.session_details(keys, conditions, status_filter=status)
-            rows = [row.model_copy(update=asdict(details[row.key])) if row.key in details else row for row in rows]
-        return rows
+            details = await self._summaries.session_details(keys, rows, status_filter=status)
+            groups = [
+                group.model_copy(update=asdict(details[group.key])) if group.key in details else group
+                for group in groups
+            ]
+        return groups
 
     async def latency(
         self,
@@ -335,8 +345,10 @@ class UsageReadService:
                 rows: list[UsageGroupRow] = []
             else:
                 overall = None
+                usage = await self._rollups.rows(conditions, start, end, bucket="hour", exact=rank_by == "p95")
                 rows = await self._summaries.breakdown(
                     group_by,
+                    usage,
                     conditions,
                     limit=SUMMARY_BREAKDOWNS[group_by],
                     status_filter=status,
@@ -358,10 +370,10 @@ class UsageReadService:
     async def tools(self, *, start: datetime, end: datetime, conditions: list[UsageCondition]) -> UsageTools:
         """The window's per-tool calls, failures, spend and requests, the summary's ``by_tool`` on its own."""
         async with self._heavy_read():
-            rows = await self._tool_breakdown(conditions)
-        return UsageTools(start_date=start.isoformat(), end_date=end.isoformat(), tools=rows)
+            tools = await self._tool_breakdown(await self._rollups.rows(conditions, start, end, bucket="hour"))
+        return UsageTools(start_date=start.isoformat(), end_date=end.isoformat(), tools=tools)
 
-    async def _tool_breakdown(self, conditions: list[UsageCondition]) -> list[UsageToolRow]:
+    async def _tool_breakdown(self, rows: UsageRows) -> list[UsageToolRow]:
         """Per-tool calls, failures, spend and requests, biggest spend first.
 
         A tool no row ran is left out, so a deployment that never ran one gets an
@@ -374,8 +386,8 @@ class UsageReadService:
         requests, so the two answer different questions on purpose: "how much tool work
         did we do" and "how many requests used a tool".
         """
-        rows = [await self._summaries.tool_usage(tool, conditions) for tool in GATEWAY_TOOL_NAMES]
-        return sorted((row for row in rows if row is not None), key=lambda r: r.cost, reverse=True)
+        tools = await self._summaries.tool_usage(GATEWAY_TOOL_NAMES, rows)
+        return sorted(tools, key=lambda tool: tool.cost, reverse=True)
 
     async def grouped_series(
         self,
@@ -391,9 +403,10 @@ class UsageReadService:
         """The window's top groups by ``rank_by``, each a series of its own, and the rest folded into ``other``."""
         dimension = SERIES_BREAKDOWNS[group_by]
         async with self._heavy_read():
-            totals = await self._summaries.totals(conditions, status)
+            rows = await self._rollups.rows(conditions, start, end, bucket=bucket)
+            totals = await self._summaries.totals(rows, status)
             top = await self._summaries.breakdown(
-                dimension, conditions, limit=SERIES_TOP_N, status_filter=status, rank_by=rank_by
+                dimension, rows, conditions, limit=SERIES_TOP_N, status_filter=status, rank_by=rank_by
             )
             groups = with_fold(
                 [UsageSeriesGroup.model_validate(row.model_dump(exclude={"p95_latency_ms"})) for row in top],
@@ -402,7 +415,7 @@ class UsageReadService:
             )
             points = await self._summaries.grouped_series(
                 dimension,
-                conditions,
+                rows,
                 status_filter=status,
                 bucket=bucket,
                 named={g.key for g in groups if g.key is not None},

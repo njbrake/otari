@@ -1,7 +1,10 @@
 """Queries behind the usage summary and the grouped series: totals, breakdowns, tools, failures and buckets.
 
-Like the log's reads, each takes the conditions the caller already built from the
-request's filters and its scope. The billed composition aggregates are shared by
+Each aggregate reads the relation :meth:`UsageRollupRepository.rows` builds over the
+window, in which a row stands for ``rows`` usage rows and every measure sums, so one
+query answers from an hour's rollups and from the rows alike. The reads that rank
+single rows (a percentile) or read a column the rollups do not keep (a tag) take
+the conditions and read the rows. The billed composition aggregates are shared by
 the summary series, the grand totals and the grouped series, so all three
 reconcile by construction.
 """
@@ -12,30 +15,26 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any, Never
 
-from sqlalchemy import ColumnElement, String, case, cast, func, null, or_, select
+from sqlalchemy import ColumnElement, String, Subquery, case, cast, func, null, or_, select
 
 from gateway.core.sql import UsageBucketGrain, bucket_expr, canonical_bucket, dialect_name, utc_bound
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import (
-    API_KEY_LABEL,
-    CHANNEL,
     CHANNEL_KEY,
-    TOOL_METER_NAMESPACE,
-    USER_LABEL,
     LabelJoin,
     SortOrder,
+    api_key_label,
     billed_cache_read_sum,
-    billed_cache_write_sum,
     billed_input_sum,
     billed_output_sum,
     imported_cost_sum,
-    needs_pricing_condition,
     request_count,
     status_count,
     tag_expr,
-    tool_calls_expr,
+    usage_channel,
+    user_label,
 )
-from gateway.models.usage import UsageLog
+from gateway.models.usage import SERVED_HERE_SLUG, UsageLog
 from gateway.repositories.base_repository import BaseRepository
 from gateway.repositories.tenancy.workspace_repository import workspace_label
 from gateway.schemas.usage import (
@@ -64,18 +63,29 @@ class _Breakdown:
     is_uuid: bool = False
 
 
-_BREAKDOWNS: dict[BreakdownDimension, _Breakdown] = {
-    "model": _Breakdown(UsageLog.model),
-    "user": _Breakdown(UsageLog.user_id, USER_LABEL),
-    "api_key": _Breakdown(UsageLog.api_key_id, API_KEY_LABEL),
-    "source": _Breakdown(UsageLog.source),
-    "source_label": _Breakdown(UsageLog.source_label),
-    "endpoint": _Breakdown(UsageLog.endpoint),
-    "provider": _Breakdown(UsageLog.provider),
-    "policy": _Breakdown(UsageLog.policy_name),
-    "workspace": _Breakdown(UsageLog.workspace_id, workspace_label(UsageLog.workspace_id), is_uuid=True),
-    "channel": _Breakdown(CHANNEL, reads=((CHANNEL_KEY, CHANNEL_KEY.c.id == UsageLog.api_key_id),)),
-}
+def _breakdown(dimension: BreakdownDimension, rows: Any) -> _Breakdown:
+    """What ``dimension`` groups by over ``rows``: ``UsageLog`` itself, or the columns of a usage relation."""
+    if dimension == "model":
+        return _Breakdown(rows.model)
+    if dimension == "user":
+        return _Breakdown(rows.user_id, user_label(rows.user_id))
+    if dimension == "api_key":
+        return _Breakdown(rows.api_key_id, api_key_label(rows.api_key_id))
+    if dimension == "source":
+        return _Breakdown(rows.source)
+    if dimension == "source_label":
+        return _Breakdown(rows.source_label)
+    if dimension == "endpoint":
+        return _Breakdown(rows.endpoint)
+    if dimension == "provider":
+        return _Breakdown(rows.provider)
+    if dimension == "policy":
+        return _Breakdown(rows.policy_name)
+    if dimension == "workspace":
+        return _Breakdown(rows.workspace_id, workspace_label(rows.workspace_id), is_uuid=True)
+    # The channel reads the row's key through its own alias, never the key label join.
+    channel = usage_channel(rows.source, rows.endpoint, CHANNEL_KEY.c.internal_secret.is_not(None))
+    return _Breakdown(channel, reads=((CHANNEL_KEY, CHANNEL_KEY.c.id == rows.api_key_id),))
 
 
 def _joined(stmt: Any, spec: _Breakdown, *, with_label: bool) -> Any:
@@ -96,38 +106,70 @@ def _in_keys(spec: _Breakdown, keys: Collection[str | None]) -> ColumnElement[bo
     return or_(*matches)
 
 
-def _p95_latency() -> Any:
+# The aggregates over a usage relation. Each sums a measure, or a row count weighted
+# by ``rows``, so it means over the relation what its namesake in ``core/usage_filters``
+# means over ``usage_logs``.
+
+
+def _cost(rows: Any) -> Any:
+    return func.coalesce(func.sum(rows.cost), 0.0)
+
+
+def _requests(rows: Any, status_filter: str | None = None) -> Any:
+    """Requests, not rows, as ``core/usage_filters.request_count`` counts them."""
+    if status_filter == "absorbed":
+        return func.coalesce(func.sum(rows.rows), 0)
+    return func.coalesce(func.sum(case((rows.status != "absorbed", rows.rows), else_=0)), 0)
+
+
+def _with_status(rows: Any, status: str) -> Any:
+    return func.coalesce(func.sum(case((rows.status == status, rows.rows), else_=0)), 0)
+
+
+def _imported_cost(rows: Any) -> Any:
+    return func.coalesce(func.sum(case((rows.source != SERVED_HERE_SLUG, rows.cost), else_=0)), 0.0)
+
+
+def _summed(column: Any) -> Any:
+    return func.coalesce(func.sum(column), 0)
+
+
+def _billed_tokens(rows: Any) -> Any:
+    return _summed(rows.billed_input_tokens) + _summed(rows.billed_output_tokens)
+
+
+def _p95_latency(rows: Any) -> Any:
     """A group's nearest-rank 95th-percentile latency over its requests, as a PostgreSQL ordered-set aggregate.
 
+    Over single rows only (see ``exact`` on :meth:`UsageRollupRepository.rows`).
     ``percentile_disc`` skips NULL inputs, so nulling the absorbed attempts leaves
     them out as :meth:`UsageSummaryRepository.group_p95_latency_ms` does.
     """
-    return func.percentile_disc(0.95).within_group(case((UsageLog.status != "absorbed", UsageLog.latency_ms)).asc())
+    return func.percentile_disc(0.95).within_group(case((rows.status != "absorbed", rows.latency_ms)).asc())
 
 
-def _rank(spec: _Breakdown, label: Any, rank_by: UsageBreakdownRankBy, status_filter: str | None) -> Any:
+def _rank(rows: Any, spec: _Breakdown, label: Any, rank_by: UsageBreakdownRankBy, status_filter: str | None) -> Any:
     """The value a breakdown's groups are ranked by, for the summary's breakdowns and the series' groups alike.
 
     ``name`` is the group's label where it has one, else its key, ignoring case.
     ``p95`` is :func:`_p95_latency`, which only PostgreSQL can order by.
     """
-    cost = func.coalesce(func.sum(UsageLog.cost), 0.0)
     if rank_by == "name":
         key = cast(spec.column, String)
         return func.lower(key if spec.label is None else func.coalesce(label, key))
     if rank_by == "p95":
-        return _p95_latency()
+        return _p95_latency(rows)
     if rank_by == "billed":
-        return cost - imported_cost_sum()
+        return _cost(rows) - _imported_cost(rows)
     if rank_by == "tokens":
-        return billed_input_sum() + billed_output_sum()
+        return _billed_tokens(rows)
     if rank_by == "requests":
-        return request_count(status_filter)
+        return _requests(rows, status_filter)
     if rank_by == "imported":
-        return imported_cost_sum()
+        return _imported_cost(rows)
     if rank_by == "errors":
-        return status_count("error")
-    return cost
+        return _with_status(rows, "error")
+    return _cost(rows)
 
 
 def _ranked_by_p95(groups: list[UsageGroupRow], rank_order: SortOrder) -> list[UsageGroupRow]:
@@ -155,71 +197,52 @@ def _most_common[T](counts: Counter[T]) -> T:
     return min(counts, key=lambda value: (-counts[value], value is None, str(value)))
 
 
-def _tool_cost_expr(tool: str) -> Any:
-    """USD charged for one tool on a row, read off its own charge line.
-
-    The row's ``cost`` mixes tokens and tools, so per-tool spend has to come from
-    the line ``price_tool_calls`` wrote. ``pricing_breakdown`` is a JSON *array*,
-    and the tool lines are appended after the token ones, so the position is not
-    fixed; the units and the rate are both on the line, so the product is
-    reconstructed from the meter count instead, which needs no array search.
-    """
-    return tool_calls_expr(tool) * _tool_unit_rate_expr(tool)
-
-
-def _tool_unit_rate_expr(tool: str) -> Any:
-    """Per-call USD rate recorded on the row for one tool.
-
-    Stored per row rather than looked up live, so a historical row keeps the rate
-    it was actually billed at even after the operator changes the price.
-    """
-    return func.coalesce(
-        UsageLog.billing_meters[(TOOL_METER_NAMESPACE, tool, "unit_rate")].as_float(),
-        0.0,
-    )
-
-
 class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
-    """Aggregate usage rows in the open block of a Unit of Work."""
+    """Aggregate usage in the open block of a Unit of Work.
+
+    ``rows`` is the relation :meth:`UsageRollupRepository.rows` built for the read;
+    ``conditions`` are the ones it was built from, for the reads that need the rows.
+    """
 
     def __init__(self, uow: UnitOfWork) -> None:
         super().__init__(uow, UsageLog)
 
-    async def totals(self, conditions: list[ColumnElement[bool]], status_filter: str | None = None) -> UsageTotals:
-        """Grand totals over the rows the conditions leave."""
+    async def totals(self, rows: Subquery, status_filter: str | None = None) -> UsageTotals:
+        """Grand totals over the rows."""
+        u = rows.c
+        counted = u.status != "absorbed"
         row = (
             await self.db.execute(
                 select(
-                    func.coalesce(func.sum(UsageLog.cost), 0.0),
-                    func.coalesce(func.sum(UsageLog.prompt_tokens), 0),
-                    func.coalesce(func.sum(UsageLog.completion_tokens), 0),
-                    func.coalesce(func.sum(UsageLog.total_tokens), 0),
-                    func.coalesce(func.sum(UsageLog.cache_read_tokens), 0),
-                    func.coalesce(func.sum(UsageLog.cache_write_tokens), 0),
-                    func.coalesce(func.sum(UsageLog.cache_write_1h_tokens), 0),
-                    request_count(status_filter),
-                    status_count("error"),
+                    _cost(u),
+                    _summed(u.prompt_tokens),
+                    _summed(u.completion_tokens),
+                    _summed(u.total_tokens),
+                    _summed(u.cache_read_tokens),
+                    _summed(u.cache_write_tokens),
+                    _summed(u.cache_write_1h_tokens),
+                    _requests(u, status_filter),
+                    _with_status(u, "error"),
                     # Averaged over requests, not attempts: an absorbed row carries the
                     # time spent on a candidate that did not serve, and folding it in
                     # would make a policy that recovers quickly look slower than one
                     # that never fails.
-                    func.avg(case((UsageLog.status != "absorbed", UsageLog.latency_ms))),
+                    func.sum(case((counted, u.latency_ms))),
+                    func.sum(case((counted, u.latency_count), else_=0)),
                     # Unpriced *served* rows only; see UsageTotals.unpriced_requests. The
                     # predicate is shared with the list filter so the tile and the rows it
                     # sends an operator to agree.
-                    func.coalesce(
-                        func.sum(case(((UsageLog.status == "success") & needs_pricing_condition(), 1), else_=0)),
-                        0,
-                    ),
-                    billed_input_sum(),
-                    billed_output_sum(),
-                    status_count("absorbed"),
-                    imported_cost_sum(),
-                    func.coalesce(func.sum(UsageLog.reasoning_tokens), 0),
-                    billed_cache_read_sum(),
-                ).where(*conditions)
+                    func.coalesce(func.sum(case(((u.status == "success") & u.needs_pricing, u.rows), else_=0)), 0),
+                    _summed(u.billed_input_tokens),
+                    _summed(u.billed_output_tokens),
+                    _with_status(u, "absorbed"),
+                    _imported_cost(u),
+                    _summed(u.reasoning_tokens),
+                    _summed(u.billed_cache_read_tokens),
+                )
             )
         ).one()
+        latency_total, latency_count = row[9], row[10]
         return UsageTotals(
             cost=float(row[0]),
             prompt_tokens=int(row[1]),
@@ -230,19 +253,20 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
             cache_write_1h_tokens=int(row[6]),
             request_count=int(row[7]),
             error_count=int(row[8]),
-            avg_latency_ms=float(row[9]) if row[9] is not None else None,
-            unpriced_requests=int(row[10]),
-            billed_input_tokens=int(row[11]),
-            billed_output_tokens=int(row[12]),
-            absorbed_count=int(row[13]),
-            imported_cost=float(row[14]),
-            reasoning_tokens=int(row[15]),
-            billed_cache_read_tokens=int(row[16]),
+            avg_latency_ms=float(latency_total) / int(latency_count) if latency_count else None,
+            unpriced_requests=int(row[11]),
+            billed_input_tokens=int(row[12]),
+            billed_output_tokens=int(row[13]),
+            absorbed_count=int(row[14]),
+            imported_cost=float(row[15]),
+            reasoning_tokens=int(row[16]),
+            billed_cache_read_tokens=int(row[17]),
         )
 
     async def breakdown(
         self,
         dimension: BreakdownDimension,
+        rows: Subquery,
         conditions: list[ColumnElement[bool]],
         *,
         limit: int | None,
@@ -259,13 +283,13 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         token count means. ``rank_by`` and ``rank_order`` order the groups, and so
         pick the ``limit`` that are kept; a group with no value to rank by comes
         last, and a tie falls to the key, the NULL group last, in either direction.
-        Ranked by ``p95``, each row carries its p95. ``with_span`` also reads each
-        group's first and last request in the same pass and returns session rows,
-        for ``source_label``.
+        Ranked by ``p95``, each row carries its p95, which needs ``rows`` built
+        ``exact``. ``with_span`` also reads each group's first and last request in
+        the same pass and returns session rows, for ``source_label``.
         """
-        spec = _BREAKDOWNS[dimension]
+        u = rows.c
+        spec = _breakdown(dimension, u)
         column, label_join = spec.column, spec.label
-        cost_sum = func.coalesce(func.sum(UsageLog.cost), 0.0)
         # The label rides along in the same pass rather than costing a second query or
         # a client-side table dump. Grouped by as well as selected: it is functionally
         # dependent on the joined row's primary key, but only PostgreSQL infers that,
@@ -273,37 +297,37 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         # deleted keeps its row (with a null label) instead of vanishing from a
         # breakdown that must still reconcile against the totals.
         label_column = label_join.label if label_join is not None else null()
-        rank = _rank(spec, label_column, rank_by, status_filter)
+        rank = _rank(u, spec, label_column, rank_by, status_filter)
         # SQLite has no percentile aggregate, so there every group is read and ranked
         # by the p95 the window-function pass computes, before the limit applies.
         p95_in_python = rank_by == "p95" and dialect_name(self.db) == "sqlite"
         stmt = select(
             column,
             label_column,
-            cost_sum,
-            billed_input_sum() + billed_output_sum(),
-            request_count(status_filter),
-            imported_cost_sum(),
-            status_count("error"),
-            billed_cache_read_sum(),
+            _cost(u),
+            _billed_tokens(u),
+            _requests(u, status_filter),
+            _imported_cost(u),
+            _with_status(u, "error"),
+            _summed(u.billed_cache_read_tokens),
         )
         if with_span:
-            stmt = stmt.add_columns(func.min(UsageLog.timestamp), func.max(UsageLog.timestamp))
+            stmt = stmt.add_columns(func.min(u.first_at), func.max(u.last_at))
         p95_in_sql = rank_by == "p95" and not p95_in_python
         if p95_in_sql:
             stmt = stmt.add_columns(rank)
-        stmt = _joined(stmt, spec, with_label=True)
+        stmt = _joined(stmt.select_from(rows), spec, with_label=True)
         group_by = (column,) if label_join is None else (column, label_column)
-        stmt = stmt.where(*conditions).group_by(*group_by)
+        stmt = stmt.group_by(*group_by)
         if not p95_in_python:
             direction = rank.asc() if rank_order == "asc" else rank.desc()
             stmt = stmt.order_by(direction.nulls_last(), column.asc().nulls_last())
             if limit is not None:
                 stmt = stmt.limit(limit)
-        rows = (await self.db.execute(stmt)).all()
-        p95 = await self._group_p95(spec, conditions) if p95_in_python else {}
+        found = (await self.db.execute(stmt)).all()
+        p95 = await self._group_p95(_breakdown(dimension, UsageLog), conditions) if p95_in_python else {}
         groups: list[UsageGroupRow] = []
-        for row in rows:
+        for row in found:
             key = _key(row[0])
             figures = {
                 "key": key,
@@ -331,7 +355,7 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         keys: Collection[str | None],
         conditions: list[ColumnElement[bool]],
     ) -> dict[str | None, int]:
-        """Each of these groups' nearest-rank 95th-percentile latency, in one grouped pass.
+        """Each of these groups' nearest-rank 95th-percentile latency, in one grouped pass over the rows.
 
         The same value the totals' p95 takes over the window (``percentile_disc``,
         absorbed attempts left out), per group. SQLite has no ordered-set aggregate,
@@ -340,7 +364,7 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         """
         if not keys:
             return {}
-        spec = _BREAKDOWNS[dimension]
+        spec = _breakdown(dimension, UsageLog)
         return await self._group_p95(spec, [*conditions, _in_keys(spec, keys)])
 
     async def _group_p95(self, spec: _Breakdown, conditions: list[ColumnElement[bool]]) -> dict[str | None, int]:
@@ -366,19 +390,19 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
             .where(*measured)
             .subquery()
         )
-        rows = (
+        found = (
             await self.db.execute(
                 select(ranked.c.group_key, ranked.c.latency).where(
                     ranked.c.position == (ranked.c.size * 95 + 99) // 100
                 )
             )
         ).all()
-        return {_key(key): int(value) for key, value in rows}
+        return {_key(key): int(value) for key, value in found}
 
     async def session_details(
         self,
         keys: Collection[str | None],
-        conditions: list[ColumnElement[bool]],
+        rows: Subquery,
         *,
         status_filter: str | None = None,
     ) -> dict[str, SessionDetail]:
@@ -387,25 +411,28 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         One grouped pass over the sessions on the page, grouped by session, source and
         key name, so both answers come from the same counts. Requests, not rows: a routed
         request's abandoned attempts are left out, as the breakdown's counts leave them,
-        unless ``status_filter`` asks for exactly those (see ``request_count``).
+        unless ``status_filter`` asks for those alone (see ``request_count``).
         """
         named = [key for key in keys if key is not None]
         if not named:
             return {}
-        counted = [] if status_filter == "absorbed" else [UsageLog.status != "absorbed"]
-        rows = (
+        u = rows.c
+        counted = [] if status_filter == "absorbed" else [u.status != "absorbed"]
+        key_name = api_key_label(u.api_key_id)
+        found = (
             await self.db.execute(
-                select(UsageLog.source_label, UsageLog.source, API_KEY_LABEL.label, func.count())
-                .outerjoin(API_KEY_LABEL.entity, API_KEY_LABEL.on)
-                .where(*conditions, UsageLog.source_label.in_(named), *counted)
-                .group_by(UsageLog.source_label, UsageLog.source, API_KEY_LABEL.label)
+                select(u.source_label, u.source, key_name.label, func.sum(u.rows))
+                .select_from(rows)
+                .outerjoin(key_name.entity, key_name.on)
+                .where(u.source_label.in_(named), *counted)
+                .group_by(u.source_label, u.source, key_name.label)
             )
         ).all()
         sources: dict[str, Counter[str]] = {}
         key_names: dict[str, Counter[str | None]] = {}
-        for label, source, key_name, count in rows:
-            sources.setdefault(label, Counter())[source] += count
-            key_names.setdefault(label, Counter())[key_name] += count
+        for label, source, key_name, count in found:
+            sources.setdefault(label, Counter())[source] += int(count)
+            key_names.setdefault(label, Counter())[key_name] += int(count)
         return {
             label: SessionDetail(source=_most_common(sources[label]), api_key_name=_most_common(key_names[label]))
             for label in sources
@@ -421,7 +448,8 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
     ) -> list[UsageGroupRow]:
         """Spend/tokens/requests grouped by the value of request tag ``key``, biggest spend first.
 
-        Rows that do not carry the tag group under a null key. ``tokens`` is billed, as in :meth:`breakdown`.
+        Read from the rows, since the rollups keep no tags. Rows that do not carry
+        the tag group under a null key. ``tokens`` is billed, as in :meth:`breakdown`.
         """
         value = tag_expr(key)
         cost_sum = func.coalesce(func.sum(UsageLog.cost), 0.0)
@@ -441,7 +469,7 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         )
         if limit is not None:
             stmt = stmt.limit(limit)
-        rows = (await self.db.execute(stmt)).all()
+        found = (await self.db.execute(stmt)).all()
         return [
             UsageGroupRow(
                 key=row[0],
@@ -452,80 +480,87 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
                 error_count=int(row[5]),
                 cache_read_tokens=int(row[6]),
             )
-            for row in rows
+            for row in found
         ]
 
-    async def tool_usage(self, tool: str, conditions: list[ColumnElement[bool]]) -> UsageToolRow | None:
-        """One tool's calls, failures, spend and requests, or None when the rows never ran it.
+    async def tool_usage(self, tools: Collection[str], rows: Subquery) -> list[UsageToolRow]:
+        """Each tool's calls, failures, spend and requests in one pass, leaving out a tool the rows never ran.
 
-        One aggregate per tool rather than a ``GROUP BY`` over the meter map: a JSON
-        map's keys cannot be grouped portably across SQLite and PostgreSQL
-        (``json_each`` versus ``jsonb_each``). Cost comes from each row's charge line
-        rather than the row total, because a row's ``cost`` also carries tokens.
+        Cost comes from each row's charge line rather than the row total, because a
+        row's ``cost`` also carries tokens. Requests, not rows: a request that failed
+        over through a routing policy writes an absorbed row per recovered attempt,
+        and counting those would report more requests using a tool than the Activity
+        list shows for the same filter.
         """
-        calls = tool_calls_expr(tool)
-        errors = UsageLog.billing_meters[(TOOL_METER_NAMESPACE, tool, "errors")].as_integer()
-        row = (
-            await self.db.execute(
-                select(
-                    func.coalesce(func.sum(calls), 0),
-                    func.coalesce(func.sum(errors), 0),
-                    # Requests, not rows: a request that failed over through a
-                    # routing policy writes an absorbed row per recovered attempt,
-                    # and counting those would report more requests using a tool
-                    # than the Activity list shows for the same filter.
-                    request_count(),
-                    func.coalesce(func.sum(_tool_cost_expr(tool)), 0.0),
-                ).where(*conditions, calls.is_not(None))
+        u = rows.c
+        counted = u.status != "absorbed"
+        columns = [
+            column
+            for tool in tools
+            for column in (
+                _summed(u[f"{tool}_calls"]),
+                _summed(u[f"{tool}_errors"]),
+                func.coalesce(func.sum(case((counted, u[f"{tool}_rows"]), else_=0)), 0),
+                func.coalesce(func.sum(u[f"{tool}_cost"]), 0.0),
             )
-        ).one()
-        if not row[0] and not row[1]:
-            return None
-        return UsageToolRow(tool=tool, calls=int(row[0]), errors=int(row[1]), requests=int(row[2]), cost=float(row[3]))
+        ]
+        found = (await self.db.execute(select(*columns))).one()
+        result: list[UsageToolRow] = []
+        for index, tool in enumerate(tools):
+            calls, errors, requests, cost = found[index * 4 : index * 4 + 4]
+            if calls or errors:
+                result.append(
+                    UsageToolRow(
+                        tool=tool,
+                        calls=int(calls),
+                        errors=int(errors),
+                        requests=int(requests),
+                        cost=float(cost),
+                    )
+                )
+        return result
 
-    async def errors_by_status_code(
-        self, conditions: list[ColumnElement[bool]], *, limit: int
-    ) -> list[UsageErrorCodeRow]:
+    async def errors_by_status_code(self, rows: Subquery, *, limit: int) -> list[UsageErrorCodeRow]:
         """Failures grouped by status code, most frequent first, at most ``limit`` codes.
 
         A GROUP BY rather than substring matching over provider-specific error prose.
         """
-        request_count = func.count()
-        rows = (
+        u = rows.c
+        failures = func.sum(u.rows)
+        found = (
             await self.db.execute(
-                select(UsageLog.status_code, request_count)
-                .where(*conditions, UsageLog.status == "error")
-                .group_by(UsageLog.status_code)
-                .order_by(request_count.desc())
+                select(u.status_code, failures)
+                .where(u.status == "error")
+                .group_by(u.status_code)
+                .order_by(failures.desc())
                 .limit(limit)
             )
         ).all()
         return [
             UsageErrorCodeRow(status_code=row[0], error_class=error_class_for(row[0]), requests=int(row[1]))
-            for row in rows
+            for row in found
         ]
 
     async def series(
-        self, conditions: list[ColumnElement[bool]], *, status_filter: str | None, bucket: UsageBucketGrain
+        self, rows: Subquery, *, status_filter: str | None, bucket: UsageBucketGrain
     ) -> dict[str, UsageSeriesPoint]:
         """The populated time buckets, keyed by canonical ``bucket_start``."""
-        expr = bucket_expr(dialect_name(self.db), bucket, UsageLog.timestamp)
-        rows = (
+        u = rows.c
+        expr = bucket_expr(dialect_name(self.db), bucket, u.ts)
+        found = (
             await self.db.execute(
                 select(
                     expr,
-                    func.coalesce(func.sum(UsageLog.cost), 0.0),
-                    func.coalesce(func.sum(UsageLog.total_tokens), 0),
-                    request_count(status_filter),
-                    status_count("error"),
-                    billed_input_sum(),
-                    billed_cache_read_sum(),
-                    billed_cache_write_sum(),
-                    billed_output_sum(),
-                    imported_cost_sum(),
-                )
-                .where(*conditions)
-                .group_by(expr)
+                    _cost(u),
+                    _summed(u.total_tokens),
+                    _requests(u, status_filter),
+                    _with_status(u, "error"),
+                    _summed(u.billed_input_tokens),
+                    _summed(u.billed_cache_read_tokens),
+                    _summed(u.billed_cache_write_tokens),
+                    _summed(u.billed_output_tokens),
+                    _imported_cost(u),
+                ).group_by(expr)
             )
         ).all()
         return {
@@ -541,13 +576,13 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
                 output_tokens=int(row[8]),
                 imported_cost=float(row[9]),
             )
-            for row in rows
+            for row in found
         }
 
     async def grouped_series(
         self,
         dimension: BreakdownDimension,
-        conditions: list[ColumnElement[bool]],
+        rows: Subquery,
         *,
         status_filter: str | None,
         bucket: UsageBucketGrain,
@@ -561,7 +596,8 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
         the row count stays bounded by buckets × (``len(named)`` + 2) regardless of
         cardinality. ``keeps_null`` says a NULL group ranked among them.
         """
-        spec = _BREAKDOWNS[dimension]
+        u = rows.c
+        spec = _breakdown(dimension, u)
         column = spec.column
         named_keys = [uuid.UUID(k) for k in named] if spec.is_uuid else list(named)
         # The synthesized groups are encoded as (key NULL, fold flag) rather than a
@@ -575,21 +611,17 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
             fold_expr = case((column.is_(None), 0), (column.in_(named_keys), 0), else_=1)
         else:
             fold_expr = case((column.in_(named_keys), 0), else_=1)
-        expr = bucket_expr(dialect_name(self.db), bucket, UsageLog.timestamp)
+        expr = bucket_expr(dialect_name(self.db), bucket, u.ts)
         stmt = select(
             expr,
             key_expr,
             fold_expr,
-            func.coalesce(func.sum(UsageLog.cost), 0.0),
-            billed_input_sum() + billed_output_sum(),
-            request_count(status_filter),
-            imported_cost_sum(),
-        )
-        rows = (
-            await self.db.execute(
-                _joined(stmt, spec, with_label=False).where(*conditions).group_by(expr, key_expr, fold_expr)
-            )
-        ).all()
+            _cost(u),
+            _billed_tokens(u),
+            _requests(u, status_filter),
+            _imported_cost(u),
+        ).select_from(rows)
+        found = (await self.db.execute(_joined(stmt, spec, with_label=False).group_by(expr, key_expr, fold_expr))).all()
         points = [
             UsageGroupedSeriesPoint(
                 bucket_start=canonical_bucket(row[0], bucket),
@@ -600,7 +632,7 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
                 requests=int(row[5]),
                 imported_cost=float(row[6]),
             )
-            for row in rows
+            for row in found
         ]
         points.sort(key=lambda p: p.bucket_start)
         return points

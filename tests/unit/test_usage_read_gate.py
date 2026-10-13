@@ -6,7 +6,7 @@ from types import TracebackType
 from typing import Any, cast
 
 from gateway.core.unit_of_work import UnitOfWork
-from gateway.repositories.usage import UsageReadRepository, UsageSummaryRepository
+from gateway.repositories.usage import UsageReadRepository, UsageRollupRepository, UsageSummaryRepository
 from gateway.services.usage import UsageReadService
 
 START = datetime(2026, 10, 1, tzinfo=UTC)
@@ -71,12 +71,20 @@ class _SlowSummaries:
         self._uow.connections.sample()
         self._running.leave()
 
-    async def tool_usage(self, tool: str, conditions: list[Any]) -> None:
+    async def tool_usage(self, tools: Any, rows: Any) -> list[Any]:
         await self._work()
+        return []
 
-    async def totals(self, conditions: list[Any], status: str | None) -> Any:
+    async def totals(self, rows: Any, status: str | None) -> Any:
         await self._work()
         raise _Stop
+
+
+class _Rollups:
+    """Hands back a relation without reading anything, so the summaries' pause is the only work."""
+
+    async def rows(self, *args: Any, **kwargs: Any) -> Any:
+        return object()
 
 
 class _Stop(Exception):
@@ -91,6 +99,7 @@ def _service(gate: asyncio.Semaphore, connections: _Counter, running: _Counter) 
         cast(UnitOfWork, uow),
         cast(UsageReadRepository, object()),
         cast(UsageSummaryRepository, _SlowSummaries(uow, running)),
+        cast(UsageRollupRepository, _Rollups()),
         gate,
     )
 
