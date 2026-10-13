@@ -17,6 +17,7 @@ import {
   useLiveUsageCount,
   useUsageBatches,
   useUsageCount,
+  useUsageLatency,
   useUsageLogs,
   useUsagePreviews,
   useUsageRow,
@@ -188,7 +189,11 @@ export function useActivityLog({
   const count = useUsageCount(filters, isReady && !isGrouping, sort)
   const totals = useActivityTotals(aggregateFilters, grain, {
     enabled: isReady,
-    withP95: true,
+  })
+  // The totals line's p95, read apart so the rest of the line is not held
+  // behind its sort. The phone's line has no latency figure.
+  const latency = useUsageLatency(aggregateFilters, {
+    enabled: isReady && !isPhone,
   })
   // With no span the chart and the totals read one window, so the totals'
   // series draws the bars; a span narrows the totals, and the chart keeps the
@@ -328,6 +333,7 @@ export function useActivityLog({
     }
     if (!aggregatesMove) {
       void totals.refetch()
+      if (!isPhone) void latency.refetch()
       if (isGrouping) void groups.refetch()
     }
     if (time.hasSpan && !isOpen) void chart.refetch()
@@ -357,7 +363,10 @@ export function useActivityLog({
     isFetchingRows: logs.isFetching,
     rowsUpdatedAt: logs.dataUpdatedAt,
     total: count.isSuccess ? count.data.total : null,
-    totals: totals.data?.totals,
+    totals: totals.data && {
+      ...totals.data.totals,
+      p95_latency_ms: latency.data?.p95_latency_ms ?? null,
+    },
     series: chartRead.data?.series ?? [],
     spend: spend.data ?? undefined,
     inFlight:
@@ -408,6 +417,7 @@ export function useActivityLog({
       rowsRead.error ??
       count.error ??
       totals.error ??
+      latency.error ??
       chartRead.error ??
       policies.error ??
       previews.find((preview) => preview.error)?.error ??

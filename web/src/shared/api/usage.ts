@@ -8,6 +8,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query"
 import type {
+  BreakdownDimension,
   InFlightResponse,
   SummaryDimension,
   UsageActivityGroupBy,
@@ -21,6 +22,7 @@ import type {
   UsageGroupBy,
   UsageGroupedSeries,
   UsageGroupRow,
+  UsageLatency,
   UsageMutationSelection,
   UsageRankBy,
   UsageRankOrder,
@@ -29,6 +31,7 @@ import type {
   UsageSetPriceResult,
   UsageSortKey,
   UsageSummary,
+  UsageTools,
 } from "@/client"
 import { ApiError, apiFetch, longRequestSignal } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
@@ -605,17 +608,14 @@ export function useUsageSummary(
 }
 
 // The Activity page's totals line and chart: the series and the totals, and
-// no breakdowns. The 95th-percentile latency sorts the window's latencies, so
-// the server computes it only when asked: the totals line asks, the chart does
-// not. `include_absorbed` is the list's and count's alone, so it is not sent:
-// the totals count earlier failed attempts separately either way.
+// no breakdowns. The totals line's p95 is `useUsageLatency`'s, read apart so
+// these figures are not held behind its sort. `include_absorbed` is the list's
+// and count's alone, so it is not sent: the totals count earlier failed
+// attempts separately either way.
 export function useActivityTotals(
   filters: UsageFilters,
   bucket: UsageBucket,
-  {
-    enabled = true,
-    withP95 = false,
-  }: { enabled?: boolean; withP95?: boolean } = {},
+  { enabled = true }: { enabled?: boolean } = {},
 ) {
   const scope = useUsageScope()
   const summaryFilters = withoutListOnly(filters)
@@ -627,13 +627,11 @@ export function useActivityTotals(
       scope.base,
       summaryFilters,
       bucket,
-      withP95,
     ],
     queryFn: () => {
       const params = usageParams(summaryFilters)
       params.set("bucket", bucket)
       params.append("dimensions", "none")
-      if (withP95) params.set("include_p95", "true")
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
       )
@@ -722,14 +720,15 @@ export type UsageBreakdownRow = UsageGroupRow &
     Pick<UsageSessionRow, "first_at" | "last_at" | "source" | "api_key_name">
   >
 
-// The Usage page's one summary: the totals and series, the breakdown on screen
-// with its per-group p95 (and a session's origin, for the session breakdown),
-// ranked and ordered by the table's sort, and the tools the page lists under
-// it. No other dimension, since each one is a GROUP BY over the window.
+// The Usage page's one summary: the totals and series, and the breakdown on
+// screen (with a session's origin, for the session breakdown), ranked and
+// ordered by the table's sort. No other dimension, since each one is a GROUP BY
+// over the window. The per-group p95 and the tools are `useUsageLatency`'s and
+// `useUsageTools`', read apart because they are the slow passes.
 export function useUsageBreakdown(
   filters: UsageFilters,
   bucket: UsageBucket,
-  dimension: SummaryDimension,
+  dimension: BreakdownDimension,
   rank: { by: UsageBreakdownRankBy; order: UsageRankOrder },
   { enabled = true, usageScope = "caller" as UsageScope } = {},
 ) {
@@ -749,10 +748,7 @@ export function useUsageBreakdown(
     queryFn: async () => {
       const params = usageParams(filters)
       params.set("bucket", bucket)
-      for (const one of new Set<SummaryDimension>([dimension, "tool"])) {
-        params.append("dimensions", one)
-      }
-      params.set("p95_by", dimension)
+      params.append("dimensions", dimension)
       params.set("rank_by", rank.by)
       params.set("rank_order", rank.order)
       if (dimension === "source_label") params.set("session_details", "true")
@@ -766,6 +762,73 @@ export function useUsageBreakdown(
     // breakdown it answers: its totals hold, and its rows are listed only
     // under that breakdown, never read as another's. A new sort keeps the
     // last order's rows on screen until the server's arrive.
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+  })
+}
+
+// The 95th-percentile latency over the window, or with `groupBy` that of each
+// group the breakdown ranked by `rank` lists. Its own request because it sorts
+// the window's latencies, the slowest part of a summary, so the figures beside
+// it need not wait. Tagged with what it answers, like the breakdown, so a
+// previous grouping's values are never matched to this one's rows.
+export function useUsageLatency(
+  filters: UsageFilters,
+  {
+    groupBy,
+    rank,
+    enabled = true,
+    usageScope = "caller",
+  }: {
+    groupBy?: BreakdownDimension
+    rank?: { by: UsageBreakdownRankBy; order: UsageRankOrder }
+    enabled?: boolean
+    usageScope?: UsageScope
+  } = {},
+) {
+  const scope = useUsageScope(usageScope)
+  const latencyFilters = withoutListOnly(filters)
+  return useQuery({
+    queryKey: [
+      USAGE,
+      "latency",
+      scope.base,
+      latencyFilters,
+      groupBy ?? null,
+      rank?.by ?? null,
+      rank?.order ?? null,
+    ],
+    queryFn: () => {
+      const params = usageParams(latencyFilters)
+      if (groupBy) params.set("group_by", groupBy)
+      if (rank) {
+        params.set("rank_by", rank.by)
+        params.set("rank_order", rank.order)
+      }
+      return apiFetch<UsageLatency>(
+        `${scope.base}/latency?${params.toString()}`,
+      )
+    },
+    enabled: enabled && scope.isReady,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+  })
+}
+
+// The gateway-run tools the Usage page lists under its breakdown. Its own
+// request because each tool reads its meters off every row in the window.
+export function useUsageTools(
+  filters: UsageFilters,
+  { enabled = true, usageScope = "caller" as UsageScope } = {},
+) {
+  const scope = useUsageScope(usageScope)
+  return useQuery({
+    queryKey: [USAGE, "tools", scope.base, filters],
+    queryFn: () =>
+      apiFetch<UsageTools>(
+        `${scope.base}/tools?${usageParams(filters).toString()}`,
+      ),
+    enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
   })

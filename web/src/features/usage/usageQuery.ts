@@ -1,5 +1,5 @@
 import type {
-  SummaryDimension,
+  BreakdownDimension,
   UsageChannel,
   UsageFilters,
   UsageGroupBy,
@@ -128,8 +128,8 @@ interface DimensionDef {
   label: string
   /** How the table's heading names it after "By": "model", "API key". */
   noun: string
-  /** The summary's `dimensions` value, and its `p95_by`. */
-  summary: SummaryDimension
+  /** The summary's `dimensions` value, and the latency's `group_by`. */
+  summary: BreakdownDimension
   /** The grouped series' `group_by`. */
   series: UsageGroupBy
   rows: (summary: UsageSummary) => UsageBreakdownRow[] | undefined

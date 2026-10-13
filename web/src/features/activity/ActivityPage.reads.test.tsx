@@ -317,12 +317,8 @@ describe("ActivityPage", () => {
       expect(summary?.url).toContain("start_date=")
       // One read for the totals and the chart, which ask the same question.
       expect(summary?.url).toContain("dimensions=none")
-      const summaries = calls.filter((call) =>
-        call.url.includes("/usage/summary"),
-      )
-      expect(summaries.every((call) => call.url.includes("include_p95"))).toBe(
-        true,
-      )
+      const latency = calls.find((call) => call.url.includes("/usage/latency"))
+      expect(latency?.url).toContain("start_date=")
     })
 
     it("reports a failed chart and totals read rather than drawing nothing", async () => {

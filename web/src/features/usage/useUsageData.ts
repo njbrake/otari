@@ -9,7 +9,9 @@ import {
   NO_BREAKDOWNS,
   useUsageBreakdown,
   useUsageGroupedSeries,
+  useUsageLatency,
   useUsageSummary,
+  useUsageTools,
 } from "@/shared/api/usage"
 import { bucketForWindow, isoAgo } from "@/shared/helpers/timeRange"
 import { breakdownRankFor, rankByFor, readMetric } from "./usageModel"
@@ -118,13 +120,20 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
     scope === "organization" ? "organization" : "caller"
   const def = DIMENSIONS[dimension]
 
-  const breakdown = useUsageBreakdown(
-    usageFilters,
-    bucket,
-    def.summary,
-    breakdownRankFor(sort, metric, withSubscription),
-    { enabled: isReady, usageScope },
-  )
+  const rank = breakdownRankFor(sort, metric, withSubscription)
+  const breakdown = useUsageBreakdown(usageFilters, bucket, def.summary, rank, {
+    enabled: isReady,
+    usageScope,
+  })
+  // Ranked by p95, the breakdown's rows already carry their own.
+  const byP95 = rank.by === "p95"
+  const latency = useUsageLatency(usageFilters, {
+    groupBy: def.summary,
+    rank,
+    enabled: isReady && !byP95,
+    usageScope,
+  })
+  const tools = useUsageTools(usageFilters, { enabled: isReady, usageScope })
   const previous = useUsageSummary(
     previousFilters,
     bucket,
@@ -154,12 +163,21 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
     }
     void breakdown.refetch()
     void grouped.refetch()
+    void tools.refetch()
+    if (!byP95) void latency.refetch()
   }
 
   // While another breakdown loads, the last one's answer keeps the totals and
   // the chart's window on screen; its rows are that breakdown's, so none show.
   const answer = breakdown.data
   const isCurrent = answer?.dimension === def.summary
+  // Another window's latencies are never set beside this one's rows, so the
+  // column stays empty until this window's arrive.
+  const p95 =
+    !byP95 && latency.data && !latency.isPlaceholderData
+      ? new Map(latency.data.groups.map((g) => [g.key, g.p95_latency_ms]))
+      : undefined
+  const rows = isCurrent ? (def.rows(answer.summary) ?? []) : []
 
   return {
     scopes,
@@ -179,14 +197,22 @@ export function useUsageData(url: UsageUrl, viewer: UsageViewer) {
     usageFilters,
     usageScope,
     summary: answer?.summary,
-    rows: isCurrent ? (def.rows(answer.summary) ?? []) : [],
+    rows: p95
+      ? rows.map((row) =>
+          row.is_other
+            ? row
+            : { ...row, p95_latency_ms: p95.get(row.key ?? null) ?? null },
+        )
+      : rows,
+    tools: tools.data?.tools ?? [],
+    isFetchingTools: tools.isFetching,
     previous: hasSpan ? undefined : previous.data?.totals,
     grouped: grouped.data,
     spend: spend.data ?? undefined,
     isLoading: !isReady || (!isCurrent && !breakdown.error),
     isFetching: breakdown.isFetching || breakdown.isPlaceholderData,
     updatedAt: breakdown.dataUpdatedAt,
-    error: breakdown.error ?? grouped.error,
+    error: breakdown.error ?? grouped.error ?? tools.error ?? latency.error,
     refresh,
   }
 }

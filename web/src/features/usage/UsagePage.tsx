@@ -172,7 +172,7 @@ export function UsagePage() {
   // read here says whether it does.
   const isWindowEmpty =
     summary !== undefined && summary.totals.request_count === 0 && !isFiltered
-  const toolRows = summary?.by_tool ?? []
+  const toolRows = data.tools
   const clearAll = () => url.patch(CLEAR_FILTERS)
 
   return (
@@ -400,7 +400,7 @@ export function UsagePage() {
                     ? (tool) => open({ ...pageSearch, tool })
                     : undefined
                 }
-                isLoading={data.isLoading}
+                isLoading={data.isFetchingTools}
               />
             </section>
           ) : null}

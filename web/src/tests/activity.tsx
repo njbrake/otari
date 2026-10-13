@@ -258,6 +258,15 @@ export function mockApi(
           total: term ? groups.length : (opts.groupsTotal ?? groups.length),
         })
       }
+      if (url.includes("/usage/latency")) {
+        return jsonResponse({
+          start_date: "",
+          end_date: "",
+          p95_latency_ms: totals(opts.totals).p95_latency_ms,
+          group_by: null,
+          groups: [],
+        })
+      }
       if (url.includes("/usage/summary")) {
         return jsonResponse({
           start_date: "",

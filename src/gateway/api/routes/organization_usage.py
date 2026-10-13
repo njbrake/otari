@@ -64,6 +64,7 @@ from gateway.api.routes._usage_common import (
     GROUP_ORDER_DESC,
     GROUP_SEARCH_DESC,
     INCLUDE_P95_DESC,
+    LATENCY_GROUP_BY_DESC,
     ORDER_DESC,
     P95_BY_DESC,
     RANK_BY_DESC,
@@ -95,8 +96,10 @@ from gateway.schemas.usage import (
     UsageActivityGroups,
     UsageBreakdownRankBy,
     UsageGroupedSeries,
+    UsageLatency,
     UsageRankBy,
     UsageSummary,
+    UsageTools,
 )
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import (
@@ -278,6 +281,51 @@ async def organization_usage_summary(
         rank_by=rank_by,
         rank_order=rank_order,
         group_by_tag=group_by_tag,
+    )
+
+
+@router.get("/latency")
+async def organization_usage_latency(
+    identity: CurrentIdentity,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
+    filters: Annotated[UsageReadFilters, Depends()],
+    group_by: Annotated[BreakdownDimension | None, Query(description=LATENCY_GROUP_BY_DESC)] = None,
+    rank_by: Annotated[UsageBreakdownRankBy, Query(description=RANK_BY_DESC)] = "cost",
+    rank_order: Annotated[SortOrder, Query(description=RANK_ORDER_DESC)] = "desc",
+) -> UsageLatency:
+    """The 95th-percentile latency over the window, or per group of one breakdown, for the caller's organization.
+
+    The tenant-scoped counterpart of ``GET /api/v1/usage/latency``.
+    """
+    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    start, end = summary_window(filters, grid=None)
+    return await reads.latency(
+        start=start,
+        end=end,
+        conditions=filters.conditions(start_date=start, end_date=end, scope=scope),
+        status=filters.status,
+        group_by=group_by,
+        rank_by=rank_by,
+        rank_order=rank_order,
+    )
+
+
+@router.get("/tools")
+async def organization_usage_tools(
+    identity: CurrentIdentity,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    reads: UsageReadServiceDep,
+    filters: Annotated[UsageReadFilters, Depends()],
+) -> UsageTools:
+    """Spend and volume per gateway-run tool, for the caller's organization.
+
+    The tenant-scoped counterpart of ``GET /api/v1/usage/tools``.
+    """
+    scope = await _scope_condition(db, user=identity, workspace_id=filters.workspace_id)
+    start, end = summary_window(filters, grid=None)
+    return await reads.tools(
+        start=start, end=end, conditions=filters.conditions(start_date=start, end_date=end, scope=scope)
     )
 
 

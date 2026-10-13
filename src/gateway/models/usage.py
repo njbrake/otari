@@ -33,6 +33,11 @@ class UsageLog(Base):
     __tablename__ = "usage_logs"
     __table_args__ = (
         Index("ix_usage_logs_user_id_timestamp", "user_id", "timestamp"),
+        # Every dashboard read scoped to a workspace or an organization narrows by
+        # workspace and then by a time window, newest first, with no source or
+        # status pinned, which the four-column index below cannot serve past its
+        # first column.
+        Index("ix_usage_logs_workspace_id_timestamp", "workspace_id", "timestamp"),
         # Supports the activity-log viewer's primary "show errors, newest-first"
         # query. status is low-cardinality; model is high-cardinality and left
         # unindexed on purpose.

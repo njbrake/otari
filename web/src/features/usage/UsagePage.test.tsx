@@ -191,18 +191,18 @@ describe("UsagePage", () => {
       page()
       // A manager's workspace view leads with Member.
       await waitFor(() =>
-        expect(lastBreakdown(calls).get("p95_by")).toBe("user"),
+        expect(lastBreakdown(calls).getAll("dimensions")).toEqual(["user"]),
       )
       await user.click(screen.getByRole("button", { name: "Model" }))
+      // Only the breakdown on screen: each dimension is a GROUP BY over the
+      // window. Its p95 and the tools are their own reads, so they never hold
+      // the table back.
       await waitFor(() =>
-        expect(lastBreakdown(calls).get("p95_by")).toBe("model"),
+        expect(lastBreakdown(calls).getAll("dimensions")).toEqual(["model"]),
       )
-      // Only the breakdown on screen and the tools under it: each dimension is
-      // a GROUP BY over the window.
-      expect(lastBreakdown(calls).getAll("dimensions")).toEqual([
-        "model",
-        "tool",
-      ])
+      expect(lastBreakdown(calls).get("p95_by")).toBeNull()
+      expect(usageReads(calls, "latency").at(-1)?.get("group_by")).toBe("model")
+      expect(usageReads(calls, "tools")).not.toHaveLength(0)
       expect(lastBreakdown(calls).get("session_details")).toBeNull()
       expect(usageReads(calls, "series").at(-1)?.get("group_by")).toBe("model")
       expect(pageUrl().textContent).toContain("by=model")
@@ -218,7 +218,7 @@ describe("UsagePage", () => {
         await screen.findByRole("menuitemradio", { name: "Policy" }),
       )
       await waitFor(() =>
-        expect(lastBreakdown(calls).get("p95_by")).toBe("policy"),
+        expect(lastBreakdown(calls).getAll("dimensions")).toEqual(["policy"]),
       )
       // A menu trigger, not a toggle: its name says what it holds.
       expect(
@@ -237,6 +237,30 @@ describe("UsagePage", () => {
       expect(within(opus).getByText("$22.40")).toBeInTheDocument()
       expect(within(opus).getByText("$1,101.35")).toBeInTheDocument()
       expect(within(opus).getByText("98% cached")).toBeInTheDocument()
+    })
+
+    it("lists the breakdown before its p95 arrives, then fills the column in", async () => {
+      let releaseLatency = () => {}
+      const latencyHeld = new Promise<void>((resolve) => {
+        releaseLatency = resolve
+      })
+      mockUsageApi({
+        viewer: "member",
+        hold: (kind) => (kind === "latency" ? latencyHeld : undefined),
+      })
+      page()
+      const row = await rowNamed(/deepseek-v4-flash/)
+      expect(within(row).getByText("$28.61")).toBeInTheDocument()
+      expect(within(row).queryByText("1.85 s")).toBeNull()
+
+      releaseLatency()
+      await waitFor(() =>
+        expect(
+          within(
+            screen.getByRole("row", { name: /deepseek-v4-flash/ }),
+          ).getByText("1.85 s"),
+        ).toBeInTheDocument(),
+      )
     })
 
     it("pins the rows with no value last, explained", async () => {
@@ -346,7 +370,10 @@ describe("UsagePage", () => {
       mockUsageApi({
         viewer: "workspaceAdmin",
         hold: (kind, params) => {
-          if (kind === "summary" && params.get("p95_by") === "model") {
+          if (
+            kind === "summary" &&
+            params.getAll("dimensions").includes("model")
+          ) {
             return summaryHeld
           }
           if (kind === "series" && params.get("group_by") === "model") {

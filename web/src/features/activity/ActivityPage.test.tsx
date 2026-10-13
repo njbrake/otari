@@ -228,13 +228,9 @@ describe("ActivityPage", () => {
       expect(screen.getByText("$1.19 billed")).toBeInTheDocument()
       expect(screen.getByText("$25.79 subscription")).toBeInTheDocument()
       expect(screen.getByText("P95 1.20 s")).toBeInTheDocument()
-      expect(
-        calls.some(
-          (call) =>
-            call.url.includes("/usage/summary") &&
-            call.url.includes("include_p95=true"),
-        ),
-      ).toBe(true)
+      expect(calls.some((call) => call.url.includes("/usage/latency"))).toBe(
+        true,
+      )
 
       await user.click(screen.getByRole("button", { name: "11 unpriced" }))
       await listCarries(calls, "priced", "false")

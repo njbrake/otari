@@ -957,3 +957,65 @@ def test_the_organization_summarys_per_group_extras_read_only_the_callers_rows(
     assert rows["task-1"]["source"] == "codex"
     # The member's unlabeled requests rank after the named session.
     assert [row["key"] for row in body["by_source_label"]] == ["task-1", None]
+
+
+def test_the_organization_latency_and_tools_read_only_the_callers_rows(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """The p95, overall and per group, and the tool spend come from the rows in scope, not the whole workspace."""
+    session = db_session_factory()
+    try:
+        member = str(world.users["alpha_member"])
+        tool_meters = {"tools": {"web_search": {"billed": 2, "errors": 0, "unit_rate": 0.01}}}
+        for latency, user_id, meters in (
+            (100, member, None),
+            (200, member, None),
+            # Someone else's requests in the same workspace: slower, and running a tool.
+            (90_000, None, tool_meters),
+            (90_000, None, tool_meters),
+            (90_000, None, tool_meters),
+        ):
+            session.add(
+                UsageLog(
+                    id=str(uuid.uuid4()),
+                    workspace_id=world.workspaces["alpha_one"],
+                    user_id=user_id,
+                    model="alpha-one-member",
+                    provider="p",
+                    endpoint="/v1/chat/completions",
+                    source="gateway",
+                    status="success",
+                    latency_ms=latency,
+                    billing_meters=meters,
+                    timestamp=datetime.now(UTC),
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    base = f"{API_ROOT}/organizations/me/usage"
+    code, overall = _as(client, world, "alpha_member", f"{base}/latency")
+    assert code == status.HTTP_200_OK, overall
+    assert isinstance(overall, dict)
+    assert overall["p95_latency_ms"] == 200
+    code, grouped = _as(client, world, "alpha_member", f"{base}/latency?group_by=model")
+    assert code == status.HTTP_200_OK, grouped
+    assert isinstance(grouped, dict)
+    assert {group["key"]: group["p95_latency_ms"] for group in grouped["groups"]} == {"alpha-one-member": 200}
+    code, tools = _as(client, world, "alpha_member", f"{base}/tools")
+    assert code == status.HTTP_200_OK, tools
+    assert isinstance(tools, dict)
+    assert tools["tools"] == []
+    # The owner manages the workspace, so the same reads include everyone's rows.
+    code, owner_tools = _as(client, world, "alpha_owner", f"{base}/tools")
+    assert code == status.HTTP_200_OK, owner_tools
+    assert isinstance(owner_tools, dict)
+    assert [(row["tool"], row["calls"]) for row in owner_tools["tools"]] == [("web_search", 6)]
+
+
+def test_the_deployment_wide_latency_and_tools_refuse_a_tenant(client: TestClient, world: _World) -> None:
+    """Like the deployment-wide summary, they read every tenant's rows, so only an operator reaches them."""
+    for path in ("latency", "tools"):
+        code, _ = _as(client, world, "alpha_owner", f"{API_ROOT}/usage/{path}")
+        assert code == status.HTTP_403_FORBIDDEN, path

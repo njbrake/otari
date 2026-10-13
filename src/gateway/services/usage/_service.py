@@ -19,12 +19,15 @@ from gateway.schemas.usage import (
     UsageActivityGroups,
     UsageBreakdownRankBy,
     UsageGroupedSeries,
+    UsageGroupLatency,
     UsageGroupRow,
+    UsageLatency,
     UsageRankBy,
     UsageSeriesGroup,
     UsageSessionRow,
     UsageSummary,
     UsageToolRow,
+    UsageTools,
 )
 from gateway.services.usage._summary import (
     ALL_SUMMARY_DIMENSIONS,
@@ -258,6 +261,55 @@ class UsageReadService:
             details = await self._summaries.session_details(keys, conditions, status_filter=status)
             rows = [row.model_copy(update=asdict(details[row.key])) if row.key in details else row for row in rows]
         return rows
+
+    async def latency(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        conditions: list[UsageCondition],
+        status: str | None,
+        group_by: BreakdownDimension | None,
+        rank_by: UsageBreakdownRankBy = "cost",
+        rank_order: SortOrder = "desc",
+    ) -> UsageLatency:
+        """The window's p95 latency, or that of each group ``summary`` would rank into ``group_by``'s top N.
+
+        The groups are ranked again here rather than named by the caller, so a
+        session breakdown's 250 keys never travel in a query string. The ranking
+        breaks ties by key, so the groups match the summary's for the same window.
+        """
+        async with self._uow:
+            if group_by is None:
+                overall = await self._reads.p95_latency_ms(conditions)
+                rows: list[UsageGroupRow] = []
+            else:
+                overall = None
+                rows = await self._summaries.breakdown(
+                    group_by,
+                    conditions,
+                    limit=SUMMARY_BREAKDOWNS[group_by],
+                    status_filter=status,
+                    rank_by=rank_by,
+                    rank_order=rank_order,
+                )
+                # Ranked by p95, the breakdown already carries every row's.
+                if rank_by != "p95":
+                    p95 = await self._summaries.group_p95_latency_ms(group_by, [row.key for row in rows], conditions)
+                    rows = [row.model_copy(update={"p95_latency_ms": p95.get(row.key)}) for row in rows]
+        return UsageLatency(
+            start_date=start.isoformat(),
+            end_date=end.isoformat(),
+            p95_latency_ms=overall,
+            group_by=group_by,
+            groups=[UsageGroupLatency(key=row.key, p95_latency_ms=row.p95_latency_ms) for row in rows],
+        )
+
+    async def tools(self, *, start: datetime, end: datetime, conditions: list[UsageCondition]) -> UsageTools:
+        """The window's per-tool calls, failures, spend and requests, the summary's ``by_tool`` on its own."""
+        async with self._uow:
+            rows = await self._tool_breakdown(conditions)
+        return UsageTools(start_date=start.isoformat(), end_date=end.isoformat(), tools=rows)
 
     async def _tool_breakdown(self, conditions: list[UsageCondition]) -> list[UsageToolRow]:
         """Per-tool calls, failures, spend and requests, biggest spend first.
