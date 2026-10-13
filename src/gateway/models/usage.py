@@ -346,8 +346,8 @@ class UsageRollup(Base):
     latency_count: Mapped[int] = mapped_column(BigInteger)
     # Every latency the rows recorded, as distinct values and how many rows took
     # each, so a percentile over hours of them is the one their rows would give.
-    latency_values: Mapped[list[int] | None] = mapped_column(_INT_ARRAY)
-    latency_counts: Mapped[list[int] | None] = mapped_column(_INT_ARRAY)
+    latency_values: Mapped[list[int]] = mapped_column(_INT_ARRAY)
+    latency_counts: Mapped[list[int]] = mapped_column(_INT_ARRAY)
     # One set per gateway-run tool (``services/usage/_summary.GATEWAY_TOOL_NAMES``):
     # the billable calls, the failed calls, the spend and the rows that ran it.
     web_search_calls: Mapped[int | None] = mapped_column(BigInteger)

@@ -19,6 +19,7 @@ from typing import Any, get_args
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
@@ -435,3 +436,42 @@ def test_every_p95_from_the_rollups_is_the_one_percentile_disc_gives_over_the_ro
 
     assert relation == rows
     assert relation["all"] is not None
+
+
+def test_a_rollup_without_its_latencies_is_refused(db_session: Session) -> None:
+    """What a gateway on the previous version writes in a rolling deploy: its refresh must fail, not store it."""
+    columns = (
+        "hour, workspace_id, model, endpoint, source, status, needs_pricing, rows, first_at, last_at, "
+        "billed_input_tokens, billed_output_tokens, billed_cache_read_tokens, billed_cache_write_tokens, "
+        "latency_count, web_search_rows, web_fetch_rows, code_execution_rows"
+    )
+    values = (
+        ":hour, :workspace, 'm', '/v1/messages', 'gateway', 'success', false, 1, :hour, :hour, 0, 0, 0, 0, 0, 0, 0, 0"
+    )
+
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            text(f"INSERT INTO usage_rollups ({columns}) VALUES ({values})"),
+            {"hour": T0, "workspace": seed_workspace_id(db_session)},
+        )
+    db_session.rollback()
+
+
+def test_an_hour_with_no_latency_builds_empty_lists(db_session: Session, test_config: GatewayConfig) -> None:
+    db_session.add(
+        UsageLog(
+            id=str(uuid.uuid4()),
+            workspace_id=seed_workspace_id(db_session),
+            timestamp=T0 + timedelta(minutes=5),
+            model="m",
+            endpoint="/v1/messages",
+            status="success",
+        )
+    )
+    db_session.commit()
+
+    _refresh(test_config)
+
+    db_session.expire_all()
+    built = db_session.execute(select(UsageRollup.latency_values, UsageRollup.latency_counts)).all()
+    assert [tuple(row) for row in built] == [([], [])]

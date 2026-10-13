@@ -82,6 +82,7 @@ MAX_DIRTY_HOURS = 48
 UsageRows = Subquery
 
 _HOUR = timedelta(hours=1)
+_NO_INTEGERS = cast(postgresql.array([], type_=Integer), postgresql.ARRAY(Integer))
 # Any fixed number serves; it only has to be this refresh's alone.
 _REFRESH_LOCK = 0x7573_6167_6572_6F6C  # "usagerol"
 
@@ -373,8 +374,9 @@ class UsageRollupRepository(BaseRepository[UsageRollup, Never, Never]):
             func.min(counted.first_at),
             func.max(counted.last_at),
             *(func.sum(counted[name]) for name in _MEASURES),
-            func.array_agg(counted.latency).filter(measured),
-            func.array_agg(cast(counted.rows, Integer)).filter(measured),
+            # Empty, not NULL, for an hour whose rows recorded no latency.
+            func.coalesce(func.array_agg(counted.latency).filter(measured), _NO_INTEGERS),
+            func.coalesce(func.array_agg(cast(counted.rows, Integer)).filter(measured), _NO_INTEGERS),
         ).group_by(*groups)
         await self.db.execute(
             insert(UsageRollup).from_select(
