@@ -9,8 +9,9 @@ from fastapi import Request, Response
 from fastapi.routing import APIRoute
 from starlette.types import Receive
 
-# What nginx logs for a request its client closed. Nobody receives it: it is
-# what the access log and the metrics record for the abandoned read.
+# What nginx logs for a request its client closed. Nobody receives it, and
+# uvicorn's access log skips a send to a closed connection, so the request
+# metrics are what record it.
 CLIENT_CLOSED_REQUEST = 499
 
 
@@ -45,7 +46,7 @@ class CancelOnDisconnectRoute(APIRoute):
                 gone.cancel()
                 if not work.done():
                     work.cancel()
-                    # The handler's own cleanup (its gate turn, its session) runs before this returns.
+                    # The handler's own cleanup (its gate turn, its transaction) runs before this returns.
                     with contextlib.suppress(asyncio.CancelledError):
                         await work
             if work.cancelled():

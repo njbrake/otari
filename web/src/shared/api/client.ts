@@ -412,10 +412,11 @@ export function longRequestSignal(): AbortSignal {
   return AbortSignal.timeout(LONG_REQUEST_TIMEOUT_MS)
 }
 
-// For the usage aggregates the gateway runs a few at a time. One can wait up to
-// 30s for its turn and then run up to the database's 65s statement timeout, so
-// the 30s bound above gave up on every read slower than that, and the gateway
-// finished it for nobody. This one outlasts both.
+// For the usage aggregates the gateway runs a few at a time. One waits up to 30s
+// for its turn and then runs its statements, each bounded at 60s, so the 30s
+// bound above gave up on every read slower than that, and the gateway finished
+// it for nobody. Not a ceiling on the read: a slow summary of several statements
+// can still outrun it.
 const HEAVY_READ_TIMEOUT_MS = 100_000
 
 /**

@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter, FastAPI
+from starlette.types import Message
 
 from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 
@@ -62,8 +63,8 @@ async def _call(app: FastAPI, method: str, path: str, *, leave: asyncio.Event | 
             await leave.wait()
         return {"type": "http.disconnect"}
 
-    async def send(message: dict[str, Any]) -> None:
-        sent.append(message)
+    async def send(message: Message) -> None:
+        sent.append(dict(message))
 
     scope = {
         "type": "http",
