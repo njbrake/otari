@@ -26,7 +26,7 @@ export const MEMBER_TOTALS_DIMENSIONS: readonly SummaryDimension[] = [
 
 /**
  * The filters (query parameter names) a member may narrow a workspace's shared
- * totals by: the window, and what was asked of which model where. Mirrors the server's
+ * totals by: the window, and what was asked of which model. Mirrors the server's
  * `MEMBER_TOTALS_FILTERS`, an allowlist, so a filter added later is refused
  * until it is judged.
  */
@@ -41,9 +41,7 @@ export const MEMBER_TOTALS_FILTERS: ReadonlySet<string> = new Set([
   "exclude_model",
   "requested_model",
   "provider",
-  "endpoint",
   "priced",
-  "counts_toward_budget",
 ])
 
 /**

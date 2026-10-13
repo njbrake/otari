@@ -148,10 +148,9 @@ and never budget-exempt.
 
 Overview splits the same way. It reads one calendar month in UTC, this one
 unless the month menu picks one of the eleven before it (any other range is
-Usage's), and one scope: someone who manages the workspace switches between the
-Workspace, You and, if they manage the organization, the whole Organization; a
-member reads You, and the Workspace too while its managers share the workspace's
-totals with members. A line at the top names what needs
+Usage's), and one scope: a member sees their own usage, while someone who
+manages the workspace switches between the Workspace, You and, if they manage
+the organization, the whole Organization. A line at the top names what needs
 acting on now, as the gateway judges it for your role (a provider down, a key or
 budget near its limit or on pace to pass it, a key about to expire), each
 linking where it is fixed. Three numbers follow: the total at API prices, split
@@ -169,7 +168,7 @@ operator also sees whether each provider answers. The scope and month live in
 the URL.
 
 Whether members see workspace totals is a per-workspace setting its managers
-change on the Members page, and it starts on. While it is on, a member switches
+change on the Members page, and it starts off. While it is on, a member switches
 between You and Workspace. At You, their chart stacks their own spend under the
 rest of the workspace's against the budget line and its projection, as a
 manager's does, and the Budget tile adds their share. At Workspace, the tiles
@@ -246,10 +245,10 @@ Whose requests they show follows workspace management. In a workspace you
 manage, as an owner or admin of the organization or of that workspace itself,
 you see everyone's requests and can narrow to your own; in any other workspace
 you belong to, you see only your own. Managing one workspace widens that
-workspace and no other. While a workspace shares its totals with members (the
-default), the organization usage API also gives a member its aggregates when
-asked (`workspace_totals=true`): totals, the time series and the 95th
-percentile latency, split by model, provider or status code, never another
+workspace and no other. While a workspace shares its totals with members (off
+until a manager turns it on), the organization usage API also gives a member its
+aggregates when asked (`workspace_totals=true`): totals, the time series and the
+95th percentile latency, split by model, provider or status code, never another
 person's requests, keys or sessions, nor the gateway-run tools. See
 [Access control](access-control.md#workspace-scoped-spend).
 

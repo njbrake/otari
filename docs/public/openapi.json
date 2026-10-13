@@ -23732,7 +23732,8 @@
         "type": "object"
       },
       "WorkspaceVisibilityUpdate": {
-        "description": "A change to what a workspace shows its members: only the fields sent change.",
+        "additionalProperties": false,
+        "description": "A change to what a workspace shows its members: only the fields sent change.\n\nAn unknown field or a null is refused rather than ignored, so a manager is\nnever told a setting changed when it did not.",
         "properties": {
           "members_see_workspace_totals": {
             "anyOf": [
@@ -34861,13 +34862,13 @@
             }
           },
           {
-            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment.",
             "in": "query",
             "name": "workspace_totals",
             "required": false,
             "schema": {
               "default": false,
-              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment.",
               "title": "Workspace Totals",
               "type": "boolean"
             }
@@ -35655,13 +35656,13 @@
             }
           },
           {
-            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment.",
             "in": "query",
             "name": "workspace_totals",
             "required": false,
             "schema": {
               "default": false,
-              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment.",
               "title": "Workspace Totals",
               "type": "boolean"
             }
@@ -36437,13 +36438,13 @@
             }
           },
           {
-            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment.",
             "in": "query",
             "name": "workspace_totals",
             "required": false,
             "schema": {
               "default": false,
-              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment.",
               "title": "Workspace Totals",
               "type": "boolean"
             }
@@ -37328,13 +37329,13 @@
             }
           },
           {
-            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment.",
             "in": "query",
             "name": "workspace_totals",
             "required": false,
             "schema": {
               "default": false,
-              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment.",
               "title": "Workspace Totals",
               "type": "boolean"
             }
@@ -38054,13 +38055,13 @@
         "operationId": "organization-usage-organization_usage_tools",
         "parameters": [
           {
-            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+            "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment.",
             "in": "query",
             "name": "workspace_totals",
             "required": false,
             "schema": {
               "default": false,
-              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment.",
+              "description": "As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment.",
               "title": "Workspace Totals",
               "type": "boolean"
             }

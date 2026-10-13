@@ -1,6 +1,6 @@
 """Request and response models of the organizations domain's workspace settings."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gateway.models.tenancy import Workspace
 
@@ -23,6 +23,19 @@ class WorkspaceVisibility(BaseModel):
 
 
 class WorkspaceVisibilityUpdate(BaseModel):
-    """A change to what a workspace shows its members: only the fields sent change."""
+    """A change to what a workspace shows its members: only the fields sent change.
+
+    An unknown field or a null is refused rather than ignored, so a manager is
+    never told a setting changed when it did not.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     members_see_workspace_totals: bool | None = Field(default=None, description=_MEMBERS_SEE_WORKSPACE_TOTALS_DESC)
+
+    @field_validator("members_see_workspace_totals")
+    @classmethod
+    def _not_null(cls, value: bool | None) -> bool:
+        if value is None:
+            raise ValueError("leave the field out to keep it; null is not a setting")
+        return value

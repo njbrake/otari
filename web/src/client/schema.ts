@@ -16918,6 +16918,9 @@ export interface components {
         /**
          * WorkspaceVisibilityUpdate
          * @description A change to what a workspace shows its members: only the fields sent change.
+         *
+         *     An unknown field or a null is refused rather than ignored, so a manager is
+         *     never told a setting changed when it did not.
          */
         WorkspaceVisibilityUpdate: {
             /**
@@ -22302,7 +22305,7 @@ export interface operations {
                 order?: "recent" | "requests";
                 skip?: number;
                 limit?: number;
-                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment. */
+                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment. */
                 workspace_totals?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
@@ -22404,7 +22407,7 @@ export interface operations {
                 rank_by?: "cost" | "billed" | "tokens" | "requests" | "imported" | "errors" | "name" | "p95";
                 /** @description Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last. */
                 rank_order?: "asc" | "desc";
-                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment. */
+                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment. */
                 workspace_totals?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
@@ -22506,7 +22509,7 @@ export interface operations {
                 bucket?: "hour" | "day";
                 /** @description What picks the groups that get a series of their own before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. */
                 rank_by?: "cost" | "billed" | "tokens" | "requests";
-                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment. */
+                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment. */
                 workspace_totals?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
@@ -22618,7 +22621,7 @@ export interface operations {
                 rank_order?: "asc" | "desc";
                 /** @description A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key. */
                 group_by_tag?: string | null;
-                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment. */
+                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment. */
                 workspace_totals?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
@@ -22714,7 +22717,7 @@ export interface operations {
     "organization-usage-organization_usage_tools": {
         parameters: {
             query?: {
-                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, endpoint, outcome, status code, pricing and whether it counts toward the budget: a user, key, source, channel, session, policy, tag or `q` filter is refused with 403. Needs `workspace_id`. Changes nothing for someone who manages the workspace or operates the deployment. */
+                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment. */
                 workspace_totals?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;

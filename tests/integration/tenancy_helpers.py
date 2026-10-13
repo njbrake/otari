@@ -79,6 +79,13 @@ async def hide_totals(db: AsyncSession, workspace: Workspace) -> None:
     await db.commit()
 
 
+async def share_totals(db: AsyncSession, workspace: Workspace) -> None:
+    """Share the workspace's totals with members, as a manager's change would."""
+    workspace.members_see_workspace_totals = True
+    db.add(workspace)
+    await db.commit()
+
+
 async def create_organization(db: AsyncSession, *, slug: str) -> Organization:
     return await OrganizationRepository(db).create_organization(name=slug.title(), slug=slug, created_by_user_id=None)
 

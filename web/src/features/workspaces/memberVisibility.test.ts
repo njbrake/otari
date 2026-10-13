@@ -42,9 +42,7 @@ describe("the member totals allowlists", () => {
   it("hold the filters a member may narrow by", () => {
     expect([...MEMBER_TOTALS_FILTERS].sort()).toEqual(
       [
-        "counts_toward_budget",
         "end_date",
-        "endpoint",
         "exclude_model",
         "exclude_status",
         "model",

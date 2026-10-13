@@ -1041,11 +1041,19 @@ def _patch_as(client: TestClient, world: _World, who: str, path: str, body: dict
         client.cookies.clear()
 
 
-def _hide_alpha_one(client: TestClient, world: _World) -> None:
+def _set_alpha_one(client: TestClient, world: _World, *, shared: bool) -> None:
     code, body = _patch_as(
-        client, world, "alpha_owner", _visibility(world, "alpha_one"), {"members_see_workspace_totals": False}
+        client, world, "alpha_owner", _visibility(world, "alpha_one"), {"members_see_workspace_totals": shared}
     )
     assert code == status.HTTP_200_OK, body
+
+
+def _share_alpha_one(client: TestClient, world: _World) -> None:
+    _set_alpha_one(client, world, shared=True)
+
+
+def _hide_alpha_one(client: TestClient, world: _World) -> None:
+    _set_alpha_one(client, world, shared=False)
 
 
 def _totals(world: _World, workspace: str = "alpha_one") -> str:
@@ -1053,28 +1061,44 @@ def _totals(world: _World, workspace: str = "alpha_one") -> str:
 
 
 @pytest.mark.parametrize("who", ["alpha_member", "alpha_viewer", "alpha_ws_admin", "alpha_owner"])
-def test_every_member_reads_that_a_workspace_shares_its_totals_by_default(
+def test_every_member_reads_that_a_workspace_keeps_its_totals_by_default(
     client: TestClient, world: _World, who: str
 ) -> None:
     assert _as(client, world, who, _visibility(world, "alpha_one")) == (
         status.HTTP_200_OK,
-        {"members_see_workspace_totals": True},
+        {"members_see_workspace_totals": False},
     )
+
+
+def test_a_member_cannot_ask_for_the_totals_until_a_manager_shares_them(client: TestClient, world: _World) -> None:
+    code, body = _as(client, world, "alpha_member", f"{_USAGE}/summary?dimensions=model&{_totals(world)}")
+    assert code == status.HTTP_403_FORBIDDEN, body
+    _share_alpha_one(client, world)
+    code, body = _as(client, world, "alpha_member", f"{_USAGE}/summary?dimensions=model&{_totals(world)}")
+    assert code == status.HTTP_200_OK, body
 
 
 @pytest.mark.parametrize("who", ["alpha_member", "alpha_viewer"])
 def test_a_member_cannot_change_what_the_workspace_shares(client: TestClient, world: _World, who: str) -> None:
-    code, _ = _patch_as(client, world, who, _visibility(world, "alpha_one"), {"members_see_workspace_totals": False})
+    code, _ = _patch_as(client, world, who, _visibility(world, "alpha_one"), {"members_see_workspace_totals": True})
     assert code == status.HTTP_403_FORBIDDEN
-    assert _as(client, world, who, _visibility(world, "alpha_one"))[1] == {"members_see_workspace_totals": True}
+    assert _as(client, world, who, _visibility(world, "alpha_one"))[1] == {"members_see_workspace_totals": False}
+
+
+def test_managing_one_workspace_does_not_change_what_another_shares(client: TestClient, world: _World) -> None:
+    # Administers Alpha one, and is a plain member of Alpha two.
+    path = _visibility(world, "alpha_two")
+    code, _ = _patch_as(client, world, "alpha_ws_admin", path, {"members_see_workspace_totals": True})
+    assert code == status.HTTP_403_FORBIDDEN
+    assert _as(client, world, "alpha_ws_admin", path)[1] == {"members_see_workspace_totals": False}
 
 
 @pytest.mark.parametrize("who", ["alpha_ws_admin", "alpha_owner", "alpha_admin"])
 def test_a_manager_changes_what_the_workspace_shares(client: TestClient, world: _World, who: str) -> None:
-    code, body = _patch_as(client, world, who, _visibility(world, "alpha_one"), {"members_see_workspace_totals": False})
-    assert (code, body) == (status.HTTP_200_OK, {"members_see_workspace_totals": False})
+    code, body = _patch_as(client, world, who, _visibility(world, "alpha_one"), {"members_see_workspace_totals": True})
+    assert (code, body) == (status.HTTP_200_OK, {"members_see_workspace_totals": True})
     assert _as(client, world, "alpha_member", _visibility(world, "alpha_one"))[1] == {
-        "members_see_workspace_totals": False
+        "members_see_workspace_totals": True
     }
 
 
@@ -1096,6 +1120,7 @@ def test_the_setting_of_a_workspace_the_caller_cannot_see_is_not_found(
 
 @pytest.mark.parametrize("who", ["alpha_member", "alpha_viewer"])
 def test_a_member_who_asks_reads_the_workspaces_totals(client: TestClient, world: _World, who: str) -> None:
+    _share_alpha_one(client, world)
     body = _summary(client, world, who, f"?{_totals(world)}")
     assert body["totals"]["request_count"] == len(_ALPHA_ONE_EVERYONE)  # type: ignore[call-overload]
     assert {row["key"] for row in body["by_model"]} == set(_ALPHA_ONE_EVERYONE)
@@ -1108,6 +1133,7 @@ def test_a_member_who_asks_reads_the_workspaces_totals(client: TestClient, world
 
 @pytest.mark.parametrize("group_by", ["model", "provider"])
 def test_a_member_who_asks_reads_the_workspaces_series(client: TestClient, world: _World, group_by: str) -> None:
+    _share_alpha_one(client, world)
     code, body = _as(client, world, "alpha_member", f"{_USAGE}/series?group_by={group_by}&{_totals(world)}")
     assert code == status.HTTP_200_OK, body
     assert isinstance(body, dict)
@@ -1116,11 +1142,13 @@ def test_a_member_who_asks_reads_the_workspaces_series(client: TestClient, world
 
 @pytest.mark.parametrize("group_by", ["", "&group_by=model", "&group_by=provider"])
 def test_a_member_who_asks_reads_the_workspaces_latency(client: TestClient, world: _World, group_by: str) -> None:
+    _share_alpha_one(client, world)
     code, body = _as(client, world, "alpha_member", f"{_USAGE}/latency?{_totals(world)}{group_by}")
     assert code == status.HTTP_200_OK, body
 
 
 def test_a_member_who_asks_reads_the_workspaces_groups_by_model(client: TestClient, world: _World) -> None:
+    _share_alpha_one(client, world)
     code, body = _as(client, world, "alpha_member", f"{_USAGE}/groups?group_by=model&{_totals(world)}")
     assert code == status.HTTP_200_OK, body
     assert isinstance(body, dict)
@@ -1158,6 +1186,8 @@ def test_a_member_who_asks_reads_the_workspaces_groups_by_model(client: TestClie
         "/summary?is_null=api_key_id",
         "/summary?policy_name=fallback",
         "/summary?cost_gt=1",
+        "/summary?endpoint=/v1/playground/chat/completions",
+        "/series?group_by=model&counts_toward_budget=false",
         "/summary?dimensions=model&group_by_tag=team",
         "/summary?tag=team:alpha",
         # Sent empty is still sent: a filter on the empty source names a source.
@@ -1169,6 +1199,7 @@ def test_a_member_who_asks_reads_the_workspaces_groups_by_model(client: TestClie
 def test_a_member_cannot_split_or_filter_the_totals_by_a_person_key_or_session(
     client: TestClient, world: _World, path: str
 ) -> None:
+    _share_alpha_one(client, world)
     path = path.format(member=world.users["alpha_ws_admin"])
     code, body = _as(client, world, "alpha_member", f"{_USAGE}{path}&{_totals(world)}")
     assert code == status.HTTP_403_FORBIDDEN, body
@@ -1177,6 +1208,7 @@ def test_a_member_cannot_split_or_filter_the_totals_by_a_person_key_or_session(
 
 
 def test_a_refusal_names_the_parameter_refused(client: TestClient, world: _World) -> None:
+    _share_alpha_one(client, world)
     code, body = _as(client, world, "alpha_member", f"{_USAGE}/groups?group_by=model&q=alpha&{_totals(world)}")
     assert (code, body) == (
         status.HTTP_403_FORBIDDEN,
@@ -1185,6 +1217,7 @@ def test_a_refusal_names_the_parameter_refused(client: TestClient, world: _World
 
 
 def test_a_member_splits_the_totals_by_status_code(client: TestClient, world: _World) -> None:
+    _share_alpha_one(client, world)
     code, body = _as(client, world, "alpha_member", f"{_USAGE}/summary?dimensions=status_code&{_totals(world)}")
     assert code == status.HTTP_200_OK, body
     assert isinstance(body, dict)
@@ -1193,23 +1226,39 @@ def test_a_member_splits_the_totals_by_status_code(client: TestClient, world: _W
 
 
 def test_a_patch_without_a_field_changes_nothing(client: TestClient, world: _World) -> None:
+    _share_alpha_one(client, world)
     code, body = _patch_as(client, world, "alpha_owner", _visibility(world, "alpha_one"), {})
     assert (code, body) == (status.HTTP_200_OK, {"members_see_workspace_totals": True})
 
 
+@pytest.mark.parametrize("body", [{"members_see_workspace_totals": None}, {"members_see_workspace_total": False}])
+def test_a_patch_that_would_change_nothing_by_mistake_is_refused(
+    client: TestClient, world: _World, body: dict[str, object]
+) -> None:
+    _share_alpha_one(client, world)
+    code, _ = _patch_as(client, world, "alpha_owner", _visibility(world, "alpha_one"), body)
+    assert code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert _as(client, world, "alpha_member", _visibility(world, "alpha_one"))[1] == {
+        "members_see_workspace_totals": True
+    }
+
+
 def test_a_member_may_narrow_the_totals_by_window_model_and_outcome(client: TestClient, world: _World) -> None:
+    _share_alpha_one(client, world)
     query = "/summary?model=gpt-4&provider=openai&status=success&start_date=2020-01-01T00:00:00Z"
     code, body = _as(client, world, "alpha_member", f"{_USAGE}{query}&{_totals(world)}")
     assert code == status.HTTP_200_OK, body
 
 
 def test_the_rows_and_their_count_stay_a_members_own_whatever_they_ask(client: TestClient, world: _World) -> None:
+    _share_alpha_one(client, world)
     assert _models_listed(client, world, "alpha_member", f"?{_totals(world)}") == set(_ALPHA_ONE_MEMBER_MODELS)
     code, body = _as(client, world, "alpha_member", f"{_USAGE}/count?{_totals(world)}")
     assert (code, body) == (status.HTTP_200_OK, {"total": len(_ALPHA_ONE_MEMBER_MODELS)})
 
 
 def test_without_asking_a_member_still_reads_their_own(client: TestClient, world: _World) -> None:
+    _share_alpha_one(client, world)
     query = f"?workspace_id={world.workspaces['alpha_one']}"
     body = _summary(client, world, "alpha_member", query)
     assert body["totals"]["request_count"] == len(_ALPHA_ONE_MEMBER_MODELS)  # type: ignore[call-overload]
@@ -1240,8 +1289,7 @@ def test_asking_for_the_totals_of_a_workspace_that_hides_them_is_refused(
 
 @pytest.mark.parametrize("hidden", [False, True])
 def test_asking_changes_nothing_for_a_manager(client: TestClient, world: _World, hidden: bool) -> None:
-    if hidden:
-        _hide_alpha_one(client, world)
+    _set_alpha_one(client, world, shared=not hidden)
     for who in ("alpha_ws_admin", "alpha_owner"):
         code, body = _as(client, world, who, f"{_USAGE}/groups?group_by=user&{_totals(world)}")
         assert code == status.HTTP_200_OK, body
@@ -1255,6 +1303,7 @@ def test_asking_changes_nothing_for_a_manager(client: TestClient, world: _World,
 def test_a_member_cannot_ask_for_the_totals_of_a_workspace_they_do_not_belong_to(
     client: TestClient, world: _World, workspace: str
 ) -> None:
+    _share_alpha_one(client, world)
     for path in (
         "/summary?dimensions=model",
         "/latency?group_by=model",
@@ -1267,5 +1316,66 @@ def test_a_member_cannot_ask_for_the_totals_of_a_workspace_they_do_not_belong_to
 
 
 def test_asking_for_totals_without_naming_a_workspace_is_refused(client: TestClient, world: _World) -> None:
+    _share_alpha_one(client, world)
     code, _ = _as(client, world, "alpha_member", f"{_USAGE}/summary?workspace_totals=true")
     assert code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+def _post_as(client: TestClient, world: _World, who: str, path: str, body: dict[str, object]) -> dict[str, object]:
+    client.cookies.set(SESSION_COOKIE_NAME, world.sessions[who])
+    try:
+        response = client.post(path, json=body)
+        assert response.status_code == status.HTTP_201_CREATED, response.text
+        created: dict[str, object] = response.json()
+        return created
+    finally:
+        client.cookies.clear()
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_a_member_reads_the_workspace_budget_in_dollars_only_while_it_shares_its_totals(
+    client: TestClient, world: _World, shared: bool
+) -> None:
+    organizations = f"{API_ROOT}/organizations/me"
+    budget = _post_as(
+        client,
+        world,
+        "alpha_owner",
+        f"{organizations}/budgets",
+        {"name": "Alpha one", "max_budget": 250.0, "reset_alignment": "calendar_month"},
+    )
+    _post_as(
+        client,
+        world,
+        "alpha_owner",
+        f"{organizations}/spend-ceilings",
+        {"scope_type": "workspace", "scope_id": str(world.workspaces["alpha_one"]), "budget_id": budget["budget_id"]},
+    )
+    _set_alpha_one(client, world, shared=shared)
+    path = f"{API_ROOT}/workspaces/{world.workspaces['alpha_one']}/budget"
+
+    code, member = _as(client, world, "alpha_member", path)
+    _, owner = _as(client, world, "alpha_owner", path)
+
+    assert code == status.HTTP_200_OK, member
+    assert isinstance(member, dict) and isinstance(owner, dict)
+    assert member["max_budget"] == 250.0
+    assert member["spent"] == (owner["spent"] if shared else None)
+    assert owner["spent"] is not None
+
+
+@pytest.mark.parametrize(("shared", "scope"), [(False, "you"), (True, "workspace")])
+def test_a_members_overview_reads_the_workspace_only_while_it_shares_its_totals(
+    client: TestClient, world: _World, shared: bool, scope: str
+) -> None:
+    _set_alpha_one(client, world, shared=shared)
+    code, body = _as(
+        client,
+        world,
+        "alpha_member",
+        f"{API_ROOT}/overview?scope=workspace&workspace_id={world.workspaces['alpha_one']}",
+    )
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert body["scope"] == scope
+    assert body["visibility"] == {"members_see_workspace_totals": shared}

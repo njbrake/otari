@@ -22,7 +22,7 @@ export function WorkspaceVisibilitySection({
   const visibility = useWorkspaceVisibility(workspaceId)
   const setVisibility = useSetWorkspaceVisibility(workspaceId)
   // Unknown until the read answers, so the list below does not say "not
-  // shown" for a setting that is on by default and then flip.
+  // shown" and then flip for a workspace that shares them.
   const isShown = visibility.data?.members_see_workspace_totals
   const titleId = useId()
   const seesId = useId()
@@ -46,7 +46,7 @@ export function WorkspaceVisibilitySection({
       <SettingsGroup isBounded>
         <SettingRow
           label="Workspace totals"
-          help="Spend, budget used and request counts for the whole workspace. On by default."
+          help="Spend, budget used and request counts for the whole workspace. Off by default."
           control={
             <Toggle
               label="Workspace totals"

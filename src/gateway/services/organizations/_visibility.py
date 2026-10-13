@@ -1,7 +1,7 @@
 """What a workspace shows the members who do not manage it, and what that lets one caller read.
 
 A member who does not manage a workspace reads their own usage in it. While the
-workspace's managers share its totals (the default), a member may also ask for
+workspace's managers share its totals (off until they turn it on), a member may also ask for
 the workspace's aggregates: totals, the time series, and breakdowns by model,
 provider or status code. Nothing that names another person, key or session: no
 breakdown by user, key, source or session, no filter on one, and never the rows
@@ -34,8 +34,11 @@ from gateway.services.tenancy.deployment_user_service import DeploymentUserServi
 # status code names no one, so the summary's error breakdown is among them.
 MEMBER_TOTALS_DIMENSIONS: tuple[SummaryDimension, ...] = ("model", "provider", "status_code")
 # The filters a member may narrow shared workspace totals by: the window, and what
-# was asked of which model where. An allowlist, so a filter added later that picks
-# out a person, a key, a source, a channel or a session is refused until it is judged.
+# was asked of which model. An allowlist, so a filter added later that picks out a
+# person, a key, a source, a channel or a session is refused until it is judged.
+# The endpoint and whether a row counts toward the budget are left off: the
+# Playground's endpoint is the Playground channel, and rows that do not count are
+# imported ones, which is a source.
 MEMBER_TOTALS_FILTERS = frozenset(
     {
         "start_date",
@@ -48,9 +51,7 @@ MEMBER_TOTALS_FILTERS = frozenset(
         "exclude_model",
         "requested_model",
         "provider",
-        "endpoint",
         "priced",
-        "counts_toward_budget",
     }
 )
 
@@ -88,13 +89,14 @@ class WorkspaceReader:
 
     @property
     def shows_spend(self) -> bool:
-        """Whether this caller reads the workspace's spend in dollars rather than only as a share of its cap."""
-        return self.sees_everyone or self.totals_shared
+        """Whether this caller reads the workspace's spend in dollars: the same setting as its totals."""
+        return self.reads_workspace_totals
 
     def share(self, fraction: float | None) -> float | None:
         """A share of the cap as this caller reads it: exact, or to a whole percent where spend is hidden.
 
-        A whole percent, so the share times the cap does not give the spend back to the cent.
+        A whole percent, so the share times the cap gives the spend back only to
+        a hundredth of the cap, not to the cent.
         """
         if fraction is None or self.shows_spend:
             return fraction
@@ -163,20 +165,21 @@ class WorkspaceVisibilityService:
         async with self._uow:
             workspace = await self._workspaces.resolve_visible_workspace(user=user, workspace_id=workspace_id)
             await self._workspaces.require_workspace_management_access(user=user, workspace=workspace)
-            changes = request.model_dump(exclude_none=True)
+            changes = request.model_dump(exclude_unset=True)
             if changes:
                 workspace = await self._settings.update_visibility(workspace, changes)
             return WorkspaceVisibility.of(workspace)
 
-    async def reader(self, *, user: User, workspace: Workspace) -> WorkspaceReader:
+    async def reader(self, *, user: User, workspace: Workspace, is_operator: bool | None = None) -> WorkspaceReader:
         """What this caller may read of ``workspace``, a row the caller already resolved.
 
         A deployment operator is anyone ``DeploymentUserService.has_administration_access``
-        admits, the same line the deployment-wide usage API draws.
+        admits, the same line the deployment-wide usage API draws. A caller that
+        already asked passes the answer as ``is_operator``.
         """
-        sees_everyone = await self._operators.has_administration_access(user) or await self._workspaces.manages(
-            user=user, workspace=workspace
-        )
+        if is_operator is None:
+            is_operator = await self._operators.has_administration_access(user)
+        sees_everyone = is_operator or await self._workspaces.manages(user=user, workspace=workspace)
         return WorkspaceReader.of(workspace, sees_everyone=sees_everyone)
 
     async def usage_reach(

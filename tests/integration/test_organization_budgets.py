@@ -65,7 +65,7 @@ from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 
-from .tenancy_helpers import hide_totals, visibility_service
+from .tenancy_helpers import hide_totals, share_totals, visibility_service
 
 _BUDGETS = f"{API_ROOT}/organizations/me/budgets"
 _CEILINGS = f"{API_ROOT}/organizations/me/spend-ceilings"
@@ -1255,6 +1255,7 @@ async def _set_counters(db: AsyncSession, ceiling_id: str, **values: Any) -> Non
 async def test_a_member_reads_the_workspace_ceiling_with_holds_in_flight(async_db: AsyncSession) -> None:
     service, _, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-read")
     member = await _joined(async_db, workspace)
+    await share_totals(async_db, workspace)
     await _set_counters(async_db, ceiling_id, current_spend=Decimal("21.40"), reserved_spend=Decimal("0.60"))
 
     spend = await service.workspace_spend(user=member, workspace_id=workspace.id)
@@ -1341,6 +1342,7 @@ async def test_a_closed_window_reads_as_the_fresh_one_the_gate_would_roll_to(asy
     """Periods roll only when a request reaches the gate, so an idle ceiling holds last month's spend."""
     service, _, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-stale")
     member = await _joined(async_db, workspace)
+    await share_totals(async_db, workspace)
     await _set_counters(
         async_db,
         ceiling_id,
@@ -1436,6 +1438,7 @@ async def test_a_closed_duration_window_reads_as_the_one_a_request_now_would_ope
         async_db, slug="acme-spend-duration", reset_alignment=None, budget_duration_sec=86_400
     )
     member = await _joined(async_db, workspace)
+    await share_totals(async_db, workspace)
     await _set_counters(
         async_db,
         ceiling_id,
@@ -1461,6 +1464,7 @@ async def test_an_alignment_the_roll_cannot_read_keeps_the_stored_window(async_d
     """The roll leaves such a window in place rather than guess, so the read does too."""
     service, _, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-unknown")
     member = await _joined(async_db, workspace)
+    await share_totals(async_db, workspace)
     ceiling = await async_db.get(ScopedBudget, ceiling_id)
     assert ceiling is not None
     budget = await async_db.get(Budget, ceiling.budget_id)
