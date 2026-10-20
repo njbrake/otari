@@ -34,13 +34,17 @@ of truth), not live; that is acceptable for these operator settings.
 """
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import VISION_STRATEGIES, GatewayConfig
 from gateway.core.settings.budgets import STREAM_MISSING_USAGE_POLICIES
 from gateway.core.settings.pricing import PRICING_REFRESH_POLICIES
+from gateway.core.sql import dialect_name
 from gateway.log_config import logger
 from gateway.models.platform import RuntimeSetting
 from gateway.services.pricing_service import configure_default_pricing
@@ -253,9 +257,24 @@ async def stage_override(session: AsyncSession, key: str, value: SettingValue) -
     Raises ``ValueError`` if the key is not settable or the value is invalid.
     """
     normalized = validate_value(key, value)
-    row = await session.get(RuntimeSetting, key)
-    if row is None:
-        session.add(RuntimeSetting(key=key, value=_serialize(normalized)))
-    else:
-        row.value = _serialize(normalized)
+    await upsert_setting_row(session, key, _serialize(normalized))
     return normalized
+
+
+async def upsert_setting_row(session: AsyncSession, key: str, value: str) -> None:
+    """Write ``key``'s row in one statement, inserting it or replacing its value.
+
+    A read followed by an insert lets two saves of a key that has no row yet
+    both decide to insert, and the second then fails on the primary key. The
+    dashboard saves several settings at once, so that was a 500 on an ordinary
+    save. The last write wins, as it does for a key whose row already exists.
+    """
+    now = datetime.now(UTC)
+    dialect_insert = postgresql_insert if dialect_name(session) == "postgresql" else sqlite_insert
+    statement = dialect_insert(RuntimeSetting).values(key=key, value=value, updated_at=now)
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[RuntimeSetting.key],
+            set_={"value": statement.excluded.value, "updated_at": now},
+        )
+    )

@@ -51,7 +51,7 @@ from gateway.api.routes._usage_common import (
     summary_window,
 )
 from gateway.core.config import GatewayConfig
-from gateway.core.database import get_ingest_db
+from gateway.core.database import get_ingest_db, release_session
 from gateway.core.metered_pricing import quantize_cost
 from gateway.core.sql import UsageBucketGrain, utc_iso
 from gateway.core.surface import Surface
@@ -324,6 +324,7 @@ async def list_usage(
 async def ingest_external_usage(
     request: ExternalEventsRequest,
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
+    auth_db: Annotated[AsyncSession, Depends(get_db)],
     db: Annotated[AsyncSession, Depends(get_ingest_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> ExternalIngestResult:
@@ -340,6 +341,8 @@ async def ingest_external_usage(
     prompt/completion/tool field is rejected (422), not stored.
     """
     api_key, is_master_key = auth_result
+    # The key was read on the request pool; the batch is written on the ingest pool.
+    await release_session(auth_db)
     with retryable_on_database_outage("external usage ingest"):
         return await ingest_external_events(
             db,

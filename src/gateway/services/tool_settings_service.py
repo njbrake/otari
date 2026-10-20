@@ -35,7 +35,7 @@ from gateway.core.env import otari_env
 from gateway.log_config import logger
 from gateway.models.platform import RuntimeSetting
 from gateway.models.tools import CodeExecutor
-from gateway.services.runtime_settings_service import SettingValue
+from gateway.services.runtime_settings_service import SettingValue, upsert_setting_row
 
 WEB_SEARCH_URL = "web_search_url"
 WEB_SEARCH_ENGINES = "web_search_engines"
@@ -270,11 +270,7 @@ async def stage_override(session: AsyncSession, key: str, value: SettingValue) -
     Raises ``ValueError`` if the key is not editable or the value is invalid.
     """
     normalized = validate_value(key, value)
-    row = await session.get(RuntimeSetting, key)
-    if row is None:
-        session.add(RuntimeSetting(key=key, value=_serialize(normalized)))
-    else:
-        row.value = _serialize(normalized)
+    await upsert_setting_row(session, key, _serialize(normalized))
     return normalized
 
 

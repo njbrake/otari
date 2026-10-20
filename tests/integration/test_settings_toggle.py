@@ -12,6 +12,7 @@ from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.database import get_db
 from gateway.main import create_app
 from gateway.services.pricing_service import configure_default_pricing, default_pricing_enabled
+from gateway.services.runtime_settings_service import stage_override
 
 from .conftest import _run_alembic_migrations, _to_async_url
 
@@ -148,3 +149,29 @@ def test_patch_requires_master_key(postgres_url: str) -> None:
         assert resp.status_code in (401, 403)
     finally:
         client_gen.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_saves_of_an_unset_key_both_succeed(postgres_url: str) -> None:
+    """Two saves of a key with no row yet used to race to insert it, and the loser got a 500."""
+    engine = create_async_engine(_to_async_url(postgres_url))
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    arrived = asyncio.Barrier(2)
+
+    async def save(value: str) -> None:
+        async with sessions() as session:
+            await session.execute(text("SELECT 1"))
+            await arrived.wait()
+            await stage_override(session, "pricing_refresh", value)
+            await session.commit()
+
+    try:
+        await asyncio.gather(save("manual"), save("review"))
+        async with sessions() as session:
+            stored = (
+                await session.execute(text("SELECT value FROM runtime_settings WHERE key = 'pricing_refresh'"))
+            ).scalar_one()
+    finally:
+        await engine.dispose()
+
+    assert stored in {"manual", "review"}

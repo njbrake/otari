@@ -12,18 +12,22 @@ import base64
 import gzip
 import json
 import time
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 
 import pytest
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from gateway.api.routes import otlp as otlp_routes
 from gateway.core.config import API_ROOT
+from gateway.core.database import get_db
+from gateway.models.api_keys import APIKey
 from gateway.models.traces import TraceSpan
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
@@ -881,3 +885,79 @@ def test_otlp_claude_managed_agents_session_is_booked_per_model_request(
     assert row.source_event_id == f"{_CLAUDE_TRACE}:{'6' * 16}"
     assert row.source_label == "sesn_1"
     assert row.prompt_tokens == 1000 and row.model == "claude-opus-4-8"
+
+
+def test_otlp_ingest_holds_no_request_pool_connection(
+    client: TestClient, master_key_header: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key is read on the request pool and the export is written on the ingest pool.
+
+    The request-pool session the key lookup opened stayed idle in its transaction
+    until the response, so every export in flight pinned a connection sign-in and
+    the rest of the API needed, for as long as a slow database made it take.
+    """
+    headers = _exempt_key(client, master_key_header)
+    _seed_pricing(client, master_key_header)
+    app = cast(FastAPI, client.app)
+    request_pool = app.dependency_overrides[get_db]
+    opened: list[AsyncSession] = []
+
+    async def recording() -> AsyncGenerator[AsyncSession]:
+        async for session in request_pool():
+            opened.append(session)
+            yield session
+
+    monkeypatch.setitem(app.dependency_overrides, get_db, recording)
+    in_transaction_during_ingest: list[bool] = []
+    ingest = otlp_routes._ingest
+
+    async def observed(*args: Any, **kwargs: Any) -> int:
+        in_transaction_during_ingest.extend(session.in_transaction() for session in opened)
+        return await ingest(*args, **kwargs)
+
+    monkeypatch.setattr(otlp_routes, "_ingest", observed)
+
+    resp = client.post(_PATH, json=_otlp(_api_request_record("req_pool")), headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert in_transaction_during_ingest == [False], "one request-pool session, released before the ingest"
+
+
+@pytest.mark.asyncio
+async def test_otlp_exporter_that_disconnects_mid_body_ends_quietly() -> None:
+    """An exporter that gives up while its body is read is not a server fault."""
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.disconnect"}
+
+    request = Request({"type": "http", "method": "POST", "path": _PATH, "headers": []}, receive)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await otlp_routes._read_export(request)
+
+    assert exc_info.value.status_code == 499
+
+
+def test_a_locked_key_row_does_not_hold_up_authentication(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    """Recording a key's last use skips a row another transaction has locked.
+
+    Every request on a key whose stamp is stale makes the same write, so behind
+    one slow commit the rest queued on the row, each holding up its own
+    authentication until ``db_lock_timeout_ms`` gave up on it.
+    """
+    headers = _exempt_key(client, master_key_header)
+    _seed_pricing(client, master_key_header)
+    key_id = db_session.execute(select(APIKey.id).where(APIKey.key_name == "cc-otlp")).scalar_one()
+    # What a competing bump's UPDATE of a non-key column holds.
+    db_session.execute(select(APIKey.id).where(APIKey.id == key_id).with_for_update(key_share=True))
+    try:
+        started = time.monotonic()
+        resp = client.post(_PATH, json=_otlp(_api_request_record("req_locked")), headers=headers)
+        waited = time.monotonic() - started
+    finally:
+        db_session.rollback()
+
+    assert resp.status_code == 200, resp.text
+    assert waited < 5, f"authentication queued on the key's row for {waited:.1f}s"

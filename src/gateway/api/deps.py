@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.auth.models import hash_key
 from gateway.container import Container
 from gateway.core.config import API_KEY_HEADER, API_ROOT, X_API_KEY_HEADER, GatewayConfig
-from gateway.core.database import DATABASE_ERRORS, create_session, get_db
+from gateway.core.database import DATABASE_ERRORS, create_session, describe_database_error, get_db
 from gateway.core.feature import CoreFeature
 from gateway.core.sql import utc_bound
 from gateway.core.unit_of_work import UnitOfWork, create_unit_of_work
@@ -336,17 +336,28 @@ async def _bump_last_used_at(api_key_id: str, now: datetime) -> None:
     caller's session or leaves it in a dirty state, and a failure is logged
     rather than swallowed. It is best-effort: throttled by
     ``_LAST_USED_UPDATE_INTERVAL_SECONDS`` and never fails the request.
+
+    Every request on a key whose stamp is stale makes this same write, so it
+    skips a row another bump has locked instead of queueing on it: queued, each
+    one held up its request's authentication for up to ``db_lock_timeout_ms``
+    whenever the database was slow to commit the bump ahead of it.
     """
+    unlocked = (
+        select(APIKey.id)
+        .where(APIKey.id == api_key_id)
+        .with_for_update(skip_locked=True, key_share=True)
+        .scalar_subquery()
+    )
     try:
         async with create_session() as session:
-            await session.execute(update(APIKey).where(APIKey.id == api_key_id).values(last_used_at=now))
+            await session.execute(update(APIKey).where(APIKey.id == unlocked).values(last_used_at=now))
             await session.commit()
-    except DATABASE_ERRORS:
+    except DATABASE_ERRORS as exc:
         # Widened past SQLAlchemyError for the same reason as the arms above:
         # this one promises never to fail the request, and a connect timeout
         # raises a bare TimeoutError.
         # codeql[py/clear-text-logging-sensitive-data]
-        logger.warning("Failed to update last_used_at for API key %s", api_key_id, exc_info=True)
+        logger.warning("Failed to update last_used_at for API key %s: %s", api_key_id, describe_database_error(exc))
 
 
 def _header_credentials_present(request: Request) -> bool:
