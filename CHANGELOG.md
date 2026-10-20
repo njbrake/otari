@@ -4,6 +4,77 @@ All notable changes to Otari will be documented in this file.
 
 The format follows [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.27.0-nb.1](https://github.com/njbrake/otari/releases/tag/v0.27.0-nb.1) - 2026-10-20
+
+
+
+### Bug Fixes
+
+- **messages:** Fold tool-result is_error into text for bridged providers in [#6](https://github.com/njbrake/otari/pull/6) by [@njbrake](https://github.com/njbrake) ([`ca68b4e`](https://github.com/njbrake/otari/commit/ca68b4e196d1df65e779e9d47e0543e43af97525))
+- **db:** Keep telemetry ingest off the request pool and bound lock waits in [#7](https://github.com/njbrake/otari/pull/7) by [@njbrake](https://github.com/njbrake) ([`e809460`](https://github.com/njbrake/otari/commit/e8094607eadcc82111cdc6e8fb58973d74e1f9fb))
+- **providers:** Log why a stored-provider write failed in [#8](https://github.com/njbrake/otari/pull/8) by [@njbrake](https://github.com/njbrake) ([`acdc957`](https://github.com/njbrake/otari/commit/acdc957273581bc198490315187ef89496044d35))
+- **dashboard:** Stop blaming pricing for an attempt that failed before any usage in [#11](https://github.com/njbrake/otari/pull/11) by [@njbrake](https://github.com/njbrake) ([`03105fe`](https://github.com/njbrake/otari/commit/03105fe940ef60f16755c6224e69611d109db3c8))
+- **providers:** Keep an otari api_base with the API root working on any-llm 1.29 by [@njbrake](https://github.com/njbrake) ([`063ff61`](https://github.com/njbrake/otari/commit/063ff610f79e28f0e7a415d6111bca438847999f))
+- **activity:** Review follow-ups to the Activity redesign in [#24](https://github.com/njbrake/otari/pull/24) by [@njbrake](https://github.com/njbrake) ([`72c0ac5`](https://github.com/njbrake/otari/commit/72c0ac5f5f75fde8fec61c6d00d44a8bed31d8de))
+- **dashboard:** Phone layout, Activity back navigation and Usage filtering by API key in [#25](https://github.com/njbrake/otari/pull/25) by [@njbrake](https://github.com/njbrake) ([`c0744cb`](https://github.com/njbrake/otari/commit/c0744cbc35d782d73d5a507bbf5e832226267a11))
+- **dashboard:** Confirm with a liveness probe before showing "Can't reach the gateway" in [#29](https://github.com/njbrake/otari/pull/29) by [@njbrake](https://github.com/njbrake) ([`7ce880b`](https://github.com/njbrake/otari/commit/7ce880baa79724fcefdcdb8658c54914cd3f1f80))
+- **budgets:** Reclaim counter holds that have no ledger row in [#30](https://github.com/njbrake/otari/pull/30) by [@njbrake](https://github.com/njbrake) ([`fe133b1`](https://github.com/njbrake/otari/commit/fe133b1c2386654938057478ce6ff7c08f7c012e))
+- **dashboard:** Open the sidebar on a right swipe on phones in [#31](https://github.com/njbrake/otari/pull/31) by [@njbrake](https://github.com/njbrake) ([`d18138f`](https://github.com/njbrake/otari/commit/d18138ff221557279e29837048412d49d66a9f4c))
+- **users:** Move end users and provider endpoints in a user merge by [@njbrake](https://github.com/njbrake) ([`c9dcec1`](https://github.com/njbrake/otari/commit/c9dcec198767b285596653b2e595a2582d9cf49f))
+- **activity:** Show the provider's own compute time in the request panel by [@njbrake](https://github.com/njbrake) ([`9a099b3`](https://github.com/njbrake/otari/commit/9a099b36e1f554c1fd33f9ce2342b3e96c9374c9))
+- **usage:** Let heavy usage reads take turns so a dashboard page cannot exhaust database memory in [#45](https://github.com/njbrake/otari/pull/45) by [@njbrake](https://github.com/njbrake) ([`28916bb`](https://github.com/njbrake/otari/commit/28916bbde6c1c941483db01e4167ac482aaaa07d))
+- **usage:** Keep the chart's bars while another breakdown's series loads in [#49](https://github.com/njbrake/otari/pull/49) by [@njbrake](https://github.com/njbrake) ([`058553f`](https://github.com/njbrake/otari/commit/058553f57baa9558c7eabd708a892a6b1c8a2027))
+- **messages:** Drop context_management for a model with no Messages API of its own by [@daavoo](https://github.com/daavoo) ([`dfe8949`](https://github.com/njbrake/otari/commit/dfe8949d3f4b76934e4d45d26b4bd8f6b3137472))
+- **web:** Retry the bootstrap read instead of dead-ending in [#58](https://github.com/njbrake/otari/pull/58) by [@njbrake](https://github.com/njbrake) ([`d349205`](https://github.com/njbrake/otari/commit/d3492055392e11d7852897182caefe1d80dabfbd))
+- **db:** Keep a database stall from cascading through the request path in [#59](https://github.com/njbrake/otari/pull/59) by [@njbrake](https://github.com/njbrake) ([`1cc6060`](https://github.com/njbrake/otari/commit/1cc60603bdc98631c856f8c977b4a7edd0065a7c))
+
+
+### Features
+
+- **api:** Serve pre-0.6 paths through a legacy route shim in [#1](https://github.com/njbrake/otari/pull/1) by [@njbrake](https://github.com/njbrake) ([`3f6dd6a`](https://github.com/njbrake/otari/commit/3f6dd6a8fd43fe0ba1c5a0fc4ba7042b4794e48d))
+- **admin:** Let an operator generate a password for an account in [#2](https://github.com/njbrake/otari/pull/2) by [@njbrake](https://github.com/njbrake) ([`c557956`](https://github.com/njbrake/otari/commit/c557956258d91f7f358f2b863bb94e8b8763042e))
+- **usage:** Show a member only the requests billed to them in [#3](https://github.com/njbrake/otari/pull/3) by [@njbrake](https://github.com/njbrake) ([`aa40ba9`](https://github.com/njbrake/otari/commit/aa40ba9ed4826eae3157509bba29412d8ab9fb13))
+- **users:** Merge one user record into another in [#4](https://github.com/njbrake/otari/pull/4) by [@njbrake](https://github.com/njbrake) ([`f5c3668`](https://github.com/njbrake/otari/commit/f5c3668308ad013b7fde24bc6cf3a28fa0c3ddee))
+- **api:** Return the requested model name in replies in [#5](https://github.com/njbrake/otari/pull/5) by [@njbrake](https://github.com/njbrake) ([`c01ad43`](https://github.com/njbrake/otari/commit/c01ad432a0e0384415c0a7353ed615c69fbb4e39))
+- **providers:** Forward the scoped prompt cache key as x-session-affinity in [#9](https://github.com/njbrake/otari/pull/9) by [@njbrake](https://github.com/njbrake) ([`1f0180e`](https://github.com/njbrake/otari/commit/1f0180eb89dbf207bd2207609bad4b2a1a517b45))
+- **providers:** Let a stored provider opt into session affinity in [#10](https://github.com/njbrake/otari/pull/10) by [@njbrake](https://github.com/njbrake) ([`04ed011`](https://github.com/njbrake/otari/commit/04ed011d57a1ba6a6c5c549b62b52aea3dd8d47f))
+- **usage:** Add the read surface the Activity redesign needs in [#16](https://github.com/njbrake/otari/pull/16) by [@klubrake](https://github.com/klubrake) ([`6f08d00`](https://github.com/njbrake/otari/commit/6f08d0010c1e6a984996c7407b0cfd01914ea0b8))
+- **usage:** Sort, refine and group the activity log in [#20](https://github.com/njbrake/otari/pull/20) by [@njbrake](https://github.com/njbrake) ([`aecc668`](https://github.com/njbrake/otari/commit/aecc668f3d7e9b4f0caac99f8a008c50d75a1e3a))
+- **api:** Saved views and a member-readable workspace budget in [#21](https://github.com/njbrake/otari/pull/21) by [@njbrake](https://github.com/njbrake) ([`1035cb2`](https://github.com/njbrake/otari/commit/1035cb23d6e8882092946cd4546a676d89ec2273))
+- **activity:** Rebuild the Activity page on the redesign in [#22](https://github.com/njbrake/otari/pull/22) by [@njbrake](https://github.com/njbrake) ([`e9190a6`](https://github.com/njbrake/otari/commit/e9190a660e6a988b298c4de32d09d4593f60e843))
+- **usage:** Workspace admins read their workspace, server-side key search in [#27](https://github.com/njbrake/otari/pull/27) by [@njbrake](https://github.com/njbrake) ([`4b35b0c`](https://github.com/njbrake/otari/commit/4b35b0c5769ebd9ac656bcc2bb3cee724f6ec8e4))
+- **usage:** Delete imported telemetry past a retention window in [#28](https://github.com/njbrake/otari/pull/28) by [@njbrake](https://github.com/njbrake) ([`354ca32`](https://github.com/njbrake/otari/commit/354ca32e10dbc0d64fe96369a6bf8a420318a553))
+- **usage:** Break the summary down by what the Usage page shows in [#38](https://github.com/njbrake/otari/pull/38) by [@njbrake](https://github.com/njbrake) ([`aa33192`](https://github.com/njbrake/otari/commit/aa33192a50c53e614c6b38066570188a36dd406c))
+- **usage:** Rebuild the Usage page on the redesign in [#39](https://github.com/njbrake/otari/pull/39) by [@njbrake](https://github.com/njbrake) ([`c8cf04d`](https://github.com/njbrake/otari/commit/c8cf04dfeb707cdefcdf1f15c20c7927db9640bd))
+- **overview:** Judge one month by scope, with what needs attention and the limits rail in [#40](https://github.com/njbrake/otari/pull/40) by [@njbrake](https://github.com/njbrake) ([`bff0d82`](https://github.com/njbrake/otari/commit/bff0d821e08d3bab1ad751fe2f59646e3ff4d629))
+- **overview:** Rebuild the Overview page on the redesign in [#41](https://github.com/njbrake/otari/pull/41) by [@njbrake](https://github.com/njbrake) ([`ec1b566`](https://github.com/njbrake/otari/commit/ec1b566b918467ac01adf951ab661944c682f61b))
+- **workspaces:** Let managers choose whether members see workspace totals in [#53](https://github.com/njbrake/otari/pull/53) by [@njbrake](https://github.com/njbrake) ([`436989c`](https://github.com/njbrake/otari/commit/436989cf6ecb184e02a3c16dd3445b51d865ba28))
+- **dashboard:** Show members workspace totals as their managers choose in [#54](https://github.com/njbrake/otari/pull/54) by [@njbrake](https://github.com/njbrake) ([`7eb69d0`](https://github.com/njbrake/otari/commit/7eb69d033e2ee946206204f3b9bff7671276ca70))
+- **traces:** Leave trace capture off by default in the fork by [@njbrake](https://github.com/njbrake) ([`4c011d6`](https://github.com/njbrake/otari/commit/4c011d62995ccfe74ecf8620a8cac786630806f6))
+
+
+### Performance
+
+- **usage:** Store billing_meters as jsonb on PostgreSQL in [#12](https://github.com/njbrake/otari/pull/12) by [@njbrake](https://github.com/njbrake) ([`362dfef`](https://github.com/njbrake/otari/commit/362dfefb50b7d77fc6b90f100fc55f121481f661))
+- **dashboard:** Serve picker suggestions from summaries already in flight in [#13](https://github.com/njbrake/otari/pull/13) by [@njbrake](https://github.com/njbrake) ([`e33dc48`](https://github.com/njbrake/otari/commit/e33dc48b8b6f15955051368706b2619f8e8846d5))
+- **usage:** Index usage by workspace and time, serve p95 and tools apart from the summary in [#42](https://github.com/njbrake/otari/pull/42) by [@njbrake](https://github.com/njbrake) ([`93b37ec`](https://github.com/njbrake/otari/commit/93b37ecc97917a1641835caa1c63487d9f8e19cd))
+- **overview:** Ask for the month without waiting on the provider list in [#48](https://github.com/njbrake/otari/pull/48) by [@njbrake](https://github.com/njbrake) ([`3d2d705`](https://github.com/njbrake/otari/commit/3d2d7056a6b4f9b7884011f673379e2222fd17c0))
+- **usage:** Drop the single-column workspace index on usage rows in [#46](https://github.com/njbrake/otari/pull/46) by [@njbrake](https://github.com/njbrake) ([`225762f`](https://github.com/njbrake/otari/commit/225762fafba55bcc29e50ea11cec4f714d4d0465))
+- **activity:** Move live mode's aggregates once a minute, not on every tick in [#47](https://github.com/njbrake/otari/pull/47) by [@njbrake](https://github.com/njbrake) ([`67bda38`](https://github.com/njbrake/otari/commit/67bda380a8f30f4f66022fd19d78fe2041915f1d))
+- **usage:** Cancel a heavy read its caller abandoned, and stop re-sending slow ones in [#50](https://github.com/njbrake/otari/pull/50) by [@njbrake](https://github.com/njbrake) ([`564d215`](https://github.com/njbrake/otari/commit/564d21511563ca4768507d4e4a136c8de4cc1de4))
+- **usage:** Read whole hours of usage from hourly rollups in [#51](https://github.com/njbrake/otari/pull/51) by [@njbrake](https://github.com/njbrake) ([`cd69ba0`](https://github.com/njbrake/otari/commit/cd69ba099cabb7acba7f8c073536f3ec50ffe37d))
+- **overview:** Read the month's spend and failures from the usage rollups in [#52](https://github.com/njbrake/otari/pull/52) by [@njbrake](https://github.com/njbrake) ([`f2f380f`](https://github.com/njbrake/otari/commit/f2f380f3162c967e5e51aa871a73bd4687fa994b))
+- **usage:** Read p95 latency from the hourly rollups in [#55](https://github.com/njbrake/otari/pull/55) by [@njbrake](https://github.com/njbrake) ([`2393e24`](https://github.com/njbrake/otari/commit/2393e24458db5710eb3cefe6698ef53060e4450b))
+- **catalog:** Read a model page's 30-day usage from the hourly rollups in [#56](https://github.com/njbrake/otari/pull/56) by [@njbrake](https://github.com/njbrake) ([`ee5d969`](https://github.com/njbrake/otari/commit/ee5d969fc4ee51952fc264419a8d6d2e8686addb))
+
+
+
+### New Contributors
+
+- [@klubrake](https://github.com/klubrake) made their first contribution in [#16](https://github.com/njbrake/otari/pull/16)
+
+**Full Changelog**: https://github.com/njbrake/otari/compare/v0.28.0...v0.27.0-nb.1
+
 ## [0.27.0](https://github.com/mozilla-ai/otari/releases/tag/v0.27.0) - 2026-10-16
 
 
