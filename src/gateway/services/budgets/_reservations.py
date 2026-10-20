@@ -603,6 +603,32 @@ async def _held_handle(
     )
 
 
+async def _hold_on_user(
+    db: AsyncSession, statement: Any, *, scoped: Sequence[ApplicableBudget], held: HeldAmounts
+) -> Any:
+    """Run the per-user hold, giving the ceilings' holds back if the database fails it.
+
+    The ceilings committed their holds before this statement, and no ledger row
+    records them yet, so an error escaping here would shrink each ceiling until
+    somebody noticed. Given back on a best-effort basis: the database that failed
+    this statement may refuse the release as well.
+    """
+    try:
+        return await db.execute(statement)
+    except DATABASE_ERRORS:
+        with contextlib.suppress(*DATABASE_ERRORS):
+            await db.rollback()
+            if scoped:
+                await release_scoped(
+                    db,
+                    [item.budget_id for item in scoped],
+                    held.amount,
+                    tokens=held.tokens,
+                    requests=held.requests,
+                )
+        raise
+
+
 async def reserve_budget(
     db: AsyncSession,
     user_id: str,
@@ -807,7 +833,8 @@ async def reserve_budget(
     if budget.max_budget is None and budget.token_limit is None and budget.request_limit is None:
         # No cap on any axis, but still reserve so reconciliation math is uniform
         # and concurrent spend is reflected immediately.
-        await db.execute(
+        await _hold_on_user(
+            db,
             update(User)
             .where(User.user_id == user_id, User.deleted_at.is_(None))
             .values(
@@ -815,7 +842,9 @@ async def reserve_budget(
                 reserved_tokens=User.reserved_tokens + held_tokens,
                 reserved_requests=User.reserved_requests + held_requests,
             )
-            .execution_options(synchronize_session=False)
+            .execution_options(synchronize_session=False),
+            scoped=scoped,
+            held=HeldAmounts(amount=usd or ZERO, tokens=held_tokens, requests=held_requests),
         )
         return await _held_handle(
             db,
@@ -852,7 +881,8 @@ async def reserve_budget(
         guards += guards_for(User.current_tokens + User.reserved_tokens, held_tokens, budget.token_limit)
     if budget.request_limit is not None:
         guards += guards_for(User.current_requests + User.reserved_requests, held_requests, budget.request_limit)
-    result = await db.execute(
+    result = await _hold_on_user(
+        db,
         update(User)
         .where(
             User.user_id == user_id,
@@ -864,7 +894,9 @@ async def reserve_budget(
             reserved_tokens=User.reserved_tokens + held_tokens,
             reserved_requests=User.reserved_requests + held_requests,
         )
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session=False),
+        scoped=scoped,
+        held=HeldAmounts(amount=usd or ZERO, tokens=held_tokens, requests=held_requests),
     )
 
     if not getattr(result, "rowcount", 0):

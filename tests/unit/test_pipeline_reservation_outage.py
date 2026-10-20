@@ -7,13 +7,14 @@ gets a retryable 503 in the format it called, and nothing is held for it.
 """
 
 import uuid
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException, Request, Response
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import gateway.api.routes._pipeline as pipeline
@@ -22,7 +23,9 @@ from gateway.container import build_container
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.ports.code_execution_policy_port import CodeExecutionPolicyPort
 from gateway.ports.model_provider_port import ModelProviderPort
+from gateway.repositories.budgets import HeldAmounts
 from gateway.services import pricing_service
+from gateway.services.budgets import _reservations
 
 
 def _stub_preamble(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,3 +113,42 @@ async def test_a_connect_timeout_during_the_reservation_is_a_503_too(monkeypatch
         await _resolve(chat._ADAPTER, AsyncMock())
 
     assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_a_row_the_database_refuses_is_not_answered_as_an_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retrying changes nothing for a data error, so it is not told to retry."""
+    _stub_preamble(monkeypatch)
+
+    async def refusing(*args: Any, **kwargs: Any) -> None:
+        raise IntegrityError("INSERT", None, Exception("duplicate"))
+
+    monkeypatch.setattr(pipeline, "reserve_budget", refusing)
+
+    with pytest.raises(IntegrityError):
+        await _resolve(chat._ADAPTER, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_a_failed_user_hold_gives_the_ceilings_holds_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ceilings committed before the per-user hold, so its failure must not strand them."""
+    released: list[tuple[list[str], Any]] = []
+
+    async def fake_release(db: Any, ids: list[str], amount: Any, **kwargs: Any) -> None:
+        released.append((ids, amount))
+
+    monkeypatch.setattr(_reservations, "release_scoped", fake_release)
+    db = AsyncMock()
+    db.execute.side_effect = OperationalError("UPDATE users", None, TimeoutError())
+    scoped = [cast(Any, SimpleNamespace(budget_id="ceiling-1")), cast(Any, SimpleNamespace(budget_id="ceiling-2"))]
+
+    with pytest.raises(OperationalError):
+        await _reservations._hold_on_user(
+            db,
+            object(),
+            scoped=scoped,
+            held=HeldAmounts(amount=Decimal(3), tokens=10, requests=1),
+        )
+
+    db.rollback.assert_awaited_once()
+    assert released == [(["ceiling-1", "ceiling-2"], Decimal(3))]

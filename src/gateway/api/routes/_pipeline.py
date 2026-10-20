@@ -122,7 +122,7 @@ from gateway.core.config import (
     RESPONSE_DURATION_HEADER,
     GatewayConfig,
 )
-from gateway.core.database import DATABASE_ERRORS, describe_database_error, release_session
+from gateway.core.database import DATA_ERRORS, DATABASE_ERRORS, describe_database_error, release_session
 from gateway.core.env import otari_env
 from gateway.core.error_codes import (
     BUDGET_EXCEEDED,
@@ -2189,6 +2189,29 @@ async def top_up_reservation_for_attempt(ctx: RequestContext, attempt: Attempt) 
     )
 
 
+async def _growth_unavailable(
+    db: AsyncSession, instance: str, model: str, refused_detail: str | None, exc: BaseException
+) -> HTTPException:
+    """Stop the chain on a database failure while growing the hold, as a retryable 503.
+
+    Not the candidate's failure: left to the walker, it was recorded as one, and
+    the next candidate topped up on a session that was never rolled back.
+    """
+    with contextlib.suppress(*DATABASE_ERRORS):
+        await db.rollback()
+    logger.error(
+        "Could not grow the reservation for %s:%s; stopping the chain: %s",
+        instance,
+        model,
+        describe_database_error(exc),
+    )
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=BUDGETS_UNAVAILABLE_DETAIL if refused_detail is not None else DATABASE_UNAVAILABLE_DETAIL,
+        headers={"Retry-After": DATABASE_RETRY_AFTER_SECONDS},
+    )
+
+
 async def _grow_reservation(
     ctx: RequestContext, instance: str, model: str, *, deployment_paid: bool, refused_detail: str | None
 ) -> None:
@@ -2200,7 +2223,12 @@ async def _grow_reservation(
     if ctx.db is None or ctx.reservation is None or ctx.estimate_inputs is None:
         return
     prices = ctx.prices if ctx.prices is not None else RequestPrices(ctx.organization_id)
-    resolved = await prices.resolve(ctx.db, instance, model, deployment_paid=deployment_paid)
+    try:
+        resolved = await prices.resolve(ctx.db, instance, model, deployment_paid=deployment_paid)
+    except DATA_ERRORS:
+        raise
+    except DATABASE_ERRORS as exc:
+        raise await _growth_unavailable(ctx.db, instance, model, refused_detail, exc) from exc
     pricing = resolved.pricing if resolved is not None else None
     # `require_pricing` is a billing safety gate: it refuses a request the gateway
     # cannot price, because it then cannot debit it. The gate at admission prices
@@ -2242,6 +2270,10 @@ async def _grow_reservation(
         if refused_detail is None:
             raise
         raise HTTPException(status_code=exc.status_code, detail=refused_detail, headers=exc.headers) from exc
+    except DATA_ERRORS:
+        raise
+    except DATABASE_ERRORS as exc:
+        raise await _growth_unavailable(ctx.db, instance, model, refused_detail, exc) from exc
     # Gotcha: the price read above, or a top-up with nothing to add, can leave a
     # transaction open, and the candidate's provider call follows.
     await release_session(ctx.db)
@@ -2954,9 +2986,12 @@ async def resolve_request_context(
                     tags=tags,
                 )
             raise
+        except DATA_ERRORS:
+            raise
         except DATABASE_ERRORS as exc:
-            # `reserve_budget` gives back what it held before raising, and a commit that
-            # landed while reporting failure is reclaimed by the ledger sweep.
+            # `reserve_budget` gives back what it held before raising, as far as the
+            # failing database lets it; a commit that landed while reporting failure
+            # is reclaimed by the ledger sweep.
             with contextlib.suppress(*DATABASE_ERRORS):
                 await db.rollback()
             raise database_unavailable(adapter, "Budget reservation", exc) from exc
@@ -3808,6 +3843,9 @@ async def prepare_gateway_tools(
                 await ctx.db.rollback()
         with contextlib.suppress(*DATABASE_ERRORS):
             await release_reservation(ctx)
+        # A row the database refused is not an outage, so it is not answered as one.
+        if isinstance(exc, DATA_ERRORS):
+            raise
         raise database_unavailable(adapter, "Tool admission", exc) from exc
 
     # Gotcha: the connection must not be held across the provider call that follows.
@@ -4863,16 +4901,22 @@ async def charge_deployment_paid(
 
 
 async def release_after_failed_settlement(
-    db: AsyncSession, reservation: ReservationHandle | None, exc: BaseException
+    db: AsyncSession,
+    reservation: ReservationHandle | None,
+    exc: BaseException,
+    *,
+    logged: LoggedUsage,
+    actual_tokens: int,
 ) -> None:
-    """Give a request's hold back after the database refused its settlement.
+    """Settle a request's hold once more after the database refused its settlement.
 
-    The provider has already answered, so the response is still served; what
-    the failure costs is the debit, which needs the database that just failed.
-    Releasing now rather than at the reservation sweep keeps the estimate from
-    shrinking the caller's budget for the hold's whole TTL. A settlement that
-    committed while reporting failure has claimed the ledger row, which makes
-    this release a no-op.
+    The provider has already answered, so the response is still served. When
+    the usage row was written its cost is known, and the hold is reconciled to
+    it again, in one transaction, so spend does not fall behind the rows; when
+    it was not, the hold is refunded. Either way it is done now rather than at
+    the reservation sweep, so the estimate does not shrink the caller's budget
+    for the hold's whole TTL. A settlement that committed while reporting
+    failure has claimed the ledger row, which makes this a no-op.
     """
     logger.error("Settlement failed after the provider answered: %s", describe_database_error(exc))
     with contextlib.suppress(*DATABASE_ERRORS):
@@ -4880,7 +4924,10 @@ async def release_after_failed_settlement(
     if reservation is None:
         return
     try:
-        await refund_reservation(db, reservation)
+        if logged.cost is not None:
+            await reconcile_reservation(db, reservation, logged.cost, actual_tokens=actual_tokens)
+        else:
+            await refund_reservation(db, reservation)
     except DATABASE_ERRORS as release_exc:
         with contextlib.suppress(*DATABASE_ERRORS):
             await db.rollback()
@@ -5571,7 +5618,9 @@ def build_streaming_response(
                     db, reservation, logged.cost or Decimal(0), actual_tokens=_settled_tokens(usage_data)
                 )
         except DATABASE_ERRORS as exc:
-            await release_after_failed_settlement(db, reservation, exc)
+            await release_after_failed_settlement(
+                db, reservation, exc, logged=logged, actual_tokens=_settled_tokens(usage_data)
+            )
         return standalone_settlement(logged)
 
     async def _on_no_usage() -> None:
@@ -7016,7 +7065,9 @@ async def run_standalone_non_stream(
                         ctx.db, ctx.reservation, logged.cost or Decimal(0), actual_tokens=_settled_tokens(usage_data)
                     )
             except DATABASE_ERRORS as exc:
-                await release_after_failed_settlement(ctx.db, ctx.reservation, exc)
+                await release_after_failed_settlement(
+                    ctx.db, ctx.reservation, exc, logged=logged, actual_tokens=_settled_tokens(usage_data)
+                )
             _attach_standalone_cost(adapter, result, logged)
             await _copy_provider_files(
                 ctx, tool_ctx.sandbox_files, produced_files_for(adapter.name, result), instance=provider

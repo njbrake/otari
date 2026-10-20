@@ -3421,19 +3421,42 @@ async def test_non_stream_settlement_failure_serves_the_answer_and_releases_the_
     settlement = _Settlement()
     settlement.install(monkeypatch)
 
-    async def timing_out(*args: Any, **kwargs: Any) -> None:
-        raise _statement_timeout()
+    reconciled: list[Decimal] = []
 
-    monkeypatch.setattr(pipeline, "reconcile_reservation", timing_out)
+    async def times_out_once(db: Any, handle: Any, cost: Decimal, *, actual_tokens: int = 0) -> None:
+        if not reconciled:
+            reconciled.append(Decimal(-1))
+            raise _statement_timeout()
+        reconciled.append(cost)
+
+    monkeypatch.setattr(pipeline, "reconcile_reservation", times_out_once)
     db = AsyncMock()
     completion = _completion(usage=_usage())
 
     returned, _ = await _run_standalone(monkeypatch, result=completion, reservation=_reservation(), db=db)
 
     assert returned is completion
-    assert db.rollback.await_count >= 1, "the failed transaction is rolled back before the release"
-    assert settlement.refunded == 1
+    assert db.rollback.await_count >= 1, "the failed transaction is rolled back before the retry"
+    assert reconciled == [Decimal(-1), Decimal("0.25")], "settled again at the cost the usage row recorded"
+    assert settlement.refunded == 0
     assert [row.get("error") for row in settlement.logged] == [None], "no failure row for a served request"
+
+
+@pytest.mark.asyncio
+async def test_non_stream_settlement_with_no_usage_row_refunds_the_hold(monkeypatch: pytest.MonkeyPatch) -> None:
+    settlement = _Settlement()
+    settlement.install(monkeypatch)
+
+    async def timing_out(*args: Any, **kwargs: Any) -> None:
+        raise _statement_timeout()
+
+    monkeypatch.setattr(pipeline, "record_usage", timing_out)
+    completion = _completion(usage=_usage())
+
+    returned, _ = await _run_standalone(monkeypatch, result=completion, reservation=_reservation(), db=AsyncMock())
+
+    assert returned is completion
+    assert settlement.refunded == 1
 
 
 @pytest.mark.asyncio
@@ -3461,7 +3484,7 @@ async def test_stream_settlement_failure_releases_the_hold(monkeypatch: pytest.M
     async def timing_out(*args: Any, **kwargs: Any) -> None:
         raise _statement_timeout()
 
-    monkeypatch.setattr(pipeline, "reconcile_reservation", timing_out)
+    monkeypatch.setattr(pipeline, "record_usage", timing_out)
 
     async def stream() -> AsyncIterator[ChatCompletionChunk]:
         yield _chunk(CompletionUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
@@ -3509,3 +3532,29 @@ async def test_failover_admission_releases_the_connection_before_the_attempt(
         await pipeline.top_up_reservation_for_attempt(ctx, attempt)
 
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_database_failure_growing_a_fallbacks_hold_stops_the_chain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not the candidate's failure, so not recorded as one and not followed by the next candidate."""
+
+    async def timing_out(*args: Any, **kwargs: Any) -> None:
+        raise _statement_timeout()
+
+    async def priced(self: Any, db: Any, instance: str, model: str, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(pipeline, "increase_reservation", timing_out)
+    monkeypatch.setattr(RequestPrices, "resolve", priced)
+    db = AsyncMock()
+    ctx = _ctx(GatewayConfig(require_pricing=False), db=cast(Any, db), reservation=_reservation())
+    ctx.estimate_inputs = EstimateInputs(
+        prompt_chars=10, max_output_tokens=None, default_output_tokens=100, cache_write_ttl=None
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await pipeline.top_up_reservation_for_attempt(ctx, cast(Any, SimpleNamespace(instance="openai", model="gpt-4")))
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == pipeline.BUDGETS_UNAVAILABLE_DETAIL
+    db.rollback.assert_awaited_once()

@@ -185,9 +185,9 @@ the batch is read.
 
 A completion that cannot reserve its budget because the database did not answer
 in time is answered `503` with a `Retry-After`, and nothing is sent upstream. One
-whose provider already answered is still served when settling it fails: its hold
-is released at once rather than left for the reservation sweep, and the request
-goes undebited, as one the sweep reclaims would.
+whose provider already answered is still served when settling it fails. Its hold
+is settled once more straight away rather than left for the reservation sweep: at
+the cost its usage row recorded, or refunded when the row was never written.
 
 `db_command_timeout` is enforced client-side and `db_statement_timeout_ms`
 server-side, so the second one still ends a statement when the client is the

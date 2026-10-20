@@ -9,6 +9,7 @@ No hold takes a row lock, so a refusal releases the holds already taken.
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import and_, select
 from sqlmodel import col
 
+from gateway.core.database import DATABASE_ERRORS
 from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import (
@@ -324,8 +326,19 @@ async def reserve(
     ceilings = ScopedBudgetRepository(db)
     taken: list[str] = []
     for budget in budgets:
-        held = await ceilings.hold(budget.budget_id, amount, tokens=tokens, requests=requests, new_request=new_request)
-        await db.commit()
+        try:
+            held = await ceilings.hold(
+                budget.budget_id, amount, tokens=tokens, requests=requests, new_request=new_request
+            )
+            await db.commit()
+        except DATABASE_ERRORS:
+            # The holds before this one are committed and recorded nowhere else,
+            # so they are given back before the error leaves; the database that
+            # just failed may refuse that too, and then they are lost.
+            with contextlib.suppress(*DATABASE_ERRORS):
+                await db.rollback()
+                await release(db, taken, amount if amount is not None else ZERO, tokens=tokens, requests=requests)
+            raise
         if not held:
             await release(db, taken, amount if amount is not None else ZERO, tokens=tokens, requests=requests)
             return budget

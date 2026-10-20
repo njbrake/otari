@@ -315,12 +315,6 @@ async def create_search_tool(
     except SecretBoxUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
-    if pinned is not None:
-        # The default's row can collide too, with another create pinning at the same time.
-        conflict = (
-            f"'{name}' was not stored: a stored tool of that name exists, or another create changed the "
-            "search instances at the same time. Reload and retry."
-        )
     await _commit(db, "create search tool", conflict_detail=conflict)
     if pinned is not None:
         apply_override(config, WEB_SEARCH_DEFAULT_TOOL, pinned.name)
