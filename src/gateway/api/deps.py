@@ -355,9 +355,9 @@ async def _bump_last_used_at(api_key_id: str, now: datetime) -> None:
     except DATABASE_ERRORS as exc:
         # Widened past SQLAlchemyError for the same reason as the arms above:
         # this one promises never to fail the request, and a connect timeout
-        # raises a bare TimeoutError.
-        # codeql[py/clear-text-logging-sensitive-data]
-        logger.warning("Failed to update last_used_at for API key %s: %s", api_key_id, describe_database_error(exc))
+        # raises a bare TimeoutError. The key's id stays out of the line: code
+        # scanning treats anything named for a key as a secret.
+        logger.warning("Failed to update an API key's last_used_at: %s", describe_database_error(exc))
 
 
 def _header_credentials_present(request: Request) -> bool:

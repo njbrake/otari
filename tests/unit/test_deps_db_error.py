@@ -96,6 +96,6 @@ async def test_failed_last_used_bump_logs_warning_and_does_not_poison_request_se
 
     assert result is api_key
     mock_warning.assert_called_once()
-    assert "key-abc123" in mock_warning.call_args.args
+    assert "OperationalError" in mock_warning.call_args.args[1]
     db.commit.assert_not_called()
     db.rollback.assert_not_called()
