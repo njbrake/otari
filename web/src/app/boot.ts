@@ -43,6 +43,11 @@ export type BootState =
   | {
       status: "failed"
       error: unknown
+      /**
+       * Where it failed: choosing which gateway to ask (`prepare`, so no gateway
+       * was asked at all) or reading that gateway's bootstrap (`load`).
+       */
+      stage: "prepare" | "load"
       /** An attempt is in flight right now. */
       isAttempting: boolean
       /** Another attempt will start on its own (a transient failure). */
@@ -63,7 +68,10 @@ export interface BootLoader {
  * gateway (or something in front of it) chose to give is not, except the two
  * that say "later": 408 and 429. A network fault or a timeout (status 0), a 5xx,
  * a non-JSON 200 from an intermediary answering in the gateway's place, and
- * anything that is not an `ApiError` at all are.
+ * anything that is not an `ApiError` at all are. The non-JSON case is retried on
+ * purpose even though a static host serving the app's own page for every path
+ * never stops doing so: an edge answering for a gateway mid-redeploy looks the
+ * same, and that one does recover. The backoff caps what the other costs.
  */
 export function isTransientBootstrapFailure(error: unknown): boolean {
   if (!(error instanceof ApiError)) {
@@ -141,12 +149,12 @@ export function createBootLoader({
     document.removeEventListener("visibilitychange", onWake)
   }
 
-  function fail(error: unknown, willRetry: boolean) {
+  function fail(error: unknown, stage: "prepare" | "load", willRetry: boolean) {
     if (willRetry) {
       retries += 1
       retryTimer = setTimeout(attempt, retryDelayMs(retries, random))
     }
-    setState({ status: "failed", error, isAttempting: false, willRetry })
+    setState({ status: "failed", error, stage, isAttempting: false, willRetry })
   }
 
   async function attempt() {
@@ -166,7 +174,7 @@ export function createBootLoader({
       } catch (error) {
         isAttempting = false
         if (!isDisposed) {
-          fail(error, false)
+          fail(error, "prepare", false)
         }
         return
       }
@@ -190,7 +198,7 @@ export function createBootLoader({
       setState({ status: "ready", bootstrap })
     } catch (error) {
       if (!isDisposed) {
-        fail(error, isTransientBootstrapFailure(error))
+        fail(error, "load", isTransientBootstrapFailure(error))
       }
     } finally {
       clearTimeout(deadline)

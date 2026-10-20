@@ -74,6 +74,7 @@ describe("createBootLoader", () => {
 
     await expect(firstSettled(boot)).resolves.toMatchObject({
       status: "failed",
+      stage: "prepare",
       willRetry: false,
     })
     await vi.advanceTimersByTimeAsync(60_000)
@@ -92,6 +93,7 @@ describe("createBootLoader", () => {
     expect(await firstSettled(boot)).toEqual({
       status: "failed",
       error: DOWN,
+      stage: "load",
       isAttempting: false,
       willRetry: true,
     })

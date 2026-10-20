@@ -62,6 +62,42 @@ describe("DeploymentGate", () => {
     expect(screen.queryByRole("navigation")).toBeNull()
   })
 
+  it("shows the gateway's own refusal rather than calling it unreachable", async () => {
+    await mountGate(async () => {
+      throw new ApiError(404, "Not Found")
+    })
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Not Found")
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /The gateway refused the request/,
+    )
+  })
+
+  it("says no gateway was asked when the deployment could not be chosen", async () => {
+    const load = vi.fn<(signal: AbortSignal) => Promise<WireBootstrap>>()
+    loader = createBootLoader({
+      prepare: async () => {
+        throw new Error("no deployment selected")
+      },
+      load,
+      random: () => 0,
+    })
+    await act(async () => {
+      await firstSettled(loader as BootLoader)
+    })
+    render(
+      <Provider>
+        <DeploymentGate loader={loader} />
+      </Provider>,
+    )
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /could not decide which gateway to reach/,
+    )
+    expect(screen.getByRole("status")).not.toHaveTextContent(/refused/)
+    expect(load).not.toHaveBeenCalled()
+  })
+
   it("becomes the app, without a reload, when a background retry answers", async () => {
     const load = vi
       .fn<(signal: AbortSignal) => Promise<WireBootstrap>>()
