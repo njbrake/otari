@@ -23,6 +23,7 @@ from gateway.api.deps import (
     get_db,
     require_deployment_operator,
     verify_api_key_or_master_key,
+    verify_ingest_key_or_master_key,
 )
 from gateway.api.routes._billing_schemas import ChargeLine, MeterMap
 from gateway.api.routes._disconnect import CancelOnDisconnectRoute
@@ -51,7 +52,7 @@ from gateway.api.routes._usage_common import (
     summary_window,
 )
 from gateway.core.config import GatewayConfig
-from gateway.core.database import get_ingest_db, release_session
+from gateway.core.database import get_ingest_db
 from gateway.core.metered_pricing import quantize_cost
 from gateway.core.sql import UsageBucketGrain, utc_iso
 from gateway.core.surface import Surface
@@ -323,8 +324,7 @@ async def list_usage(
 @key_router.post("/external-events")
 async def ingest_external_usage(
     request: ExternalEventsRequest,
-    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    auth_db: Annotated[AsyncSession, Depends(get_db)],
+    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_ingest_key_or_master_key)],
     db: Annotated[AsyncSession, Depends(get_ingest_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> ExternalIngestResult:
@@ -341,8 +341,6 @@ async def ingest_external_usage(
     prompt/completion/tool field is rejected (422), not stored.
     """
     api_key, is_master_key = auth_result
-    # The key was read on the request pool; the batch is written on the ingest pool.
-    await release_session(auth_db)
     with retryable_on_database_outage("external usage ingest"):
         return await ingest_external_events(
             db,

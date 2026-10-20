@@ -20,6 +20,7 @@ import logging
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from any_llm import LLMProvider
@@ -56,12 +57,15 @@ def _attempt(position: int, instance: str, model: str) -> Attempt:
     )
 
 
+_UNSET = object()
+
+
 def _ctx(
     *,
     estimate: Decimal = Decimal(5),
     counts_toward_budget: bool = True,
     require_pricing: bool = False,
-    db: object | None = object(),
+    db: object | None = _UNSET,
     reservation: ReservationHandle | None = None,
     estimate_inputs: object | None = None,
 ) -> Any:
@@ -72,7 +76,8 @@ def _ctx(
     auth, rate limiting, and the allow-list resolver for no added coverage.
     """
     return SimpleNamespace(
-        db=cast(AsyncSession, db) if db is not None else None,
+        # Mocked rather than a bare object: a successful top-up hands the connection back.
+        db=cast(AsyncSession, AsyncMock() if db is _UNSET else db),
         uow=object(),
         rate_limit_grant=None,
         # Resolved once in the preamble on a real request. None is "this

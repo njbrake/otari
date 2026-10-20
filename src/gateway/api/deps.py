@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.auth.models import hash_key
 from gateway.container import Container
 from gateway.core.config import API_KEY_HEADER, API_ROOT, X_API_KEY_HEADER, GatewayConfig
-from gateway.core.database import DATABASE_ERRORS, create_session, describe_database_error, get_db
+from gateway.core.database import DATABASE_ERRORS, create_session, describe_database_error, get_db, release_session
 from gateway.core.feature import CoreFeature
 from gateway.core.sql import utc_bound
 from gateway.core.unit_of_work import UnitOfWork, create_unit_of_work
@@ -797,6 +797,23 @@ async def get_db_if_needed(
     async with aclosing(get_db()) as sessions:
         async for db in sessions:
             yield db
+
+
+async def verify_ingest_key_or_master_key(
+    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> tuple[APIKey | None, bool]:
+    """Verify the caller like ``verify_api_key_or_master_key``, then hand its connection back.
+
+    For the telemetry ingest routes, which write on a pool of their own. The key
+    is read on the request pool, and without this that session would stay idle
+    in its transaction while the batch uploads, parses and is written, so a
+    burst of exports could take the connections sign-in and the rest of the API
+    need. ``db`` is the same session the verification used: FastAPI resolves a
+    dependency once per request.
+    """
+    await release_session(db)
+    return auth_result
 
 
 async def verify_api_key_or_master_key_if_needed(

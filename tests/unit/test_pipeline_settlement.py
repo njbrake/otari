@@ -83,9 +83,9 @@ from gateway.ports.code_execution_policy_port import CodeExecutionPolicyScope
 from gateway.ports.mcp_server_port import McpServerPort, McpServerScope
 from gateway.ports.web_search_policy_port import WebSearchPolicyPort, WebSearchPolicyScope
 from gateway.rate_limit import RateLimitInfo
-from gateway.services.budgets import ReservationHandle
+from gateway.services.budgets import EstimateInputs, ReservationHandle
 from gateway.services.inference import DeploymentCharge
-from gateway.services.pricing_service import ResolvedPricing
+from gateway.services.pricing_service import RequestPrices, ResolvedPricing
 from gateway.services.tool_usage import ToolUsageTally
 from gateway.services.tools._mcp_admission import (
     MCP_SERVER_NAME_COLLIDES_WITH_STORED_DETAIL,
@@ -3494,11 +3494,11 @@ async def test_failover_admission_releases_the_connection_before_the_attempt(
     async def priced(self: Any, db: Any, instance: str, model: str, **kwargs: Any) -> None:
         return None
 
-    monkeypatch.setattr(pipeline.RequestPrices, "resolve", priced)
+    monkeypatch.setattr(RequestPrices, "resolve", priced)
     db = AsyncMock()
     ctx = _ctx(GatewayConfig(require_pricing=False), db=cast(Any, db), reservation=_reservation())
     ctx.uow = cast(Any, object())
-    ctx.estimate_inputs = pipeline.EstimateInputs(
+    ctx.estimate_inputs = EstimateInputs(
         prompt_chars=10, max_output_tokens=None, default_output_tokens=100, cache_write_ttl=None
     )
     attempt = cast(Any, SimpleNamespace(instance="openai", model="gpt-4"))

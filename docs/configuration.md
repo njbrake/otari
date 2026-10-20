@@ -179,7 +179,15 @@ rebuild is what removes it again, which is why the interval cannot be `0`.
 The OTLP endpoints and `POST /api/v1/usage/external-events` draw from it rather
 than the request pool, so a burst of imports contending on the same events
 cannot take the connections sign-in and the dashboard need. It has no overflow,
-which is the point: the cap is the isolation.
+which is the point: the cap is the isolation. The key lookup that authenticates
+an import still runs on the request pool, and hands its connection back before
+the batch is read.
+
+A completion that cannot reserve its budget because the database did not answer
+in time is answered `503` with a `Retry-After`, and nothing is sent upstream. One
+whose provider already answered is still served when settling it fails: its hold
+is released at once rather than left for the reservation sweep, and the request
+goes undebited, as one the sweep reclaims would.
 
 `db_command_timeout` is enforced client-side and `db_statement_timeout_ms`
 server-side, so the second one still ends a statement when the client is the

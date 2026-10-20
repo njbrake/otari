@@ -64,10 +64,10 @@ from opentelemetry.proto.metrics.v1.metrics_pb2 import AggregationTemporality
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import ClientDisconnect
 
-from gateway.api.deps import TelemetryStoragePortDep, get_config, verify_api_key_or_master_key
+from gateway.api.deps import TelemetryStoragePortDep, get_config, verify_ingest_key_or_master_key
 from gateway.api.routes._helpers import retryable_on_database_outage
 from gateway.core.config import GatewayConfig
-from gateway.core.database import get_db, get_ingest_db, release_session
+from gateway.core.database import get_ingest_db
 from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
 from gateway.ports.telemetry_storage_port import TelemetryRecord
@@ -475,19 +475,6 @@ def _point_value(point: Any) -> Any:
     return point.as_double if arm == "as_double" else point.as_int
 
 
-async def _release_after_auth(auth_db: AsyncSession) -> None:
-    """End the transaction the key lookup opened before reading the export.
-
-    ``auth_db`` is the request-pool session ``verify_api_key_or_master_key``
-    read the key on (FastAPI hands a route the same ``get_db`` session its
-    dependencies got), not the ingest session. Otherwise that connection sits
-    idle in its transaction while the body uploads, parses and is ingested, so
-    a burst of exports could take the connections sign-in and the rest of the
-    API need.
-    """
-    await release_session(auth_db)
-
-
 async def _ingest(
     pairs: list[tuple[str, ExternalUsageEvent]],
     *,
@@ -534,14 +521,12 @@ def _otlp_response(content_type: str, response: Message) -> Response:
 @router.post("/v1/traces")
 async def receive_traces(
     request: Request,
-    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    auth_db: Annotated[AsyncSession, Depends(get_db)],
+    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_ingest_key_or_master_key)],
     db: Annotated[AsyncSession, Depends(get_ingest_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> Response:
     """Ingest LLM usage from OTLP spans (GenAI semantic conventions)."""
     api_key = _require_import_key(auth_result[0])
-    await _release_after_auth(auth_db)
     content_type = _content_type(request)
     body = await _read_export(request)
     parsed = _parse(body, content_type, ExportTraceServiceRequest())
@@ -608,15 +593,13 @@ async def receive_traces(
 @router.post("/v1/logs")
 async def receive_logs(
     request: Request,
-    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    auth_db: Annotated[AsyncSession, Depends(get_db)],
+    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_ingest_key_or_master_key)],
     db: Annotated[AsyncSession, Depends(get_ingest_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     storage: TelemetryStoragePortDep,
 ) -> Response:
     """Ingest LLM usage from OTLP log events (Claude Code, Codex, or GenAI logs)."""
     api_key = _require_import_key(auth_result[0])
-    await _release_after_auth(auth_db)
     content_type = _content_type(request)
     body = await _read_export(request)
     parsed = _parse(body, content_type, ExportLogsServiceRequest())
@@ -670,8 +653,7 @@ async def receive_logs(
 @router.post("/v1/metrics")
 async def receive_metrics(
     request: Request,
-    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    auth_db: Annotated[AsyncSession, Depends(get_db)],
+    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_ingest_key_or_master_key)],
     db: Annotated[AsyncSession, Depends(get_ingest_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     storage: TelemetryStoragePortDep,
@@ -692,7 +674,6 @@ async def receive_metrics(
     with it off, the export still succeeds and simply stores nothing.
     """
     api_key = _require_import_key(auth_result[0])
-    await _release_after_auth(auth_db)
     content_type = _content_type(request)
     body = await _read_export(request)
     parsed = _parse(body, content_type, ExportMetricsServiceRequest())
