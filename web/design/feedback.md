@@ -49,7 +49,7 @@ EmptyState: { title, description?, actionLabel?, onAction?, isActionDisabled?,
 EmptyMessage: { children, minHeight? }
 PageLoading: { label = "Loading…" }
 LoadingBar: { isActive }
-PageError: { error: unknown, children? }
+PageError: { error: unknown, children?, action? }
 ConfirmDialog: { isOpen, onOpenChange, heading, body, confirmLabel, onConfirm,
   confirmVariant = "danger", isPending?, error? }
 FormDialog: { isOpen, onOpenChange, title, description?, size = "md",
@@ -69,7 +69,9 @@ turn it on, because nothing the reader did is waiting on them.
 
 `PageError` is `PageLoading`'s counterpart, for a failure that took the whole page
 rather than a band inside one: a gateway that never answered, and the two catch
-boundaries below. Its `children` is the sentence about what to do next.
+boundaries below. Its `children` is the sentence about what to do next, and
+`action` the one control that does it where there is one (the gateway case's
+Retry).
 
 `ErrorBoundary` is not one a page reaches for: it is the catch above the router in
 `App.tsx`, and the only one the pre-session screens have. Everything inside

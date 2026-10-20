@@ -17,6 +17,14 @@ The dashboard reads `GET /api/v1/bootstrap` before rendering. That response cont
 the available sign-in methods and navigation surfaces, so a page that is not
 available in the current mode is not offered.
 
+If the gateway does not answer that request (it is down, restarting, or too slow
+to answer within 8 seconds), the dashboard does not guess a mode. It says the
+gateway is unreachable, keeps retrying in the background with a growing wait of
+up to 30 seconds, retries at once when the browser comes back online or the tab
+is shown again, and offers a Retry button. It opens as soon as an attempt
+answers, with no reload. A refusal such as a 404 is not retried on its own; use
+Retry once the address is fixed.
+
 ## Sign-in and secrets
 
 The master key and `OTARI_SECRET_KEY` are different credentials:
