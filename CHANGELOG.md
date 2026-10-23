@@ -4,6 +4,17 @@ All notable changes to Otari will be documented in this file.
 
 The format follows [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.27.0-nb.2](https://github.com/njbrake/otari/releases/tag/v0.27.0-nb.2) - 2026-10-23
+
+
+
+### Bug Fixes
+
+- **budgets:** Stop a slow WAL flush from holding the budget rows in [#62](https://github.com/njbrake/otari/pull/62) by [@njbrake](https://github.com/njbrake) ([`5e7908d`](https://github.com/njbrake/otari/commit/5e7908dd40c852a1fa3c5840aa63ea47ab468ffe))
+
+
+**Full Changelog**: https://github.com/njbrake/otari/compare/v0.27.0-nb.1...v0.27.0-nb.2
+
 ## [0.27.0-nb.1](https://github.com/njbrake/otari/releases/tag/v0.27.0-nb.1) - 2026-10-20
 
 
