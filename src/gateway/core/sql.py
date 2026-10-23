@@ -131,6 +131,23 @@ def dialect_name(db: AsyncSession) -> str:
 INGEST_LOCK_TIMEOUT_MS = 2000
 
 
+async def defer_commit_flush(db: AsyncSession) -> None:
+    """Let the current transaction's COMMIT return before PostgreSQL flushes its WAL to disk.
+
+    For a transaction that writes a row every request of a user or a key shares,
+    such as a budget hold. A row lock is held until the commit returns, and a
+    synchronous commit waits for the flush, so a storage stall that slows one
+    flush otherwise holds the row for its whole length and every concurrent
+    request that writes it gives up at ``lock_timeout``. The commit is still
+    atomic and visible at once, and WAL is replayed in order, so a crash can only
+    drop the last fraction of a second of such commits, never one without a
+    commit before it. SQLite has no such setting, so it is ignored there. Must
+    run inside the transaction it applies to; the commit resets it.
+    """
+    if dialect_name(db) == "postgresql":
+        await db.execute(text("SET LOCAL synchronous_commit = off"))
+
+
 async def insert_ignoring_duplicates(
     db: AsyncSession,
     rows: Sequence[Any],

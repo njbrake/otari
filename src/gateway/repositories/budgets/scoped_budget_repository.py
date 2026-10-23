@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped
 from sqlalchemy.sql.elements import ColumnElement
 
+from gateway.core.sql import defer_commit_flush
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.budget_exceptions import SpendCeilingAlreadyExistsError
 from gateway.models.budgets import (
@@ -421,7 +422,11 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
         return result.scalar_one_or_none()
 
     async def lock(self, scoped_budget_ids: Sequence[str]) -> None:
-        """Lock these ceilings until the transaction ends, in the order of their IDs."""
+        """Lock these ceilings until the transaction ends, in the order of their IDs.
+
+        The commit is told not to wait for its flush, so the locks last no longer than the transaction's own work.
+        """
+        await defer_commit_flush(self.db)
         await self.db.execute(
             select(ScopedBudget.id)
             .where(ScopedBudget.id.in_(list(scoped_budget_ids)))

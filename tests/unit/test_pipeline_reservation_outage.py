@@ -10,7 +10,7 @@ import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException, Request, Response
@@ -139,6 +139,7 @@ async def test_a_failed_user_hold_gives_the_ceilings_holds_back(monkeypatch: pyt
 
     monkeypatch.setattr(_reservations, "release_scoped", fake_release)
     db = AsyncMock()
+    db.get_bind = MagicMock(return_value=SimpleNamespace(dialect=SimpleNamespace(name="sqlite")))
     db.execute.side_effect = OperationalError("UPDATE users", None, TimeoutError())
     scoped = [cast(Any, SimpleNamespace(budget_id="ceiling-1")), cast(Any, SimpleNamespace(budget_id="ceiling-2"))]
 

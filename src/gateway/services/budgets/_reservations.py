@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.core import error_codes
 from gateway.core.database import DATABASE_ERRORS
 from gateway.core.metered_pricing import estimate_metered_cost, priced_per_request
+from gateway.core.sql import defer_commit_flush
 from gateway.log_config import logger
 from gateway.metrics import REGISTRY, Counter
 from gateway.models.budgets import (
@@ -614,6 +615,7 @@ async def _hold_on_user(
     this statement may refuse the release as well.
     """
     try:
+        await defer_commit_flush(db)
         return await db.execute(statement)
     except DATABASE_ERRORS:
         with contextlib.suppress(*DATABASE_ERRORS):
@@ -1007,6 +1009,7 @@ async def reconcile_reservation(
     # expression clamps at zero that would pass silently as an under-count of
     # live holds rather than fail.
     reclaimed_early = False
+    await defer_commit_flush(db)
     if not await ledger.try_terminate(db, handle.reservation_id, RESERVATION_SETTLED):
         # Losing that claim has two causes and they settle differently. Another
         # settlement site for this request already ran, and there is nothing left
@@ -1123,6 +1126,7 @@ async def refund_reservation(db: AsyncSession, handle: ReservationHandle) -> Non
     reachable from roughly seven sites, and only control flow (a ``raise`` after
     each) has kept two of them from firing for one request.
     """
+    await defer_commit_flush(db)
     if not await ledger.try_terminate(db, handle.reservation_id, RESERVATION_RELEASED):
         # Commit rather than roll back the empty transaction: the guarded UPDATE
         # matched nothing, so there is nothing to undo, and ``rollback()`` expires
@@ -1299,6 +1303,7 @@ async def increase_reservation(
                 values["reserved_tokens"] = ledger.release_reserved_count_expression(
                     User.reserved_tokens, delta.token_estimate
                 )
+            await defer_commit_flush(db)
             await db.execute(
                 update(User)
                 .where(User.user_id == handle.user_id, User.deleted_at.is_(None))

@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped
 
 from gateway.core.database import create_session
+from gateway.core.sql import defer_commit_flush
 from gateway.log_config import logger
 from gateway.models.budgets import RESERVATION_EXPIRED, ReservationStatus
 from gateway.models.users import User
@@ -270,6 +271,7 @@ async def _reclaim(db: AsyncSession, expired: Sequence[BudgetReservation]) -> in
         # Claim and release in one transaction. Committing the claim first would
         # mean a failure in the release left a row terminal with its hold still
         # held, and no later sweep would look at that row again.
+        await defer_commit_flush(db)
         if not await try_terminate(db, reservation.id, RESERVATION_EXPIRED):
             # This commits the empty transaction, because a rollback would expire the rows this loop iterates over.
             await db.commit()

@@ -20,6 +20,7 @@ from sqlalchemy import and_, select
 from sqlmodel import col
 
 from gateway.core.database import DATABASE_ERRORS
+from gateway.core.sql import defer_commit_flush
 from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import (
@@ -286,6 +287,8 @@ async def release(
     """
     if not budget_ids or not (amount > ZERO or tokens > 0 or requests > 0):
         return
+    if commit:
+        await defer_commit_flush(db)
     await ScopedBudgetRepository(db).release_holds(budget_ids, amount, tokens=tokens, requests=requests)
     if commit:
         await db.commit()
@@ -327,6 +330,7 @@ async def reserve(
     taken: list[str] = []
     for budget in budgets:
         try:
+            await defer_commit_flush(db)
             held = await ceilings.hold(
                 budget.budget_id, amount, tokens=tokens, requests=requests, new_request=new_request
             )
@@ -441,6 +445,8 @@ async def settle(
         spend > ZERO or held > ZERO or tokens > 0 or held_tokens > 0 or counted_requests > 0 or held_requests > 0
     ):
         return
+    if commit:
+        await defer_commit_flush(db)
     await ScopedBudgetRepository(db).settle(
         budget_ids,
         spend=spend,
