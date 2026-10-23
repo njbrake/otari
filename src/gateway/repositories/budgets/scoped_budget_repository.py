@@ -421,12 +421,12 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
         )
         return result.scalar_one_or_none()
 
-    async def lock(self, scoped_budget_ids: Sequence[str]) -> None:
-        """Lock these ceilings until the transaction ends, in the order of their IDs.
-
-        The commit is told not to wait for its flush, so the locks last no longer than the transaction's own work.
-        """
+    async def defer_commit_flush(self) -> None:
+        """Let this transaction's commit return before its flush, for one that moves a ceiling's hold."""
         await defer_commit_flush(self.db)
+
+    async def lock(self, scoped_budget_ids: Sequence[str]) -> None:
+        """Lock these ceilings until the transaction ends, in the order of their IDs."""
         await self.db.execute(
             select(ScopedBudget.id)
             .where(ScopedBudget.id.in_(list(scoped_budget_ids)))

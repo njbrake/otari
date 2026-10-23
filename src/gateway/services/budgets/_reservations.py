@@ -95,6 +95,7 @@ async def _cas_reset_user_budget(db: AsyncSession, user: User, budget: Budget, n
     window = budget_window(now, budget)
     started_at, next_reset_at = window if window is not None else (now, None)
 
+    await defer_commit_flush(db)
     result = await db.execute(
         update(User)
         .where(

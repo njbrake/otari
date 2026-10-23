@@ -165,9 +165,9 @@ top-up grows the existing row rather than creating a second independently
 expiring hold. The sweep also clamps a counter untouched for the reservation
 TTL down to the sum of its active rows, which returns a hold whose row never
 landed. A transaction that moves a hold on a user's row or a ceiling's calls
-`defer_commit_flush` (`core/sql.py`) before its first write (a fallback's move
-does it in `ScopedBudgetRepository.lock`), so its row lock does not last as
-long as a slow WAL flush.
+`defer_commit_flush` (`core/sql.py`, or the method of that name on
+`ScopedBudgetRepository`) before its first write, so its row lock does not last
+as long as a slow WAL flush.
 
 Every exit after reservation must settle or refund, including cancellation,
 client disconnect, tool failure, and provider error. Preserve the sweeper and

@@ -118,6 +118,7 @@ async def release_unrecorded(
     this call gave them back.
     """
     try:
+        await defer_commit_flush(db)
         await ReservationRepository(db).add_released(reservation_id, user_id=user_id)
         await release_scoped(
             db, scoped_budget_ids, held.amount, tokens=held.tokens, requests=held.requests, commit=False
@@ -324,6 +325,7 @@ def _clamped(names: Sequence[str], counters: Sequence[Decimal | int], held: Held
 
 async def _reconcile_user(db: AsyncSession, user_id: str, cutoff: datetime) -> bool:
     """Clamp one quiet user's holds to the sum of that user's active rows."""
+    await defer_commit_flush(db)
     counters = (
         await db.execute(
             select(User.reserved, User.reserved_tokens, User.reserved_requests)
@@ -358,6 +360,7 @@ async def _reconcile_user(db: AsyncSession, user_id: str, cutoff: datetime) -> b
 async def _reconcile_scoped(db: AsyncSession, scoped_budget_id: str, cutoff: datetime) -> bool:
     """Clamp one quiet ceiling's holds to the sum of its lines on active rows."""
     ceilings = ScopedBudgetRepository(db)
+    await ceilings.defer_commit_flush()
     counters = await ceilings.lock_quiet_holds(scoped_budget_id, quiet_before=cutoff)
     if counters is None:
         await db.commit()

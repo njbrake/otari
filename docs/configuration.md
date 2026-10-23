@@ -193,12 +193,18 @@ On PostgreSQL the transactions that hold, settle or release a budget commit with
 `synchronous_commit` off. Every request of a user writes that user's row, and
 every request of a key writes its ceiling's row, so a commit waiting on a slow
 disk flush would hold the row for the whole stall and fail each concurrent
-request at `db_lock_timeout_ms`. The commit is still atomic and visible at once;
-a crash of PostgreSQL itself can drop up to about three times
-`wal_writer_delay` of these commits (600 ms by default). A hold lost that way
-is gone early, a lost release lingers until the reservation sweep, and a lost
-settlement leaves that request's spend off the budget counter; its usage row is
-a separate, synchronous write and keeps the cost.
+request at `db_lock_timeout_ms`. The commit is still atomic and visible at once,
+but it is durable only once the WAL reaches disk: normally within about three
+times `wal_writer_delay` (600 ms by default), and only after the stall ends
+when the disk is stalled. A crash of PostgreSQL in that window, or a failover to
+a standby, drops those commits. Commits are replayed in order, so a dropped hold
+takes its ledger row with it and its request's spend never reaches the budget
+counter; a dropped release lingers until the reservation sweep; a dropped
+settlement leaves its spend off the counter and its hold for the sweep. A
+ceiling hold dropped just before its request's own commit failed can also be
+given back once more than it held, which lowers that ceiling's holds until the
+requests holding it settle. Usage rows are written separately, synchronously,
+and keep the cost.
 
 `db_command_timeout` is enforced client-side and `db_statement_timeout_ms`
 server-side, so the second one still ends a statement when the client is the

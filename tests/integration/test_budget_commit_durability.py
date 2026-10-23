@@ -7,21 +7,25 @@ held the row for its whole length, and every concurrent request on the row gave
 up at ``lock_timeout`` (a 97.9 s checkpoint failed twelve requests this way).
 """
 
+import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event, text
+from sqlalchemy import event, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.sql import defer_commit_flush
-from gateway.models.budgets import BudgetReservation
+from gateway.models.budgets import Budget, BudgetReservation, ScopedBudget
+from gateway.models.users import User
+from gateway.repositories.budgets import HeldAmounts
 from gateway.services.budgets import _ledger as ledger
 from gateway.services.budgets import increase_reservation, reconcile_reservation, refund_reservation, reserve_budget
 
-from .test_budget_reservation_ledger import _with_budget
+from .test_budget_reservation_ledger import _TTL, _age, _orphan_user_hold, _with_budget
 from .test_scoped_budgets import Fixture, _build_tenancy, _caps_for_two_providers, _scoped, move
 
 _DEFER = "SET LOCAL synchronous_commit = off"
@@ -67,7 +71,10 @@ def transactions(async_db: AsyncSession) -> Iterator[_Transactions]:
 
 
 def _writes_a_hold(statement: str) -> bool:
-    return statement.startswith(("UPDATE users ", "UPDATE scoped_budgets ")) and "reserved" in statement
+    """A write to a counter of a user's row or a ceiling's: a hold, a spend or a window count."""
+    return statement.startswith(("UPDATE users ", "UPDATE scoped_budgets ")) and any(
+        counter in statement for counter in ("reserved", "spend", "current_")
+    )
 
 
 @pytest.mark.asyncio
@@ -108,6 +115,51 @@ async def test_a_fallbacks_move_defers_its_flush(
     await move(async_db, handle, "anthropic", cost=3.0)
 
     _assert_every_hold_defers(transactions, at_least=1)
+
+
+@pytest.mark.asyncio
+async def test_the_sweeps_and_a_window_roll_defer_their_flush(
+    async_db: AsyncSession, tenancy: Fixture, transactions: _Transactions
+) -> None:
+    await _with_budget(async_db, tenancy, max_budget=100.0)
+    cap = await _scoped(async_db, scope_type="organization", scope_id=str(tenancy.organization_id), max_budget=50.0)
+    async_db.add(cap)
+    await async_db.commit()
+    cap_id = cap.id
+    await reserve_budget(async_db, tenancy.user_id, 2.0, scope=tenancy.scope())
+    await _orphan_user_hold(async_db, tenancy.user_id, usd="5", tokens=0, requests=1)
+    await async_db.execute(
+        update(ScopedBudget).where(ScopedBudget.id == cap_id).values(reserved_spend=ScopedBudget.reserved_spend + 5)
+    )
+    await async_db.commit()
+    await _age(async_db, User, User.user_id, tenancy.user_id)
+    await _age(async_db, ScopedBudget, ScopedBudget.id, cap_id)
+    transactions.committed.clear()
+
+    assert await ledger.reconcile_orphaned_holds(async_db, quiet_sec=_TTL, batch_size=10) == 2
+    assert await ledger.release_unrecorded(
+        async_db,
+        str(uuid.uuid4()),
+        user_id=tenancy.user_id,
+        scoped_budget_ids=[cap_id],
+        held=HeldAmounts(amount=Decimal(1), tokens=0, requests=1),
+    )
+    _assert_every_hold_defers(transactions, at_least=3)
+
+    user = await async_db.get_one(User, tenancy.user_id)
+    budget = await async_db.get_one(Budget, user.budget_id)
+    budget.budget_duration_sec = 3600
+    user.next_budget_reset_at = datetime.now(UTC) - timedelta(minutes=1)
+    await async_db.commit()
+    transactions.committed.clear()
+
+    await reserve_budget(async_db, tenancy.user_id, 1.0)
+
+    rolled = [
+        statements for statements in transactions.committed if any("next_budget_reset_at" in s for s in statements)
+    ]
+    assert rolled, "the reserve should have rolled the window"
+    _assert_every_hold_defers(transactions, at_least=2)
 
 
 def _assert_every_hold_defers(transactions: _Transactions, *, at_least: int) -> None:

@@ -157,6 +157,7 @@ class _ReservationMoves:
         """
         if handle.reservation_id is not None and not await self._reservations.lock_active(handle.reservation_id):
             return MoveOutcome(reclaimed=True)
+        await self._ceilings.defer_commit_flush()
         await self._ceilings.lock(
             sorted(
                 [ceiling.scoped_budget_id for ceiling in move.added]
