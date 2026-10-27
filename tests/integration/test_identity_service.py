@@ -1,12 +1,13 @@
 """Sign-in through the identity service, and the core identity provider policy."""
 
+import asyncio
 import functools
 from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, col
 
 from gateway.adapters.identity_provider_adapter import DeploymentIdentityProviderAdapter
 from gateway.core.config import GatewayConfig
@@ -123,6 +124,23 @@ async def test_starting_a_session_records_the_sign_in_on_the_account(async_db: A
 
     await async_db.refresh(account)
     assert account.last_sign_in_at is not None
+
+
+async def test_a_locked_account_row_does_not_hold_up_starting_a_session(async_db: AsyncSession) -> None:
+    """The sign-in stamp is skipped while another transaction holds the account's row."""
+    organization = await create_organization(async_db, slug="acme")
+    account = await create_member(async_db, organization, role="member", full_name="Ada")
+    await async_db.commit()
+
+    async with AsyncSession(async_db.bind) as holder:
+        # What a competing UPDATE of a non-key column holds.
+        await holder.execute(select(col(User.id)).where(col(User.id) == account.id).with_for_update(key_share=True))
+        signed_in = await asyncio.wait_for(_service(async_db, open_signup=False).start_session(account), timeout=5)
+        await holder.rollback()
+
+    assert signed_in.session_token
+    await async_db.refresh(account)
+    assert account.last_sign_in_at is None
 
 
 class _ReturnsAccount:
