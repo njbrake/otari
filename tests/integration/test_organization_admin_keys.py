@@ -19,13 +19,13 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from gateway.auth.models import hash_key
-from gateway.core.config import API_ROOT, GatewayConfig
+from gateway.core.config import API_ROOT
 from gateway.models.api_keys import APIKey
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.models.users import User as BillingUser
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
-from .conftest import build_test_client
+from .conftest import build_test_client, declared_test_providers, shared_test_config
 
 _KEYS = f"{API_ROOT}/organizations/me/keys"
 _TOOL_NAMES = f"{API_ROOT}/organizations/me/search-tools"
@@ -41,9 +41,15 @@ class _World:
 
 
 @pytest.fixture
-def admin_client(test_config: GatewayConfig, clean_database: None) -> Generator[TestClient]:
-    """A client whose deployment declares one search tool, so the names read has something to list."""
-    config = test_config.model_copy(update={"search_tools": {"exa-search": {"provider": "exa", "api_key": "k"}}})
+def admin_client(postgres_url: str, clean_database: None) -> Generator[TestClient]:
+    """A client whose deployment declares one search tool, so the names read has something to list.
+
+    Built fresh rather than copied from ``test_config``: a copy keeps the
+    config-file tool baseline an earlier test on the worker may have captured.
+    """
+    config = shared_test_config(postgres_url, declared_test_providers()).model_copy(
+        update={"search_tools": {"exa-search": {"provider": "exa", "api_key": "k"}}}
+    )
     yield from build_test_client(config)
 
 
