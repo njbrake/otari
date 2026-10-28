@@ -230,10 +230,12 @@ _CORE_ROUTERS: tuple[APIRouter, ...] = (
     tool_settings.operator_router,
     tool_settings.reader_router,
     tool_settings.catalog_router,
-    # Both prefixed /search-tools. The catalog first, because its one route is a
-    # fixed path and the operator's end in a path parameter.
+    # The first two prefixed /search-tools: the catalog first, because its one
+    # route is a fixed path and the operator's end in a path parameter. The
+    # tenant's names list sits under /organizations/me.
     search_tools.catalog_router,
     search_tools.router,
+    search_tools.tenant_router,
     tools.router,
 )
 

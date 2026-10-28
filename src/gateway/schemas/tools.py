@@ -316,6 +316,12 @@ class ConfigSearchToolSchema(pydantic.BaseModel):
     )
 
 
+class SearchToolNamesResponse(pydantic.BaseModel):
+    """The names a key's or a user's ``allowed_tools`` may list, without anything else about the tools."""
+
+    names: list[str] = pydantic.Field(description="Every instance name of the kind asked for, sorted.")
+
+
 class SearchToolsResponse(pydantic.BaseModel):
     """Every search instance ``POST /api/v1/search`` can name, or every fetch instance, by where it came from."""
 

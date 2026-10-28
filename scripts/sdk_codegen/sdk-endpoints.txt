@@ -403,6 +403,7 @@ GET /api/v1/organizations/me/automatic-fallbacks                # dashboard-only
 # caller does not hold.
 GET /api/v1/organizations/me/keys                               # dashboard-only
 GET /api/v1/organizations/me/keys/routing                       # dashboard-only
+GET /api/v1/organizations/me/search-tools                       # dashboard-only
 POST /api/v1/organizations/me/keys                              # dashboard-only
 PATCH /api/v1/organizations/me/keys/{key_id}                    # dashboard-only
 DELETE /api/v1/organizations/me/keys/{key_id}                   # dashboard-only
