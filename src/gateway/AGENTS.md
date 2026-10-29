@@ -105,9 +105,10 @@ Tenant lookups include the tenant predicate and return 404 for a foreign ID.
 Client filters may narrow the server-derived scope and never widen it. A tenant
 that needs a deployment-wide route gets a separately scoped endpoint, as
 organization usage does for reads and `/api/v1/organizations/me/keys`
-(`organization_keys.py`) does for writes; do not loosen the original route. A
-member's key surface derives its owner as well as its scope, so it takes no
-`user_id` and mints nothing budget-exempt.
+(`organization_keys.py`) does for writes; do not loosen the original route.
+That key surface derives a member's owner as well as their scope, takes a
+`user_id` only from an organization owner or admin naming an active member,
+and never mints or hands a manager a budget-exempt or service key.
 
 The API key determines the billed workspace. Client `user`, workspace, or
 organization fields cannot move billing or credential resolution.

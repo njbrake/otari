@@ -14,7 +14,8 @@ established for usage reads (otari#837), applied to a write surface:
   keys on), and every load for a member carries that owner predicate, so
   somebody else's key answers the 404 a nonexistent one does.
 * **An organization owner or admin manages the organization's keys.** Their
-  loads drop the owner predicate and keep the organization one, and their create
+  loads widen the owner predicate to any member's key that is neither
+  budget-exempt nor a service key (see ``_CallerScope.key_condition``), and their create
   may name ``user_id``: an active member of the organization who may see the
   workspace themselves, never an arbitrary or new id. A member naming
   ``user_id`` is refused. Either way an owner an operator has revoked through
@@ -42,7 +43,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
@@ -184,12 +185,28 @@ class _CallerScope:
     own_user_id: str
     """The caller's own attribution id: the identity's UUID as a string, as ``get_or_create_attribution_user`` mints."""
     manages: bool
-    """An owner or admin of the organization, who may touch every key in it."""
+    """An owner or admin of the organization, who may touch any member's key in it."""
 
     @property
-    def owner_filter(self) -> str | None:
-        """The owner a key must have to be the caller's to touch, or None for any key in the organization."""
-        return None if self.manages else self.own_user_id
+    def key_condition(self) -> ColumnElement[bool]:
+        """What a key in the organization must satisfy for the caller to touch it.
+
+        Always their own. For a manager also any other key with an owner that is
+        neither budget-exempt nor a service key: rotating an exempt or service key
+        hands over a credential only the operator may mint, and a key with no
+        owner has nobody for an edit to narrow against.
+        """
+        own = col(APIKey.user_id) == self.own_user_id
+        if not self.manages:
+            return own
+        return or_(
+            own,
+            and_(
+                col(APIKey.user_id).is_not(None),
+                col(APIKey.exclude_from_budget).is_(False),
+                col(APIKey.is_service_key).is_(False),
+            ),
+        )
 
 
 async def _caller_scope(db: AsyncSession, identity: TenancyUser) -> _CallerScope:
@@ -214,7 +231,7 @@ async def _caller_scope(db: AsyncSession, identity: TenancyUser) -> _CallerScope
 
 
 async def _key_owner(
-    db: AsyncSession, organizations: OrganizationService, scope: _CallerScope, user_id: uuid.UUID | None
+    organizations: OrganizationService, scope: _CallerScope, user_id: uuid.UUID | None
 ) -> TenancyUser | None:
     """The identity a new key is for, when the caller names one; None means the caller.
 
@@ -257,7 +274,7 @@ async def create_own_key(
     organizations = OrganizationService(db, membership_listener=None)
     scope = await _caller_scope(db, identity)
     organization = scope.organization
-    owner_identity = await _key_owner(db, organizations, scope, request.user_id) or identity
+    owner_identity = await _key_owner(organizations, scope, request.user_id) or identity
     for_someone_else = owner_identity.id != identity.id
 
     if request.workspace_id is not None:
@@ -406,7 +423,8 @@ async def list_own_keys(
 
     A member sees only keys billed to their own user: an operator-minted key
     assigned to them is theirs to see here, and nobody else's key ever is. An
-    organization owner or admin sees every key in the organization. Naming a
+    organization owner or admin also sees every other member's key, apart from
+    budget-exempt and service keys, which stay the operator's. Naming a
     workspace outside the organization lists nothing rather than refusing, so
     the filter reports no more than the unfiltered read does. ``search`` narrows
     within the same rows.
@@ -415,10 +433,8 @@ async def list_own_keys(
     statement = (
         select(APIKey)
         .join(Workspace, col(Workspace.id) == col(APIKey.workspace_id))
-        .where(col(Workspace.organization_id) == scope.organization.id)
+        .where(col(Workspace.organization_id) == scope.organization.id, scope.key_condition)
     )
-    if scope.owner_filter is not None:
-        statement = statement.where(col(APIKey.user_id) == scope.owner_filter)
     if workspace_id is not None:
         statement = statement.where(col(APIKey.workspace_id) == workspace_id)
     if (matches := key_search_condition(search)) is not None:
@@ -443,13 +459,20 @@ async def get_own_keys_routing(
     """What each key named sent in the last 30 days, and whether a failure on each name has a backup.
 
     The same read as the operator's, over the keys the list shows the caller: a
-    member's own, or every key in the organization for an owner or admin. A key
+    member's own, or for an owner or admin every member's key in the organization. A key
     outside that, named or not, is left out like one that does not exist.
     """
     scope = await _caller_scope(db, identity)
-    keys = await api_keys.reach(
-        set(api_key_id), organization_id=scope.organization.id, owner_user_id=scope.owner_filter
+    visible = await db.execute(
+        select(APIKey.id)
+        .join(Workspace, col(Workspace.id) == col(APIKey.workspace_id))
+        .where(
+            col(APIKey.id).in_(set(api_key_id)),
+            col(Workspace.organization_id) == scope.organization.id,
+            scope.key_condition,
+        )
     )
+    keys = await api_keys.reach(set(visible.scalars()), organization_id=scope.organization.id)
     return await key_routing_response(routing, keys, api_key_id)
 
 
@@ -462,9 +485,9 @@ async def update_own_key(
     config: Annotated[GatewayConfig, Depends(get_config)],
     api_keys: ApiKeyServiceDep,
 ) -> KeyInfo:
-    """Update one of the caller's own API keys, or for an organization owner or admin any key in the organization."""
+    """Update one of the caller's own API keys, or for an organization owner or admin any member's key."""
     scope = await _caller_scope(db, identity)
-    key = await _load_key_in_organization(db, key_id, scope.organization.id, owner_user_id=scope.owner_filter)
+    key = await _load_key_in_organization(db, key_id, scope.organization.id, condition=scope.key_condition)
 
     # Before the key is changed, and narrow-only against its owner's lists
     # (see keys.update_key).
@@ -519,14 +542,14 @@ async def rotate_own_key(
     db: Annotated[AsyncSession, Depends(get_db)],
     key_format: ApiKeyFormatPortDep,
 ) -> CreateKeyResponse:
-    """Rotate a key's secret in place: the caller's own, or for an organization owner or admin any in the organization.
+    """Rotate a key's secret in place: the caller's own, or for an organization owner or admin any member's.
 
     Same contract as the operator's rotate: the row keeps its identity, the new
     raw key is returned once, and the previous secret stops authenticating
     immediately with no grace window.
     """
     scope = await _caller_scope(db, identity)
-    key = await _load_key_in_organization(db, key_id, scope.organization.id, owner_user_id=scope.owner_filter)
+    key = await _load_key_in_organization(db, key_id, scope.organization.id, condition=scope.key_condition)
 
     new_api_key = key_format.mint()
     key.key_hash = hash_key(new_api_key)
@@ -554,9 +577,9 @@ async def delete_own_key(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
-    """Delete (revoke) one of the caller's own API keys, or for an organization owner or admin any key in it."""
+    """Delete (revoke) one of the caller's own API keys, or for an organization owner or admin any member's key."""
     scope = await _caller_scope(db, identity)
-    key = await _load_key_in_organization(db, key_id, scope.organization.id, owner_user_id=scope.owner_filter)
+    key = await _load_key_in_organization(db, key_id, scope.organization.id, condition=scope.key_condition)
 
     await db.delete(key)
     try:

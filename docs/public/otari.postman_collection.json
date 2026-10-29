@@ -6346,7 +6346,7 @@
         {
           "name": "List Own Keys",
           "request": {
-            "description": "List API keys in the caller's active organization, newest first.\n\nA member sees only keys billed to their own user: an operator-minted key\nassigned to them is theirs to see here, and nobody else's key ever is. An\norganization owner or admin sees every key in the organization. Naming a\nworkspace outside the organization lists nothing rather than refusing, so\nthe filter reports no more than the unfiltered read does. ``search`` narrows\nwithin the same rows.",
+            "description": "List API keys in the caller's active organization, newest first.\n\nA member sees only keys billed to their own user: an operator-minted key\nassigned to them is theirs to see here, and nobody else's key ever is. An\norganization owner or admin also sees every other member's key, apart from\nbudget-exempt and service keys, which stay the operator's. Naming a\nworkspace outside the organization lists nothing rather than refusing, so\nthe filter reports no more than the unfiltered read does. ``search`` narrows\nwithin the same rows.",
             "header": [],
             "method": "GET",
             "url": {
@@ -6428,7 +6428,7 @@
         {
           "name": "Get Own Keys Routing",
           "request": {
-            "description": "What each key named sent in the last 30 days, and whether a failure on each name has a backup.\n\nThe same read as the operator's, over the keys the list shows the caller: a\nmember's own, or every key in the organization for an owner or admin. A key\noutside that, named or not, is left out like one that does not exist.",
+            "description": "What each key named sent in the last 30 days, and whether a failure on each name has a backup.\n\nThe same read as the operator's, over the keys the list shows the caller: a\nmember's own, or for an owner or admin every member's key in the organization. A key\noutside that, named or not, is left out like one that does not exist.",
             "header": [],
             "method": "GET",
             "url": {
@@ -6467,7 +6467,7 @@
               },
               "raw": "{\n  \"allowed_models\": [\n    \"string\"\n  ],\n  \"allowed_tools\": [\n    \"string\"\n  ],\n  \"capture_agent_telemetry\": false,\n  \"expires_at\": \"2024-01-01T00:00:00Z\",\n  \"is_active\": false,\n  \"key_name\": \"string\",\n  \"metadata\": {},\n  \"reject_user_mismatch\": false\n}"
             },
-            "description": "Update one of the caller's own API keys, or for an organization owner or admin any key in the organization.",
+            "description": "Update one of the caller's own API keys, or for an organization owner or admin any member's key.",
             "header": [
               {
                 "key": "Content-Type",
@@ -6501,7 +6501,7 @@
         {
           "name": "Delete Own Key",
           "request": {
-            "description": "Delete (revoke) one of the caller's own API keys, or for an organization owner or admin any key in it.",
+            "description": "Delete (revoke) one of the caller's own API keys, or for an organization owner or admin any member's key.",
             "header": [],
             "method": "DELETE",
             "url": {
@@ -6640,7 +6640,7 @@
         {
           "name": "Rotate Own Key",
           "request": {
-            "description": "Rotate a key's secret in place: the caller's own, or for an organization owner or admin any in the organization.\n\nSame contract as the operator's rotate: the row keeps its identity, the new\nraw key is returned once, and the previous secret stops authenticating\nimmediately with no grace window.",
+            "description": "Rotate a key's secret in place: the caller's own, or for an organization owner or admin any member's.\n\nSame contract as the operator's rotate: the row keeps its identity, the new\nraw key is returned once, and the previous secret stops authenticating\nimmediately with no grace window.",
             "header": [],
             "method": "POST",
             "url": {

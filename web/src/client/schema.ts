@@ -3123,7 +3123,8 @@ export interface paths {
          *
          *     A member sees only keys billed to their own user: an operator-minted key
          *     assigned to them is theirs to see here, and nobody else's key ever is. An
-         *     organization owner or admin sees every key in the organization. Naming a
+         *     organization owner or admin also sees every other member's key, apart from
+         *     budget-exempt and service keys, which stay the operator's. Naming a
          *     workspace outside the organization lists nothing rather than refusing, so
          *     the filter reports no more than the unfiltered read does. ``search`` narrows
          *     within the same rows.
@@ -3159,7 +3160,7 @@ export interface paths {
          * @description What each key named sent in the last 30 days, and whether a failure on each name has a backup.
          *
          *     The same read as the operator's, over the keys the list shows the caller: a
-         *     member's own, or every key in the organization for an owner or admin. A key
+         *     member's own, or for an owner or admin every member's key in the organization. A key
          *     outside that, named or not, is left out like one that does not exist.
          */
         get: operations["organization-keys-get_own_keys_routing"];
@@ -3183,14 +3184,14 @@ export interface paths {
         post?: never;
         /**
          * Delete Own Key
-         * @description Delete (revoke) one of the caller's own API keys, or for an organization owner or admin any key in it.
+         * @description Delete (revoke) one of the caller's own API keys, or for an organization owner or admin any member's key.
          */
         delete: operations["organization-keys-delete_own_key"];
         options?: never;
         head?: never;
         /**
          * Update Own Key
-         * @description Update one of the caller's own API keys, or for an organization owner or admin any key in the organization.
+         * @description Update one of the caller's own API keys, or for an organization owner or admin any member's key.
          */
         patch: operations["organization-keys-update_own_key"];
         trace?: never;
@@ -3262,7 +3263,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate Own Key
-         * @description Rotate a key's secret in place: the caller's own, or for an organization owner or admin any in the organization.
+         * @description Rotate a key's secret in place: the caller's own, or for an organization owner or admin any member's.
          *
          *     Same contract as the operator's rotate: the row keeps its identity, the new
          *     raw key is returned once, and the previous secret stops authenticating

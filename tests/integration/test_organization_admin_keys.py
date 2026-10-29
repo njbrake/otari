@@ -294,6 +294,55 @@ def test_nobody_on_this_surface_can_exempt_a_key_from_budget(admin_client: TestC
     assert body["exclude_from_budget"] is False
 
 
+@pytest.mark.parametrize(
+    ("owner", "fields"),
+    [
+        # Owned by a member, so only the exemption keeps it out.
+        pytest.param("colleague", {"exclude_from_budget": True}, id="exempt"),
+        pytest.param("colleague", {"is_service_key": True}, id="service"),
+        pytest.param(None, {"allowed_models": ["openai:gpt-4o"]}, id="ownerless"),
+    ],
+)
+def test_an_admin_cannot_reach_a_key_only_the_operator_may_hand_out(
+    admin_client: TestClient,
+    world: _World,
+    db_session_factory: Callable[[], Session],
+    owner: str | None,
+    fields: dict[str, Any],
+) -> None:
+    session = db_session_factory()
+    try:
+        key = str(uuid.uuid4())
+        session.add(
+            APIKey(
+                id=key,
+                workspace_id=world.workspaces["alpha_one"],
+                key_hash=hash_key(key),
+                key_name="op",
+                user_id=str(world.users[owner]) if owner else None,
+                **fields,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    assert key not in _listed(admin_client, world, "admin")
+    code, body = _call(admin_client, world, "admin", "GET", f"{_KEYS}/routing", params={"api_key_id": [key]})
+    assert code == status.HTTP_200_OK, body
+    assert body["keys"] == []
+    for method, suffix, json in [
+        ("PATCH", "", {"allowed_models": None}),
+        ("POST", "/rotate", None),
+        ("DELETE", "", None),
+    ]:
+        code, _ = _call(admin_client, world, "admin", method, f"{_KEYS}/{key}{suffix}", json=json)
+        assert code == status.HTTP_404_NOT_FOUND, (method, suffix)
+    # Its owner still has it, as a member always had an operator-minted key of theirs.
+    if owner is not None:
+        assert key in _listed(admin_client, world, owner)
+
+
 # =============================================================================
 # Creating a key for a member
 # =============================================================================

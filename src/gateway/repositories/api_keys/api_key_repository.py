@@ -41,20 +41,16 @@ class ApiKeyRepository(BaseRepository[APIKey, Never, Never]):
         result = await self.db.execute(select(APIKey.id).where(APIKey.workspace_id.in_(workspace_ids)))
         return list(result.scalars().all())
 
-    async def placements(
-        self, key_ids: Collection[str], *, workspace_ids: Collection[uuid.UUID], owner_user_id: str | None = None
-    ) -> list[KeyPlacement]:
-        """The keys among ``key_ids`` in ``workspace_ids``, owned by ``owner_user_id`` when one is given.
+    async def placements(self, key_ids: Collection[str], *, workspace_ids: Collection[uuid.UUID]) -> list[KeyPlacement]:
+        """The keys among ``key_ids`` in ``workspace_ids``.
 
-        An id that names no key, or one the narrowing leaves out, is simply absent.
+        An id that names no key, or one in another workspace, is simply absent.
         """
         if not key_ids or not workspace_ids:
             return []
         stmt = select(APIKey.id, APIKey.workspace_id, APIKey.user_id, APIKey.allowed_models).where(
             APIKey.id.in_(sorted(key_ids)), APIKey.workspace_id.in_(sorted(workspace_ids))
         )
-        if owner_user_id is not None:
-            stmt = stmt.where(APIKey.user_id == owner_user_id)
         return [
             KeyPlacement(id=key_id, workspace_id=workspace_id, user_id=user_id, allowed_models=allowed_models)
             for key_id, workspace_id, user_id, allowed_models in (await self.db.execute(stmt)).all()
