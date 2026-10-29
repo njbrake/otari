@@ -96,8 +96,9 @@ cannot select another workspace with a header. Master-key inference uses the
 default workspace.
 
 A member manages only their own API keys (`/api/v1/organizations/me/keys`). An
-organization owner or admin also manages every other member's key: they list,
-edit, rotate and delete them, and create a key owned by another member, who
+organization owner or admin also manages every other member's key, the
+organization owner's included: they list, edit, rotate and delete them, and
+create a key owned by another member, who
 must be an active member of the organization able to see the key's workspace.
 Their role is read on every request, so lowering it takes those keys away at
 once. Neither can exempt a key from budget or make it a service key: an exempt

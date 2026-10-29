@@ -228,11 +228,20 @@ def test_a_lowered_role_takes_the_organizations_keys_away_at_once(
 # =============================================================================
 
 
-def test_an_admin_updates_rotates_and_deletes_a_members_key(admin_client: TestClient, world: _World) -> None:
-    key = world.keys["member"]
+@pytest.mark.parametrize("owner", ["member", "owner"])
+def test_an_admin_updates_rotates_and_deletes_a_members_key(
+    admin_client: TestClient, world: _World, db_session_factory: Callable[[], Session], owner: str
+) -> None:
+    # The organization's owner is a member like any other here: an admin manages
+    # their ordinary keys too, by decision rather than by omission.
+    session = db_session_factory()
+    try:
+        key = _key(session, world.workspaces["alpha_one"], world.users[owner])
+    finally:
+        session.close()
     code, body = _call(admin_client, world, "admin", "PATCH", f"{_KEYS}/{key}", json={"key_name": "renamed"})
     assert code == status.HTTP_200_OK, body
-    assert (body["key_name"], body["user_id"]) == ("renamed", str(world.users["member"]))
+    assert (body["key_name"], body["user_id"]) == ("renamed", str(world.users[owner]))
 
     code, body = _call(admin_client, world, "admin", "POST", f"{_KEYS}/{key}/rotate")
     assert code == status.HTTP_200_OK, body
@@ -240,7 +249,7 @@ def test_an_admin_updates_rotates_and_deletes_a_members_key(admin_client: TestCl
 
     code, _ = _call(admin_client, world, "admin", "DELETE", f"{_KEYS}/{key}")
     assert code == status.HTTP_204_NO_CONTENT
-    assert key not in _listed(admin_client, world, "member")
+    assert key not in _listed(admin_client, world, owner)
 
 
 @pytest.mark.parametrize(("method", "suffix"), [("PATCH", ""), ("POST", "/rotate"), ("DELETE", "")])
