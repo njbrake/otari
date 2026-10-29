@@ -4,8 +4,10 @@ import type { ReactElement } from "react"
 import { vi } from "vitest"
 
 import type {
+  ApiKey,
   AutomaticFallback,
   CatalogModelSummary,
+  NameTraffic,
   OrganizationContext,
   OrganizationMember,
   PolicySpec,
@@ -142,6 +144,12 @@ export function mockApi(
     catalog?: CatalogModelSummary[]
     // What /api/v1/organizations/me/automatic-fallbacks answers.
     fallbacks?: AutomaticFallback[]
+    // What /api/v1/organizations/me/routing-policies/traffic answers.
+    traffic?: NameTraffic[]
+    // The caller's keys, for the key filter and the Sent by names.
+    keys?: ApiKey[]
+    // Whether the workspace lets members create their own policies.
+    membersCreatePolicies?: boolean
   } = {},
 ) {
   let list = [...policies]
@@ -159,20 +167,47 @@ export function mockApi(
         init?.body === undefined ? undefined : JSON.parse(String(init.body))
       calls.push({ url, method, body })
 
+      if (
+        url.includes(`${API_ROOT}/organizations/me/routing-policies/traffic`)
+      ) {
+        return jsonResponse({ window_days: 30, names: opts.traffic ?? [] })
+      }
+      if (url.includes(`${API_ROOT}/organizations/me/routing-policies/copy`)) {
+        const source = memberList.find(
+          (item) => item.name === body.name && !item.user_id,
+        )
+        const row = policy(body.name, source?.spec ?? CHAIN, {
+          user_id: opts.context?.caller?.user_id ?? null,
+          workspace_id: body.workspace_id,
+        })
+        memberList = [...memberList, row]
+        return jsonResponse(row)
+      }
       if (url.includes(`${API_ROOT}/organizations/me/routing-policies`)) {
         if (method === "POST") {
-          const row = policy(body.name, body.spec)
+          // Keyed on name and person, like the real upsert.
+          const row = policy(body.name, body.spec, {
+            user_id: body.member_id ?? null,
+          })
           memberList = [
-            ...memberList.filter((item) => item.name !== row.name),
+            ...memberList.filter(
+              (item) =>
+                item.name !== row.name ||
+                (item.user_id ?? null) !== row.user_id,
+            ),
             row,
           ]
           return jsonResponse(row)
         }
         if (method === "DELETE") {
+          const parsed = new URL(url, "http://localhost")
           const name = decodeURIComponent(
-            url.split("?")[0].split("/").pop() ?? "",
+            parsed.pathname.split("/").pop() ?? "",
           )
-          memberList = memberList.filter((item) => item.name !== name)
+          const memberId = parsed.searchParams.get("member_id")
+          memberList = memberList.filter(
+            (item) => item.name !== name || (item.user_id ?? null) !== memberId,
+          )
           return new Response(null, { status: 204 })
         }
         return jsonResponse(memberList)
@@ -203,6 +238,19 @@ export function mockApi(
       }
       if (url.includes(`${API_ROOT}/organizations/me/automatic-fallbacks`)) {
         return jsonResponse({ window_days: 30, models: opts.fallbacks ?? [] })
+      }
+      if (url.includes("/visibility")) {
+        return jsonResponse({
+          members_see_workspace_totals: false,
+          members_create_policies: opts.membersCreatePolicies ?? true,
+        })
+      }
+      if (
+        url.includes(`${API_ROOT}/organizations/me/keys`) ||
+        url.includes(`${API_ROOT}/keys`)
+      ) {
+        // A bare array, like the real key list.
+        return jsonResponse(opts.keys ?? [])
       }
       if (url.endsWith(`${API_ROOT}/organizations/me`)) {
         return jsonResponse(opts.context ?? organizationContext())

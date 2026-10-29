@@ -39,7 +39,8 @@ export function WorkspaceVisibilitySection({
           </span>
         </div>
         <p className="text-caption">
-          What members can see beyond their own requests.
+          What members can see beyond their own requests, and what they can set
+          up for themselves.
         </p>
       </div>
       <ErrorBanner error={setVisibility.error ?? visibility.error} />
@@ -58,6 +59,20 @@ export function WorkspaceVisibilitySection({
               isDisabled={!visibility.data || setVisibility.isPending}
               onChange={(next) =>
                 setVisibility.mutate({ members_see_workspace_totals: next })
+              }
+            />
+          }
+        />
+        <SettingRow
+          label="Members can create their own policies"
+          help="A member's own routing policy applies to their requests alone, and can be a version of a shared one. On by default."
+          control={
+            <Toggle
+              label="Members can create their own policies"
+              isSelected={visibility.data?.members_create_policies ?? false}
+              isDisabled={!visibility.data || setVisibility.isPending}
+              onChange={(next) =>
+                setVisibility.mutate({ members_create_policies: next })
               }
             />
           }

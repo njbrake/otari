@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router"
 import { Fragment } from "react"
-import { FiAlertTriangle, FiArrowRight } from "react-icons/fi"
+import { FiArrowRight } from "react-icons/fi"
 
 import type { AutomaticFallback, FallbackOffering } from "@/client"
 import { CopyableValue } from "@/design-system/actions/CopyField"
@@ -12,14 +12,7 @@ import { docsSourceHref } from "@/shared/helpers/docs"
 import { formatNumber } from "@/shared/helpers/format"
 import { providerDisplayName } from "@/shared/helpers/providers"
 
-function Warning({ children }: { children: string }) {
-  return (
-    <span className="flex items-center gap-1 text-sm text-warning">
-      <FiAlertTriangle aria-hidden className="size-3 shrink-0" />
-      {children}
-    </span>
-  )
-}
+import { SentByCell, Warning } from "./PolicyCells"
 
 /** Who runs the built-in tools on one offering, or nothing where nobody does. */
 function toolsCaption(offering: FallbackOffering): string | undefined {
@@ -106,7 +99,7 @@ function OrderCell({ row }: { row: AutomaticFallback }) {
   )
 }
 
-const COLUMNS: DataTableColumn<AutomaticFallback>[] = [
+const BASE_COLUMNS: DataTableColumn<AutomaticFallback>[] = [
   {
     id: "model",
     header: "Model",
@@ -150,6 +143,31 @@ const COLUMNS: DataTableColumn<AutomaticFallback>[] = [
   },
 ]
 
+/** The columns, with Sent by after the model where key names are at hand. */
+function columnsFor(
+  keyLabelOf: ((apiKeyId: string) => string) | undefined,
+): DataTableColumn<AutomaticFallback>[] {
+  if (!keyLabelOf) return BASE_COLUMNS
+  const [model, ...rest] = BASE_COLUMNS
+  return [
+    model,
+    {
+      id: "sentBy",
+      header: "Sent by",
+      cell: (row) => (
+        <SentByCell
+          sentBy={row.sent_by.map((key) => ({
+            apiKeyId: key.api_key_id,
+            requests: key.requests,
+          }))}
+          labelOf={keyLabelOf}
+        />
+      ),
+    },
+    ...rest,
+  ]
+}
+
 /**
  * The fallbacks a gateway gives with no policy: a model served on
  * several providers fails over between them when callers send its catalog ID.
@@ -158,10 +176,13 @@ const COLUMNS: DataTableColumn<AutomaticFallback>[] = [
 export function AutomaticFallbacks({
   fallbacks,
   toolsNote,
+  keyLabelOf,
   isLoading = false,
   error,
 }: {
   fallbacks: AutomaticFallback[]
+  /** A key's name, for the Sent by column; the column is left out without it. */
+  keyLabelOf?: (apiKeyId: string) => string
   /** How the tools caption under each provider is decided, in one sentence. */
   toolsNote?: string
   isLoading?: boolean
@@ -188,7 +209,7 @@ export function AutomaticFallbacks({
         <TableScrollFrame className="otari-fallbacks-table">
           <DataTable
             ariaLabel="Automatic fallback"
-            columns={COLUMNS}
+            columns={columnsFor(keyLabelOf)}
             rows={fallbacks}
             getRowKey={(row) => row.id}
             isLoading={isLoading}

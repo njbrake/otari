@@ -688,6 +688,42 @@ describe("Creating in a workspace", () => {
     expect(policyWrites(calls)).toHaveLength(0)
   })
 
+  it("writes a member's new policy as their own", async () => {
+    const memberId = "33333333-3333-3333-3333-333333333333"
+    const { calls } = mockApi([], null, [], {
+      context: organizationContext({
+        deployment_operator: false,
+        role: "member",
+        workspace_memberships: [
+          { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "member" },
+        ],
+      }),
+      memberPolicies: [],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<RoutingPage />)
+
+    await user.click(await screen.findByRole("button", { name: "New policy" }))
+    await user.click(dialog().getByRole("radio", { name: "Fallback" }))
+    await user.click(dialog().getByRole("button", { name: "Continue" }))
+    expect(
+      await screen.findByText(/applies to your own requests/i),
+    ).toBeInTheDocument()
+    await fillFallback(user, "my-fast", "openai:gpt-5-mini")
+    await submitDialog(user)
+
+    const written = calls.find(
+      (call) =>
+        call.method === "POST" &&
+        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
+    )
+    expect(written?.body).toMatchObject({
+      name: "my-fast",
+      workspace_id: ADMIN_WORKSPACE,
+      member_id: memberId,
+    })
+  })
+
   it("offers an admin no user scope, which the tenant router refuses", async () => {
     mockApi([], null, [], { context: adminContext(), memberPolicies: [] })
     const user = userEvent.setup()

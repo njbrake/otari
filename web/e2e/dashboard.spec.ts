@@ -378,8 +378,10 @@ test.describe("dashboard core flows", () => {
       .filter({ has: page.getByRole("rowheader", { name: "chained" }) })
     await expect(chained).toBeVisible()
     await expect(
-      chained.getByRole("list", { name: "Backups" }).getByRole("listitem"),
-    ).toHaveText(["claude-3-5-haiku-latest · Anthropic"])
+      chained
+        .getByRole("list", { name: "Tried in order" })
+        .getByRole("listitem"),
+    ).toHaveText(["gpt-4o OpenAI", "claude-3-5-haiku-latest Anthropic"])
   })
 
   test("renames a policy in place", async ({ page }) => {
@@ -416,8 +418,10 @@ test.describe("dashboard core flows", () => {
       .filter({ has: page.getByRole("rowheader", { name: "renamed" }) })
     await expect(renamed).toBeVisible()
     await expect(
-      renamed.getByRole("list", { name: "Backups" }).getByRole("listitem"),
-    ).toHaveCount(1)
+      renamed
+        .getByRole("list", { name: "Tried in order" })
+        .getByRole("listitem"),
+    ).toHaveCount(2)
     await expect(page.getByRole("rowheader", { name: "chained" })).toBeHidden()
   })
 

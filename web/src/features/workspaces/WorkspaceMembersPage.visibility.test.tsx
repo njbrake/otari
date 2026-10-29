@@ -76,7 +76,10 @@ function mockApi({
       }
       reads += 1
       if (reads > 1 && reread) await reread
-      return Response.json({ members_see_workspace_totals: stored })
+      return Response.json({
+        members_see_workspace_totals: stored,
+        members_create_policies: true,
+      })
     }
     if (url.includes(`${API_ROOT}/workspaces/${ALPHA}/members`)) {
       const members = [workspaceMember({ user_id: USER })]
@@ -186,6 +189,25 @@ describe("WorkspaceMembersPage visibility", () => {
     })
     answer(Response.json({ members_see_workspace_totals: false }))
     await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"))
+  })
+
+  it("lets a manager turn off members creating their own policies", async () => {
+    const requests = mockApi()
+    const user = userEvent.setup()
+    await renderPage()
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Members can create their own policies",
+    })
+    // On unless a manager turns it off.
+    await waitFor(() => expect(toggle).toBeEnabled())
+    expect(toggle).toHaveAttribute("aria-checked", "true")
+    await user.click(toggle)
+
+    const saved = requests.find((request) => request.method === "PATCH")
+    expect(JSON.parse(saved?.body ?? "{}")).toEqual({
+      members_create_policies: false,
+    })
   })
 
   it("holds the switch while a save is in flight, so a second press cannot race it", async () => {

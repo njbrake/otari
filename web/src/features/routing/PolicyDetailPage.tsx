@@ -35,7 +35,8 @@ export function PolicyDetailPage({ name }: { name: string }) {
     isFetching,
     error,
     isOperator,
-    canEdit,
+    canEditRow,
+    isOwn,
     writeWorkspaceId,
   } = useRoutingRows()
   const row = rows.find(
@@ -68,7 +69,8 @@ export function PolicyDetailPage({ name }: { name: string }) {
 
   const isConfig = row.source === "config"
   const isRepresentable = isEditableInForm(row.spec)
-  const isEditable = canEdit && !isConfig && isRepresentable
+  const canEdit = canEditRow(row)
+  const isEditable = canEdit && isRepresentable
   const stored = draftFromSpec(row.spec)
   const sectionProps = {
     row,
@@ -89,7 +91,9 @@ export function PolicyDetailPage({ name }: { name: string }) {
         Callers send{" "}
         <code className="font-mono text-caption">model: "{row.name}"</code>.
         Applies to{" "}
-        {row.user_id ? (
+        {isOwn(row) ? (
+          "you alone"
+        ) : row.user_id ? (
           <code className="font-mono text-caption">{row.user_id}</code>
         ) : (
           "every caller"

@@ -76,6 +76,7 @@ export function CreatePolicyDialog({
   returnFocusRef,
   isDeploymentWide,
   workspaceId,
+  memberId = "",
   onClose,
 }: {
   /**
@@ -96,6 +97,8 @@ export function CreatePolicyDialog({
   isDeploymentWide: boolean
   /** The workspace the write lands in; null only for a caller in none. */
   workspaceId: string | null
+  /** The member a tenant write is that member's own policy for; empty for everyone. */
+  memberId?: string
   onClose: () => void
 }) {
   const save = useSetRoutingPolicy()
@@ -190,7 +193,12 @@ export function CreatePolicyDialog({
     setPartialFailure(undefined)
     if (isTenantScoped && workspaceId !== null) {
       saveOrgPolicy.mutate(
-        { name: name.trim(), spec, workspace_id: workspaceId },
+        {
+          name: name.trim(),
+          spec,
+          workspace_id: workspaceId,
+          ...(memberId ? { member_id: memberId } : {}),
+        },
         { onSuccess: onClose },
       )
       return
@@ -329,7 +337,9 @@ export function CreatePolicyDialog({
             // Withheld rather than disabled: the tenant-scoped writer refuses
             // a user id, so an organization's entries are workspace-wide.
             <p className="text-caption">
-              This applies to everyone in the selected workspace.
+              {memberId
+                ? "This applies to your own requests in the selected workspace."
+                : "This applies to everyone in the selected workspace."}
             </p>
           ) : (
             <Disclosure

@@ -433,6 +433,14 @@ export type RoutingPolicyResponse = Omit<Schemas["PolicyResponse"], "spec"> & {
 export type SetRoutingPolicyRequest = Omit<Schemas["PolicyRequest"], "spec"> & {
   spec: PolicySpec
 }
+// The tenant surface's own fields on a policy write: a member's own policy is
+// named by identity (`member_id`), and an alias can be replaced in one step.
+export type OrganizationPolicyFields = Pick<
+  Schemas["OrganizationPolicyRequest"],
+  "member_id" | "replaces_alias"
+>
+export type RoutingTrafficResponse = Schemas["RoutingTrafficResponse"]
+export type NameTraffic = Schemas["NameTrafficPublic"]
 export type AliasResponse = Schemas["AliasResponse"]
 export type CreateAliasRequest = Schemas["AliasRequest"]
 export type RouterStatus = Schemas["RouterStatus"]

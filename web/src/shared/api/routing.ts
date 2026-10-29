@@ -9,8 +9,10 @@ import type {
   AliasResponse,
   AutomaticFallbacksResponse,
   CreateAliasRequest,
+  OrganizationPolicyFields,
   RouterStatus,
   RoutingPolicyResponse,
+  RoutingTrafficResponse,
   SetRoutingPolicyRequest,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
@@ -22,6 +24,7 @@ import {
   MODELS,
   ROUTER_STATUS,
   ROUTING_POLICIES,
+  ROUTING_TRAFFIC,
   workspaceMeta,
 } from "@/shared/api/queryKeys"
 
@@ -73,7 +76,7 @@ function deploymentScope(
 // keeps the whole-scope view, which is what a caller who belongs to no
 // workspace, and every read that wants the catalog rather than one workspace's
 // management list, still wants.
-export function useAliases(workspaceId?: string) {
+export function useAliases(workspaceId?: string, enabled = true) {
   const scope = useRoutingScope()
   return useQuery({
     queryKey: [ALIASES, scope.aliases, workspaceId ?? null],
@@ -81,11 +84,11 @@ export function useAliases(workspaceId?: string) {
     queryFn: () =>
       apiFetch<AliasResponse[]>(inWorkspace(scope.aliases, workspaceId)),
     staleTime: 60_000,
-    enabled: scope.isReady,
+    enabled: scope.isReady && enabled,
   })
 }
 
-export function useRoutingPolicies(workspaceId?: string) {
+export function useRoutingPolicies(workspaceId?: string, enabled = true) {
   const scope = useRoutingScope()
   return useQuery({
     queryKey: [ROUTING_POLICIES, scope.policies, workspaceId ?? null],
@@ -95,21 +98,55 @@ export function useRoutingPolicies(workspaceId?: string) {
         inWorkspace(scope.policies, workspaceId),
       ),
     staleTime: 60_000,
-    enabled: scope.isReady,
+    enabled: scope.isReady && enabled,
   })
 }
 
+/** `api_key_id` repeated, the shape the routing reads take a key filter in. */
+function keyParams(apiKeyIds: readonly string[]): string {
+  const params = new URLSearchParams()
+  for (const id of apiKeyIds) params.append("api_key_id", id)
+  const query = params.toString()
+  return query ? `?${query}` : ""
+}
+
 // The models the caller's organization used in the last 30 days, each with the
-// offerings its catalog ID tries in order. One endpoint for every caller: the
-// server scopes the traffic to the workspaces the caller may see.
-export function useAutomaticFallbacks() {
+// offerings its catalog ID tries in order and the keys the caller may see that
+// sent it. One endpoint for every caller: the server scopes the traffic to the
+// workspaces the caller may see. `apiKeyIds` narrows to what those keys sent.
+export function useAutomaticFallbacks(apiKeyIds: readonly string[] = []) {
   return useQuery({
-    queryKey: [AUTOMATIC_FALLBACKS],
+    queryKey: [AUTOMATIC_FALLBACKS, apiKeyIds],
     queryFn: () =>
       apiFetch<AutomaticFallbacksResponse>(
-        "/organizations/me/automatic-fallbacks",
+        `/organizations/me/automatic-fallbacks${keyParams(apiKeyIds)}`,
       ),
     staleTime: 60_000,
+  })
+}
+
+/**
+ * Who sent each policy and alias name in the last 30 days and what each step of
+ * its plan did, per workspace and person, among the requests the caller may see.
+ */
+export function useRoutingTraffic(
+  workspaceId: string | undefined,
+  apiKeyIds: readonly string[] = [],
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: [ROUTING_TRAFFIC, workspaceId ?? null, apiKeyIds],
+    queryFn: () => {
+      const params = new URLSearchParams()
+      if (workspaceId) params.set("workspace_id", workspaceId)
+      for (const id of apiKeyIds) params.append("api_key_id", id)
+      const query = params.toString()
+      return apiFetch<RoutingTrafficResponse>(
+        `/organizations/me/routing-policies/traffic${query ? `?${query}` : ""}`,
+      )
+    },
+    staleTime: 60_000,
+    enabled,
   })
 }
 
@@ -201,10 +238,7 @@ export function useSetOrganizationRoutingPolicy() {
     mutationFn: (
       body: SetRoutingPolicyRequest & {
         workspace_id: string
-        // A member's own policy, by the identity id its row lists as `user_id`.
-        // Without it the write lands on the workspace-wide policy of that name.
-        member_id?: string
-      },
+      } & Partial<OrganizationPolicyFields>,
     ) =>
       apiFetch<RoutingPolicyResponse>("/organizations/me/routing-policies", {
         method: "POST",
@@ -226,11 +260,28 @@ export function useDeleteOrganizationRoutingPolicy() {
       workspaceId: string
       // A member's own row lists its identity id as `user_id`. Without it the
       // delete is workspace-wide and would take the shared policy of that name.
-      memberId?: string | null
-    }) =>
-      apiFetch<void>(
-        `/organizations/me/routing-policies/${encodeURIComponent(name)}?workspace_id=${encodeURIComponent(workspaceId)}${memberId != null ? `&member_id=${encodeURIComponent(memberId)}` : ""}`,
+      memberId?: string
+    }) => {
+      const params = new URLSearchParams({ workspace_id: workspaceId })
+      if (memberId) params.set("member_id", memberId)
+      return apiFetch<void>(
+        `/organizations/me/routing-policies/${encodeURIComponent(name)}?${params}`,
         { method: "DELETE" },
+      )
+    },
+    onSuccess: () => invalidateRoutingLists(queryClient),
+  })
+}
+
+/** Make the caller's own version of a shared policy: the same name and spec, applying only to them. */
+export function useCopyOrganizationRoutingPolicy() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationKey: [ROUTING_POLICIES],
+    mutationFn: (body: { name: string; workspace_id: string }) =>
+      apiFetch<RoutingPolicyResponse>(
+        "/organizations/me/routing-policies/copy",
+        { method: "POST", body: JSON.stringify(body) },
       ),
     onSuccess: () => invalidateRoutingLists(queryClient),
   })

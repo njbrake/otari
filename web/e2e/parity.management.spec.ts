@@ -322,15 +322,16 @@ test.describe("fallback routing", () => {
     await fillModelBox(page, /^Backup 2/, "groq:llama-3.3-70b-versatile")
     await dialog.getByRole("button", { name: "Create policy" }).click()
 
-    // The table lists the backups in order, so both chips are the assertion
-    // that both were saved and not just the first.
+    // The table lists the model then its backups in order, so both backups
+    // are the assertion that both were saved and not just the first.
     const policy = row(page, "Routing policies", POLICY)
-    const backups = policy
-      .getByRole("list", { name: "Backups" })
+    const steps = policy
+      .getByRole("list", { name: "Tried in order" })
       .getByRole("listitem")
-    await expect(backups).toHaveText([
-      "claude-3-5-haiku-latest · Anthropic",
-      "llama-3.3-70b-versatile · Groq",
+    await expect(steps).toHaveText([
+      "gpt-4o OpenAI",
+      "claude-3-5-haiku-latest Anthropic",
+      "llama-3.3-70b-versatile Groq",
     ])
 
     // Shrinking has to be possible too: a chain that could only grow would strand
@@ -350,9 +351,9 @@ test.describe("fallback routing", () => {
     await page.getByRole("link", { name: "← Routing" }).click()
     await expect(
       row(page, "Routing policies", POLICY)
-        .getByRole("list", { name: "Backups" })
+        .getByRole("list", { name: "Tried in order" })
         .getByRole("listitem"),
-    ).toHaveText(["claude-3-5-haiku-latest · Anthropic"])
+    ).toHaveText(["gpt-4o OpenAI", "claude-3-5-haiku-latest Anthropic"])
 
     await row(page, "Routing policies", POLICY)
       .getByRole("button", { name: "Delete" })

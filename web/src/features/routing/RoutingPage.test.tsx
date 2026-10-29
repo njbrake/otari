@@ -8,7 +8,7 @@ import type { OrganizationContext } from "@/client"
 import { RoutingPage } from "@/features/routing/RoutingPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
-import { bootstrap, organizationContext } from "@/tests/fixtures"
+import { apiKey, bootstrap, organizationContext } from "@/tests/fixtures"
 import { withRouter } from "@/tests/router"
 import {
   ADMIN_WORKSPACE,
@@ -55,6 +55,19 @@ function PolicyProbe() {
 
 const POLICY_PAGE = [{ path: "/routing/$name", element: <PolicyProbe /> }]
 
+/** The identity id the fixtures' caller carries, which a member's own rows name. */
+const MEMBER_ID = "33333333-3333-3333-3333-333333333333"
+
+function memberContext(): OrganizationContext {
+  return organizationContext({
+    deployment_operator: false,
+    role: "member",
+    workspace_memberships: [
+      { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "member" },
+    ],
+  })
+}
+
 describe("RoutingPage", () => {
   it("lists each policy's main model, its backups and who it applies to", async () => {
     mockApi()
@@ -65,12 +78,16 @@ describe("RoutingPage", () => {
     // itself so the table makes no catalog read per row.
     expect(within(fastRow).getByText("gpt-5-mini")).toBeInTheDocument()
     expect(within(fastRow).getByText("OpenAI")).toBeInTheDocument()
-    // The backups are spelled out in order, so a fallback is visible without
+    // The model then its backups, in order, so a fallback is visible without
     // opening the policy.
-    const backups = within(fastRow).getByRole("list", { name: "Backups" })
-    expect(within(backups).getAllByRole("listitem")).toHaveLength(1)
-    expect(backups).toHaveTextContent("claude-haiku-4-5 · Anthropic")
-    expect(within(fastRow).getByText("Every caller")).toBeInTheDocument()
+    const order = within(fastRow).getByRole("list", { name: "Tried in order" })
+    const steps = within(order).getAllByRole("listitem")
+    expect(steps).toHaveLength(2)
+    expect(steps[0]).toHaveTextContent("gpt-5-mini OpenAI")
+    expect(steps[1]).toHaveTextContent("claude-haiku-4-5 Anthropic")
+    expect(
+      within(fastRow).getByText("Everyone in this workspace"),
+    ).toBeInTheDocument()
   })
 
   it("says a policy has no backups rather than leaving the cell empty", async () => {
@@ -78,10 +95,12 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("solo")).closest("tr")!
-    expect(within(row).getByText("None")).toBeInTheDocument()
+    expect(within(row).getByText("No backup")).toBeInTheDocument()
     expect(
-      within(row).queryByRole("list", { name: "Backups" }),
-    ).not.toBeInTheDocument()
+      within(
+        within(row).getByRole("list", { name: "Tried in order" }),
+      ).getAllByRole("listitem"),
+    ).toHaveLength(1)
   })
 
   it("marks a policy that decides per request, since it has no single target", async () => {
@@ -102,7 +121,9 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const autoRow = (await screen.findByText("auto")).closest("tr")!
-    expect(within(autoRow).getByText("set in config.yml")).toBeInTheDocument()
+    expect(
+      within(autoRow).getByText("Set in deployment config"),
+    ).toBeInTheDocument()
     expect(
       within(autoRow).queryByRole("button", { name: "Edit" }),
     ).not.toBeInTheDocument()
@@ -477,7 +498,9 @@ describe("RoutingPage", () => {
     expect(
       within(row).queryByRole("button", { name: "Edit" }),
     ).not.toBeInTheDocument()
-    expect(within(row).getByText("set in config.yml")).toBeInTheDocument()
+    expect(
+      within(row).getByText("Set in deployment config"),
+    ).toBeInTheDocument()
   })
 
   it("names the pool and what serves when the router declines", async () => {
@@ -744,7 +767,8 @@ describe("RoutingPage scoped to the selected workspace", () => {
     const listed = calls.filter(
       (call) =>
         call.method === "GET" &&
-        call.url.includes(`${API_ROOT}/routing/policies`),
+        call.url.includes(`${API_ROOT}/routing/policies`) &&
+        !call.url.includes("/traffic"),
     )
     expect(listed.length).toBeGreaterThan(0)
     for (const call of listed) {
@@ -760,10 +784,12 @@ describe("RoutingPage scoped to the selected workspace", () => {
     renderInWorkspace(<RoutingPage />)
 
     await screen.findByText("tenant-fast")
+    console.log("CALLS", calls.map((c) => c.url).join("\n"))
     const listed = calls.filter(
       (call) =>
         call.method === "GET" &&
-        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
+        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`) &&
+        !call.url.includes("/traffic"),
     )
     expect(listed.length).toBeGreaterThan(0)
     for (const call of listed) {
@@ -915,18 +941,155 @@ describe("RoutingPage for an organization admin", () => {
     expect(
       screen.queryByRole("button", { name: "Delete" }),
     ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Make my own version" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("splits a member's own policies from the shared ones, and says which wins", async () => {
+    mockApi([], null, [], {
+      context: memberContext(),
+      memberPolicies: [
+        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+        policy("fast", CHAIN, {
+          user_id: MEMBER_ID,
+          workspace_id: ADMIN_WORKSPACE,
+        }),
+      ],
+    })
+    renderInWorkspace(<RoutingPage />)
+
+    const own = await screen.findByRole("grid", { name: "Your policies" })
+    const shared = screen.getByRole("grid", { name: "Shared policies" })
+    expect(
+      await within(own).findByText("Your version of a shared policy"),
+    ).toBeInTheDocument()
+    expect(within(shared).getByText("Using your version")).toBeInTheDocument()
+    // Their own is theirs to change; the shared one is the admins'.
+    expect(
+      within(own).getByRole("button", { name: "Delete" }),
+    ).toBeInTheDocument()
+    expect(
+      within(shared).queryByRole("button", { name: "Delete" }),
+    ).not.toBeInTheDocument()
+    // Already has a version of it, so no second copy is offered.
+    expect(
+      within(shared).queryByRole("button", { name: "Make my own version" }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "New policy" }),
+    ).toBeInTheDocument()
+  })
+
+  it("makes a member's own version of a shared policy and opens it", async () => {
+    const { calls } = mockApi([], null, [], {
+      context: memberContext(),
+      memberPolicies: [
+        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<RoutingPage />, "/routing", POLICY_PAGE)
+
+    const shared = await screen.findByRole("grid", { name: "Shared policies" })
+    await user.click(
+      await within(shared).findByRole("button", {
+        name: "Make my own version",
+      }),
+    )
+    expect(
+      await screen.findByText(`Policy page for fast as ${MEMBER_ID}`),
+    ).toBeInTheDocument()
+    const copy = calls.find((call) => call.url.endsWith("/copy"))
+    expect(copy?.body).toEqual({ name: "fast", workspace_id: ADMIN_WORKSPACE })
+  })
+
+  it("deletes a member's own policy by their identity, not the shared one", async () => {
+    const { calls } = mockApi([], null, [], {
+      context: memberContext(),
+      memberPolicies: [
+        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+        policy("fast", CHAIN, {
+          user_id: MEMBER_ID,
+          workspace_id: ADMIN_WORKSPACE,
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<RoutingPage />)
+
+    const own = await screen.findByRole("grid", { name: "Your policies" })
+    await user.click(await within(own).findByRole("button", { name: "Delete" }))
+    const dialog = await screen.findByRole("alertdialog")
+    expect(dialog).toHaveTextContent("go back to the shared policy")
+    await user.click(
+      within(dialog).getByRole("button", { name: "Delete policy" }),
+    )
+    const deleted = calls.find((call) => call.method === "DELETE")
+    expect(deleted?.url).toContain(`member_id=${MEMBER_ID}`)
+    expect(deleted?.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
+  })
+
+  it("shows who sent each name and how often, and narrows to one key", async () => {
+    const { calls } = mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [
+        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+        policy("idle", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+      ],
+      keys: [
+        apiKey({ id: "key-ci", key_name: "ci" }),
+        apiKey({ id: "key-laptop", key_name: "laptop" }),
+      ],
+      traffic: [
+        {
+          workspace_id: ADMIN_WORKSPACE,
+          name: "fast",
+          user_id: null,
+          requests: 1234,
+          sent_by: [
+            { api_key_id: "key-ci", requests: 1000 },
+            { api_key_id: "key-laptop", requests: 234 },
+          ],
+          steps: [],
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<RoutingPage />)
+
+    const fastRow = (await screen.findByText("fast")).closest("tr")!
+    expect(await within(fastRow).findByText("1,234")).toBeInTheDocument()
+    // Busiest first, by the names the caller's own key list gives them.
+    expect(await within(fastRow).findByText("ci,")).toBeInTheDocument()
+    expect(within(fastRow).getByText("laptop")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: /Sent by key/ }))
+    await user.click(await screen.findByRole("option", { name: "laptop" }))
+    // The filter goes to the server, which counts what that key sent alone.
+    await vi.waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.url.includes("/routing-policies/traffic") &&
+            call.url.includes("api_key_id=key-laptop"),
+        ),
+      ).toBe(true),
+    )
+    expect(
+      calls.some(
+        (call) =>
+          call.url.includes("/automatic-fallbacks") &&
+          call.url.includes("api_key_id=key-laptop"),
+      ),
+    ).toBe(true)
   })
 
   it("still withholds the write affordances from a member", async () => {
     mockApi([], null, [], {
-      context: organizationContext({
-        deployment_operator: false,
-        role: "member",
-        workspace_memberships: [
-          { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "member" },
-        ],
-      }),
+      context: memberContext(),
       memberPolicies: [policy("mine", CHAIN)],
+      membersCreatePolicies: false,
     })
     renderInWorkspace(<RoutingPage />)
 
@@ -937,6 +1100,148 @@ describe("RoutingPage for an organization admin", () => {
     expect(
       screen.queryByRole("button", { name: "Delete" }),
     ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Make my own version" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("splits a member's own policies from the shared ones, and says which wins", async () => {
+    mockApi([], null, [], {
+      context: memberContext(),
+      memberPolicies: [
+        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+        policy("fast", CHAIN, {
+          user_id: MEMBER_ID,
+          workspace_id: ADMIN_WORKSPACE,
+        }),
+      ],
+    })
+    renderInWorkspace(<RoutingPage />)
+
+    const own = await screen.findByRole("grid", { name: "Your policies" })
+    const shared = screen.getByRole("grid", { name: "Shared policies" })
+    expect(
+      await within(own).findByText("Your version of a shared policy"),
+    ).toBeInTheDocument()
+    expect(within(shared).getByText("Using your version")).toBeInTheDocument()
+    // Their own is theirs to change; the shared one is the admins'.
+    expect(
+      within(own).getByRole("button", { name: "Delete" }),
+    ).toBeInTheDocument()
+    expect(
+      within(shared).queryByRole("button", { name: "Delete" }),
+    ).not.toBeInTheDocument()
+    // Already has a version of it, so no second copy is offered.
+    expect(
+      within(shared).queryByRole("button", { name: "Make my own version" }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "New policy" }),
+    ).toBeInTheDocument()
+  })
+
+  it("makes a member's own version of a shared policy and opens it", async () => {
+    const { calls } = mockApi([], null, [], {
+      context: memberContext(),
+      memberPolicies: [
+        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<RoutingPage />, "/routing", POLICY_PAGE)
+
+    const shared = await screen.findByRole("grid", { name: "Shared policies" })
+    await user.click(
+      await within(shared).findByRole("button", {
+        name: "Make my own version",
+      }),
+    )
+    expect(
+      await screen.findByText(`Policy page for fast as ${MEMBER_ID}`),
+    ).toBeInTheDocument()
+    const copy = calls.find((call) => call.url.endsWith("/copy"))
+    expect(copy?.body).toEqual({ name: "fast", workspace_id: ADMIN_WORKSPACE })
+  })
+
+  it("deletes a member's own policy by their identity, not the shared one", async () => {
+    const { calls } = mockApi([], null, [], {
+      context: memberContext(),
+      memberPolicies: [
+        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+        policy("fast", CHAIN, {
+          user_id: MEMBER_ID,
+          workspace_id: ADMIN_WORKSPACE,
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<RoutingPage />)
+
+    const own = await screen.findByRole("grid", { name: "Your policies" })
+    await user.click(await within(own).findByRole("button", { name: "Delete" }))
+    const dialog = await screen.findByRole("alertdialog")
+    expect(dialog).toHaveTextContent("go back to the shared policy")
+    await user.click(
+      within(dialog).getByRole("button", { name: "Delete policy" }),
+    )
+    const deleted = calls.find((call) => call.method === "DELETE")
+    expect(deleted?.url).toContain(`member_id=${MEMBER_ID}`)
+    expect(deleted?.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
+  })
+
+  it("shows who sent each name and how often, and narrows to one key", async () => {
+    const { calls } = mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [
+        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+        policy("idle", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+      ],
+      keys: [
+        apiKey({ id: "key-ci", key_name: "ci" }),
+        apiKey({ id: "key-laptop", key_name: "laptop" }),
+      ],
+      traffic: [
+        {
+          workspace_id: ADMIN_WORKSPACE,
+          name: "fast",
+          user_id: null,
+          requests: 1234,
+          sent_by: [
+            { api_key_id: "key-ci", requests: 1000 },
+            { api_key_id: "key-laptop", requests: 234 },
+          ],
+          steps: [],
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<RoutingPage />)
+
+    const fastRow = (await screen.findByText("fast")).closest("tr")!
+    expect(await within(fastRow).findByText("1,234")).toBeInTheDocument()
+    // Busiest first, by the names the caller's own key list gives them.
+    expect(await within(fastRow).findByText("ci,")).toBeInTheDocument()
+    expect(within(fastRow).getByText("laptop")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: /Sent by key/ }))
+    await user.click(await screen.findByRole("option", { name: "laptop" }))
+    // The filter goes to the server, which counts what that key sent alone.
+    await vi.waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.url.includes("/routing-policies/traffic") &&
+            call.url.includes("api_key_id=key-laptop"),
+        ),
+      ).toBe(true),
+    )
+    expect(
+      calls.some(
+        (call) =>
+          call.url.includes("/automatic-fallbacks") &&
+          call.url.includes("api_key_id=key-laptop"),
+      ),
+    ).toBe(true)
   })
 
   it("lists the automatic fallbacks the gateway reports, in its order", async () => {
