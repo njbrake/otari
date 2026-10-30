@@ -8,7 +8,7 @@ import { ControlField } from "@/design-system/forms/FieldMessages"
 import { OfferingPicker } from "@/features/models/OfferingPicker"
 
 // When `walk_attempts` (`api/routes/_attempts.py`) moves on to the next model.
-const BACKUP_HELP =
+export const BACKUP_HELP =
   "Tried in order when the main model fails or is unavailable before it starts answering, including a rate limit, a missing or rejected provider key, or a request it refuses as invalid. Not once the answer has started streaming or a tool call is under way, or when the remaining budget cannot cover a pricier backup."
 
 let nextRowKey = 0

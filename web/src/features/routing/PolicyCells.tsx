@@ -77,7 +77,7 @@ function KindMark({ label }: { label: string }) {
 }
 
 /** A selector as its model and provider, without a catalog read per row. */
-function SelectorName({ selector }: { selector: string }) {
+export function SelectorName({ selector }: { selector: string }) {
   const { model, provider } = describeOffering(selector)
   return (
     <span title={selector} className="flex min-w-0 items-baseline gap-1.5">

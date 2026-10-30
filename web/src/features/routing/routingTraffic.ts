@@ -8,10 +8,18 @@ export interface KeyRequests {
   requests: number
 }
 
-/** A row's share of the traffic: how many requests it served, and which keys sent them. */
+/** What one step of the plan did: requests it answered, and attempts on it that failed. */
+export interface StepTraffic {
+  served: number
+  failed: number
+}
+
+/** A row's share of the traffic: how many requests it served, which keys sent them, and each step's outcome. */
 export interface RowTraffic {
   requests: number
   sentBy: KeyRequests[]
+  /** By the step's place in the plan, 1 for the first. */
+  steps: ReadonlyMap<number, StepTraffic>
 }
 
 /**
@@ -49,9 +57,17 @@ export function trafficForRow(
         : !(entry.user_id && ownVersions.has(entry.user_id))),
   )
   const keys = new Map<string, number>()
+  const steps = new Map<number, StepTraffic>()
   for (const entry of entries) {
     for (const key of entry.sent_by) {
       keys.set(key.api_key_id, (keys.get(key.api_key_id) ?? 0) + key.requests)
+    }
+    for (const step of entry.steps) {
+      const sum = steps.get(step.position) ?? { served: 0, failed: 0 }
+      steps.set(step.position, {
+        served: sum.served + step.served,
+        failed: sum.failed + step.failed,
+      })
     }
   }
   return {
@@ -62,6 +78,7 @@ export function trafficForRow(
         (a, b) =>
           b.requests - a.requests || a.apiKeyId.localeCompare(b.apiKeyId),
       ),
+    steps,
   }
 }
 

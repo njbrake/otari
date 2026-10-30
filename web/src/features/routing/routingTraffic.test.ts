@@ -52,14 +52,14 @@ describe("trafficForRow", () => {
   ]
 
   it("gives a member's own row that member's requests alone", () => {
-    expect(trafficForRow(samsOwn, rows, all)).toEqual({
+    expect(trafficForRow(samsOwn, rows, all)).toMatchObject({
       requests: 5,
       sentBy: [{ apiKeyId: "sam-key", requests: 5 }],
     })
   })
 
   it("gives the shared row everyone else's in its workspace", () => {
-    expect(trafficForRow(shared, rows, all)).toEqual({
+    expect(trafficForRow(shared, rows, all)).toMatchObject({
       requests: 3,
       sentBy: [{ apiKeyId: "priya-key", requests: 3 }],
     })
@@ -68,6 +68,25 @@ describe("trafficForRow", () => {
   it("gives a config-file row the traffic of every workspace", () => {
     const config = row({ source: "config", workspace_id: null })
     expect(trafficForRow(config, [config], all).requests).toBe(10)
+  })
+
+  it("sums each step of the plan across the entries it takes", () => {
+    const withSteps = [
+      {
+        ...traffic(PRIYA, "a", 4),
+        steps: [
+          { position: 1, served: 3, failed: 1 },
+          { position: 2, served: 1, failed: 0 },
+        ],
+      },
+      {
+        ...traffic(null, "b", 2),
+        steps: [{ position: 1, served: 2, failed: 0 }],
+      },
+    ]
+    const { steps } = trafficForRow(shared, rows, withSteps)
+    expect(steps.get(1)).toEqual({ served: 5, failed: 1 })
+    expect(steps.get(2)).toEqual({ served: 1, failed: 0 })
   })
 
   it("lists the names a filter left traffic under", () => {

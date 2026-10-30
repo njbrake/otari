@@ -11,9 +11,12 @@ import {
   isFallbackReady,
   plannedModels,
   poolProblems,
+  saveProblem,
   seedDraft,
   selectionOf,
   switchSelection,
+  triedInOrder,
+  withTriedInOrder,
 } from "./policyDraft"
 
 const COMBINED: PolicySpec = {
@@ -181,5 +184,74 @@ describe("backupProblems", () => {
     expect(isFallbackReady({ ...draft, backups: ["a:x"] })).toBe(false)
     expect(isFallbackReady({ ...draft, backups: ["b:y", "b:y"] })).toBe(false)
     expect(isFallbackReady({ ...draft, backups: ["b:y", "c:z"] })).toBe(true)
+  })
+})
+
+describe("the one-form editor's helpers", () => {
+  const chain = draftFromSpec({
+    select: [{ default: "openai:gpt-5" }],
+    on_failure: ["anthropic:claude-haiku-4-5", "openai:gpt-4o"],
+  })
+
+  it("reads a one-model plan as one list, and writes a reordered one back", () => {
+    expect(triedInOrder(chain)).toEqual([
+      "openai:gpt-5",
+      "anthropic:claude-haiku-4-5",
+      "openai:gpt-4o",
+    ])
+    const promoted = withTriedInOrder(chain, [
+      "anthropic:claude-haiku-4-5",
+      "openai:gpt-5",
+      "openai:gpt-4o",
+    ])
+    expect(buildSpec(promoted)).toEqual({
+      select: [{ default: "anthropic:claude-haiku-4-5" }],
+      on_failure: ["openai:gpt-5", "openai:gpt-4o"],
+    })
+  })
+
+  it("names the first thing that stops a save, or nothing", () => {
+    expect(saveProblem(chain)).toBe("")
+    expect(saveProblem({ ...chain, backups: ["openai:gpt-5"] })).toMatch(
+      /repeats a model/,
+    )
+    expect(saveProblem({ ...chain, backups: [""] })).toMatch(/every backup/)
+    expect(
+      saveProblem({
+        ...chain,
+        tierDowns: [
+          { threshold: 80, target: "openai:gpt-5-nano" },
+          { threshold: 80, target: "openai:gpt-4o-mini" },
+        ],
+      }),
+    ).toMatch(/its own threshold/)
+    expect(saveProblem(switchSelection(chain, "weighted"))).toMatch(
+      /every pool row/,
+    )
+  })
+
+  it("refuses a backup that is already in the pool", () => {
+    const routed = draftFromSpec({
+      select: [
+        { router: "knn", candidates: ["openai:gpt-5-nano", "openai:gpt-5"] },
+        { default: "openai:gpt-5" },
+      ],
+      on_failure: ["openai:gpt-5-nano"],
+    })
+    expect(saveProblem(routed)).toMatch(/repeats a model/)
+  })
+
+  it("saves several tiers highest first, however they were entered", () => {
+    const tiers = buildSpec({
+      ...chain,
+      tierDowns: [
+        { threshold: 80, target: "openai:gpt-5-nano" },
+        { threshold: 95, target: "openai:gpt-4o-mini" },
+      ],
+    })
+    expect(tiers.select.slice(0, 2)).toEqual([
+      { when: { budget_used_pct: { gte: 95 } }, target: "openai:gpt-4o-mini" },
+      { when: { budget_used_pct: { gte: 80 } }, target: "openai:gpt-5-nano" },
+    ])
   })
 })

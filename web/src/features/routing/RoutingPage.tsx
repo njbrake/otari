@@ -28,10 +28,6 @@ import { useKeys } from "@/shared/api/apiKeys"
 import {
   useAutomaticFallbacks,
   useCopyOrganizationRoutingPolicy,
-  useDeleteAlias,
-  useDeleteOrganizationAlias,
-  useDeleteOrganizationRoutingPolicy,
-  useDeleteRoutingPolicy,
   useRoutingTraffic,
 } from "@/shared/api/routing"
 import { docsSourceHref } from "@/shared/helpers/docs"
@@ -52,6 +48,7 @@ import {
   rowKeyOf,
 } from "./policyModel"
 import { namesSent, trafficForRow } from "./routingTraffic"
+import { usePolicyDelete } from "./usePolicyDelete"
 import { useRoutingRows } from "./useRoutingRows"
 
 const ROUTING_URL_DEFAULTS = { key: "" }
@@ -76,10 +73,10 @@ export function RoutingPage() {
     writeWorkspaceId,
     isWorkspaceSettled,
   } = useRoutingRows()
-  const deletePolicy = useDeleteRoutingPolicy()
-  const deleteAlias = useDeleteAlias()
-  const deleteOrgPolicy = useDeleteOrganizationRoutingPolicy()
-  const deleteOrgAlias = useDeleteOrganizationAlias()
+  const deletes = usePolicyDelete({
+    isOperator,
+    fallbackWorkspaceId: writeWorkspaceId,
+  })
   const copyPolicy = useCopyOrganizationRoutingPolicy()
   // One key at a time, from the filter or a link from the Keys page.
   const url = useUrlState(ROUTING_URL_DEFAULTS)
@@ -329,24 +326,10 @@ export function RoutingPage() {
     writeWorkspaceId,
   ])
 
-  // Which of the four delete surfaces a row goes to. Both name the workspace the
-  // row lives in; the deployment-wide pair carries the user scope, the tenant
-  // pair a member's own policy by their identity.
-  const deleteWorkspaceFor = (row: RoutingRow) =>
-    row.workspace_id ?? writeWorkspaceId
-  const deleteMutationFor = (row: RoutingRow) =>
-    isOperator
-      ? row.kind === "alias"
-        ? deleteAlias
-        : deletePolicy
-      : row.kind === "alias"
-        ? deleteOrgAlias
-        : deleteOrgPolicy
-  // Resolved for the pending row alone, not as a chain over all four: a refusal
-  // stays on its mutation until the next call, so reading every one of them
-  // would report the last row's failure over this row's confirm.
+  // Resolved for the pending row alone: a refusal stays on its mutation until
+  // the next call, so reading all four would report another row's failure.
   const pendingDeleteMutation = pendingDelete
-    ? deleteMutationFor(pendingDelete)
+    ? deletes.mutationFor(pendingDelete)
     : undefined
 
   const keyOptions = [
@@ -523,10 +506,7 @@ export function RoutingPage() {
         onOpenChange={(open) => {
           if (open) return
           setPendingDelete(undefined)
-          deletePolicy.reset()
-          deleteAlias.reset()
-          deleteOrgPolicy.reset()
-          deleteOrgAlias.reset()
+          deletes.reset()
         }}
         heading={
           pendingDelete?.kind === "alias" ? "Delete alias" : "Delete policy"
@@ -545,29 +525,7 @@ export function RoutingPage() {
         error={pendingDeleteMutation?.error}
         onConfirm={() => {
           if (!pendingDelete) return
-          const onSuccess = () => setPendingDelete(undefined)
-          const rowWorkspace = deleteWorkspaceFor(pendingDelete)
-          if (isOperator) {
-            const deployment = {
-              name: pendingDelete.name,
-              userId: pendingDelete.user_id,
-              workspaceId: rowWorkspace,
-            }
-            if (pendingDelete.kind === "alias")
-              deleteAlias.mutate(deployment, { onSuccess })
-            else deletePolicy.mutate(deployment, { onSuccess })
-            return
-          }
-          // Unreachable: a stored row always carries its own workspace.
-          if (rowWorkspace === null) return
-          const scoped = { name: pendingDelete.name, workspaceId: rowWorkspace }
-          if (pendingDelete.kind === "alias")
-            deleteOrgAlias.mutate(scoped, { onSuccess })
-          else
-            deleteOrgPolicy.mutate(
-              { ...scoped, memberId: pendingDelete.user_id ?? undefined },
-              { onSuccess },
-            )
+          deletes.remove(pendingDelete, () => setPendingDelete(undefined))
         }}
       />
     </div>

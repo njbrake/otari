@@ -403,13 +403,17 @@ test.describe("dashboard core flows", () => {
       .getByRole("row")
       .filter({ has: page.getByRole("rowheader", { name: "chained" }) })
     await chained.getByRole("button", { name: "Edit" }).click()
-    // Edit opens the policy's own page, where the name is a section of its own.
+    // Edit opens the policy's own page, where a rename saves with the rest.
     await expect(pageHeading(page, "chained")).toBeVisible()
-    await page.getByRole("textbox", { name: /^Name/ }).fill("renamed")
     await page.getByRole("button", { name: "Rename" }).click()
+    await page.getByRole("textbox", { name: /^Name/ }).fill("renamed")
+    await page.getByRole("button", { name: "Save", exact: true }).click()
     // The page follows the policy to its new address.
     await expect(pageHeading(page, "renamed")).toBeVisible()
-    await page.getByRole("link", { name: "← Routing" }).click()
+    await page
+      .getByRole("navigation", { name: "Breadcrumb" })
+      .getByRole("link", { name: "Routing" })
+      .click()
 
     // A rename moves the row rather than copying it, so the old name has to be
     // gone: two rows would mean callers could still reach the policy either way.

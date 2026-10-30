@@ -79,21 +79,28 @@ export function TierDownSection({
           </FieldAction>
         </SectionRow>
       ))}
-      {/* One at a time: the first matching entry wins, so a second, higher
-          threshold behind a lower one would never fire. */}
-      {tierDowns.length > 0 ? null : (
-        <div>
-          <Button
-            variant="ghost"
-            onPress={() =>
-              onChange([...tierDowns, { threshold: 80, target: "" }])
-            }
-          >
-            <FiPlus aria-hidden />
-            Add a tier-down
-          </Button>
-        </div>
-      )}
+      {/* Several, saved highest threshold first (`buildSpec`), so each one
+          is reachable however they were entered. */}
+      <div>
+        <Button
+          variant="ghost"
+          onPress={() =>
+            onChange([
+              ...tierDowns,
+              {
+                threshold: Math.min(
+                  95,
+                  Math.max(80, ...tierDowns.map((tier) => tier.threshold + 5)),
+                ),
+                target: "",
+              },
+            ])
+          }
+        >
+          <FiPlus aria-hidden />
+          {tierDowns.length === 0 ? "Add a tier" : "Add another tier"}
+        </Button>
+      </div>
     </div>
   )
 }
