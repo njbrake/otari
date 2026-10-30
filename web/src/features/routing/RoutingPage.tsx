@@ -1,6 +1,6 @@
 import { Button } from "@heroui/react"
 import { Link, useNavigate } from "@tanstack/react-router"
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   FiCopy,
   FiEdit2,
@@ -110,6 +110,12 @@ export function RoutingPage() {
   const createButtonRef = useRef<HTMLButtonElement | null>(null)
   const [createCount, setCreateCount] = useState(0)
   const openCreate = (intent?: Intent) => {
+    // A tenant's policy is created on its own page; the dialog writes
+    // deployment-wide, which is the operator's.
+    if (!isOperator) {
+      void navigate({ to: "/routing/new" })
+      return
+    }
     setStartAt(intent)
     setCreateCount((n) => n + 1)
     setAdding(true)
@@ -121,7 +127,17 @@ export function RoutingPage() {
   const canCreate = canEdit || canCreateOwn
   // `adding` is seeded from ?target= before the membership context settles, so
   // the role is applied here: a caller who may not create gets the read-only page.
-  const isAdding = adding && canCreate
+  const isAdding = adding && canCreate && isOperator
+  // The same deep link, for a tenant, opens the new-policy page on that model.
+  useEffect(() => {
+    if (isListLoading || isOperator || !canCreate || initialTarget === "")
+      return
+    void navigate({
+      to: "/routing/new",
+      search: { target: initialTarget },
+      replace: true,
+    })
+  }, [isListLoading, isOperator, canCreate, initialTarget, navigate])
 
   // Stable, because the columns below are memoized on it for DataTable.
   const openPolicy = useCallback(
@@ -410,9 +426,7 @@ export function RoutingPage() {
         // creating one is what makes the page non-empty. The heading's action
         // survives.
         returnFocusRef={createButtonRef}
-        isDeploymentWide={isOperator}
         workspaceId={writeWorkspaceId}
-        memberId={canEdit ? "" : ownerId}
         onClose={closeCreate}
       />
 

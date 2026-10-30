@@ -42,6 +42,7 @@ import { Route as OrganizationProviderKeysRouteImport } from './routes/organizat
 import { Route as OrganizationUsageRouteImport } from './routes/organization.usage'
 import { Route as RoutingIndexRouteImport } from './routes/routing.index'
 import { Route as RoutingNameRouteImport } from './routes/routing.$name'
+import { Route as RoutingNewRouteImport } from './routes/routing.new'
 import { Route as ToolsIndexRouteImport } from './routes/tools.index'
 import { Route as ToolsCodeExecutionRouteImport } from './routes/tools.code-execution'
 import { Route as ToolsGuardrailsRouteImport } from './routes/tools.guardrails'
@@ -214,6 +215,11 @@ const RoutingNameRoute = RoutingNameRouteImport.update({
   path: '/$name',
   getParentRoute: () => RoutingRoute,
 } as any)
+const RoutingNewRoute = RoutingNewRouteImport.update({
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => RoutingRoute,
+} as any)
 const ToolsIndexRoute = ToolsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -271,6 +277,7 @@ export interface FileRoutesByFullPath {
   '/organization/provider-keys': typeof OrganizationProviderKeysRoute
   '/organization/usage': typeof OrganizationUsageRoute
   '/routing/$name': typeof RoutingNameRoute
+  '/routing/new': typeof RoutingNewRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/mcp-servers': typeof ToolsMcpServersRoute
@@ -307,6 +314,7 @@ export interface FileRoutesByTo {
   '/organization/provider-keys': typeof OrganizationProviderKeysRoute
   '/organization/usage': typeof OrganizationUsageRoute
   '/routing/$name': typeof RoutingNameRoute
+  '/routing/new': typeof RoutingNewRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/mcp-servers': typeof ToolsMcpServersRoute
@@ -348,6 +356,7 @@ export interface FileRoutesById {
   '/organization/provider-keys': typeof OrganizationProviderKeysRoute
   '/organization/usage': typeof OrganizationUsageRoute
   '/routing/$name': typeof RoutingNameRoute
+  '/routing/new': typeof RoutingNewRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/mcp-servers': typeof ToolsMcpServersRoute
@@ -390,6 +399,7 @@ export interface FileRouteTypes {
     | '/organization/provider-keys'
     | '/organization/usage'
     | '/routing/$name'
+    | '/routing/new'
     | '/tools/code-execution'
     | '/tools/guardrails'
     | '/tools/mcp-servers'
@@ -426,6 +436,7 @@ export interface FileRouteTypes {
     | '/organization/provider-keys'
     | '/organization/usage'
     | '/routing/$name'
+    | '/routing/new'
     | '/tools/code-execution'
     | '/tools/guardrails'
     | '/tools/mcp-servers'
@@ -466,6 +477,7 @@ export interface FileRouteTypes {
     | '/organization/provider-keys'
     | '/organization/usage'
     | '/routing/$name'
+    | '/routing/new'
     | '/tools/code-execution'
     | '/tools/guardrails'
     | '/tools/mcp-servers'
@@ -734,6 +746,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RoutingNameRouteImport
       parentRoute: typeof RoutingRoute
     }
+    '/routing/new': {
+      id: '/routing/new'
+      path: '/new'
+      fullPath: '/routing/new'
+      preLoaderRoute: typeof RoutingNewRouteImport
+      parentRoute: typeof RoutingRoute
+    }
     '/tools/': {
       id: '/tools/'
       path: '/'
@@ -811,11 +830,13 @@ const OrganizationRouteWithChildren = OrganizationRoute._addFileChildren(
 
 interface RoutingRouteChildren {
   RoutingNameRoute: typeof RoutingNameRoute
+  RoutingNewRoute: typeof RoutingNewRoute
   RoutingIndexRoute: typeof RoutingIndexRoute
 }
 
 const RoutingRouteChildren: RoutingRouteChildren = {
   RoutingNameRoute: RoutingNameRoute,
+  RoutingNewRoute: RoutingNewRoute,
   RoutingIndexRoute: RoutingIndexRoute,
 }
 

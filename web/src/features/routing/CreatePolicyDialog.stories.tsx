@@ -84,8 +84,6 @@ const meta = {
   parameters: { layout: "fullscreen", api: API },
   args: {
     isOpen: true,
-    // The operator's surface, which is what the user-scope picker needs.
-    isDeploymentWide: true,
     workspaceId: null,
     onClose: () => {},
   },
@@ -110,12 +108,3 @@ export const SmartRouter: Story = { args: { startAt: "knn" } }
 export const SpillOver: Story = { args: { startAt: "priority" } }
 
 export const TierDown: Story = { args: { startAt: "tierdown" } }
-
-/** An organization admin, whose policy applies to the whole workspace. */
-export const TenantScoped: Story = {
-  args: {
-    startAt: "fallback",
-    isDeploymentWide: false,
-    workspaceId: "44444444-4444-4444-4444-444444444444",
-  },
-}

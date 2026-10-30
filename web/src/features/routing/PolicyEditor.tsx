@@ -134,6 +134,8 @@ export function PolicyEditor({
   onDiscard,
   onSave,
   saveNote,
+  discardLabel,
+  saveLabel,
   isPending,
   error,
 }: {
@@ -157,6 +159,8 @@ export function PolicyEditor({
   onSave: (draft: PolicyDraft) => void
   /** What a save does, in the bar beside it. */
   saveNote: string
+  discardLabel?: string
+  saveLabel?: string
   isPending: boolean
   error?: unknown
 }) {
@@ -535,6 +539,8 @@ export function PolicyEditor({
           }
           isDirty={isDirty}
           canSave={problem === "" && !isSyncing}
+          discardLabel={discardLabel}
+          saveLabel={saveLabel}
           isPending={isPending}
           error={error}
           onDiscard={() => {
@@ -556,6 +562,8 @@ export function SaveBar({
   note,
   isDirty,
   canSave,
+  discardLabel = "Discard",
+  saveLabel = "Save",
   isPending,
   error,
   onDiscard,
@@ -564,6 +572,8 @@ export function SaveBar({
   note: ReactNode
   isDirty: boolean
   canSave: boolean
+  discardLabel?: string
+  saveLabel?: string
   isPending: boolean
   error?: unknown
   onDiscard: () => void
@@ -579,7 +589,7 @@ export function SaveBar({
           isDisabled={!isDirty || isPending}
           onPress={onDiscard}
         >
-          Discard
+          {discardLabel}
         </Button>
         <Button
           variant="primary"
@@ -587,7 +597,7 @@ export function SaveBar({
           isPending={isPending}
           onPress={onSave}
         >
-          Save
+          {saveLabel}
         </Button>
       </div>
     </div>

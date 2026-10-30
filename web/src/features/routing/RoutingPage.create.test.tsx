@@ -1,3 +1,4 @@
+import { useSearch } from "@tanstack/react-router"
 import { screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -640,6 +641,12 @@ describe("Creating from the empty state", () => {
   })
 })
 
+/** Where a tenant's create lands, with the model a link carried. */
+function NewPolicyProbe() {
+  const search = useSearch({ strict: false }) as { target?: string }
+  return <p>New policy page for {search.target}</p>
+}
+
 describe("Creating in a workspace", () => {
   function operatorInWorkspace(): OrganizationContext {
     return organizationContext({
@@ -664,77 +671,26 @@ describe("Creating in a workspace", () => {
     })
   })
 
-  it("writes an admin's policy through the tenant-scoped router", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: adminContext(),
-      memberPolicies: [],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<RoutingPage />)
-
-    await startCreate(user)
-    await fillFallback(user, "tenant-fast", "openai:gpt-5-mini")
-    await submitDialog(user)
-
-    const written = calls.find(
-      (call) =>
-        call.method === "POST" &&
-        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
-    )
-    expect(written?.body).toMatchObject({
-      name: "tenant-fast",
-      workspace_id: ADMIN_WORKSPACE,
-    })
-    expect(policyWrites(calls)).toHaveLength(0)
-  })
-
-  it("writes a member's new policy as their own", async () => {
-    const memberId = "33333333-3333-3333-3333-333333333333"
-    const { calls } = mockApi([], null, [], {
-      context: organizationContext({
-        deployment_operator: false,
-        role: "member",
-        workspace_memberships: [
-          { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "member" },
-        ],
-      }),
-      memberPolicies: [],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<RoutingPage />)
-
-    await user.click(await screen.findByRole("button", { name: "New policy" }))
-    await user.click(dialog().getByRole("radio", { name: "Fallback" }))
-    await user.click(dialog().getByRole("button", { name: "Continue" }))
-    expect(
-      await screen.findByText(/applies to your own requests/i),
-    ).toBeInTheDocument()
-    await fillFallback(user, "my-fast", "openai:gpt-5-mini")
-    await submitDialog(user)
-
-    const written = calls.find(
-      (call) =>
-        call.method === "POST" &&
-        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
-    )
-    expect(written?.body).toMatchObject({
-      name: "my-fast",
-      workspace_id: ADMIN_WORKSPACE,
-      member_id: memberId,
-    })
-  })
-
-  it("offers an admin no user scope, which the tenant router refuses", async () => {
+  it("sends an organization's admin to the new-policy page, not the dialog", async () => {
     mockApi([], null, [], { context: adminContext(), memberPolicies: [] })
     const user = userEvent.setup()
-    renderInWorkspace(<RoutingPage />)
+    renderInWorkspace(<RoutingPage />, "/", [
+      { path: "/routing/new", element: <p>New policy page</p> },
+    ])
 
-    await startCreate(user)
+    await user.click(await createTrigger())
+    expect(await screen.findByText("New policy page")).toBeInTheDocument()
+    expect(screen.queryByRole("dialog")).toBeNull()
+  })
+
+  it("carries a deep link's model to the new-policy page for a tenant", async () => {
+    mockApi([], null, [], { context: adminContext(), memberPolicies: [] })
+    renderInWorkspace(<RoutingPage />, "/?target=openai:gpt-5", [
+      { path: "/routing/new", element: <NewPolicyProbe /> },
+    ])
+
     expect(
-      await screen.findByText(/applies to everyone in the selected workspace/i),
+      await screen.findByText("New policy page for openai:gpt-5"),
     ).toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: /^Applies to/ }),
-    ).not.toBeInTheDocument()
   })
 })

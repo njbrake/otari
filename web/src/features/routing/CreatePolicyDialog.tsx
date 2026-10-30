@@ -15,10 +15,7 @@ import { Disclosure } from "@/design-system/navigation/Disclosure"
 import { OfferingPicker } from "@/features/models/OfferingPicker"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { userOptionText } from "@/features/users/userOptions"
-import {
-  useSetOrganizationRoutingPolicy,
-  useSetRoutingPolicy,
-} from "@/shared/api/routing"
+import { useSetRoutingPolicy } from "@/shared/api/routing"
 import { useUsers } from "@/shared/api/users"
 
 import { BackupList } from "./BackupList"
@@ -74,9 +71,7 @@ export function CreatePolicyDialog({
   startAt,
   initialTarget = "",
   returnFocusRef,
-  isDeploymentWide,
   workspaceId,
-  memberId = "",
   onClose,
 }: {
   /**
@@ -90,23 +85,13 @@ export function CreatePolicyDialog({
   initialTarget?: string
   /** See `FormDialog`'s own prop. */
   returnFocusRef?: RefObject<HTMLElement | null>
-  /**
-   * Which surface the write goes to: the deployment-wide one for an operator,
-   * the tenant-scoped one, which refuses a user scope, for an admin.
-   */
-  isDeploymentWide: boolean
-  /** The workspace the write lands in; null only for a caller in none. */
+  /** The workspace the write lands in; null for the deployment's default. */
   workspaceId: string | null
-  /** The member a tenant write is that member's own policy for; empty for everyone. */
-  memberId?: string
   onClose: () => void
 }) {
   const save = useSetRoutingPolicy()
-  const saveOrgPolicy = useSetOrganizationRoutingPolicy()
-  const isTenantScoped = !isDeploymentWide
-  // `/users` is a deployment-wide operator read, and a tenant admin is offered
-  // no user scope, so only an operator asks for it, and only while open.
-  const users = useUsers(isOpen && !isTenantScoped)
+  // `/users` is a deployment-wide read, asked only while the dialog is open.
+  const users = useUsers(isOpen)
   const labelForUser = useUserLabel(users.data ?? [])
 
   const [intent, setIntent] = useState<Intent | undefined>(startAt)
@@ -150,7 +135,7 @@ export function CreatePolicyDialog({
       userIds !== null ||
       JSON.stringify(draft) !==
         JSON.stringify(seedDraft(intent, initialTarget)))
-  const isPending = save.isPending || saveOrgPolicy.isPending || isWritingScopes
+  const isPending = save.isPending || isWritingScopes
 
   /** Write one policy per chosen person, one at a time, and report both halves. */
   const writeUserScopes = async (scopes: string[]) => {
@@ -191,18 +176,6 @@ export function CreatePolicyDialog({
     if (!canSubmit) return
     // Cleared on every path, or it would outrank a fresh refusal below.
     setPartialFailure(undefined)
-    if (isTenantScoped && workspaceId !== null) {
-      saveOrgPolicy.mutate(
-        {
-          name: name.trim(),
-          spec,
-          workspace_id: workspaceId,
-          ...(memberId ? { member_id: memberId } : {}),
-        },
-        { onSuccess: onClose },
-      )
-      return
-    }
     if (userIds !== null) {
       void writeUserScopes(userIds)
       return
@@ -246,11 +219,7 @@ export function CreatePolicyDialog({
       isPending={isPending}
       isSubmitDisabled={intent !== undefined && !canSubmit}
       isDirty={isDirty}
-      error={
-        intent === undefined
-          ? undefined
-          : (partialFailure ?? save.error ?? saveOrgPolicy.error)
-      }
+      error={intent === undefined ? undefined : (partialFailure ?? save.error)}
       footerStart={
         intent === undefined ? null : (
           <Button
@@ -333,33 +302,23 @@ export function CreatePolicyDialog({
             tierDowns={draft.tierDowns}
           />
 
-          {isTenantScoped ? (
-            // Withheld rather than disabled: the tenant-scoped writer refuses
-            // a user id, so an organization's entries are workspace-wide.
-            <p className="text-caption">
-              {memberId
-                ? "This applies to your own requests in the selected workspace."
-                : "This applies to everyone in the selected workspace."}
-            </p>
-          ) : (
-            <Disclosure
-              heading={
-                <span className="flex flex-col items-start text-left">
-                  <span>Applies to</span>{" "}
-                  <span className="text-caption">{scopeSummary}</span>
-                </span>
-              }
-            >
-              <ScopePicker
-                userIds={userIds}
-                users={users.data ?? []}
-                onChange={setUserIds}
-                // Any landed write fixes the scope: nothing here can take one
-                // back.
-                isSettled={written.userIds.length > 0}
-              />
-            </Disclosure>
-          )}
+          <Disclosure
+            heading={
+              <span className="flex flex-col items-start text-left">
+                <span>Applies to</span>{" "}
+                <span className="text-caption">{scopeSummary}</span>
+              </span>
+            }
+          >
+            <ScopePicker
+              userIds={userIds}
+              users={users.data ?? []}
+              onChange={setUserIds}
+              // Any landed write fixes the scope: nothing here can take one
+              // back.
+              isSettled={written.userIds.length > 0}
+            />
+          </Disclosure>
         </>
       )}
     </FormDialog>
