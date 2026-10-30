@@ -39,6 +39,7 @@ import {
   PRIORITY_BACKEND,
   WEIGHTED_BACKEND,
 } from "./policyModel"
+import { RulesSection } from "./RulesSection"
 import type { StepTraffic } from "./routingTraffic"
 import { TierDownSection } from "./TierDownSection"
 import { useGuardrailsConfigured } from "./useGuardrailsConfigured"
@@ -125,6 +126,8 @@ export function PolicyEditor({
   workspaceId,
   isAlias,
   isReadOnly,
+  hasRules = false,
+  ruleLabel = (id) => id,
   steps,
   nameIsDirty = false,
   nameProblem = "",
@@ -140,6 +143,10 @@ export function PolicyEditor({
   workspaceId?: string
   isAlias: boolean
   isReadOnly: boolean
+  /** Whether to show the rules, which send named members elsewhere. */
+  hasRules?: boolean
+  /** A member's name, for the rules summary. */
+  ruleLabel?: (userId: string) => string
   /** What each step of the stored plan did in the last 30 days. */
   steps: ReadonlyMap<number, StepTraffic>
   /** A rename in the page's header, saved with the rest. */
@@ -237,6 +244,18 @@ export function PolicyEditor({
   const shares = poolShares(pool)
   const setPool = (next: Partial<PolicyDraft["pool"]>) =>
     setDraft((prev) => ({ ...prev, pool: { ...prev.pool, ...next } }))
+
+  const ruleSummary =
+    draft.rules.length === 0
+      ? "None"
+      : draft.rules
+          .map(
+            (rule) =>
+              `${rule.userIds.map(ruleLabel).join(", ") || "…"} → ${
+                rule.target ? describeOffering(rule.target).model : "…"
+              }`,
+          )
+          .join("; ")
 
   const tierSummary =
     draft.tierDowns.length === 0
@@ -408,6 +427,32 @@ export function PolicyEditor({
 
       {isAlias ? null : (
         <SettingsGroup>
+          {hasRules ? (
+            <DisclosureRow
+              label="Rules"
+              trailing={<span className="text-caption">{ruleSummary}</span>}
+              isOpen={open.rules ?? false}
+              onToggle={() => toggle("rules")}
+            >
+              <div className="flex flex-col gap-3 p-4">
+                <p className="text-caption">
+                  Send specific members to a different model. Checked in order
+                  before budget tiers; the first match wins. Everyone else gets
+                  the main selection.
+                </p>
+                {isReadOnly ? (
+                  <span className="text-body">{ruleSummary}</span>
+                ) : (
+                  <RulesSection
+                    rules={draft.rules}
+                    onChange={(rules) =>
+                      setDraft((prev) => ({ ...prev, rules }))
+                    }
+                  />
+                )}
+              </div>
+            </DisclosureRow>
+          ) : null}
           <DisclosureRow
             label="Budget tier-down"
             trailing={<span className="text-caption">{tierSummary}</span>}

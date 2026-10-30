@@ -10,7 +10,9 @@ import {
   findFallthroughIndex,
   findFallthroughTarget,
   findRouterBackend,
+  findUserRules,
   findWeights,
+  isEditableInForm,
   normalizeBackend,
 } from "./policyModel"
 
@@ -215,5 +217,64 @@ describe("partialScopeReport", () => {
     ).toBe(
       "Created for user-1, user-2. Not created for user-3 (a), user-4 (b). Submitting again retries only the ones still missing.",
     )
+  })
+})
+
+describe("member rules in the form", () => {
+  const rule = {
+    when: { user_id: ["u-sam", "u-priya"] },
+    target: "openai:gpt-5",
+  }
+  const tier = {
+    when: { budget_used_pct: { gte: 80 } },
+    target: "openai:gpt-5-nano",
+  }
+
+  it("edits a rule checked ahead of the budget tiers", () => {
+    expect(
+      isEditableInForm({
+        select: [rule, tier, { default: "openai:gpt-5-mini" }],
+      }),
+    ).toBe(true)
+    expect(
+      isEditableInForm({
+        select: [
+          { when: { user_id: "u-sam" }, target: "openai:gpt-5" },
+          { default: "openai:gpt-5-mini" },
+        ],
+      }),
+    ).toBe(true)
+  })
+
+  it("shows read-only what it would reorder or flatten", () => {
+    // Saved back, the rule would be checked before the tier.
+    expect(
+      isEditableInForm({
+        select: [tier, rule, { default: "openai:gpt-5-mini" }],
+      }),
+    ).toBe(false)
+    // One condition per entry is all a rule or a tier holds.
+    expect(
+      isEditableInForm({
+        select: [
+          {
+            when: { user_id: ["u-sam"], budget_used_pct: { gte: 80 } },
+            target: "openai:gpt-5",
+          },
+          { default: "openai:gpt-5-mini" },
+        ],
+      }),
+    ).toBe(false)
+  })
+
+  it("reads a rule written for one member as a list of one", () => {
+    expect(
+      findUserRules({
+        select: [
+          { when: { user_id: "u-sam" }, target: "openai:gpt-5" },
+          { default: "openai:gpt-5-mini" },
+        ],
+      }),
+    ).toEqual([{ userIds: ["u-sam"], target: "openai:gpt-5" }])
   })
 })

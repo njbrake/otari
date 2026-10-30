@@ -194,7 +194,7 @@ describe("RoutingPage", () => {
   })
 
   it("does not offer Edit for a policy the form would silently truncate", async () => {
-    // The editor models only a `budget_used_pct.gte` condition. Offering Edit on a
+    // The editor models a `budget_used_pct.gte` and a `user_id` condition. Offering Edit on a
     // policy built through the API with anything else would drop it on save, which
     // is worse than not offering the button.
     mockApi([

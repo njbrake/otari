@@ -255,3 +255,30 @@ describe("the one-form editor's helpers", () => {
     ])
   })
 })
+
+describe("member rules in a draft", () => {
+  const spec: PolicySpec = {
+    select: [
+      { when: { user_id: ["u-sam", "u-priya"] }, target: "openai:gpt-5" },
+      { when: { budget_used_pct: { gte: 80 } }, target: "openai:gpt-5-nano" },
+      { default: "openai:gpt-5-mini" },
+    ],
+  }
+
+  it("round-trips, rules ahead of the tiers", () => {
+    expect(buildSpec(draftFromSpec(spec))).toEqual(spec)
+  })
+
+  it("will not save a rule without members or a model", () => {
+    const draft = draftFromSpec(spec)
+    expect(
+      saveProblem({
+        ...draft,
+        rules: [{ userIds: [], target: "openai:gpt-5" }],
+      }),
+    ).toMatch(/at least one member and a model/)
+    expect(
+      saveProblem({ ...draft, rules: [{ userIds: ["u-sam"], target: "" }] }),
+    ).toMatch(/at least one member and a model/)
+  })
+})

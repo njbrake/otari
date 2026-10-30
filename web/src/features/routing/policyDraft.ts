@@ -15,6 +15,7 @@ import {
   findFallthroughIndex,
   findFallthroughTarget,
   findRouterBackend,
+  findUserRules,
   findWeights,
   KNN_BACKEND,
   MAX_CANDIDATES,
@@ -26,6 +27,13 @@ export type RouterBackend =
   | typeof KNN_BACKEND
   | typeof WEIGHTED_BACKEND
   | typeof PRIORITY_BACKEND
+
+/** Named members sent to another model, ahead of everything else. */
+export interface UserRule {
+  /** Attribution ids: a member's identity id, as their keys bill to. */
+  userIds: string[]
+  target: string
+}
 
 export interface TierDown {
   threshold: number
@@ -53,6 +61,7 @@ export interface PolicyDraft {
   /** Routed when it holds any model. */
   pool: PoolDraft
   backups: string[]
+  rules: UserRule[]
   tierDowns: TierDown[]
   guardrails: PolicyGuardrail[]
 }
@@ -144,6 +153,7 @@ export function draftFromSpec(spec: PolicySpec): PolicyDraft {
             safeIndex: findFallthroughIndex(spec),
           },
     backups: spec.on_failure ?? [],
+    rules: findUserRules(spec),
     tierDowns: findBudgetConditions(spec),
     guardrails: spec.guardrails ?? [],
   }
@@ -155,6 +165,7 @@ export function seedDraft(intent: Intent, target = ""): PolicyDraft {
     target,
     pool: emptyPool(),
     backups: [],
+    rules: [],
     tierDowns: [],
     guardrails: [],
   }
@@ -278,6 +289,9 @@ export function isDraftReady(draft: PolicyDraft): boolean {
       (tier) =>
         tier.target.trim() !== "" && tier.threshold > 0 && tier.threshold < 100,
     ) &&
+    draft.rules.every(
+      (rule) => rule.userIds.length > 0 && rule.target.trim() !== "",
+    ) &&
     draft.guardrails.every((guardrail) => guardrail.profile.trim() !== "") &&
     plannedModels(draft) <= MAX_CANDIDATES
   )
@@ -346,6 +360,12 @@ export function saveProblem(draft: PolicyDraft): string {
   )
     return "A backup repeats a model the policy already tries."
   if (
+    draft.rules.some(
+      (rule) => rule.userIds.length === 0 || rule.target.trim() === "",
+    )
+  )
+    return "Give every rule at least one member and a model."
+  if (
     draft.tierDowns.some(
       (tier) =>
         tier.target.trim() === "" ||
@@ -373,6 +393,11 @@ export function buildSpec(draft: PolicyDraft): PolicySpec {
   const values = parseWeights(pool.weights)
   return {
     select: [
+      // Rules first: a named member gets their model whatever the budget says.
+      ...draft.rules.map((rule) => ({
+        when: { user_id: rule.userIds },
+        target: rule.target.trim(),
+      })),
       // Highest threshold first: the first matching entry wins, so a lower
       // tier ahead of a higher one would leave the higher one unreachable.
       ...[...draft.tierDowns]

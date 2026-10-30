@@ -111,6 +111,29 @@ export function findBudgetConditions(
     }))
 }
 
+/** The members a `user_id` condition names, as a list whichever way it was written. */
+function namedUsers(userId: string | string[] | null | undefined): string[] {
+  if (userId === undefined || userId === null) return []
+  return typeof userId === "string" ? [userId] : userId
+}
+
+/** The rules that send named members to another model, in the order they are checked. */
+export function findUserRules(
+  spec: PolicySpec,
+): { userIds: string[]; target: string }[] {
+  return spec.select
+    .filter(
+      (entry) =>
+        entry.when?.user_id !== undefined &&
+        entry.when.user_id !== null &&
+        entry.target !== undefined,
+    )
+    .map((entry) => ({
+      userIds: namedUsers(entry.when?.user_id),
+      target: entry.target!,
+    }))
+}
+
 /**
  * Why a policy name cannot be sent as a `model`, or "" when it can.
  *
@@ -174,7 +197,7 @@ export const rowKeyOf = (row: RoutingRow): string =>
 /** Whether the dashboard can edit a spec without losing part of it.
  *
  *  An edit rebuilds the spec from its sections, so anything they do not model
- *  (a `user_id`/`key_id` condition, a comparator other than `gte`, an unknown
+ *  (a `key_id` condition, a condition combining two, a comparator other than `gte`, an unknown
  *  router) would be dropped on save. Those are shown read-only: refusing to
  *  edit is recoverable, a silent lossy save is not.
  */
@@ -185,6 +208,16 @@ export function isEditableInForm(spec: PolicySpec): boolean {
   const routerIndex = spec.select.findIndex(
     (entry) => entry.router !== undefined,
   )
+  // Rules are re-emitted ahead of every tier-down, so a rule stored after one
+  // would come back checked first.
+  const firstTierIndex = spec.select.findIndex(
+    (entry) => entry.when?.budget_used_pct !== undefined,
+  )
+  const lastRuleIndex = spec.select.reduce(
+    (last, entry, index) => (entry.when?.user_id !== undefined ? index : last),
+    -1,
+  )
+  if (firstTierIndex !== -1 && lastRuleIndex > firstTierIndex) return false
   const lastConditionIndex = spec.select.reduce(
     (last, entry, index) => (entry.when !== undefined ? index : last),
     -1,
@@ -211,10 +244,10 @@ export function isEditableInForm(spec: PolicySpec): boolean {
     const when = entry.when
     if (when === undefined || entry.target === undefined) return false
     const keys = Object.keys(when)
+    if (keys.length !== 1) return false
+    if (keys[0] === "user_id") return namedUsers(when.user_id).length > 0
     return (
-      keys.length === 1 &&
-      keys[0] === "budget_used_pct" &&
-      when.budget_used_pct?.gte !== undefined
+      keys[0] === "budget_used_pct" && when.budget_used_pct?.gte !== undefined
     )
   })
 }

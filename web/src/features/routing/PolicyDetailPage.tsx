@@ -43,6 +43,7 @@ export function PolicyDetailPage({ name }: { name: string }) {
     isFetching,
     error,
     isOperator,
+    manages,
     canEditRow,
     canCreateOwn,
     isOwn,
@@ -97,6 +98,7 @@ export function PolicyDetailPage({ name }: { name: string }) {
         key={rowKeyOf(row)}
         row={row}
         isOperator={isOperator}
+        manages={manages}
         canEdit={canEditRow(row)}
         isOwn={isOwn(row)}
         isOwnVersion={isOwn(row) && shared !== undefined}
@@ -119,6 +121,7 @@ export function PolicyDetailPage({ name }: { name: string }) {
 function PolicyView({
   row,
   isOperator,
+  manages,
   canEdit,
   isOwn,
   isOwnVersion,
@@ -130,6 +133,8 @@ function PolicyView({
 }: {
   row: RoutingRow
   isOperator: boolean
+  /** An owner, admin or operator, who sees and writes a policy's rules. */
+  manages: boolean
   canEdit: boolean
   isOwn: boolean
   /** The caller's own copy of a shared policy, which keeps its name. */
@@ -329,6 +334,10 @@ function PolicyView({
           workspaceId={row.workspace_id ?? writeWorkspaceId ?? undefined}
           isAlias={row.kind === "alias"}
           isReadOnly={!isEditable}
+          // Managers only, since a rule names colleagues; and never on a
+          // member's own policy, which applies to them alone.
+          hasRules={manages && !row.user_id}
+          ruleLabel={(id) => memberLabels.get(id) ?? id}
           steps={traffic.steps}
           nameIsDirty={isRenaming && renamed}
           nameProblem={nameProblem}

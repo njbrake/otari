@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { PolicySpec } from "@/client"
 import { PolicyDetailPage } from "@/features/routing/PolicyDetailPage"
 import { API_ROOT } from "@/shared/api/client"
-import { organizationContext } from "@/tests/fixtures"
+import { organizationContext, organizationMember } from "@/tests/fixtures"
 import {
   ADMIN_WORKSPACE,
   adminContext,
@@ -922,6 +922,69 @@ describe("PolicyDetailPage for a member", () => {
 })
 
 describe("PolicyDetailPage for an organization admin", () => {
+  it("sends named members to another model ahead of the budget tiers", async () => {
+    const SAM = "77777777-7777-7777-7777-777777777777"
+    const { calls } = mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [
+        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+      ],
+      members: [
+        organizationMember({
+          user_id: SAM,
+          attribution_user_id: SAM,
+          full_name: "Sam Rivera",
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<PolicyDetailPage name="fast" />, "/routing/fast")
+
+    await unfold(user, "Rules")
+    await user.click(screen.getByRole("button", { name: "Add a rule" }))
+    // Saving waits for both halves of the rule.
+    expect(
+      screen.getByText(/at least one member and a model/),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole("combobox", { name: /^members/i }))
+    await user.click(await screen.findByRole("option", { name: /Sam Rivera/ }))
+    await user.keyboard("{Escape}")
+    await pick(user, /^use$/i, "openai:gpt-5")
+    expect(
+      screen.getByRole("button", { name: /^Rules.*Sam Rivera → gpt-5/ }),
+    ).toBeInTheDocument()
+    await save(user)
+
+    const written = calls.find(
+      (call) =>
+        call.method === "POST" &&
+        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
+    )
+    expect((written?.body as { spec?: PolicySpec })?.spec?.select).toEqual([
+      { when: { user_id: [SAM] }, target: "openai:gpt-5" },
+      { default: "openai:gpt-5-mini" },
+    ])
+  })
+
+  it("keeps rules from a member reading the policy", async () => {
+    mockApi([], null, [], {
+      context: organizationContext({
+        deployment_operator: false,
+        role: "member",
+        workspace_memberships: [
+          { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "member" },
+        ],
+      }),
+      memberPolicies: [
+        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
+      ],
+    })
+    renderInWorkspace(<PolicyDetailPage name="fast" />, "/routing/fast")
+
+    await screen.findByRole("heading", { level: 1, name: "fast" })
+    expect(screen.queryByRole("button", { name: /^Rules/ })).toBeNull()
+  })
+
   it("writes an admin's edit back to the row's own workspace", async () => {
     const OTHER_WORKSPACE = "55555555-5555-5555-5555-555555555555"
     const { calls } = mockApi([], null, [], {
