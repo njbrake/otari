@@ -440,6 +440,7 @@ export type OrganizationPolicyFields = Pick<
   "member_id" | "replaces_alias"
 >
 export type RoutingTrafficResponse = Schemas["RoutingTrafficResponse"]
+export type UnpricedSelectorsResponse = Schemas["UnpricedSelectorsResponse"]
 export type NameTraffic = Schemas["NameTrafficPublic"]
 export type AliasResponse = Schemas["AliasResponse"]
 export type CreateAliasRequest = Schemas["AliasRequest"]

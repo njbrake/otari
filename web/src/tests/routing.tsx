@@ -150,6 +150,8 @@ export function mockApi(
     keys?: ApiKey[]
     // Whether the workspace lets members create their own policies.
     membersCreatePolicies?: boolean
+    // The selectors the pricing check reports as having no price.
+    unpriced?: string[]
   } = {},
 ) {
   let list = [...policies]
@@ -171,6 +173,18 @@ export function mockApi(
         url.includes(`${API_ROOT}/organizations/me/routing-policies/traffic`)
       ) {
         return jsonResponse({ window_days: 30, names: opts.traffic ?? [] })
+      }
+      if (
+        url.includes(`${API_ROOT}/organizations/me/routing-policies/unpriced`)
+      ) {
+        const asked = new URL(url, "http://localhost").searchParams.getAll(
+          "selector",
+        )
+        return jsonResponse({
+          unpriced: asked.filter((selector) =>
+            (opts.unpriced ?? []).includes(selector),
+          ),
+        })
       }
       if (url.includes(`${API_ROOT}/organizations/me/routing-policies/copy`)) {
         const source = memberList.find(

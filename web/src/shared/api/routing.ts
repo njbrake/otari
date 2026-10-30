@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useIsFetching,
   useIsMutating,
   useMutation,
@@ -14,6 +15,7 @@ import type {
   RoutingPolicyResponse,
   RoutingTrafficResponse,
   SetRoutingPolicyRequest,
+  UnpricedSelectorsResponse,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
@@ -25,6 +27,7 @@ import {
   ROUTER_STATUS,
   ROUTING_POLICIES,
   ROUTING_TRAFFIC,
+  ROUTING_UNPRICED,
   workspaceMeta,
 } from "@/shared/api/queryKeys"
 
@@ -147,6 +150,34 @@ export function useRoutingTraffic(
     },
     staleTime: 60_000,
     enabled,
+  })
+}
+
+/**
+ * Which of a Smart router pool's models have no pricing in the workspace, the
+ * check a save would fail on, asked while the pool is edited. Empty selectors
+ * are left out; nothing is asked for an empty pool.
+ */
+export function useUnpricedSelectors(
+  workspaceId: string | undefined,
+  selectors: readonly string[],
+  enabled = true,
+) {
+  const named = [...new Set(selectors.filter((selector) => selector !== ""))]
+  return useQuery({
+    queryKey: [ROUTING_UNPRICED, workspaceId ?? null, named],
+    meta: workspaceMeta(workspaceId),
+    queryFn: () => {
+      const params = new URLSearchParams({ workspace_id: workspaceId ?? "" })
+      for (const selector of named) params.append("selector", selector)
+      return apiFetch<UnpricedSelectorsResponse>(
+        `/organizations/me/routing-policies/unpriced?${params}`,
+      )
+    },
+    enabled: enabled && workspaceId !== undefined && named.length > 0,
+    staleTime: 60_000,
+    // Kept while the pool changes, so a mark does not blink out per keystroke.
+    placeholderData: keepPreviousData,
   })
 }
 

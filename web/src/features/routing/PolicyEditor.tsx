@@ -9,13 +9,14 @@ import { Field } from "@/design-system/forms/Field"
 import { SettingsGroup } from "@/design-system/layout/SettingsGroup"
 import { DisclosureRow } from "@/design-system/navigation/DisclosureRow"
 import { Segmented } from "@/design-system/navigation/Segmented"
-import { useRoutingSyncing } from "@/shared/api/routing"
+import { describeOffering } from "@/features/models/offerings"
+import { useRoutingSyncing, useUnpricedSelectors } from "@/shared/api/routing"
 import { formatNumber } from "@/shared/helpers/format"
 
 import { BACKUP_HELP } from "./BackupList"
 import { GuardrailsSection } from "./GuardrailsSection"
 import { ModelOrderList } from "./ModelOrderList"
-import { selectorText } from "./PolicyCells"
+import { selectorText, Warning } from "./PolicyCells"
 import {
   buildSpec,
   isAtModelCap,
@@ -121,6 +122,7 @@ function stepStat(
  */
 export function PolicyEditor({
   stored,
+  workspaceId,
   isAlias,
   isReadOnly,
   steps,
@@ -134,6 +136,8 @@ export function PolicyEditor({
 }: {
   /** The policy as saved. Remount the editor (by key) to re-seed it. */
   stored: PolicyDraft
+  /** Where the policy is stored, for the pricing check a Smart router needs. */
+  workspaceId?: string
   isAlias: boolean
   isReadOnly: boolean
   /** What each step of the stored plan did in the last 30 days. */
@@ -155,8 +159,29 @@ export function PolicyEditor({
   const spec = buildSpec(draft)
   const isDirty =
     nameIsDirty || JSON.stringify(spec) !== JSON.stringify(buildSpec(stored))
-  const problem = nameProblem || saveProblem(draft)
   const selection = selectionOf(draft)
+  // A Smart router scores by cost, so the server refuses a pool model with no
+  // price. Asked as the pool changes, so the row says so before Save does.
+  const needsPrices = selection === KNN_BACKEND && !isReadOnly
+  const pricing = useUnpricedSelectors(
+    workspaceId,
+    draft.pool.models,
+    needsPrices,
+  )
+  const unpriced = needsPrices
+    ? (pricing.data?.unpriced ?? []).filter((selector) =>
+        draft.pool.models.includes(selector),
+      )
+    : []
+  const unpricedNames = unpriced
+    .map((selector) => describeOffering(selector).model)
+    .join(", ")
+  const problem =
+    nameProblem ||
+    saveProblem(draft) ||
+    (unpriced.length > 0
+      ? `${unpricedNames} ${unpriced.length === 1 ? "has" : "have"} no price, and Smart router needs one for every pool model.`
+      : "")
   const routed = isRouted(draft)
   const atCap = isAtModelCap(draft)
   const toggle = (section: string) =>
@@ -260,6 +285,13 @@ export function PolicyEditor({
                 index === pool.safeIndex ? "DEFAULT" : "MODEL"
               }
               itemName={(index) => `pool model ${index + 1}`}
+              statOf={(selector) =>
+                unpriced.includes(selector) ? (
+                  <Warning>No price set</Warning>
+                ) : (
+                  statOf(selector)
+                )
+              }
               extraOf={(index) =>
                 pool.backend === WEIGHTED_BACKEND ? (
                   <div className="w-24">
@@ -332,6 +364,18 @@ export function PolicyEditor({
               addNote={AT_CAP}
             />
             {isReadOnly ? null : <PoolProblems pool={pool} />}
+            {unpriced.length > 0 ? (
+              <p className="text-caption text-warning">
+                Smart router compares prices, so every pool model needs one.{" "}
+                {unpricedNames} {unpriced.length === 1 ? "has" : "have"} none.{" "}
+                <Link
+                  to="/organization/pricing"
+                  className="text-link hover:underline"
+                >
+                  Set a price in Pricing
+                </Link>
+              </p>
+            ) : null}
             {selection !== "single" ? (
               <p className="text-caption">{POOL_NOTE[selection]}</p>
             ) : null}

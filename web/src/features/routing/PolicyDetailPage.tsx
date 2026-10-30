@@ -326,6 +326,7 @@ function PolicyView({
           // Re-seeded when the stored policy changes, as after a save.
           key={JSON.stringify(row.spec)}
           stored={stored}
+          workspaceId={row.workspace_id ?? writeWorkspaceId ?? undefined}
           isAlias={row.kind === "alias"}
           isReadOnly={!isEditable}
           steps={traffic.steps}

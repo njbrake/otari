@@ -477,6 +477,42 @@ describe("PolicyDetailPage", () => {
     expect(lastWrite(calls).spec.select[0]).toEqual(WEIGHTED.select[0])
   })
 
+  it("marks a Smart router pool model with no price, and holds the save", async () => {
+    const { calls } = mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [
+        policy("smart", LEARNED, {
+          workspace_id: ADMIN_WORKSPACE,
+          is_dynamic: true,
+        }),
+      ],
+      unpriced: ["openai:gpt-5-nano"],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<PolicyDetailPage name="smart" />, "/routing/smart")
+
+    expect(await screen.findByText("No price set")).toBeInTheDocument()
+    expect(listed("Pool")[0]).toMatch(/gpt-5-nano.*No price set/)
+    expect(
+      screen.getByRole("link", { name: "Set a price in Pricing" }),
+    ).toHaveAttribute("href", "/organization/pricing")
+    const asked = calls.find((call) => call.url.includes("/unpriced"))
+    expect(asked?.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
+
+    await user.click(screen.getByRole("button", { name: "Make default" }))
+    expect(
+      screen.getByText(
+        /Can't save: gpt-5-nano has no price, and Smart router needs one/,
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
+
+    // A split weighs by share, not price, so nothing is asked or held.
+    await user.click(screen.getByRole("radio", { name: "Split traffic" }))
+    expect(screen.queryByText("No price set")).toBeNull()
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled()
+  })
+
   it("will not save a split where every share is zero, or one naming a model twice", async () => {
     const { calls } = mockApi([
       policy("balanced", WEIGHTED, { is_dynamic: true }),

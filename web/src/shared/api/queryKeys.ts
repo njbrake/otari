@@ -49,6 +49,7 @@ export const AUTOMATIC_FALLBACKS = "automatic-fallbacks"
 // Who sent each routing name and what each step did, over the last 30 days.
 // Usage, not configuration, so a routing write does not invalidate it.
 export const ROUTING_TRAFFIC = "routing-traffic"
+export const ROUTING_UNPRICED = "routing-unpriced"
 // Deliberately not nested under MODELS: pricing mutations invalidate that key,
 // and a price change cannot alter which models a provider serves. Sharing the
 // key would fire a live provider call on every save.
