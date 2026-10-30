@@ -299,7 +299,7 @@ export function PolicyEditor({
 
         {routed ? (
           <>
-            <h3 className="text-emphasis">Pool</h3>
+            <p className="text-emphasis">Pool</p>
             <ModelOrderList
               label="Pool"
               models={pool.models}
@@ -401,7 +401,7 @@ export function PolicyEditor({
             {selection !== "single" ? (
               <p className="text-caption">{POOL_NOTE[selection]}</p>
             ) : null}
-            <h3 className="text-emphasis">Backups</h3>
+            <p className="text-emphasis">Backups</p>
             <p className="text-caption">
               If the picked model fails, the rest of the pool is tried, then
               these in order.
@@ -414,7 +414,7 @@ export function PolicyEditor({
           </>
         ) : (
           <>
-            <h3 className="text-emphasis">Tried in order</h3>
+            <p className="text-emphasis">Tried in order</p>
             {backupsList(
               triedInOrder(draft),
               (models) => setDraft((prev) => withTriedInOrder(prev, models)),

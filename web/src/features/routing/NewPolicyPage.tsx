@@ -145,7 +145,7 @@ export function NewPolicyPage() {
               onChange={(next) => setAppliesTo(next as AppliesTo)}
             />
           ) : (
-            <span className="text-body text-foreground">Just you</span>
+            <span className="text-body">Just you</span>
           )}
           <span className="text-caption">{APPLIES_TO_HELP[effective]}</span>
         </div>

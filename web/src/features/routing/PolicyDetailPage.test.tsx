@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -175,6 +175,28 @@ describe("PolicyDetailPage", () => {
     ).toBeDisabled()
     await save(user)
 
+    expect(lastWrite(calls).spec).toEqual({
+      select: [{ default: "anthropic:claude-haiku-4-5" }],
+      on_failure: ["openai:gpt-5-mini"],
+    })
+  })
+
+  it("reorders by dragging a row's handle onto another row", async () => {
+    const { calls } = mockApi([policy("fast", CHAIN)])
+    const user = userEvent.setup()
+    renderPolicy("fast")
+
+    await screen.findByRole("list", { name: "Tried in order" })
+    const [mainRow, backupRow] = within(
+      screen.getByRole("list", { name: "Tried in order" }),
+    ).getAllByRole("listitem")
+    const handle = backupRow.querySelector("[data-model-drag]")!
+    fireEvent.dragStart(handle)
+    fireEvent.dragOver(mainRow)
+    fireEvent.drop(mainRow)
+
+    expect(listed("Tried in order")[0]).toMatch(/MAIN.*claude-haiku-4-5/)
+    await save(user)
     expect(lastWrite(calls).spec).toEqual({
       select: [{ default: "anthropic:claude-haiku-4-5" }],
       on_failure: ["openai:gpt-5-mini"],

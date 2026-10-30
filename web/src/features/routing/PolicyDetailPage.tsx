@@ -304,7 +304,7 @@ function PolicyView({
 
       <div className="flex flex-wrap items-baseline gap-x-8 gap-y-1 border-y border-border py-3">
         <span className="text-caption">Applies to</span>
-        <span className="text-body text-foreground">{appliesTo.label}</span>
+        <span className="text-body">{appliesTo.label}</span>
         <span className="text-caption">{appliesTo.help}</span>
       </div>
 

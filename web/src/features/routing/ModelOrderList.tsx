@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useState } from "react"
-import { FiArrowDown, FiArrowUp, FiPlus, FiX } from "react-icons/fi"
+import { FiArrowDown, FiArrowUp, FiMenu, FiPlus, FiX } from "react-icons/fi"
 
 import { Button } from "@/design-system/actions/Button"
 import { IconButton } from "@/design-system/actions/IconButton"
@@ -20,8 +20,9 @@ const newRowKey = () => {
  *
  * A row with no model yet is a picker; once one is picked it reads as the
  * model and its provider, so a list being reordered stays a list of names
- * rather than a stack of fields. The arrows stay on a phone, where there is
- * nothing to drag with. Rows are keyed by identity, so focus follows a moved
+ * rather than a stack of fields. A row drags by its handle with a pointer; the
+ * arrows are the way for a keyboard, a screen reader and a phone, where there
+ * is nothing to drag with. Rows are keyed by identity, so focus follows a moved
  * model onto the same arrow, or the other one at either end.
  */
 export function ModelOrderList({
@@ -72,6 +73,9 @@ export function ModelOrderList({
   // starts over with fresh rows.
   if (keys.length !== models.length) setKeys(models.map(newRowKey))
   const [moved, setMoved] = useState<{ key: number; up: boolean }>()
+  // The row being dragged, by index, and the row it would land on.
+  const [dragging, setDragging] = useState<number>()
+  const [over, setOver] = useState<number>()
   // Rows whose model is being changed, by key: a picker until Done.
   const [editing, setEditing] = useState<ReadonlySet<number>>(new Set())
   const setEditingRow = (key: number, isEditing: boolean) =>
@@ -126,8 +130,42 @@ export function ModelOrderList({
             return (
               <li
                 key={key}
-                className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
+                onDragOver={(event) => {
+                  if (dragging === undefined) return
+                  event.preventDefault()
+                  setOver(index)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  if (dragging !== undefined && dragging !== index)
+                    move(dragging, index)
+                  setDragging(undefined)
+                  setOver(undefined)
+                }}
+                className={`flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 ${
+                  over === index && dragging !== index ? "bg-surface-alt" : ""
+                }`}
               >
+                {isEditable ? (
+                  // Pointer only: the arrows below are the accessible way.
+                  <span
+                    aria-hidden
+                    draggable
+                    data-model-drag={index}
+                    onDragStart={(event) => {
+                      setDragging(index)
+                      const row = event.currentTarget.closest("li")
+                      if (row) event.dataTransfer?.setDragImage(row, 16, 16)
+                    }}
+                    onDragEnd={() => {
+                      setDragging(undefined)
+                      setOver(undefined)
+                    }}
+                    className="hidden shrink-0 cursor-grab text-subtle md:inline"
+                  >
+                    <FiMenu />
+                  </span>
+                ) : null}
                 <span className="w-4 shrink-0 text-caption tabular-nums">
                   {index + 1}
                 </span>

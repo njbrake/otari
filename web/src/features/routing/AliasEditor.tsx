@@ -45,7 +45,7 @@ export function AliasEditor({
       >
         {isReadOnly ? (
           <>
-            <h2 className="text-emphasis">Points to</h2>
+            <h2 className="text-title">Points to</h2>
             <p className="text-body">{selectorText(target)}</p>
           </>
         ) : (
@@ -59,7 +59,7 @@ export function AliasEditor({
         )}
       </section>
       <section aria-labelledby="alias-backups" className="flex flex-col gap-2">
-        <h2 id="alias-backups" className="text-emphasis">
+        <h2 id="alias-backups" className="text-title">
           Backups
         </h2>
         <p className="text-caption">
