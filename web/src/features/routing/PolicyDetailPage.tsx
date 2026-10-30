@@ -14,15 +14,22 @@ import { useKeys } from "@/shared/api/apiKeys"
 import {
   useCopyOrganizationRoutingPolicy,
   useRoutingTraffic,
+  useSetOrganizationRoutingPolicy,
 } from "@/shared/api/routing"
 import { formatNumber } from "@/shared/helpers/format"
 import { useUrlValue } from "@/shared/helpers/urlState"
 
+import { AliasEditor } from "./AliasEditor"
 import { PolicyEditor } from "./PolicyEditor"
 import { nameProblemOf, PolicyNameField } from "./PolicyNameField"
 import { PolicyReadOnly } from "./PolicyReadOnly"
 import { buildSpec, draftFromSpec } from "./policyDraft"
-import { isEditableInForm, type RoutingRow, rowKeyOf } from "./policyModel"
+import {
+  findFallthroughTarget,
+  isEditableInForm,
+  type RoutingRow,
+  rowKeyOf,
+} from "./policyModel"
 import { trafficForRow } from "./routingTraffic"
 import { usePolicyDelete } from "./usePolicyDelete"
 import { usePolicyWrite } from "./usePolicyWrite"
@@ -156,6 +163,9 @@ function PolicyView({
     fallbackWorkspaceId: writeWorkspaceId,
   })
   const copy = useCopyOrganizationRoutingPolicy()
+  const turn = useSetOrganizationRoutingPolicy()
+  // An alias being turned into a policy: the policy form, on the alias's name.
+  const [isTurning, setIsTurning] = useState(false)
   const keys = useKeys(writeWorkspaceId ?? undefined)
   const memberLabels = useMemberAttributionLabels()
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false)
@@ -207,7 +217,15 @@ function PolicyView({
               : "Everyone in this workspace who sends this name.",
           }
 
-  const deleteLabel = isOwnVersion ? "Remove my version" : "Delete policy"
+  const isAlias = row.kind === "alias"
+  const deleteLabel = isAlias
+    ? "Delete alias"
+    : isOwnVersion
+      ? "Remove my version"
+      : "Delete policy"
+  // Through the tenant surface, the one that swaps an alias for a policy in a
+  // single write; an operator deletes and recreates instead.
+  const canTurn = isAlias && canEdit && !isOperator && !isConfig && !row.user_id
   const deleting = deletes.mutationFor(row)
 
   return (
@@ -218,6 +236,11 @@ function PolicyView({
             <h1 className="text-display">
               {isOwnVersion ? `Your version of ${row.name}` : row.name}
             </h1>
+            {isAlias && !isTurning ? (
+              <span className="rounded-sm border border-border px-1.5 py-0.5 text-mono-overline text-subtle">
+                ALIAS
+              </span>
+            ) : null}
             {canRename && !isRenaming ? (
               <IconButton
                 variant="ghost"
@@ -241,6 +264,12 @@ function PolicyView({
                 }.`
               : "No requests in 30 days."}
           </p>
+          {isAlias && !isTurning ? (
+            <p className="text-caption">
+              An alias is a short name for one model. Requests sent as "
+              {row.name}" go to that model as written, with no backup.
+            </p>
+          ) : null}
           {isOwnVersion ? (
             <p className="text-caption">
               Keeps the name {row.name} so it replaces the shared one for you.
@@ -324,7 +353,45 @@ function PolicyView({
       ) : null}
       <ErrorBanner error={copy.error} />
 
-      {!isRepresentable ? (
+      {isAlias && !isTurning ? (
+        <AliasEditor
+          name={row.name}
+          target={findFallthroughTarget(row.spec)}
+          isReadOnly={!canEdit}
+          isConfig={isConfig}
+          onTurnIntoPolicy={canTurn ? () => setIsTurning(true) : undefined}
+          onSave={(target) =>
+            writer.write({ select: [{ default: target }] }, {})
+          }
+          isPending={writer.isPending}
+          error={writer.error}
+        />
+      ) : isTurning ? (
+        <PolicyEditor
+          stored={stored}
+          workspaceId={row.workspace_id ?? writeWorkspaceId ?? undefined}
+          isReadOnly={false}
+          hasRules={manages}
+          ruleLabel={(id) => memberLabels.get(id) ?? id}
+          steps={traffic.steps}
+          isUnsaved
+          onDiscard={() => setIsTurning(false)}
+          saveNote={`Replaces the alias ${row.name} with a policy of the same name in one step. Apps keep sending "${row.name}".`}
+          isPending={turn.isPending}
+          error={turn.error}
+          onSave={(draft) => {
+            const workspaceId = row.workspace_id ?? writeWorkspaceId
+            if (workspaceId === null) return
+            // The row turns from an alias into a policy, which remounts this view.
+            turn.mutate({
+              name: row.name,
+              spec: buildSpec(draft),
+              workspace_id: workspaceId,
+              replaces_alias: true,
+            })
+          }}
+        />
+      ) : !isRepresentable ? (
         <PolicyReadOnly row={row} />
       ) : (
         <PolicyEditor
@@ -332,7 +399,6 @@ function PolicyView({
           key={JSON.stringify(row.spec)}
           stored={stored}
           workspaceId={row.workspace_id ?? writeWorkspaceId ?? undefined}
-          isAlias={row.kind === "alias"}
           isReadOnly={!isEditable}
           // Managers only, since a rule names colleagues; and never on a
           // member's own policy, which applies to them alone.

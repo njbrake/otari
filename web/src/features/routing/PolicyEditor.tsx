@@ -124,12 +124,12 @@ function stepStat(
 export function PolicyEditor({
   stored,
   workspaceId,
-  isAlias,
   isReadOnly,
   hasRules = false,
   ruleLabel = (id) => id,
   steps,
   nameIsDirty = false,
+  isUnsaved = false,
   nameProblem = "",
   onDiscard,
   onSave,
@@ -141,7 +141,6 @@ export function PolicyEditor({
   stored: PolicyDraft
   /** Where the policy is stored, for the pricing check a Smart router needs. */
   workspaceId?: string
-  isAlias: boolean
   isReadOnly: boolean
   /** Whether to show the rules, which send named members elsewhere. */
   hasRules?: boolean
@@ -151,6 +150,8 @@ export function PolicyEditor({
   steps: ReadonlyMap<number, StepTraffic>
   /** A rename in the page's header, saved with the rest. */
   nameIsDirty?: boolean
+  /** Something to save even unchanged, such as an alias being turned into a policy. */
+  isUnsaved?: boolean
   nameProblem?: string
   onDiscard: () => void
   onSave: (draft: PolicyDraft) => void
@@ -165,7 +166,9 @@ export function PolicyEditor({
   const isGuardrailsConfigured = useGuardrailsConfigured(!isReadOnly)
   const spec = buildSpec(draft)
   const isDirty =
-    nameIsDirty || JSON.stringify(spec) !== JSON.stringify(buildSpec(stored))
+    isUnsaved ||
+    nameIsDirty ||
+    JSON.stringify(spec) !== JSON.stringify(buildSpec(stored))
   const selection = selectionOf(draft)
   // A Smart router scores by cost, so the server refuses a pool model with no
   // price. Asked as the pool changes, so the row says so before Save does.
@@ -232,7 +235,7 @@ export function PolicyEditor({
       onPick={(index, selector) =>
         setModels(models.map((entry, i) => (i === index ? selector : entry)))
       }
-      onAdd={isAlias ? undefined : () => setModels([...models, ""])}
+      onAdd={() => setModels([...models, ""])}
       addLabel="Add a backup"
       canAdd={!atCap}
       addNote={AT_CAP}
@@ -274,7 +277,7 @@ export function PolicyEditor({
         <h2 id="main-selection" className="text-title">
           Main selection
         </h2>
-        {isReadOnly || isAlias ? (
+        {isReadOnly ? (
           <p className="text-body">
             {SELECTIONS.find((option) => option.value === selection)?.label}
           </p>
@@ -288,11 +291,7 @@ export function PolicyEditor({
             }
           />
         )}
-        <p className="text-caption">
-          {isAlias
-            ? "An alias sends every request to one model, with no backups."
-            : SELECTION_HELP[selection]}
-        </p>
+        <p className="text-caption">{SELECTION_HELP[selection]}</p>
 
         {routed ? (
           <>
@@ -421,116 +420,109 @@ export function PolicyEditor({
         )}
       </section>
 
-      {isAlias || isReadOnly ? null : (
-        <p className="text-caption">{BACKUP_HELP}</p>
-      )}
+      {isReadOnly ? null : <p className="text-caption">{BACKUP_HELP}</p>}
 
-      {isAlias ? null : (
-        <SettingsGroup>
-          {hasRules ? (
-            <DisclosureRow
-              label="Rules"
-              trailing={<span className="text-caption">{ruleSummary}</span>}
-              isOpen={open.rules ?? false}
-              onToggle={() => toggle("rules")}
-            >
-              <div className="flex flex-col gap-3 p-4">
-                <p className="text-caption">
-                  Send specific members to a different model. Checked in order
-                  before budget tiers; the first match wins. Everyone else gets
-                  the main selection.
-                </p>
-                {isReadOnly ? (
-                  <span className="text-body">{ruleSummary}</span>
-                ) : (
-                  <RulesSection
-                    rules={draft.rules}
-                    onChange={(rules) =>
-                      setDraft((prev) => ({ ...prev, rules }))
-                    }
-                  />
-                )}
-              </div>
-            </DisclosureRow>
-          ) : null}
+      <SettingsGroup>
+        {hasRules ? (
           <DisclosureRow
-            label="Budget tier-down"
-            trailing={<span className="text-caption">{tierSummary}</span>}
-            isOpen={open.tiers ?? false}
-            onToggle={() => toggle("tiers")}
+            label="Rules"
+            trailing={<span className="text-caption">{ruleSummary}</span>}
+            isOpen={open.rules ?? false}
+            onToggle={() => toggle("rules")}
           >
             <div className="flex flex-col gap-3 p-4">
               <p className="text-caption">
-                Switch to a cheaper model once the caller has used part of their
-                budget.
+                Send specific members to a different model. Checked in order
+                before budget tiers; the first match wins. Everyone else gets
+                the main selection.
               </p>
               {isReadOnly ? (
-                <span className="text-body">{tierSummary}</span>
+                <span className="text-body">{ruleSummary}</span>
               ) : (
-                <TierDownSection
-                  tierDowns={draft.tierDowns}
-                  onChange={(tierDowns) =>
-                    setDraft((prev) => ({ ...prev, tierDowns }))
-                  }
+                <RulesSection
+                  rules={draft.rules}
+                  onChange={(rules) => setDraft((prev) => ({ ...prev, rules }))}
                 />
               )}
             </div>
           </DisclosureRow>
-          {draft.guardrails.length > 0 || !isReadOnly ? (
-            <DisclosureRow
-              label="Guardrails"
-              trailing={
-                <span className="text-caption">
-                  {draft.guardrails.length === 0
-                    ? "None"
-                    : draft.guardrails
-                        .map((guardrail) => guardrail.profile)
-                        .join(", ")}
-                </span>
-              }
-              isOpen={open.guardrails ?? false}
-              onToggle={() => toggle("guardrails")}
-            >
-              <div className="p-4">
-                {isReadOnly ? (
-                  <span className="text-body">
-                    {draft.guardrails
-                      .map(
-                        (guardrail) =>
-                          `${guardrail.profile} (${guardrail.mode})`,
-                      )
-                      .join(", ")}
-                  </span>
-                ) : (
-                  <GuardrailsSection
-                    guardrails={draft.guardrails}
-                    onChange={(guardrails) =>
-                      setDraft((prev) => ({ ...prev, guardrails }))
-                    }
-                    isConfigured={isGuardrailsConfigured}
-                  />
-                )}
-              </div>
-            </DisclosureRow>
-          ) : null}
+        ) : null}
+        <DisclosureRow
+          label="Budget tier-down"
+          trailing={<span className="text-caption">{tierSummary}</span>}
+          isOpen={open.tiers ?? false}
+          onToggle={() => toggle("tiers")}
+        >
+          <div className="flex flex-col gap-3 p-4">
+            <p className="text-caption">
+              Switch to a cheaper model once the caller has used part of their
+              budget.
+            </p>
+            {isReadOnly ? (
+              <span className="text-body">{tierSummary}</span>
+            ) : (
+              <TierDownSection
+                tierDowns={draft.tierDowns}
+                onChange={(tierDowns) =>
+                  setDraft((prev) => ({ ...prev, tierDowns }))
+                }
+              />
+            )}
+          </div>
+        </DisclosureRow>
+        {draft.guardrails.length > 0 || !isReadOnly ? (
           <DisclosureRow
-            label="As JSON"
+            label="Guardrails"
             trailing={
               <span className="text-caption">
-                {isDirty
-                  ? "Includes unsaved changes"
-                  : "Same shape as config.yml"}
+                {draft.guardrails.length === 0
+                  ? "None"
+                  : draft.guardrails
+                      .map((guardrail) => guardrail.profile)
+                      .join(", ")}
               </span>
             }
-            isOpen={open.json ?? false}
-            onToggle={() => toggle("json")}
+            isOpen={open.guardrails ?? false}
+            onToggle={() => toggle("guardrails")}
           >
             <div className="p-4">
-              <CodeBlock label="json" value={JSON.stringify(spec, null, 2)} />
+              {isReadOnly ? (
+                <span className="text-body">
+                  {draft.guardrails
+                    .map(
+                      (guardrail) => `${guardrail.profile} (${guardrail.mode})`,
+                    )
+                    .join(", ")}
+                </span>
+              ) : (
+                <GuardrailsSection
+                  guardrails={draft.guardrails}
+                  onChange={(guardrails) =>
+                    setDraft((prev) => ({ ...prev, guardrails }))
+                  }
+                  isConfigured={isGuardrailsConfigured}
+                />
+              )}
             </div>
           </DisclosureRow>
-        </SettingsGroup>
-      )}
+        ) : null}
+        <DisclosureRow
+          label="As JSON"
+          trailing={
+            <span className="text-caption">
+              {isDirty
+                ? "Includes unsaved changes"
+                : "Same shape as config.yml"}
+            </span>
+          }
+          isOpen={open.json ?? false}
+          onToggle={() => toggle("json")}
+        >
+          <div className="p-4">
+            <CodeBlock label="json" value={JSON.stringify(spec, null, 2)} />
+          </div>
+        </DisclosureRow>
+      </SettingsGroup>
 
       {isReadOnly ? null : (
         <SaveBar
@@ -560,7 +552,7 @@ export function PolicyEditor({
  * The one Save for the whole policy, held at the foot of the view while the
  * page scrolls, so it is in reach from any section that changed.
  */
-function SaveBar({
+export function SaveBar({
   note,
   isDirty,
   canSave,

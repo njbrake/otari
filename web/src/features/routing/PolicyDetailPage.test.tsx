@@ -751,14 +751,20 @@ describe("PolicyDetailPage for an alias", () => {
     renderPolicy("legacy")
 
     expect(
-      await screen.findByText(/An alias sends every request to one model/),
+      await screen.findByText(/go to that model as written, with no backup/),
     ).toBeInTheDocument()
+    expect(screen.getByText("ALIAS")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Delete alias" })).toBeVisible()
     expect(screen.queryByRole("button", { name: "Rename" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Add a backup" })).toBeNull()
     expect(screen.queryByRole("radio", { name: "Split traffic" })).toBeNull()
+    // The operator surface has no one-step swap, so it says how instead.
     expect(
-      screen.queryByRole("button", { name: /^Budget tier-down/ }),
+      screen.queryByRole("button", { name: "Turn into a policy" }),
     ).toBeNull()
+    expect(
+      screen.getByText(/delete it and create a policy with the same name/),
+    ).toBeInTheDocument()
   })
 
   it("writes an alias edit back to the alias's own workspace", async () => {
@@ -782,10 +788,8 @@ describe("PolicyDetailPage for an alias", () => {
       "/routing/elsewhere-alias",
     )
 
-    await user.click(
-      await screen.findByRole("button", { name: "Change the main model" }),
-    )
-    await pick(user, /^the main model$/i, "openai:gpt-5-mini")
+    await screen.findByRole("combobox", { name: /^points to/i })
+    await pick(user, /^points to/i, "openai:gpt-5-mini")
     await save(user)
 
     const written = calls.find(
@@ -797,6 +801,47 @@ describe("PolicyDetailPage for an alias", () => {
       name: "elsewhere-alias",
       target: "openai:gpt-5-mini",
       workspace_id: OTHER_WORKSPACE,
+    })
+  })
+
+  it("turns an alias into a policy of the same name in one write", async () => {
+    const { calls } = mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [],
+      memberAliases: [
+        {
+          name: "fast",
+          target: "openai:gpt-5",
+          source: "stored",
+          user_id: null,
+          workspace_id: ADMIN_WORKSPACE,
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<PolicyDetailPage name="fast" />, "/routing/fast")
+
+    await user.click(
+      await screen.findByRole("button", { name: "Turn into a policy" }),
+    )
+    expect(listed("Tried in order")[0]).toMatch(/MAIN.*gpt-5 OpenAI/)
+    await user.click(screen.getByRole("button", { name: "Add a backup" }))
+    await pick(user, /^backup 1$/i, "anthropic:claude-haiku-4-5")
+    await save(user)
+
+    const written = calls.find(
+      (call) =>
+        call.method === "POST" &&
+        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
+    )
+    expect(written?.body).toEqual({
+      name: "fast",
+      spec: {
+        select: [{ default: "openai:gpt-5" }],
+        on_failure: ["anthropic:claude-haiku-4-5"],
+      },
+      workspace_id: ADMIN_WORKSPACE,
+      replaces_alias: true,
     })
   })
 })
