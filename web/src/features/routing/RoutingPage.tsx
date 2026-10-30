@@ -109,13 +109,19 @@ export function RoutingPage() {
   // unmounts the empty state whose button opened the dialog.
   const createButtonRef = useRef<HTMLButtonElement | null>(null)
   const [createCount, setCreateCount] = useState(0)
-  const openCreate = (intent?: Intent) => {
+  // The model a new policy starts on: the deep link's, or the row it came from.
+  const [createTarget, setCreateTarget] = useState(initialTarget)
+  const openCreate = (intent?: Intent, target = "") => {
     // A tenant's policy is created on its own page; the dialog writes
     // deployment-wide, which is the operator's.
     if (!isOperator) {
-      void navigate({ to: "/routing/new" })
+      void navigate({
+        to: "/routing/new",
+        search: target ? { target } : {},
+      })
       return
     }
+    setCreateTarget(target)
     setStartAt(intent)
     setCreateCount((n) => n + 1)
     setAdding(true)
@@ -421,7 +427,7 @@ export function RoutingPage() {
         key={createCount}
         isOpen={isAdding}
         startAt={startAt}
-        initialTarget={initialTarget}
+        initialTarget={createTarget}
         // The empty state's buttons are gone by the time this closes, since
         // creating one is what makes the page non-empty. The heading's action
         // survives.
@@ -511,6 +517,9 @@ export function RoutingPage() {
       <AutomaticFallbacksSection
         apiKeyIds={apiKeyIds}
         keyLabelOf={keyLabelOf}
+        onAddBackup={
+          canCreate ? (selector) => openCreate("fallback", selector) : undefined
+        }
       />
 
       <ConfirmDialog
@@ -554,15 +563,18 @@ export function RoutingPage() {
 function AutomaticFallbacksSection({
   apiKeyIds,
   keyLabelOf,
+  onAddBackup,
 }: {
   apiKeyIds: readonly string[]
   keyLabelOf: (apiKeyId: string) => string
+  onAddBackup?: (selector: string) => void
 }) {
   const fallbacks = useAutomaticFallbacks(apiKeyIds)
   return (
     <AutomaticFallbacks
       fallbacks={fallbacks.data?.models ?? []}
       keyLabelOf={keyLabelOf}
+      onAddBackup={onAddBackup}
       toolsNote="Tools shown for callers that declare them in the provider's own words and leave the choice to Otari: a provider's own where it runs them, Otari's where it does not."
       isLoading={fallbacks.isLoading}
       error={fallbacks.error}

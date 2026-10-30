@@ -1,4 +1,5 @@
 import { screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
 import type { AutomaticFallback, FallbackOffering } from "@/client"
@@ -158,6 +159,32 @@ describe("AutomaticFallbacks", () => {
     )
     const row = await rowOf("Claude Sonnet 5.5")
     expect(within(row).getByText("No backup · pinned")).toBeInTheDocument()
+  })
+
+  it("offers a backup on the provider a model's traffic is pinned to", async () => {
+    const added: string[] = []
+    const user = userEvent.setup()
+    await renderWithRouter(
+      <AutomaticFallbacks
+        fallbacks={[
+          { ...SONNET, pinned: SONNET.requests, pinned_provider: "bedrock" },
+        ]}
+        onAddBackup={(selector) => added.push(selector)}
+      />,
+    )
+    const row = await rowOf("Claude Sonnet 5.5")
+    await user.click(within(row).getByRole("button", { name: "Add a backup" }))
+    expect(added).toEqual(["bedrock:anthropic.claude-sonnet-5-5"])
+  })
+
+  it("offers no backup link where a model already has one, or no link is wanted", async () => {
+    await renderWithRouter(
+      <AutomaticFallbacks fallbacks={[SONNET]} onAddBackup={() => {}} />,
+    )
+    const row = await rowOf("Claude Sonnet 5.5")
+    expect(
+      within(row).queryByRole("button", { name: "Add a backup" }),
+    ).toBeNull()
   })
 
   it("keeps the chain when only some requests were pinned", async () => {

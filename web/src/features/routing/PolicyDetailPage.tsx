@@ -9,6 +9,7 @@ import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
+import { Dot } from "@/design-system/indicators/Dot"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { useKeys } from "@/shared/api/apiKeys"
 import {
@@ -257,12 +258,18 @@ function PolicyView({
             <code className="font-mono text-caption">
               "model": "{row.name}"
             </code>{" "}
-            to use it.{" "}
+            to use it.
+          </p>
+          {/* Whether anything sends it yet: the question right after a create. */}
+          <p className="flex items-center gap-2 text-caption">
+            <Dot
+              className={traffic.requests > 0 ? "bg-success" : "bg-border"}
+            />
             {traffic.requests > 0
-              ? `${formatNumber(traffic.requests)} requests in 30 days${
+              ? `In use: ${formatNumber(traffic.requests)} requests in 30 days${
                   topKeyName ? `, most from ${topKeyName}` : ""
                 }.`
-              : "No requests in 30 days."}
+              : `Not used yet: nothing has sent "${row.name}" in 30 days.`}
           </p>
           {isAlias && !isTurning ? (
             <p className="text-caption">

@@ -202,7 +202,9 @@ describe("PolicyDetailPage", () => {
 
     expect(await screen.findByText("3 failed over (30d)")).toBeInTheDocument()
     expect(screen.getByText("Served 3 (30d)")).toBeInTheDocument()
-    expect(screen.getByText(/10 requests in 30 days/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/In use: 10 requests in 30 days/),
+    ).toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: "Move backup 1 up" }))
     // Still the backup's numbers, on the row it moved to.
@@ -211,6 +213,17 @@ describe("PolicyDetailPage", () => {
     await user.click(screen.getByRole("button", { name: "Add a backup" }))
     await pick(user, /^backup 2$/i, "openai:gpt-5")
     expect(screen.getByText("New, no history")).toBeInTheDocument()
+  })
+
+  it("says when nothing sends the name yet", async () => {
+    mockApi([policy("fast", CHAIN)])
+    renderPolicy("fast")
+
+    expect(
+      await screen.findByText(
+        'Not used yet: nothing has sent "fast" in 30 days.',
+      ),
+    ).toBeInTheDocument()
   })
 
   it("discards every unsaved change at once", async () => {
