@@ -78,6 +78,16 @@ async def heavy_usage_read(uow: UnitOfWork, gate: asyncio.Semaphore) -> AsyncIte
         gate.release()
 
 
+def by_spend(tools: list[UsageToolRow]) -> list[UsageToolRow]:
+    """``tools`` biggest spend first, judged to the micro-dollar, a tie by tool name.
+
+    A tool's spend is a float sum, and the same rows summed in another order (an
+    hour's rollups against the rows themselves) can differ in the last bit, so
+    ranking the raw sums would order two equal spends either way.
+    """
+    return sorted(tools, key=lambda tool: (-round(tool.cost, 6), tool.tool))
+
+
 @dataclass(frozen=True)
 class UsagePageRow:
     """One row of a page of the log, with its display labels and its earlier failed attempts."""
@@ -401,8 +411,7 @@ class UsageReadService:
         requests, so the two answer different questions on purpose: "how much tool work
         did we do" and "how many requests used a tool".
         """
-        tools = await self._summaries.tool_usage(GATEWAY_TOOL_NAMES, rows)
-        return sorted(tools, key=lambda tool: tool.cost, reverse=True)
+        return by_spend(await self._summaries.tool_usage(GATEWAY_TOOL_NAMES, rows))
 
     async def grouped_series(
         self,
