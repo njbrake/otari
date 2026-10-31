@@ -219,7 +219,11 @@ export function BudgetChart({
               className="pointer-events-none absolute inset-y-0 border-l border-border"
               style={{ left: `${(elapsed / count) * 100}%` }}
             >
-              <span className="absolute top-0 left-1.5 text-mono-micro whitespace-nowrap text-subtle">
+              <span
+                className={`absolute top-0 text-mono-micro whitespace-nowrap text-subtle ${
+                  elapsed > count * 0.7 ? "right-1.5" : "left-1.5"
+                }`}
+              >
                 Today
               </span>
             </div>
