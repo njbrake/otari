@@ -10540,6 +10540,171 @@
         "title": "KeyInfo",
         "type": "object"
       },
+      "KeyModelPublic": {
+        "description": "One model name a key sent in the window, and whether a failure on it has a backup.",
+        "properties": {
+          "backup": {
+            "description": "Whether a failure on this name has somewhere to go. `subscription`: every request was imported usage, which the gateway never routed. `unknown`: the name resolves to nothing now.",
+            "enum": [
+              "has_backup",
+              "no_backup",
+              "subscription",
+              "unknown"
+            ],
+            "title": "Backup",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What the name is to this key now: a routing policy, an alias, a catalog ID, a pinned `provider:model`, or none of them (a name nothing resolves any more).",
+            "enum": [
+              "policy",
+              "alias",
+              "catalog",
+              "pinned",
+              "unknown"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the key's requests sent as `model`; for imported usage, the model that ran.",
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The one instance that serves the name, when exactly one does.",
+            "title": "Provider"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "single_offering",
+                  "single_target_policy",
+                  "pinned",
+                  "no_allowed_offering"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why there is no backup, when `backup` is `no_backup`: one offering serves it among those the key may reach, a policy or alias with one candidate, a request that named the provider, or no offering the key may reach.",
+            "title": "Reason"
+          },
+          "requests": {
+            "description": "Requests in the window, each counted once however many attempts.",
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "requests",
+          "kind",
+          "backup",
+          "reason",
+          "provider"
+        ],
+        "title": "KeyModelPublic",
+        "type": "object"
+      },
+      "KeyPolicyPublic": {
+        "description": "One routing policy a key sent in the window.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "requests"
+        ],
+        "title": "KeyPolicyPublic",
+        "type": "object"
+      },
+      "KeyRoutingPublic": {
+        "description": "What one key sent in the window, and what a failure on each name does.",
+        "properties": {
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "model_count": {
+            "description": "How many names the key sent, including any `models` leaves out.",
+            "title": "Model Count",
+            "type": "integer"
+          },
+          "models": {
+            "description": "The most requested names first, at most ten.",
+            "items": {
+              "$ref": "#/components/schemas/KeyModelPublic"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "no_backup_count": {
+            "description": "Of `model_count`, how many have no backup.",
+            "title": "No Backup Count",
+            "type": "integer"
+          },
+          "policies": {
+            "description": "Every routing policy the key sent, most requested first.",
+            "items": {
+              "$ref": "#/components/schemas/KeyPolicyPublic"
+            },
+            "title": "Policies",
+            "type": "array"
+          }
+        },
+        "required": [
+          "api_key_id",
+          "models",
+          "model_count",
+          "no_backup_count",
+          "policies"
+        ],
+        "title": "KeyRoutingPublic",
+        "type": "object"
+      },
+      "KeyRoutingResponse": {
+        "description": "The routing each key's traffic got.",
+        "properties": {
+          "keys": {
+            "description": "One entry per key asked for that the caller may see, in the order asked; a key the caller may not see is left out, like one that does not exist.",
+            "items": {
+              "$ref": "#/components/schemas/KeyRoutingPublic"
+            },
+            "title": "Keys",
+            "type": "array"
+          },
+          "window_days": {
+            "description": "How many days of traffic the counts cover.",
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days",
+          "keys"
+        ],
+        "title": "KeyRoutingResponse",
+        "type": "object"
+      },
       "KnownProviderSchema": {
         "description": "A selected provider's autofill hints for the add-provider form.",
         "properties": {
@@ -34001,6 +34166,64 @@
         ]
       }
     },
+    "/api/v1/keys/routing": {
+      "get": {
+        "description": "What each key sent in the last 30 days, and whether a failure on each name has a backup.\n\nFor each key in the caller's organization among those named: the model names\nits requests sent, most requested first, each judged as a request from the\nkey would resolve it now (a routing policy, an alias, a catalog ID narrowed\nto the offerings the key may reach, or a pinned ``provider:model``), and the\nrouting policies it sent.",
+        "operationId": "keys-get_keys_routing",
+        "parameters": [
+          {
+            "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+            "in": "query",
+            "name": "api_key_id",
+            "required": true,
+            "schema": {
+              "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 50,
+              "minItems": 1,
+              "title": "Api Key Id",
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRoutingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Keys Routing",
+        "tags": [
+          "keys"
+        ]
+      }
+    },
     "/api/v1/keys/{key_id}": {
       "delete": {
         "description": "Delete (revoke) an API key in the caller's organization.\n\nRequires master key authentication.",
@@ -37301,6 +37524,64 @@
           }
         ],
         "summary": "Create Own Key",
+        "tags": [
+          "organization-keys"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/keys/routing": {
+      "get": {
+        "description": "What each of the caller's own keys sent in the last 30 days, and whether a failure on each name has a backup.\n\nThe same read as the operator's, narrowed by the owner predicate every route\nhere carries: somebody else's key, named or not, is left out like one that\ndoes not exist.",
+        "operationId": "organization-keys-get_own_keys_routing",
+        "parameters": [
+          {
+            "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+            "in": "query",
+            "name": "api_key_id",
+            "required": true,
+            "schema": {
+              "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 50,
+              "minItems": 1,
+              "title": "Api Key Id",
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRoutingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Own Keys Routing",
         "tags": [
           "organization-keys"
         ]

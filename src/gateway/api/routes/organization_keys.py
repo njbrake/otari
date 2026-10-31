@@ -49,6 +49,7 @@ from gateway.api.deps import (
     DeploymentUserServiceDep,
     GrowthSignalPortDep,
     OrganizationServiceDep,
+    RoutingServiceDep,
     get_config,
     get_db,
     verify_master_key,
@@ -59,7 +60,9 @@ from gateway.api.routes.keys import (
     KEY_SEARCH_MAX_LENGTH,
     CreateKeyResponse,
     KeyInfo,
+    KeyRoutingIds,
     _load_key_in_organization,
+    key_routing_response,
     key_search_condition,
 )
 from gateway.auth.models import hash_key, key_suffix
@@ -73,6 +76,7 @@ from gateway.models.users import User
 from gateway.ports.growth_signal_port import GrowthActivationEvent
 from gateway.repositories.users_repository import get_or_create_attribution_user
 from gateway.schemas.api_keys import FederationRuleCreate, FederationRulePublic
+from gateway.schemas.routing import KeyRoutingResponse
 from gateway.services.model_access import (
     KEY_MODELS_EXCEED_USER_DETAIL,
     KEY_TOOLS_EXCEED_USER_DETAIL,
@@ -355,6 +359,25 @@ async def list_own_keys(
     keys = result.scalars().all()
 
     return [KeyInfo.from_model(key) for key in keys]
+
+
+@router.get("/routing")
+async def get_own_keys_routing(
+    api_key_id: KeyRoutingIds,
+    identity: CurrentIdentity,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    api_keys: ApiKeyServiceDep,
+    routing: RoutingServiceDep,
+) -> KeyRoutingResponse:
+    """What each of the caller's own keys sent in the last 30 days, and whether a failure on each name has a backup.
+
+    The same read as the operator's, narrowed by the owner predicate every route
+    here carries: somebody else's key, named or not, is left out like one that
+    does not exist.
+    """
+    organization_id, owner_user_id = await _caller_context(db, identity)
+    keys = await api_keys.reach(set(api_key_id), organization_id=organization_id, owner_user_id=owner_user_id)
+    return await key_routing_response(routing, keys, api_key_id)
 
 
 @router.patch("/{key_id}")

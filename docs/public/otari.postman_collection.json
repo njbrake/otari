@@ -3655,6 +3655,34 @@
           }
         },
         {
+          "name": "Get Keys Routing",
+          "request": {
+            "description": "What each key sent in the last 30 days, and whether a failure on each name has a backup.\n\nFor each key in the caller's organization among those named: the model names\nits requests sent, most requested first, each judged as a request from the\nkey would resolve it now (a routing policy, an alias, a catalog ID narrowed\nto the offerings the key may reach, or a pinned ``provider:model``), and the\nrouting policies it sent.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "keys",
+                "routing"
+              ],
+              "query": [
+                {
+                  "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+                  "disabled": false,
+                  "key": "api_key_id",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/keys/routing?api_key_id="
+            }
+          }
+        },
+        {
           "name": "Get Key",
           "request": {
             "description": "Get details of a specific API key in the caller's organization.\n\nRequires master key authentication.",
@@ -6352,6 +6380,36 @@
                 "keys"
               ],
               "raw": "{{baseUrl}}/api/v1/organizations/me/keys"
+            }
+          }
+        },
+        {
+          "name": "Get Own Keys Routing",
+          "request": {
+            "description": "What each of the caller's own keys sent in the last 30 days, and whether a failure on each name has a backup.\n\nThe same read as the operator's, narrowed by the owner predicate every route\nhere carries: somebody else's key, named or not, is left out like one that\ndoes not exist.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "keys",
+                "routing"
+              ],
+              "query": [
+                {
+                  "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+                  "disabled": false,
+                  "key": "api_key_id",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/keys/routing?api_key_id="
             }
           }
         },

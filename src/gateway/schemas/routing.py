@@ -140,3 +140,59 @@ class AutomaticFallbacksResponse(BaseModel):
 
     window_days: int = Field(description="How many days of traffic the counts cover.")
     models: list[AutomaticFallbackPublic] = Field(description="Most requested first.")
+
+
+class KeyModelPublic(BaseModel):
+    """One model name a key sent in the window, and whether a failure on it has a backup."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str = Field(
+        description="The name the key's requests sent as `model`; for imported usage, the model that ran."
+    )
+    requests: int = Field(description="Requests in the window, each counted once however many attempts.")
+    kind: Literal["policy", "alias", "catalog", "pinned", "unknown"] = Field(
+        description="What the name is to this key now: a routing policy, an alias, a catalog ID, a pinned "
+        "`provider:model`, or none of them (a name nothing resolves any more)."
+    )
+    backup: Literal["has_backup", "no_backup", "subscription", "unknown"] = Field(
+        description="Whether a failure on this name has somewhere to go. `subscription`: every request was "
+        "imported usage, which the gateway never routed. `unknown`: the name resolves to nothing now."
+    )
+    reason: Literal["single_offering", "single_target_policy", "pinned", "no_allowed_offering"] | None = Field(
+        description="Why there is no backup, when `backup` is `no_backup`: one offering serves it among those the "
+        "key may reach, a policy or alias with one candidate, a request that named the provider, or no offering "
+        "the key may reach."
+    )
+    provider: str | None = Field(description="The one instance that serves the name, when exactly one does.")
+
+
+class KeyPolicyPublic(BaseModel):
+    """One routing policy a key sent in the window."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    requests: int
+
+
+class KeyRoutingPublic(BaseModel):
+    """What one key sent in the window, and what a failure on each name does."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    api_key_id: str
+    models: list[KeyModelPublic] = Field(description="The most requested names first, at most ten.")
+    model_count: int = Field(description="How many names the key sent, including any `models` leaves out.")
+    no_backup_count: int = Field(description="Of `model_count`, how many have no backup.")
+    policies: list[KeyPolicyPublic] = Field(description="Every routing policy the key sent, most requested first.")
+
+
+class KeyRoutingResponse(BaseModel):
+    """The routing each key's traffic got."""
+
+    window_days: int = Field(description="How many days of traffic the counts cover.")
+    keys: list[KeyRoutingPublic] = Field(
+        description="One entry per key asked for that the caller may see, in the order asked; "
+        "a key the caller may not see is left out, like one that does not exist."
+    )

@@ -51,6 +51,21 @@ from gateway.schemas.usage import (
 
 
 @dataclass(frozen=True)
+class KeyNameTraffic:
+    """The requests one key sent under one model name.
+
+    The name is what the caller sent (``requested_model``) on a row served here,
+    and the model that ran on imported usage, which reports nothing else.
+    """
+
+    api_key_id: str
+    name: str
+    requests: int
+    imported: int
+    """Of ``requests``, those imported rather than served here."""
+
+
+@dataclass(frozen=True)
 class _Breakdown:
     """What a breakdown groups by: a column or expression, the join that names its values, and any join it reads."""
 
@@ -571,6 +586,33 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
                     )
                 )
         return result
+
+    async def names_by_key(self, rows: Subquery) -> list[KeyNameTraffic]:
+        """Requests per key and model name sent, most first.
+
+        A served row with no ``requested_model`` (older than the column, or a
+        side-call nobody named) is left out rather than guessed at.
+        """
+        u = rows.c
+        imported = u.source != SERVED_HERE_SLUG
+        name = case((imported, u.model), else_=u.requested_model)
+        requests = func.sum(u.rows)
+        found = (
+            await self.db.execute(
+                select(
+                    u.api_key_id,
+                    name.label("name"),
+                    requests.label("requests"),
+                    func.sum(case((imported, u.rows), else_=0)).label("imported"),
+                )
+                .where(u.api_key_id.is_not(None), name.is_not(None), u.status != "absorbed")
+                .group_by(u.api_key_id, name)
+                .order_by(u.api_key_id, requests.desc(), name)
+            )
+        ).all()
+        return [
+            KeyNameTraffic(api_key_id=row[0], name=row[1], requests=int(row[2]), imported=int(row[3])) for row in found
+        ]
 
     async def errors_by_status_code(self, rows: Subquery, *, limit: int) -> list[UsageErrorCodeRow]:
         """Failures grouped by status code, most frequent first, at most ``limit`` codes.

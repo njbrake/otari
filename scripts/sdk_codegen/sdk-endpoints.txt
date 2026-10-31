@@ -185,6 +185,7 @@ GET /api/v1/organizations/me/traces/{trace_id}      # not yet wrapped
 GET /api/v1/usage/count                             # not yet wrapped
 GET /api/v1/usage/requests/{request_id}            # not yet wrapped
 POST /api/v1/keys/{key_id}/rotate                   # not yet wrapped
+GET /api/v1/keys/routing                            # not yet wrapped
 GET /api/v1/budgets/{budget_id}/reset-logs          # not yet wrapped
 PUT /api/v1/budgets/{budget_id}                     # not yet wrapped
 GET /api/v1/keys/{key_id}/end-users                 # not yet wrapped
@@ -400,6 +401,7 @@ GET /api/v1/organizations/me/automatic-fallbacks                # dashboard-only
 # usage reads above: scoped by the caller's dashboard session, which an SDK
 # caller does not hold.
 GET /api/v1/organizations/me/keys                               # dashboard-only
+GET /api/v1/organizations/me/keys/routing                       # dashboard-only
 POST /api/v1/organizations/me/keys                              # dashboard-only
 PATCH /api/v1/organizations/me/keys/{key_id}                    # dashboard-only
 DELETE /api/v1/organizations/me/keys/{key_id}                   # dashboard-only
