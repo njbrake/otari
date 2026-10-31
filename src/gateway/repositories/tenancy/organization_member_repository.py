@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Collection, Iterable
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, String, cast, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
@@ -181,6 +181,18 @@ class OrganizationMemberRepository(
             select(col(OrganizationMember.id)).where(col(OrganizationMember.organization_id) == organization_id)
         )
         return list(result.scalars().all())
+
+    @staticmethod
+    def attribution_ids(organization_id: uuid.UUID) -> Select[tuple[str]]:
+        """Everyone who has held a membership in the organization, whatever its status, as the attribution id.
+
+        The identity's UUID as a string, which is what a key, a budget or a
+        routing policy of theirs carries as ``users.user_id``. A query to embed
+        rather than a list, so it does not grow with the organization.
+        """
+        return select(cast(col(OrganizationMember.user_id), String)).where(
+            col(OrganizationMember.organization_id) == organization_id
+        )
 
     async def create_membership(
         self,

@@ -14849,6 +14849,84 @@
         "title": "OrganizationModelPricingsPublic",
         "type": "object"
       },
+      "OrganizationPolicyRequest": {
+        "description": "A tenant policy write: the operator's body, scoped to a member by identity rather than ``user_id``.",
+        "properties": {
+          "member_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Scope the policy to one member, by identity id: it applies only to requests made with their keys, and wins over a workspace-wide or config policy of the same name for them. A member may name only themselves; an owner or admin may name any active member of the organization who may see the workspace. Omit for a workspace-wide policy, which only an owner or admin may write. `user_id` is not accepted here.",
+            "title": "Member Id"
+          },
+          "name": {
+            "description": "Model name callers send, e.g. 'fast'.",
+            "title": "Name",
+            "type": "string"
+          },
+          "rename_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Current name of the policy to rename, in the same scope, meaning the same workspace and the same user. A rename never moves a policy between them. The stored row keeps its id and created_at and takes `name` and `spec`. Sending it asserts that policy exists, so a name with no stored row is a 404 rather than a create, even when it equals `name`. Omit to create or update the policy named `name`. Renaming changes what callers must send as `model`; usage already recorded keeps the old name.",
+            "title": "Rename From"
+          },
+          "replaces_alias": {
+            "default": false,
+            "description": "Turn the workspace's own workspace-wide alias of this name into this policy, in one step, so callers sending the name never find neither. Owners and admins, workspace-wide policies only.",
+            "title": "Replaces Alias",
+            "type": "boolean"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "description": "The policy body: select (with exactly one `default` entry, last), optional on_failure and guardrails. Same schema as a `routing.policies` entry in config.yml, and closed to unknown keys, so a typo is a 400 rather than a silently ignored setting.",
+            "title": "Spec",
+            "type": "object"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "User this policy belongs to. Omit for a policy every caller in the workspace sees. A user-scoped policy resolves only for that user and shadows the workspace-wide one of the same name.",
+            "title": "User Id"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Workspace this policy belongs to. Omit for the deployment's default workspace. The policy resolves only for requests in that workspace, so two workspaces can each define their own 'fast'.",
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "name",
+          "spec"
+        ],
+        "title": "OrganizationPolicyRequest",
+        "type": "object"
+      },
       "OrganizationPublic": {
         "properties": {
           "created_at": {
@@ -16448,6 +16526,28 @@
           "blocked"
         ],
         "title": "PolicyCheckResponse",
+        "type": "object"
+      },
+      "PolicyCopyRequest": {
+        "description": "Make the caller's own version of a shared policy.",
+        "properties": {
+          "name": {
+            "description": "The shared policy to copy: a workspace-wide one in the workspace, or config.yml's.",
+            "title": "Name",
+            "type": "string"
+          },
+          "workspace_id": {
+            "description": "The workspace the copy belongs to, which the caller must see.",
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "workspace_id"
+        ],
+        "title": "PolicyCopyRequest",
         "type": "object"
       },
       "PolicyRequest": {
@@ -27575,6 +27675,11 @@
       "WorkspaceVisibility": {
         "description": "What a workspace shows members who do not manage it.",
         "properties": {
+          "members_create_policies": {
+            "description": "Whether members may create routing policies that apply only to their own requests, including their own version of a shared policy. When false they cannot create or copy one, and the ones they have keep working and stay theirs to edit or delete.",
+            "title": "Members Create Policies",
+            "type": "boolean"
+          },
           "members_see_workspace_totals": {
             "description": "Whether members may read the workspace's aggregate usage (totals, series, and breakdowns by model, provider or status code) and its budget's dollar figures. Never anyone else's requests, keys or limits. When false, a member reads only their own usage and the budget as a percentage.",
             "title": "Members See Workspace Totals",
@@ -27582,7 +27687,8 @@
           }
         },
         "required": [
-          "members_see_workspace_totals"
+          "members_see_workspace_totals",
+          "members_create_policies"
         ],
         "title": "WorkspaceVisibility",
         "type": "object"
@@ -27591,6 +27697,18 @@
         "additionalProperties": false,
         "description": "A change to what a workspace shows its members: only the fields sent change.\n\nAn unknown field or a null is refused rather than ignored, so a manager is\nnever told a setting changed when it did not.",
         "properties": {
+          "members_create_policies": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether members may create routing policies that apply only to their own requests, including their own version of a shared policy. When false they cannot create or copy one, and the ones they have keep working and stay theirs to edit or delete.",
+            "title": "Members Create Policies"
+          },
           "members_see_workspace_totals": {
             "anyOf": [
               {
@@ -39472,7 +39590,7 @@
     },
     "/api/v1/organizations/me/routing-policies": {
       "get": {
-        "description": "List the routing policies in force in the workspaces this caller may see.\n\nStored policies from the caller's visible workspaces plus the config-file\npolicies, which are deployment-wide and resolve in every workspace. The\nresponse is the shape ``GET /api/v1/routing/policies`` answers, narrowed to the\ncaller's own organization, and narrowed again to one workspace when\n``workspace_id`` names one.",
+        "description": "List the routing policies in force in the workspaces this caller may see.\n\nStored policies from the caller's visible workspaces plus the config-file\npolicies, which are deployment-wide and resolve in every workspace. The\nresponse is the shape ``GET /api/v1/routing/policies`` answers, narrowed to the\ncaller's own organization, and narrowed again to one workspace when\n``workspace_id`` names one. Beside the workspace-wide policies, an owner or\nadmin sees every member's own, and anyone else their own alone; ``user_id``\non such a row is the member's identity id.",
         "operationId": "routing-list_visible_routing_policies",
         "parameters": [
           {
@@ -39549,13 +39667,13 @@
         ]
       },
       "post": {
-        "description": "Create or update a stored policy in one of the organization's workspaces.\n\nOrganization owners and admins only. ``workspace_id`` is required and must\nname a workspace of the caller's own organization; ``user_id`` is not\naccepted here.",
+        "description": "Create or update a stored policy in one of the organization's workspaces.\n\n``workspace_id`` is required and must name a workspace of the caller's own\norganization; ``user_id`` is not accepted here. A workspace-wide policy is an\nowner's or admin's to write. With ``member_id`` the policy is that member's\nown: a member may write their own (creating one only while the workspace lets\nmembers create policies), and an owner or admin anyone's.",
         "operationId": "routing-set_organization_routing_policy",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PolicyRequest"
+                "$ref": "#/components/schemas/OrganizationPolicyRequest"
               }
             }
           },
@@ -39597,9 +39715,59 @@
         ]
       }
     },
+    "/api/v1/organizations/me/routing-policies/copy": {
+      "post": {
+        "description": "Make the caller's own version of a shared policy: the same name and spec, applying only to their requests.\n\nThe source is the workspace's workspace-wide policy of that name, else the\nconfig.yml one. The copy wins over it for the caller alone, and deleting the\ncopy hands their requests back to it. Creating one follows the workspace's\n``members_create_policies`` like any other policy of a member's own; having\none already is a 409.",
+        "operationId": "routing-copy_organization_routing_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyCopyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Copy Organization Routing Policy",
+        "tags": [
+          "routing"
+        ]
+      }
+    },
     "/api/v1/organizations/me/routing-policies/{name}": {
       "delete": {
-        "description": "Delete a stored policy from one of the organization's workspaces. Owners and admins only.",
+        "description": "Delete a stored policy from one of the organization's workspaces.\n\nA workspace-wide policy is an owner's or admin's to delete. A member deletes\ntheir own, whatever ``members_create_policies`` says, and an owner or admin\nanyone's.",
         "operationId": "routing-delete_organization_routing_policy",
         "parameters": [
           {
@@ -39628,6 +39796,25 @@
               ],
               "description": "Delete the policy in this workspace of the caller's organization.",
               "title": "Workspace Id"
+            }
+          },
+          {
+            "description": "Delete this member's own policy rather than the workspace-wide one. A member may name only themselves; an owner or admin anyone, including someone who has since left.",
+            "in": "query",
+            "name": "member_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Delete this member's own policy rather than the workspace-wide one. A member may name only themselves; an owner or admin anyone, including someone who has since left.",
+              "title": "Member Id"
             }
           }
         ],

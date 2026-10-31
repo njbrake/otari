@@ -101,6 +101,18 @@ async def get_or_create_attribution_user(db: AsyncSession, *, user_id: str, alia
         return await _revive(winner)
 
 
+async def get_or_create_live_attribution_user(db: AsyncSession, *, user_id: str, alias: str | None) -> User | None:
+    """:func:`get_or_create_attribution_user`, except that a soft-deleted row answers None rather than being revived.
+
+    For a write that needs an owner row but must not restore one an operator
+    revoked through ``DELETE /api/v1/users``.
+    """
+    existing = (await db.execute(select(User).where(User.user_id == user_id))).scalar_one_or_none()
+    if existing is not None:
+        return None if existing.deleted_at is not None else existing
+    return await get_or_create_attribution_user(db, user_id=user_id, alias=alias)
+
+
 async def live_attribution_user_ids(db: AsyncSession, user_ids: Sequence[str]) -> set[str]:
     """Return which of ``user_ids`` name a usable request-plane owner.
 

@@ -6,6 +6,7 @@ import type { PolicySpec } from "@/client"
 import { PolicyDetailPage } from "@/features/routing/PolicyDetailPage"
 import { API_ROOT } from "@/shared/api/client"
 import {
+  ADMIN_WORKSPACE,
   adminContext,
   CHAIN,
   LEARNED,
@@ -693,5 +694,34 @@ describe("PolicyDetailPage for an organization admin", () => {
         call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
     )
     expect(written?.body).toMatchObject({ workspace_id: OTHER_WORKSPACE })
+  })
+
+  it("writes an edit to a member's own policy as theirs, not the shared one", async () => {
+    const MEMBER = "88888888-8888-8888-8888-888888888888"
+    const { calls } = mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [policy("theirs", CHAIN, { user_id: MEMBER })],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(
+      <PolicyDetailPage name="theirs" />,
+      `/routing/theirs?user=${MEMBER}`,
+    )
+
+    await user.click(
+      await screen.findByRole("button", { name: "Remove backup 1" }),
+    )
+    await save(user, "Save fallback chain")
+
+    const written = calls.find(
+      (call) =>
+        call.method === "POST" &&
+        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
+    )
+    expect(written?.body).toMatchObject({
+      name: "theirs",
+      workspace_id: ADMIN_WORKSPACE,
+      member_id: MEMBER,
+    })
   })
 })

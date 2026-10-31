@@ -1109,7 +1109,7 @@ def test_every_member_reads_that_a_workspace_keeps_its_totals_by_default(
 ) -> None:
     assert _as(client, world, who, _visibility(world, "alpha_one")) == (
         status.HTTP_200_OK,
-        {"members_see_workspace_totals": False},
+        {"members_see_workspace_totals": False, "members_create_policies": True},
     )
 
 
@@ -1125,7 +1125,10 @@ def test_a_member_cannot_ask_for_the_totals_until_a_manager_shares_them(client: 
 def test_a_member_cannot_change_what_the_workspace_shares(client: TestClient, world: _World, who: str) -> None:
     code, _ = _patch_as(client, world, who, _visibility(world, "alpha_one"), {"members_see_workspace_totals": True})
     assert code == status.HTTP_403_FORBIDDEN
-    assert _as(client, world, who, _visibility(world, "alpha_one"))[1] == {"members_see_workspace_totals": False}
+    assert _as(client, world, who, _visibility(world, "alpha_one"))[1] == {
+        "members_see_workspace_totals": False,
+        "members_create_policies": True,
+    }
 
 
 def test_managing_one_workspace_does_not_change_what_another_shares(client: TestClient, world: _World) -> None:
@@ -1133,15 +1136,22 @@ def test_managing_one_workspace_does_not_change_what_another_shares(client: Test
     path = _visibility(world, "alpha_two")
     code, _ = _patch_as(client, world, "alpha_ws_admin", path, {"members_see_workspace_totals": True})
     assert code == status.HTTP_403_FORBIDDEN
-    assert _as(client, world, "alpha_ws_admin", path)[1] == {"members_see_workspace_totals": False}
+    assert _as(client, world, "alpha_ws_admin", path)[1] == {
+        "members_see_workspace_totals": False,
+        "members_create_policies": True,
+    }
 
 
 @pytest.mark.parametrize("who", ["alpha_ws_admin", "alpha_owner", "alpha_admin"])
 def test_a_manager_changes_what_the_workspace_shares(client: TestClient, world: _World, who: str) -> None:
     code, body = _patch_as(client, world, who, _visibility(world, "alpha_one"), {"members_see_workspace_totals": True})
-    assert (code, body) == (status.HTTP_200_OK, {"members_see_workspace_totals": True})
+    assert (code, body) == (
+        status.HTTP_200_OK,
+        {"members_see_workspace_totals": True, "members_create_policies": True},
+    )
     assert _as(client, world, "alpha_member", _visibility(world, "alpha_one"))[1] == {
-        "members_see_workspace_totals": True
+        "members_see_workspace_totals": True,
+        "members_create_policies": True,
     }
 
 
@@ -1271,7 +1281,10 @@ def test_a_member_splits_the_totals_by_status_code(client: TestClient, world: _W
 def test_a_patch_without_a_field_changes_nothing(client: TestClient, world: _World) -> None:
     _share_alpha_one(client, world)
     code, body = _patch_as(client, world, "alpha_owner", _visibility(world, "alpha_one"), {})
-    assert (code, body) == (status.HTTP_200_OK, {"members_see_workspace_totals": True})
+    assert (code, body) == (
+        status.HTTP_200_OK,
+        {"members_see_workspace_totals": True, "members_create_policies": True},
+    )
 
 
 @pytest.mark.parametrize("body", [{"members_see_workspace_totals": None}, {"members_see_workspace_total": False}])
@@ -1282,7 +1295,8 @@ def test_a_patch_that_would_change_nothing_by_mistake_is_refused(
     code, _ = _patch_as(client, world, "alpha_owner", _visibility(world, "alpha_one"), body)
     assert code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert _as(client, world, "alpha_member", _visibility(world, "alpha_one"))[1] == {
-        "members_see_workspace_totals": True
+        "members_see_workspace_totals": True,
+        "members_create_policies": True,
     }
 
 
@@ -1421,4 +1435,4 @@ def test_a_members_overview_reads_the_workspace_only_while_it_shares_its_totals(
     assert code == status.HTTP_200_OK, body
     assert isinstance(body, dict)
     assert body["scope"] == scope
-    assert body["visibility"] == {"members_see_workspace_totals": shared}
+    assert body["visibility"] == {"members_see_workspace_totals": shared, "members_create_policies": True}

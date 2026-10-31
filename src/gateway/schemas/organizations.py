@@ -11,6 +11,13 @@ _MEMBERS_SEE_WORKSPACE_TOTALS_DESC = (
 )
 
 
+_MEMBERS_CREATE_POLICIES_DESC = (
+    "Whether members may create routing policies that apply only to their own requests, including their own "
+    "version of a shared policy. When false they cannot create or copy one, and the ones they have keep "
+    "working and stay theirs to edit or delete."
+)
+
+
 class OrganizationRefusal(BaseModel):
     """The body of a request the organizations domain refuses."""
 
@@ -21,11 +28,15 @@ class WorkspaceVisibility(BaseModel):
     """What a workspace shows members who do not manage it."""
 
     members_see_workspace_totals: bool = Field(description=_MEMBERS_SEE_WORKSPACE_TOTALS_DESC)
+    members_create_policies: bool = Field(description=_MEMBERS_CREATE_POLICIES_DESC)
 
     @classmethod
     def of(cls, workspace: Workspace) -> "WorkspaceVisibility":
         """Read the settings from the workspace row."""
-        return cls(members_see_workspace_totals=workspace.members_see_workspace_totals)
+        return cls(
+            members_see_workspace_totals=workspace.members_see_workspace_totals,
+            members_create_policies=workspace.members_create_policies,
+        )
 
 
 class WorkspaceVisibilityUpdate(BaseModel):
@@ -38,8 +49,9 @@ class WorkspaceVisibilityUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     members_see_workspace_totals: bool | None = Field(default=None, description=_MEMBERS_SEE_WORKSPACE_TOTALS_DESC)
+    members_create_policies: bool | None = Field(default=None, description=_MEMBERS_CREATE_POLICIES_DESC)
 
-    @field_validator("members_see_workspace_totals")
+    @field_validator("members_see_workspace_totals", "members_create_policies")
     @classmethod
     def _not_null(cls, value: bool | None) -> bool:
         if value is None:

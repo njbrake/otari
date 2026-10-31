@@ -178,8 +178,8 @@ export function useDeleteRoutingPolicy() {
  * Each is its operator sibling above with one difference the server insists on:
  * the workspace is named rather than defaulted, because the deployment's default
  * workspace is not the caller's organization's to write into (otari-ai#1969).
- * `user_id` has no counterpart here at all: an organization's entries are
- * workspace-wide.
+ * `user_id` is never sent: a policy that is one member's own names them by
+ * `member_id` instead, and aliases are workspace-wide.
  *
  * Both list keys carry their surface and their workspace as trailing segments,
  * so invalidating the head of each covers whichever one this caller is reading.
@@ -198,7 +198,14 @@ export function useSetOrganizationRoutingPolicy() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationKey: [ROUTING_POLICIES],
-    mutationFn: (body: SetRoutingPolicyRequest & { workspace_id: string }) =>
+    mutationFn: (
+      body: SetRoutingPolicyRequest & {
+        workspace_id: string
+        // A member's own policy, by the identity id its row lists as `user_id`.
+        // Without it the write lands on the workspace-wide policy of that name.
+        member_id?: string
+      },
+    ) =>
       apiFetch<RoutingPolicyResponse>("/organizations/me/routing-policies", {
         method: "POST",
         body: JSON.stringify(body),
@@ -213,12 +220,16 @@ export function useDeleteOrganizationRoutingPolicy() {
     mutationFn: ({
       name,
       workspaceId,
+      memberId,
     }: {
       name: string
       workspaceId: string
+      // A member's own row lists its identity id as `user_id`. Without it the
+      // delete is workspace-wide and would take the shared policy of that name.
+      memberId?: string | null
     }) =>
       apiFetch<void>(
-        `/organizations/me/routing-policies/${encodeURIComponent(name)}?workspace_id=${encodeURIComponent(workspaceId)}`,
+        `/organizations/me/routing-policies/${encodeURIComponent(name)}?workspace_id=${encodeURIComponent(workspaceId)}${memberId != null ? `&member_id=${encodeURIComponent(memberId)}` : ""}`,
         { method: "DELETE" },
       ),
     onSuccess: () => invalidateRoutingLists(queryClient),

@@ -28,13 +28,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import CallerWorkspaceQuery, get_config, get_db, require_deployment_operator
 from gateway.api.routes._helpers import database_error, resolve_managed_workspace_id
+from gateway.api.routes.aliases import stage_alias_replacement
 from gateway.core.config import GatewayConfig
 from gateway.core.database import DATABASE_ERRORS
 from gateway.core.surface import Surface
 from gateway.log_config import logger
 from gateway.models.routing import PolicySpec, RoutingPolicy
 from gateway.repositories.users_repository import get_active_user
-from gateway.services.alias_service import all_alias_names
+from gateway.services.alias_service import all_alias_names, refresh_alias_cache
 from gateway.services.policy_store import (
     all_policy_names,
     list_stored_policies,
@@ -236,7 +237,9 @@ def validated_spec(name: str, spec: dict[str, Any]) -> PolicySpec:
         ) from exc
 
 
-def _validate_write(config: GatewayConfig, name: str, spec: PolicySpec, user_id: str | None) -> None:
+def _validate_write(
+    config: GatewayConfig, name: str, spec: PolicySpec, user_id: str | None, *, replacing_alias: bool = False
+) -> None:
     """Apply the startup policy rules to a runtime write, as a 400.
 
     A configured policy wins over a *workspace-wide* stored one during resolution,
@@ -254,7 +257,7 @@ def _validate_write(config: GatewayConfig, name: str, spec: PolicySpec, user_id:
                 "edit config.yml."
             ),
         )
-    if name in all_alias_names(config):
+    if name in all_alias_names(config) and not replacing_alias:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -441,6 +444,7 @@ async def upsert_policy_in_workspace(
     config: GatewayConfig,
     *,
     workspace_id: uuid.UUID,
+    replacing_alias: bool = False,
 ) -> PolicyResponse:
     """Create or update a stored policy in an already-resolved workspace.
 
@@ -461,12 +465,18 @@ async def upsert_policy_in_workspace(
     the new spec. The new name is validated exactly as a fresh one is, because a
     rename can walk a policy into every collision a create can. Sending the field
     asserts the named policy is stored, so it never falls back to creating one.
+
+    ``replacing_alias`` turns the workspace's own workspace-wide alias of the same
+    name into this policy in the same commit, so callers sending the name never
+    find neither (``stage_alias_replacement`` says when it refuses).
     """
     if request.user_id is not None:
         await _require_user(db, request.user_id)
     spec = validated_spec(request.name, request.spec)
     await refresh_policy_cache(db)
-    _validate_write(config, request.name, spec, request.user_id)
+    if replacing_alias:
+        await stage_alias_replacement(db, config, request.name, workspace_id=workspace_id)
+    _validate_write(config, request.name, spec, request.user_id, replacing_alias=replacing_alias)
     await _validate_router_pricing(config, db, spec, workspace_id)
 
     # Both scopes are part of the identity: the upsert must not turn one
@@ -547,6 +557,11 @@ async def upsert_policy_in_workspace(
         spec.router_backend or "none",
     )
     await _refresh_quietly(db, policy.name)
+    if replacing_alias:
+        try:
+            await refresh_alias_cache(db)
+        except SQLAlchemyError:
+            logger.warning("Alias cache refresh failed after replacing '%s'; converges within TTL", policy.name)
     return PolicyResponse.from_model(policy, is_dynamic=spec.is_dynamic)
 
 

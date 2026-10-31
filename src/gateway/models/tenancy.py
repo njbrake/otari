@@ -68,6 +68,7 @@ from sqlalchemy import (
     false,
     func,
     text,
+    true,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlmodel import Field, SQLModel
@@ -984,6 +985,10 @@ class Workspace(WorkspaceBase, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, 
     # anyone else's rows, keys or limits; see ``services/organizations``. Off
     # until a manager turns it on.
     members_see_workspace_totals: bool = Field(default=False, sa_column_kwargs={"server_default": false()})
+    # Whether a member who does not manage the workspace may create routing
+    # policies that apply only to their own requests, including their own version
+    # of a shared one. Ones they already have stay theirs to edit and delete.
+    members_create_policies: bool = Field(default=True, sa_column_kwargs={"server_default": true()})
 
 
 class WorkspaceMemberBase(SQLModel):

@@ -198,8 +198,8 @@ export function RoutingPage() {
   }, [canEdit, expanded, isOperator, openPolicy])
 
   // Which of the four delete surfaces a row goes to. Both name the workspace the
-  // row lives in; only the deployment-wide pair carries the user scope, which
-  // the tenant surface has no rows in.
+  // row lives in and a policy's user scope, which the tenant surface spells
+  // `member_id`.
   const deleteWorkspaceFor = (row: RoutingRow) =>
     row.workspace_id ?? writeWorkspaceId
   const deleteMutationFor = (row: RoutingRow) =>
@@ -367,7 +367,11 @@ export function RoutingPage() {
           const scoped = { name: pendingDelete.name, workspaceId: rowWorkspace }
           if (pendingDelete.kind === "alias")
             deleteOrgAlias.mutate(scoped, { onSuccess })
-          else deleteOrgPolicy.mutate(scoped, { onSuccess })
+          else
+            deleteOrgPolicy.mutate(
+              { ...scoped, memberId: pendingDelete.user_id },
+              { onSuccess },
+            )
         }}
       />
     </div>

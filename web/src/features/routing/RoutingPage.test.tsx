@@ -823,6 +823,28 @@ describe("RoutingPage for an organization admin", () => {
     expect(deleted?.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
   })
 
+  it("deletes a member's own policy, not the shared one of that name", async () => {
+    const MEMBER = "88888888-8888-8888-8888-888888888888"
+    const { calls } = mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [policy("theirs", CHAIN, { user_id: MEMBER })],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<RoutingPage />)
+
+    await screen.findByText("theirs")
+    await user.click(screen.getByRole("button", { name: "Delete" }))
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Delete policy",
+      }),
+    )
+
+    const deleted = calls.find((call) => call.method === "DELETE")
+    expect(deleted?.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
+    expect(deleted?.url).toContain(`member_id=${MEMBER}`)
+  })
+
   it("lists the tenant-scoped aliases beside the policies", async () => {
     mockApi([], null, [], {
       context: adminContext(),

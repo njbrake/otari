@@ -24,14 +24,18 @@ member, Edit for an admin (otari-ai#1942, otari-ai#1969).
   page, because the dashboard renders policies and aliases as one sorted table
   and a page of one beside every row of the other would be incoherent; the bound
   is there for the organization that outgrows the page, not to paginate the page.
-* **Workspace-wide rows only, on the reads as much as the writes.** A stored row
-  may be scoped to one ``users.user_id`` as well as to a workspace, and neither
-  half of this surface handles that scope. The write refuses ``user_id`` because
-  it is a deployment-wide identifier; the read has to agree, or an admin is shown
-  a row they cannot address. While these were listed, Delete on one carried no
-  user scope, so it matched ``user_id IS NULL`` and destroyed the workspace-wide
-  row of that name while answering 204. A tenant cannot interpret the identifier
-  either: it names an API-key user, where a dashboard member is a tenancy UUID.
+* **A policy may be one member's, named by identity, never by billing id.** A
+  stored policy may be scoped to one ``users.user_id`` as well as to a workspace.
+  ``user_id`` stays refused here, because it is a deployment-wide identifier and
+  accepting one would make this an existence oracle across tenants. A policy
+  write names ``member_id`` instead: an identity of the caller's own
+  organization, whose attribution id (its UUID as a string) is the scope. A
+  member names only themselves, and only while the workspace lets members
+  create policies (``members_create_policies``); one they already have stays
+  theirs to edit and delete either way. An owner or admin names anyone active in
+  the organization who may see the workspace. Policy reads show an owner or
+  admin every member's, and a member their own, beside the workspace-wide ones.
+  Aliases stay workspace-wide, on the reads as much as the writes.
 * **A write needs a named workspace, resolved inside the organization.** There is
   no default-workspace fallback here, unlike the operator routers: the
   deployment's default workspace is not the tenant's to write into unless it
@@ -56,11 +60,12 @@ traffic used, and the fallback a catalog ID gives each with no policy.
 """
 
 import uuid
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import ValidationError
-from sqlalchemy import Select, false, select
+from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import Select, false, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
@@ -90,9 +95,11 @@ from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
 from gateway.models.providers import ModelAlias
 from gateway.models.routing import PolicySpec, RoutingPolicy
+from gateway.models.tenancy import MANAGEMENT_ROLES, Organization, Workspace
 from gateway.models.tenancy import User as TenancyUser
-from gateway.models.tenancy import Workspace
 from gateway.ports.model_provider_port import ModelProviderPort
+from gateway.repositories.tenancy.organization_member_repository import OrganizationMemberRepository
+from gateway.repositories.users_repository import get_or_create_live_attribution_user
 from gateway.schemas.routing import AutomaticFallbackPublic, AutomaticFallbacksResponse
 from gateway.services.alias_service import all_alias_names
 from gateway.services.model_access import is_model_allowed
@@ -210,6 +217,133 @@ async def _require_reachable_targets(
         )
 
 
+class OrganizationPolicyRequest(PolicyRequest):
+    """A tenant policy write: the operator's body, scoped to a member by identity rather than ``user_id``."""
+
+    member_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Scope the policy to one member, by identity id: it applies only to requests made with their keys, "
+            "and wins over a workspace-wide or config policy of the same name for them. A member may name only "
+            "themselves; an owner or admin may name any active member of the organization who may see the "
+            "workspace. Omit for a workspace-wide policy, which only an owner or admin may write. `user_id` is "
+            "not accepted here."
+        ),
+    )
+    replaces_alias: bool = Field(
+        default=False,
+        description=(
+            "Turn the workspace's own workspace-wide alias of this name into this policy, in one step, so "
+            "callers sending the name never find neither. Owners and admins, workspace-wide policies only."
+        ),
+    )
+
+
+class PolicyCopyRequest(BaseModel):
+    """Make the caller's own version of a shared policy."""
+
+    name: str = Field(description="The shared policy to copy: a workspace-wide one in the workspace, or config.yml's.")
+    workspace_id: uuid.UUID = Field(description="The workspace the copy belongs to, which the caller must see.")
+
+
+@dataclass(frozen=True)
+class _Caller:
+    """The caller's organization and whether they manage it."""
+
+    identity: TenancyUser
+    organization: Organization
+    organizations: OrganizationService
+    manages: bool
+
+
+async def _caller(db: AsyncSession, identity: TenancyUser) -> _Caller:
+    """Resolve the caller's active organization and their role in it, read on every request."""
+    organizations = OrganizationService(db, membership_listener=None)
+    organization = await organizations.get_active_organization_for_user(identity)
+    membership = await organizations.members.get_active_by_organization_and_user(organization.id, identity.id)
+    return _Caller(
+        identity=identity,
+        organization=organization,
+        organizations=organizations,
+        manages=membership is not None and membership.role in MANAGEMENT_ROLES,
+    )
+
+
+def _require_workspace_id(workspace_id: uuid.UUID | None) -> uuid.UUID:
+    if workspace_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="workspace_id is required: an organization's routing entries belong to one of its workspaces.",
+        )
+    return workspace_id
+
+
+async def _member_policy_scope(
+    db: AsyncSession, caller: _Caller, *, workspace_id: uuid.UUID, member_id: uuid.UUID, require_active: bool = True
+) -> tuple[Workspace, str]:
+    """The workspace and the attribution id a member-scoped policy write or delete acts on, refusing what it may not.
+
+    Naming oneself takes only seeing the workspace. Naming someone else takes
+    managing the organization, and that person being an active member of it who
+    may see the workspace. With ``require_active`` off, for a delete that cleans
+    up after someone who left, any membership of theirs will do, which is the
+    set the list shows. Anyone else's id is the 404 an unknown one is, so a row
+    the operator scoped to a non-member is never destroyed from here.
+    """
+    if member_id == caller.identity.id:
+        owner = caller.identity
+    else:
+        if not caller.manages:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only an organization owner or admin may act on another member's policies.",
+            )
+        found = await caller.organizations.users.get(member_id)
+        is_member = found is not None and await caller.organizations.user_has_active_membership(
+            organization_id=caller.organization.id, user_id=found.id
+        )
+        was_member = is_member or (
+            await caller.organizations.members.get_by_organization_and_user(caller.organization.id, member_id)
+            is not None
+        )
+        if not (is_member if require_active else was_member):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such member in this organization.")
+        owner = found if found is not None and is_member else caller.identity
+    workspace = await resolve_workspace_in_organization(
+        db, user=owner, workspace_id=workspace_id, organization=caller.organization, organizations=caller.organizations
+    )
+    return workspace, str(member_id)
+
+
+async def _require_live_owner(db: AsyncSession, user_id: str, alias: str | None) -> None:
+    """Make sure the attribution row a member's policy hangs off exists, never reviving one an operator revoked."""
+    if await get_or_create_live_attribution_user(db, user_id=user_id, alias=alias) is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That member's spend identity has been deactivated on this deployment; ask an operator to "
+            "restore it.",
+        )
+
+
+async def _stored_policy_exists(db: AsyncSession, *, workspace_id: uuid.UUID, name: str, user_id: str | None) -> bool:
+    statement = select(RoutingPolicy.id).where(
+        col(RoutingPolicy.workspace_id) == workspace_id,
+        col(RoutingPolicy.name) == name,
+        col(RoutingPolicy.user_id) == user_id if user_id is not None else col(RoutingPolicy.user_id).is_(None),
+    )
+    return (await db.execute(statement.limit(1))).scalar_one_or_none() is not None
+
+
+def _require_members_create(caller: _Caller, workspace: Workspace) -> None:
+    """Refuse a member creating a policy of their own where the workspace's managers turned that off."""
+    if not caller.manages and not workspace.members_create_policies:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This workspace's admins have turned off creating your own policies. The ones you have still "
+            "apply, and you can edit or delete them.",
+        )
+
+
 def _reject_user_scope(user_id: str | None) -> None:
     """Refuse a user-scoped entry on the tenant surface.
 
@@ -269,18 +403,27 @@ async def list_visible_routing_policies(
     policies, which are deployment-wide and resolve in every workspace. The
     response is the shape ``GET /api/v1/routing/policies`` answers, narrowed to the
     caller's own organization, and narrowed again to one workspace when
-    ``workspace_id`` names one.
+    ``workspace_id`` names one. Beside the workspace-wide policies, an owner or
+    admin sees every member's own, and anyone else their own alone; ``user_id``
+    on such a row is the member's identity id.
     """
     scope = await resolve_visible_workspace_scope(
         db,
         user=current_identity,
         organizations=OrganizationService(db, membership_listener=None),
     )
+    # A person's row is listed only when the person is a member's identity: to an
+    # owner or admin anyone's who ever belonged to the organization, to anyone
+    # else their own. A row the operator scoped to some other user stays the
+    # operator's, since nothing here could address it.
+    people = (
+        OrganizationMemberRepository.attribution_ids(scope.organization.id)
+        if scope.sees_every_workspace
+        else select(literal(str(current_identity.id)))
+    )
     statement = select(RoutingPolicy).where(
         col(RoutingPolicy.workspace_id).in_(_visible_workspace_ids(scope)),
-        # Workspace-wide only; see the module docstring for why a user-scoped row
-        # is neither this surface's to show nor its to act on.
-        col(RoutingPolicy.user_id).is_(None),
+        or_(col(RoutingPolicy.user_id).is_(None), col(RoutingPolicy.user_id).in_(people)),
     )
     if workspace_id is not None:
         statement = statement.where(col(RoutingPolicy.workspace_id) == workspace_id)
@@ -315,7 +458,7 @@ async def list_visible_routing_policies(
 
 @policies_router.post("")
 async def set_organization_routing_policy(
-    request: PolicyRequest,
+    request: OrganizationPolicyRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     current_identity: CurrentIdentity,
@@ -323,20 +466,100 @@ async def set_organization_routing_policy(
 ) -> PolicyResponse:
     """Create or update a stored policy in one of the organization's workspaces.
 
-    Organization owners and admins only. ``workspace_id`` is required and must
-    name a workspace of the caller's own organization; ``user_id`` is not
-    accepted here.
+    ``workspace_id`` is required and must name a workspace of the caller's own
+    organization; ``user_id`` is not accepted here. A workspace-wide policy is an
+    owner's or admin's to write. With ``member_id`` the policy is that member's
+    own: a member may write their own (creating one only while the workspace lets
+    members create policies), and an owner or admin anyone's.
     """
     _reject_user_scope(request.user_id)
-    workspace_id = await _writable_workspace_id(
-        db,
-        config,
-        user=current_identity,
-        workspace_id=request.workspace_id,
-        targets=validated_spec(request.name, request.spec).static_selectors(),
-        model_provider=model_provider,
+    targets = validated_spec(request.name, request.spec).static_selectors()
+    if request.member_id is None:
+        workspace_id = await _writable_workspace_id(
+            db,
+            config,
+            user=current_identity,
+            workspace_id=request.workspace_id,
+            targets=targets,
+            model_provider=model_provider,
+        )
+        body = PolicyRequest(**request.model_dump(include=set(PolicyRequest.model_fields)))
+        return await upsert_policy_in_workspace(
+            body, db, config, workspace_id=workspace_id, replacing_alias=request.replaces_alias
+        )
+    if request.replaces_alias:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="replaces_alias turns a workspace-wide alias into a workspace-wide policy; leave member_id out.",
+        )
+    caller = await _caller(db, current_identity)
+    workspace, user_id = await _member_policy_scope(
+        db, caller, workspace_id=_require_workspace_id(request.workspace_id), member_id=request.member_id
     )
-    return await upsert_policy_in_workspace(request, db, config, workspace_id=workspace_id)
+    lookup = request.rename_from if request.rename_from is not None else request.name
+    if not await _stored_policy_exists(db, workspace_id=workspace.id, name=lookup, user_id=user_id):
+        _require_members_create(caller, workspace)
+    await _require_reachable_targets(db, config, user=current_identity, targets=targets, model_provider=model_provider)
+    await _require_live_owner(db, user_id, None)
+    body = PolicyRequest(
+        name=request.name,
+        spec=request.spec,
+        user_id=user_id,
+        workspace_id=workspace.id,
+        rename_from=request.rename_from,
+    )
+    return await upsert_policy_in_workspace(body, db, config, workspace_id=workspace.id)
+
+
+@policies_router.post("/copy")
+async def copy_organization_routing_policy(
+    request: PolicyCopyRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    current_identity: CurrentIdentity,
+    model_provider: RequestSessionModelProviderPortDep,
+) -> PolicyResponse:
+    """Make the caller's own version of a shared policy: the same name and spec, applying only to their requests.
+
+    The source is the workspace's workspace-wide policy of that name, else the
+    config.yml one. The copy wins over it for the caller alone, and deleting the
+    copy hands their requests back to it. Creating one follows the workspace's
+    ``members_create_policies`` like any other policy of a member's own; having
+    one already is a 409.
+    """
+    caller = await _caller(db, current_identity)
+    workspace, user_id = await _member_policy_scope(
+        db, caller, workspace_id=request.workspace_id, member_id=current_identity.id
+    )
+    stored = (
+        await db.execute(
+            select(RoutingPolicy).where(
+                col(RoutingPolicy.workspace_id) == workspace.id,
+                col(RoutingPolicy.name) == request.name,
+                col(RoutingPolicy.user_id).is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if stored is not None:
+        spec = stored.spec
+    elif request.name in config.routing.policies:
+        spec = config.routing.policies[request.name].model_dump(mode="json", exclude_none=True)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No shared policy named '{request.name}' in this workspace.",
+        )
+    if await _stored_policy_exists(db, workspace_id=workspace.id, name=request.name, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"You already have your own version of '{request.name}'.",
+        )
+    _require_members_create(caller, workspace)
+    targets = validated_spec(request.name, spec).static_selectors()
+    await _require_reachable_targets(db, config, user=current_identity, targets=targets, model_provider=model_provider)
+    await _require_live_owner(db, user_id, current_identity.full_name or current_identity.email)
+    body = PolicyRequest(name=request.name, spec=spec, user_id=user_id, workspace_id=workspace.id)
+    return await upsert_policy_in_workspace(body, db, config, workspace_id=workspace.id)
 
 
 @policies_router.delete("/{name:path}", status_code=status.HTTP_204_NO_CONTENT)
@@ -349,17 +572,36 @@ async def delete_organization_routing_policy(
         uuid.UUID | None,
         Query(description="Delete the policy in this workspace of the caller's organization."),
     ] = None,
+    member_id: Annotated[
+        uuid.UUID | None,
+        Query(
+            description="Delete this member's own policy rather than the workspace-wide one. A member may name "
+            "only themselves; an owner or admin anyone, including someone who has since left."
+        ),
+    ] = None,
 ) -> None:
-    """Delete a stored policy from one of the organization's workspaces. Owners and admins only."""
-    resolved = await _writable_workspace_id(
-        db,
-        config,
-        user=current_identity,
-        workspace_id=workspace_id,
-        targets=[],
-        model_provider=None,
+    """Delete a stored policy from one of the organization's workspaces.
+
+    A workspace-wide policy is an owner's or admin's to delete. A member deletes
+    their own, whatever ``members_create_policies`` says, and an owner or admin
+    anyone's.
+    """
+    if member_id is None:
+        resolved = await _writable_workspace_id(
+            db,
+            config,
+            user=current_identity,
+            workspace_id=workspace_id,
+            targets=[],
+            model_provider=None,
+        )
+        await delete_policy_in_workspace(name, db, config, workspace_id=resolved, user_id=None)
+        return
+    caller = await _caller(db, current_identity)
+    workspace, user_id = await _member_policy_scope(
+        db, caller, workspace_id=_require_workspace_id(workspace_id), member_id=member_id, require_active=False
     )
-    await delete_policy_in_workspace(name, db, config, workspace_id=resolved, user_id=None)
+    await delete_policy_in_workspace(name, db, config, workspace_id=workspace.id, user_id=user_id)
 
 
 @aliases_router.get("")
