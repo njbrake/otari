@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 from any_llm.exceptions import AnyLLMError
@@ -351,6 +352,30 @@ def compile_policy(
         ],
         dropped=dropped,
     )
+
+
+def reachable_candidates(
+    config: GatewayConfig,
+    policy_name: str,
+    selectors: Sequence[str],
+    *,
+    allowlist: list[str] | None,
+    workspace_id: uuid.UUID | None,
+) -> list[Attempt]:
+    """What ``selectors`` resolve to for a caller, in order, by the rules a compiled plan applies.
+
+    The allow-list, the organization key's restriction, duplicates and the cap,
+    as ``compile_policy`` filters them, without its warning: a read asking what a
+    policy could reach is not a request whose plan lost a candidate.
+    """
+    attempts, _ = _resolve_candidates(
+        config,
+        [(selector, "default") for selector in selectors],
+        display_model=policy_name,
+        allowlist=allowlist,
+        workspace_id=workspace_id,
+    )
+    return attempts
 
 
 def compile_catalog_plan(

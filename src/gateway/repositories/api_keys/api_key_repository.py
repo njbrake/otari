@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from typing import Never
 
 from sqlalchemy import select
@@ -9,6 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.api_keys import APIKey
 from gateway.repositories.base_repository import BaseRepository
+
+
+@dataclass(frozen=True)
+class KeyPlacement:
+    """Where a key sits and whose it is: what deciding which models its requests reach needs."""
+
+    id: str
+    workspace_id: uuid.UUID
+    user_id: str | None
+    allowed_models: list[str] | None
 
 
 class ApiKeyRepository(BaseRepository[APIKey, Never, Never]):
@@ -29,6 +40,21 @@ class ApiKeyRepository(BaseRepository[APIKey, Never, Never]):
         """Return the IDs of the keys in these workspaces, in no particular order."""
         result = await self.db.execute(select(APIKey.id).where(APIKey.workspace_id.in_(workspace_ids)))
         return list(result.scalars().all())
+
+    async def placements(self, key_ids: Collection[str], *, workspace_ids: Collection[uuid.UUID]) -> list[KeyPlacement]:
+        """The keys among ``key_ids`` in ``workspace_ids``.
+
+        An id that names no key, or one in another workspace, is simply absent.
+        """
+        if not key_ids or not workspace_ids:
+            return []
+        stmt = select(APIKey.id, APIKey.workspace_id, APIKey.user_id, APIKey.allowed_models).where(
+            APIKey.id.in_(sorted(key_ids)), APIKey.workspace_id.in_(sorted(workspace_ids))
+        )
+        return [
+            KeyPlacement(id=key_id, workspace_id=workspace_id, user_id=user_id, allowed_models=allowed_models)
+            for key_id, workspace_id, user_id, allowed_models in (await self.db.execute(stmt)).all()
+        ]
 
     async def names_defaulting_end_users_to(self, budget_id: str) -> list[str]:
         """Name each key that starts its end users on ``budget_id`` by default, by its name or else its id."""

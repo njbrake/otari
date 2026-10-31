@@ -34,12 +34,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
+    CurrentIdentity,
+    OrganizationServiceDep,
     WebProviderClientDep,
     catalog_reader_operates_deployment,
     get_config,
     get_db,
     require_deployment_operator,
     verify_catalog_reader,
+    verify_master_key,
 )
 from gateway.api.routes._helpers import database_error
 from gateway.core.config import API_ROOT, GatewayConfig
@@ -59,6 +62,7 @@ from gateway.schemas.tools import (
     CreateSearchToolRequest,
     ReencryptSearchToolsResponse,
     SearchProviderSchema,
+    SearchToolNamesResponse,
     SearchToolsResponse,
     SearchToolTestRequest,
     SearchToolTestResponse,
@@ -118,6 +122,16 @@ catalog_router = APIRouter(
     prefix="/search-tools",
     tags=["search-tools"],
     dependencies=[Depends(verify_catalog_reader)],
+)
+
+# The names alone, for an organization owner or admin filling a key's search tool
+# access list: the list above carries endpoints and key metadata that are the
+# operator's, and a name is all the access list needs. Authentication only, like
+# the rest of ``/api/v1/organizations/me``; the role is checked per request.
+tenant_router = APIRouter(
+    prefix="/organizations/me/search-tools",
+    tags=["search-tools"],
+    dependencies=[Depends(verify_master_key)],
 )
 
 
@@ -228,6 +242,30 @@ async def list_all_search_tools(
             for name, entry in sorted(from_config.items())
         ],
     )
+
+
+@tenant_router.get("")
+async def list_search_tool_names(
+    identity: CurrentIdentity,
+    organizations: OrganizationServiceDep,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    kind: Annotated[ToolKind, Query(description="Which names to list: 'search' (the default) or 'fetch'.")] = (
+        "search"
+    ),
+) -> SearchToolNamesResponse:
+    """List the search (or fetch) instance names a key's search tool access list may name.
+
+    For an owner or admin of the caller's active organization, who sets a key's
+    access list for their members; anyone else is refused with 403. Names only:
+    no provider, endpoint or key metadata, which stay the operator's.
+    """
+    organization = await organizations.get_active_organization_for_user(identity)
+    await organizations.require_active_organization_management_access(user=identity, organization=organization)
+    names = set(config_file_tools(config, kind)) | {row.name for row in await list_search_tools(db, kind)}
+    if kind == "fetch":
+        names.add(BUILTIN_FETCH)
+    return SearchToolNamesResponse(names=sorted(names))
 
 
 @router.post("/reencrypt")

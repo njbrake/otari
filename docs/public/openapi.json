@@ -5098,7 +5098,7 @@
         "type": "object"
       },
       "CreateOwnKeyRequest": {
-        "description": "Create-key body for the member surface.\n\nDeliberately not ``CreateKeyRequest``: it carries no ``user_id`` (the owner\nis always the caller) and no ``exclude_from_budget`` (a member must not\nexempt their own spend from enforcement).",
+        "description": "Create-key body for the tenant surface.\n\nDeliberately not ``CreateKeyRequest``: its ``user_id`` names an identity in\nthe organization rather than any billing id, and it has no\n``exclude_from_budget`` (see the module docstring).",
         "properties": {
           "allowed_models": {
             "anyOf": [
@@ -5184,6 +5184,19 @@
             ],
             "description": "Per-key override of the deployment-wide reject_user_mismatch setting: null (default) inherits it, true always rejects a request naming a different 'user', false always accepts it. Spend binds to your own user either way.",
             "title": "Reject User Mismatch"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Organization owners and admins only: the member who owns the key and whose budget its spend counts toward, by identity id. Must be an active member of your active organization who may see the workspace. Omitted means you.",
+            "title": "User Id"
           },
           "workspace_id": {
             "anyOf": [
@@ -10538,6 +10551,171 @@
           "metadata"
         ],
         "title": "KeyInfo",
+        "type": "object"
+      },
+      "KeyModelPublic": {
+        "description": "One model name a key sent in the window, and whether a failure on it has a backup.",
+        "properties": {
+          "backup": {
+            "description": "Whether a failure on this name has somewhere to go. `subscription`: every request was imported usage, which the gateway never routed. `unknown`: the name resolves to nothing now.",
+            "enum": [
+              "has_backup",
+              "no_backup",
+              "subscription",
+              "unknown"
+            ],
+            "title": "Backup",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What the name is to this key now: a routing policy, an alias, a catalog ID, a pinned `provider:model`, or none of them (a name nothing resolves any more).",
+            "enum": [
+              "policy",
+              "alias",
+              "catalog",
+              "pinned",
+              "unknown"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the key's requests sent as `model`; for imported usage, the model that ran.",
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The one instance that serves the name, when exactly one does.",
+            "title": "Provider"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "single_offering",
+                  "single_target_policy",
+                  "pinned",
+                  "no_allowed_offering"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why there is no backup, when `backup` is `no_backup`: one offering serves it among those the key may reach, a policy or alias with one candidate, a request that named the provider, or no offering the key may reach.",
+            "title": "Reason"
+          },
+          "requests": {
+            "description": "Requests in the window, each counted once however many attempts.",
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "requests",
+          "kind",
+          "backup",
+          "reason",
+          "provider"
+        ],
+        "title": "KeyModelPublic",
+        "type": "object"
+      },
+      "KeyPolicyPublic": {
+        "description": "One routing policy a key sent in the window.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "requests"
+        ],
+        "title": "KeyPolicyPublic",
+        "type": "object"
+      },
+      "KeyRoutingPublic": {
+        "description": "What one key sent in the window, and what a failure on each name does.",
+        "properties": {
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "model_count": {
+            "description": "How many names the key sent, including any `models` leaves out.",
+            "title": "Model Count",
+            "type": "integer"
+          },
+          "models": {
+            "description": "The most requested names first, at most ten.",
+            "items": {
+              "$ref": "#/components/schemas/KeyModelPublic"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "no_backup_count": {
+            "description": "Of `model_count`, how many have no backup.",
+            "title": "No Backup Count",
+            "type": "integer"
+          },
+          "policies": {
+            "description": "Every routing policy the key sent, most requested first.",
+            "items": {
+              "$ref": "#/components/schemas/KeyPolicyPublic"
+            },
+            "title": "Policies",
+            "type": "array"
+          }
+        },
+        "required": [
+          "api_key_id",
+          "models",
+          "model_count",
+          "no_backup_count",
+          "policies"
+        ],
+        "title": "KeyRoutingPublic",
+        "type": "object"
+      },
+      "KeyRoutingResponse": {
+        "description": "The routing each key's traffic got.",
+        "properties": {
+          "keys": {
+            "description": "One entry per key asked for that the caller may see, in the order asked; a key the caller may not see is left out, like one that does not exist.",
+            "items": {
+              "$ref": "#/components/schemas/KeyRoutingPublic"
+            },
+            "title": "Keys",
+            "type": "array"
+          },
+          "window_days": {
+            "description": "How many days of traffic the counts cover.",
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days",
+          "keys"
+        ],
+        "title": "KeyRoutingResponse",
         "type": "object"
       },
       "KnownProviderSchema": {
@@ -20195,6 +20373,24 @@
           "snippet"
         ],
         "title": "SearchResultItem",
+        "type": "object"
+      },
+      "SearchToolNamesResponse": {
+        "description": "The names a key's or a user's ``allowed_tools`` may list, without anything else about the tools.",
+        "properties": {
+          "names": {
+            "description": "Every instance name of the kind asked for, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "names"
+        ],
+        "title": "SearchToolNamesResponse",
         "type": "object"
       },
       "SearchToolTestRequest": {
@@ -34001,6 +34197,64 @@
         ]
       }
     },
+    "/api/v1/keys/routing": {
+      "get": {
+        "description": "What each key sent in the last 30 days, and whether a failure on each name has a backup.\n\nFor each key in the caller's organization among those named: the model names\nits requests sent, most requested first, each judged as a request from the\nkey would resolve it now (a routing policy, an alias, a catalog ID narrowed\nto the offerings the key may reach, or a pinned ``provider:model``), and the\nrouting policies it sent.",
+        "operationId": "keys-get_keys_routing",
+        "parameters": [
+          {
+            "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+            "in": "query",
+            "name": "api_key_id",
+            "required": true,
+            "schema": {
+              "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 50,
+              "minItems": 1,
+              "title": "Api Key Id",
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRoutingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Keys Routing",
+        "tags": [
+          "keys"
+        ]
+      }
+    },
     "/api/v1/keys/{key_id}": {
       "delete": {
         "description": "Delete (revoke) an API key in the caller's organization.\n\nRequires master key authentication.",
@@ -37153,7 +37407,7 @@
     },
     "/api/v1/organizations/me/keys": {
       "get": {
-        "description": "List the caller's own API keys in their active organization, newest first.\n\nOnly keys billed to the caller's own user: an operator-minted key assigned\nto them is theirs to see here, and nobody else's key ever is. Naming a\nworkspace outside their organization lists nothing rather than refusing, so\nthe filter reports no more than the unfiltered read does. ``search`` narrows\nwithin the same rows.",
+        "description": "List API keys in the caller's active organization, newest first.\n\nA member sees only keys billed to their own user: an operator-minted key\nassigned to them is theirs to see here, and nobody else's key ever is. An\norganization owner or admin also sees every other member's key, apart from\nbudget-exempt and service keys, which stay the operator's. Naming a\nworkspace outside the organization lists nothing rather than refusing, so\nthe filter reports no more than the unfiltered read does. ``search`` narrows\nwithin the same rows.",
         "operationId": "organization-keys-list_own_keys",
         "parameters": [
           {
@@ -37258,7 +37512,7 @@
         ]
       },
       "post": {
-        "description": "Create an API key owned by the caller, in a workspace they may see.\n\nThe member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the\ncaller's own attribution user, the key is always budget-enforced, and the\nworkspace must be visible to the caller (a member of it, or an organization\nowner/admin, who see every workspace). The secret is returned once.",
+        "description": "Create an API key, owned by the caller or, for an organization owner or admin, by a member they name.\n\nThe tenant counterpart of ``POST /api/v1/keys``: the key is always\nbudget-enforced, and the workspace must be visible to the owner (a member of\nit, or an organization owner/admin, who see every workspace). An owner or\nadmin sees every workspace, so that check is the owner's. The secret is\nreturned once.",
         "operationId": "organization-keys-create_own_key",
         "requestBody": {
           "content": {
@@ -37306,9 +37560,67 @@
         ]
       }
     },
+    "/api/v1/organizations/me/keys/routing": {
+      "get": {
+        "description": "What each key named sent in the last 30 days, and whether a failure on each name has a backup.\n\nThe same read as the operator's, over the keys the list shows the caller: a\nmember's own, or for an owner or admin every member's key in the organization. A key\noutside that, named or not, is left out like one that does not exist.",
+        "operationId": "organization-keys-get_own_keys_routing",
+        "parameters": [
+          {
+            "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+            "in": "query",
+            "name": "api_key_id",
+            "required": true,
+            "schema": {
+              "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 50,
+              "minItems": 1,
+              "title": "Api Key Id",
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRoutingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Own Keys Routing",
+        "tags": [
+          "organization-keys"
+        ]
+      }
+    },
     "/api/v1/organizations/me/keys/{key_id}": {
       "delete": {
-        "description": "Delete (revoke) one of the caller's own API keys.",
+        "description": "Delete (revoke) one of the caller's own API keys, or for an organization owner or admin any member's key.",
         "operationId": "organization-keys-delete_own_key",
         "parameters": [
           {
@@ -37350,7 +37662,7 @@
         ]
       },
       "patch": {
-        "description": "Update one of the caller's own API keys.",
+        "description": "Update one of the caller's own API keys, or for an organization owner or admin any member's key.",
         "operationId": "organization-keys-update_own_key",
         "parameters": [
           {
@@ -37578,7 +37890,7 @@
     },
     "/api/v1/organizations/me/keys/{key_id}/rotate": {
       "post": {
-        "description": "Rotate the secret of one of the caller's own API keys, in place.\n\nSame contract as the operator's rotate: the row keeps its identity, the new\nraw key is returned once, and the previous secret stops authenticating\nimmediately with no grace window.",
+        "description": "Rotate a key's secret in place: the caller's own, or for an organization owner or admin any member's.\n\nSame contract as the operator's rotate: the row keeps its identity, the new\nraw key is returned once, and the previous secret stops authenticating\nimmediately with no grace window.",
         "operationId": "organization-keys-rotate_own_key",
         "parameters": [
           {
@@ -39657,6 +39969,64 @@
         "summary": "Delete Organization Routing Policy",
         "tags": [
           "routing"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/search-tools": {
+      "get": {
+        "description": "List the search (or fetch) instance names a key's search tool access list may name.\n\nFor an owner or admin of the caller's active organization, who sets a key's\naccess list for their members; anyone else is refused with 403. Names only:\nno provider, endpoint or key metadata, which stay the operator's.",
+        "operationId": "search-tools-list_search_tool_names",
+        "parameters": [
+          {
+            "description": "Which names to list: 'search' (the default) or 'fetch'.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "search",
+              "description": "Which names to list: 'search' (the default) or 'fetch'.",
+              "enum": [
+                "search",
+                "fetch"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchToolNamesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Search Tool Names",
+        "tags": [
+          "search-tools"
         ]
       }
     },

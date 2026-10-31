@@ -633,17 +633,13 @@ def test_an_update_cannot_exempt_the_key_from_budget(client: TestClient, world: 
 
 
 def test_a_create_cannot_name_an_owner_or_exempt_itself(client: TestClient, world: _World) -> None:
-    """The escalation fields of the operator body are inert here, not honored."""
-    code, body = _create(
-        client,
-        world,
-        "alpha_member",
-        {
-            "key_name": "escalation",
-            "user_id": "somebody-else",
-            "exclude_from_budget": True,
-        },
+    """A member naming an owner is refused, and the exemption field of the operator body is inert here."""
+    code, _ = _create(
+        client, world, "alpha_member", {"key_name": "escalation", "user_id": str(world.users["alpha_colleague"])}
     )
+    assert code == status.HTTP_403_FORBIDDEN
+
+    code, body = _create(client, world, "alpha_member", {"key_name": "escalation", "exclude_from_budget": True})
     assert code == status.HTTP_200_OK, body
     assert body["user_id"] == str(world.users["alpha_member"])
     assert body["exclude_from_budget"] is False

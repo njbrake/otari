@@ -95,6 +95,20 @@ The API key that authenticates a request determines its workspace. A caller
 cannot select another workspace with a header. Master-key inference uses the
 default workspace.
 
+A member manages only their own API keys (`/api/v1/organizations/me/keys`). An
+organization owner or admin also manages every other member's key, the
+organization owner's included: they list, edit, rotate and delete them, and
+create a key owned by another member, who
+must be an active member of the organization able to see the key's workspace.
+Their role is read on every request, so lowering it takes those keys away at
+once. Neither can exempt a key from budget or make it a service key: an exempt
+key also skips the ceilings the operator sets on the organization, so both stay
+with the deployment operator (`/api/v1/keys`), and an existing exempt or
+service key, or one with no owner, is left out of an owner's or admin's view
+unless it is their own. An owner or admin can
+also read the search tool names a key's access list may use
+(`GET /api/v1/organizations/me/search-tools`), without their endpoints or keys.
+
 An owner or admin can delete their active organization from Organization →
 General (`DELETE /api/v1/organizations/me`) while it has no usage: the gateway
 refuses an organization whose workspaces still hold usage, API keys, aliases or

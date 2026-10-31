@@ -3655,6 +3655,34 @@
           }
         },
         {
+          "name": "Get Keys Routing",
+          "request": {
+            "description": "What each key sent in the last 30 days, and whether a failure on each name has a backup.\n\nFor each key in the caller's organization among those named: the model names\nits requests sent, most requested first, each judged as a request from the\nkey would resolve it now (a routing policy, an alias, a catalog ID narrowed\nto the offerings the key may reach, or a pinned ``provider:model``), and the\nrouting policies it sent.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "keys",
+                "routing"
+              ],
+              "query": [
+                {
+                  "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+                  "disabled": false,
+                  "key": "api_key_id",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/keys/routing?api_key_id="
+            }
+          }
+        },
+        {
           "name": "Get Key",
           "request": {
             "description": "Get details of a specific API key in the caller's organization.\n\nRequires master key authentication.",
@@ -6276,7 +6304,7 @@
         {
           "name": "List Own Keys",
           "request": {
-            "description": "List the caller's own API keys in their active organization, newest first.\n\nOnly keys billed to the caller's own user: an operator-minted key assigned\nto them is theirs to see here, and nobody else's key ever is. Naming a\nworkspace outside their organization lists nothing rather than refusing, so\nthe filter reports no more than the unfiltered read does. ``search`` narrows\nwithin the same rows.",
+            "description": "List API keys in the caller's active organization, newest first.\n\nA member sees only keys billed to their own user: an operator-minted key\nassigned to them is theirs to see here, and nobody else's key ever is. An\norganization owner or admin also sees every other member's key, apart from\nbudget-exempt and service keys, which stay the operator's. Naming a\nworkspace outside the organization lists nothing rather than refusing, so\nthe filter reports no more than the unfiltered read does. ``search`` narrows\nwithin the same rows.",
             "header": [],
             "method": "GET",
             "url": {
@@ -6330,9 +6358,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"allowed_models\": [\n    \"string\"\n  ],\n  \"allowed_tools\": [\n    \"string\"\n  ],\n  \"capture_agent_telemetry\": false,\n  \"expires_at\": \"2024-01-01T00:00:00Z\",\n  \"key_name\": \"string\",\n  \"metadata\": {},\n  \"reject_user_mismatch\": false,\n  \"workspace_id\": \"00000000-0000-0000-0000-000000000000\"\n}"
+              "raw": "{\n  \"allowed_models\": [\n    \"string\"\n  ],\n  \"allowed_tools\": [\n    \"string\"\n  ],\n  \"capture_agent_telemetry\": false,\n  \"expires_at\": \"2024-01-01T00:00:00Z\",\n  \"key_name\": \"string\",\n  \"metadata\": {},\n  \"reject_user_mismatch\": false,\n  \"user_id\": \"00000000-0000-0000-0000-000000000000\",\n  \"workspace_id\": \"00000000-0000-0000-0000-000000000000\"\n}"
             },
-            "description": "Create an API key owned by the caller, in a workspace they may see.\n\nThe member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the\ncaller's own attribution user, the key is always budget-enforced, and the\nworkspace must be visible to the caller (a member of it, or an organization\nowner/admin, who see every workspace). The secret is returned once.",
+            "description": "Create an API key, owned by the caller or, for an organization owner or admin, by a member they name.\n\nThe tenant counterpart of ``POST /api/v1/keys``: the key is always\nbudget-enforced, and the workspace must be visible to the owner (a member of\nit, or an organization owner/admin, who see every workspace). An owner or\nadmin sees every workspace, so that check is the owner's. The secret is\nreturned once.",
             "header": [
               {
                 "key": "Content-Type",
@@ -6356,6 +6384,36 @@
           }
         },
         {
+          "name": "Get Own Keys Routing",
+          "request": {
+            "description": "What each key named sent in the last 30 days, and whether a failure on each name has a backup.\n\nThe same read as the operator's, over the keys the list shows the caller: a\nmember's own, or for an owner or admin every member's key in the organization. A key\noutside that, named or not, is left out like one that does not exist.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "keys",
+                "routing"
+              ],
+              "query": [
+                {
+                  "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+                  "disabled": false,
+                  "key": "api_key_id",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/keys/routing?api_key_id="
+            }
+          }
+        },
+        {
           "name": "Update Own Key",
           "request": {
             "body": {
@@ -6367,7 +6425,7 @@
               },
               "raw": "{\n  \"allowed_models\": [\n    \"string\"\n  ],\n  \"allowed_tools\": [\n    \"string\"\n  ],\n  \"capture_agent_telemetry\": false,\n  \"expires_at\": \"2024-01-01T00:00:00Z\",\n  \"is_active\": false,\n  \"key_name\": \"string\",\n  \"metadata\": {},\n  \"reject_user_mismatch\": false\n}"
             },
-            "description": "Update one of the caller's own API keys.",
+            "description": "Update one of the caller's own API keys, or for an organization owner or admin any member's key.",
             "header": [
               {
                 "key": "Content-Type",
@@ -6401,7 +6459,7 @@
         {
           "name": "Delete Own Key",
           "request": {
-            "description": "Delete (revoke) one of the caller's own API keys.",
+            "description": "Delete (revoke) one of the caller's own API keys, or for an organization owner or admin any member's key.",
             "header": [],
             "method": "DELETE",
             "url": {
@@ -6540,7 +6598,7 @@
         {
           "name": "Rotate Own Key",
           "request": {
-            "description": "Rotate the secret of one of the caller's own API keys, in place.\n\nSame contract as the operator's rotate: the row keeps its identity, the new\nraw key is returned once, and the previous secret stops authenticating\nimmediately with no grace window.",
+            "description": "Rotate a key's secret in place: the caller's own, or for an organization owner or admin any member's.\n\nSame contract as the operator's rotate: the row keeps its identity, the new\nraw key is returned once, and the previous secret stops authenticating\nimmediately with no grace window.",
             "header": [],
             "method": "POST",
             "url": {
@@ -7502,6 +7560,292 @@
         }
       ],
       "name": "provider-keys"
+    },
+    {
+      "item": [
+        {
+          "name": "List Search Tool Names",
+          "request": {
+            "description": "List the search (or fetch) instance names a key's search tool access list may name.\n\nFor an owner or admin of the caller's active organization, who sets a key's\naccess list for their members; anyone else is refused with 403. Names only:\nno provider, endpoint or key metadata, which stay the operator's.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "search-tools"
+              ],
+              "query": [
+                {
+                  "description": "Which names to list: 'search' (the default) or 'fetch'.",
+                  "disabled": true,
+                  "key": "kind",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/search-tools?kind="
+            }
+          }
+        },
+        {
+          "name": "List All Search Tools",
+          "request": {
+            "description": "List every search instance ``POST /api/v1/search`` can name, or with ``?kind=fetch`` every fetch instance.\n\n``stored`` are the editable rows written through this API; ``config`` are the\nconfig-file entries, which are still honored and are reported so the operator\ncan see the whole set, ``builtin_fetch`` first among the fetch instances. Keys\nare never returned, only ``last4``.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search-tools"
+              ],
+              "query": [
+                {
+                  "description": "Which instances to list: 'search' (the default) or 'fetch'.",
+                  "disabled": true,
+                  "key": "kind",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools?kind="
+            }
+          }
+        },
+        {
+          "name": "Create Search Tool",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"api_base\": \"http://searxng:8080\",\n  \"name\": \"local\",\n  \"provider\": \"searxng\"\n}"
+            },
+            "description": "Add a search or fetch instance at runtime. Storing an API key requires OTARI_SECRET_KEY.\n\nCreating a second search instance, while the first is the in-loop default\nonly because it is the only one, first sets ``web_search_default_tool`` to\nthe first in the same commit, and says so in the response, so that adding\nan instance never turns in-loop search off. That runtime value wins over the\nconfiguration file until it is cleared.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search-tools"
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools"
+            }
+          }
+        },
+        {
+          "name": "List Search Providers",
+          "request": {
+            "description": "List the providers a search or fetch tool may name, for the add-tool form.\n\nThe list comes from the metadata any-search and any-fetch publish, so a\nprovider either library adds appears with no change to the gateway. Reports\nper provider whether an API key is required, what endpoint a tool inherits\nwhen it declares none, and the native options a tool may set. Providers that\nexist only for tests are left out, and so is the fetch provider ``builtin``,\nwhich only the implicit ``builtin_fetch`` tool uses.\n\nWhat belongs to this deployment rather than to the libraries, its own tools\non each provider and an endpoint a tool inherits from its settings, is\nshown only to a caller who operates the deployment: the tool settings\nreader withholds the same from anyone else.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search-tools",
+                "providers"
+              ],
+              "query": [
+                {
+                  "description": "Which providers to list: search providers (the default) or fetch providers.",
+                  "disabled": true,
+                  "key": "kind",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools/providers?kind="
+            }
+          }
+        },
+        {
+          "name": "Reencrypt Stored Search Tool Keys",
+          "request": {
+            "description": "Re-encrypt stored search-tool keys with the primary OTARI_SECRET_KEY.\n\nThe search-tool half of the ``OTARI_SECRET_KEY`` rotation procedure; run it\nalongside ``POST /api/v1/hosted-providers/reencrypt``. Rows that cannot be\ndecrypted are left untouched and must be recovered by replacing the affected\ntool's key.",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search-tools",
+                "reencrypt"
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools/reencrypt"
+            }
+          }
+        },
+        {
+          "name": "Test Unsaved Search Tool",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"api_base\": \"http://searxng:8080\",\n  \"name\": \"local\",\n  \"provider\": \"searxng\"\n}"
+            },
+            "description": "Test an instance before saving it, with one search or one fetch.\n\nTakes the create request's fields, held to the create's checks against the\ninstances this worker has loaded, plus ``query`` for a search instance or\n``url`` for a fetch instance. Answers whether the provider answered without\nan error, the error's tag when it did not, and how many hits or characters\ncame back, never the results or the page.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search-tools",
+                "test"
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools/test"
+            }
+          }
+        },
+        {
+          "name": "Update Search Tool",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"api_base\": \"string\",\n  \"api_key\": \"string\",\n  \"expected_updated_at\": \"string\",\n  \"fetch_tool\": \"string\",\n  \"kind\": \"search\",\n  \"options\": {},\n  \"provider\": \"string\",\n  \"timeout\": 1.0\n}"
+            },
+            "description": "Update a stored search or fetch instance. Omitted fields are left as-is; an explicit ``null`` clears them.\n\n``api_key`` follows the same rule: omit it to keep the stored key, send a new\none to rotate, or send ``null`` to clear it (a keyless SearXNG backend). The\nrow is locked ``FOR UPDATE`` so the ``expected_updated_at`` check and the\nwrite it guards are atomic. The tool as it will be after the update is\nvalidated, so a change that would leave it unusable (clearing the key of a\nprovider that needs one) is refused rather than stored. Its options are\nchecked against the provider's when the update sets them or changes the\nprovider, and ``fetch_tool`` when the update sets it, so rotating the key of\nan instance stored before those rules never trips on them. ``kind`` cannot\nchange, so an instance never moves between the search and fetch maps.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search-tools",
+                ":name"
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools/:name",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "name",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Stored Search Tool",
+          "request": {
+            "description": "Delete a stored search or fetch instance. A config-file one, or ``builtin_fetch``, cannot be deleted here.",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search-tools",
+                ":name"
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools/:name",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "name",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Test Search Tool",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"query\": \"string\",\n  \"url\": \"string\"\n}"
+            },
+            "description": "Test a configured or stored instance with one search or one fetch.\n\nTakes ``query`` for a search instance or ``url`` for a fetch instance, and\nanswers as ``POST /search-tools/test`` does. ``builtin_fetch``, the built-in\nfetcher, fetches as a fetch tool call does, with no domain policy.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search-tools",
+                ":name",
+                "test"
+              ],
+              "raw": "{{baseUrl}}/api/v1/search-tools/:name/test",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "name",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "search-tools"
     },
     {
       "item": [
@@ -11564,263 +11908,6 @@
         }
       ],
       "name": "search"
-    },
-    {
-      "item": [
-        {
-          "name": "List All Search Tools",
-          "request": {
-            "description": "List every search instance ``POST /api/v1/search`` can name, or with ``?kind=fetch`` every fetch instance.\n\n``stored`` are the editable rows written through this API; ``config`` are the\nconfig-file entries, which are still honored and are reported so the operator\ncan see the whole set, ``builtin_fetch`` first among the fetch instances. Keys\nare never returned, only ``last4``.",
-            "header": [],
-            "method": "GET",
-            "url": {
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "search-tools"
-              ],
-              "query": [
-                {
-                  "description": "Which instances to list: 'search' (the default) or 'fetch'.",
-                  "disabled": true,
-                  "key": "kind",
-                  "value": ""
-                }
-              ],
-              "raw": "{{baseUrl}}/api/v1/search-tools?kind="
-            }
-          }
-        },
-        {
-          "name": "Create Search Tool",
-          "request": {
-            "body": {
-              "mode": "raw",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              },
-              "raw": "{\n  \"api_base\": \"http://searxng:8080\",\n  \"name\": \"local\",\n  \"provider\": \"searxng\"\n}"
-            },
-            "description": "Add a search or fetch instance at runtime. Storing an API key requires OTARI_SECRET_KEY.\n\nCreating a second search instance, while the first is the in-loop default\nonly because it is the only one, first sets ``web_search_default_tool`` to\nthe first in the same commit, and says so in the response, so that adding\nan instance never turns in-loop search off. That runtime value wins over the\nconfiguration file until it is cleared.",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "method": "POST",
-            "url": {
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "search-tools"
-              ],
-              "raw": "{{baseUrl}}/api/v1/search-tools"
-            }
-          }
-        },
-        {
-          "name": "List Search Providers",
-          "request": {
-            "description": "List the providers a search or fetch tool may name, for the add-tool form.\n\nThe list comes from the metadata any-search and any-fetch publish, so a\nprovider either library adds appears with no change to the gateway. Reports\nper provider whether an API key is required, what endpoint a tool inherits\nwhen it declares none, and the native options a tool may set. Providers that\nexist only for tests are left out, and so is the fetch provider ``builtin``,\nwhich only the implicit ``builtin_fetch`` tool uses.\n\nWhat belongs to this deployment rather than to the libraries, its own tools\non each provider and an endpoint a tool inherits from its settings, is\nshown only to a caller who operates the deployment: the tool settings\nreader withholds the same from anyone else.",
-            "header": [],
-            "method": "GET",
-            "url": {
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "search-tools",
-                "providers"
-              ],
-              "query": [
-                {
-                  "description": "Which providers to list: search providers (the default) or fetch providers.",
-                  "disabled": true,
-                  "key": "kind",
-                  "value": ""
-                }
-              ],
-              "raw": "{{baseUrl}}/api/v1/search-tools/providers?kind="
-            }
-          }
-        },
-        {
-          "name": "Reencrypt Stored Search Tool Keys",
-          "request": {
-            "description": "Re-encrypt stored search-tool keys with the primary OTARI_SECRET_KEY.\n\nThe search-tool half of the ``OTARI_SECRET_KEY`` rotation procedure; run it\nalongside ``POST /api/v1/hosted-providers/reencrypt``. Rows that cannot be\ndecrypted are left untouched and must be recovered by replacing the affected\ntool's key.",
-            "header": [],
-            "method": "POST",
-            "url": {
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "search-tools",
-                "reencrypt"
-              ],
-              "raw": "{{baseUrl}}/api/v1/search-tools/reencrypt"
-            }
-          }
-        },
-        {
-          "name": "Test Unsaved Search Tool",
-          "request": {
-            "body": {
-              "mode": "raw",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              },
-              "raw": "{\n  \"api_base\": \"http://searxng:8080\",\n  \"name\": \"local\",\n  \"provider\": \"searxng\"\n}"
-            },
-            "description": "Test an instance before saving it, with one search or one fetch.\n\nTakes the create request's fields, held to the create's checks against the\ninstances this worker has loaded, plus ``query`` for a search instance or\n``url`` for a fetch instance. Answers whether the provider answered without\nan error, the error's tag when it did not, and how many hits or characters\ncame back, never the results or the page.",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "method": "POST",
-            "url": {
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "search-tools",
-                "test"
-              ],
-              "raw": "{{baseUrl}}/api/v1/search-tools/test"
-            }
-          }
-        },
-        {
-          "name": "Update Search Tool",
-          "request": {
-            "body": {
-              "mode": "raw",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              },
-              "raw": "{\n  \"api_base\": \"string\",\n  \"api_key\": \"string\",\n  \"expected_updated_at\": \"string\",\n  \"fetch_tool\": \"string\",\n  \"kind\": \"search\",\n  \"options\": {},\n  \"provider\": \"string\",\n  \"timeout\": 1.0\n}"
-            },
-            "description": "Update a stored search or fetch instance. Omitted fields are left as-is; an explicit ``null`` clears them.\n\n``api_key`` follows the same rule: omit it to keep the stored key, send a new\none to rotate, or send ``null`` to clear it (a keyless SearXNG backend). The\nrow is locked ``FOR UPDATE`` so the ``expected_updated_at`` check and the\nwrite it guards are atomic. The tool as it will be after the update is\nvalidated, so a change that would leave it unusable (clearing the key of a\nprovider that needs one) is refused rather than stored. Its options are\nchecked against the provider's when the update sets them or changes the\nprovider, and ``fetch_tool`` when the update sets it, so rotating the key of\nan instance stored before those rules never trips on them. ``kind`` cannot\nchange, so an instance never moves between the search and fetch maps.",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "method": "PATCH",
-            "url": {
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "search-tools",
-                ":name"
-              ],
-              "raw": "{{baseUrl}}/api/v1/search-tools/:name",
-              "variable": [
-                {
-                  "description": "path parameter",
-                  "key": "name",
-                  "value": ""
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Delete Stored Search Tool",
-          "request": {
-            "description": "Delete a stored search or fetch instance. A config-file one, or ``builtin_fetch``, cannot be deleted here.",
-            "header": [],
-            "method": "DELETE",
-            "url": {
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "search-tools",
-                ":name"
-              ],
-              "raw": "{{baseUrl}}/api/v1/search-tools/:name",
-              "variable": [
-                {
-                  "description": "path parameter",
-                  "key": "name",
-                  "value": ""
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Test Search Tool",
-          "request": {
-            "body": {
-              "mode": "raw",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              },
-              "raw": "{\n  \"query\": \"string\",\n  \"url\": \"string\"\n}"
-            },
-            "description": "Test a configured or stored instance with one search or one fetch.\n\nTakes ``query`` for a search instance or ``url`` for a fetch instance, and\nanswers as ``POST /search-tools/test`` does. ``builtin_fetch``, the built-in\nfetcher, fetches as a fetch tool call does, with no domain policy.",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "method": "POST",
-            "url": {
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "search-tools",
-                ":name",
-                "test"
-              ],
-              "raw": "{{baseUrl}}/api/v1/search-tools/:name/test",
-              "variable": [
-                {
-                  "description": "path parameter",
-                  "key": "name",
-                  "value": ""
-                }
-              ]
-            }
-          }
-        }
-      ],
-      "name": "search-tools"
     },
     {
       "item": [

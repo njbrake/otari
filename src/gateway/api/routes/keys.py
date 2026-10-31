@@ -13,6 +13,7 @@ from gateway.api.deps import (
     ApiKeyServiceDep,
     BudgetServiceDep,
     CallerOrganization,
+    RoutingServiceDep,
     get_config,
     get_db,
     require_deployment_operator,
@@ -22,6 +23,7 @@ from gateway.api.routes.users import TOTAL_COUNT_HEADER
 from gateway.auth.models import hash_key, key_suffix
 from gateway.core.config import GatewayConfig
 from gateway.core.database import DATABASE_ERRORS
+from gateway.core.sql import MAX_FILTER_VALUES
 from gateway.core.surface import Surface
 from gateway.models.api_keys import MAX_END_USER_BUDGETS, APIKey
 from gateway.models.tenancy import Workspace
@@ -29,6 +31,8 @@ from gateway.models.users import User
 from gateway.repositories.users_repository import get_or_create_default_user, owned_by_organization
 from gateway.schemas.api_keys import FederationRuleCreate, FederationRulePublic
 from gateway.schemas.budgets import EndUserPublic, EndUserPut, EndUserUpdate
+from gateway.schemas.routing import KeyRoutingPublic, KeyRoutingResponse
+from gateway.services.api_keys import KeyReach
 from gateway.services.budgets import BudgetService, check_path_external_id
 from gateway.services.model_access import (
     KEY_MODELS_EXCEED_USER_DETAIL,
@@ -39,6 +43,7 @@ from gateway.services.model_access import (
     validate_allowed_tools,
 )
 from gateway.services.organizations import AccessLists
+from gateway.services.routing import FALLBACK_WINDOW, RoutingService
 from gateway.services.workspace_scope import organization_default_workspace_id
 
 router = APIRouter(
@@ -81,6 +86,7 @@ async def _load_key_in_organization(
     organization_id: uuid.UUID,
     *,
     owner_user_id: str | None = None,
+    condition: ColumnElement[bool] | None = None,
 ) -> APIKey:
     """Load a key by id within one organization, or raise 404.
 
@@ -95,6 +101,7 @@ async def _load_key_in_organization(
     ``owner_user_id`` narrows the load to keys billed to that owner, for the
     member-scoped routes in ``organization_keys.py``: somebody else's key in the
     caller's own organization answers the same 404, for the same reason.
+    ``condition`` narrows it the same way by any other rule those routes apply.
     """
     statement = (
         select(APIKey)
@@ -106,6 +113,8 @@ async def _load_key_in_organization(
     )
     if owner_user_id is not None:
         statement = statement.where(col(APIKey.user_id) == owner_user_id)
+    if condition is not None:
+        statement = statement.where(condition)
     result = await db.execute(statement)
     key = result.scalar_one_or_none()
 
@@ -483,6 +492,45 @@ async def list_keys(
     keys = result.scalars().all()
 
     return [KeyInfo.from_model(key) for key in keys]
+
+
+KEY_ROUTING_IDS_DESC = (
+    f"The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most {MAX_FILTER_VALUES}. "
+    "An id that names no key the caller may see is left out of the answer rather than refused."
+)
+
+KeyRoutingIds = Annotated[
+    list[str], Query(min_length=1, max_length=MAX_FILTER_VALUES, description=KEY_ROUTING_IDS_DESC)
+]
+
+
+async def key_routing_response(routing: RoutingService, keys: list[KeyReach], asked: list[str]) -> KeyRoutingResponse:
+    """The routing read for ``keys``, in the order ``asked`` named them."""
+    position = {key_id: index for index, key_id in reversed(list(enumerate(asked)))}
+    ordered = sorted(keys, key=lambda key: position[key.id])
+    return KeyRoutingResponse(
+        window_days=FALLBACK_WINDOW.days,
+        keys=[KeyRoutingPublic.model_validate(key) for key in await routing.key_routing(ordered)],
+    )
+
+
+@router.get("/routing")
+async def get_keys_routing(
+    api_key_id: KeyRoutingIds,
+    organization_id: CallerOrganization,
+    api_keys: ApiKeyServiceDep,
+    routing: RoutingServiceDep,
+) -> KeyRoutingResponse:
+    """What each key sent in the last 30 days, and whether a failure on each name has a backup.
+
+    For each key in the caller's organization among those named: the model names
+    its requests sent, most requested first, each judged as a request from the
+    key would resolve it now (a routing policy, an alias, a catalog ID narrowed
+    to the offerings the key may reach, or a pinned ``provider:model``), and the
+    routing policies it sent.
+    """
+    keys = await api_keys.reach(set(api_key_id), organization_id=organization_id)
+    return await key_routing_response(routing, keys, api_key_id)
 
 
 @router.get("/{key_id}")

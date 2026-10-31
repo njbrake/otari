@@ -1,5 +1,6 @@
 import uuid
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
+from dataclasses import dataclass
 
 from gateway.core.config import GatewayConfig
 from gateway.core.settings.api_keys import ApiKeyConfig, https_url_problem
@@ -30,6 +31,21 @@ from gateway.services.model_access import (
 )
 from gateway.services.organizations import AccessLists, UserAccess
 
+WorkspacesOfOrganization = Callable[[uuid.UUID], Awaitable[list[uuid.UUID]]]
+"""The ids of an organization's workspaces, read in the caller's Unit of Work block."""
+
+
+@dataclass(frozen=True)
+class KeyReach:
+    """A key's workspace, organization and owner, and the model allow-list its requests are held to."""
+
+    id: str
+    workspace_id: uuid.UUID
+    organization_id: uuid.UUID
+    user_id: str | None
+    allowlist: list[str] | None
+    """The key's own list, else its owner's; ``None`` is unrestricted, as in ``effective_allowlist``."""
+
 
 class ApiKeyService:
     """Answer questions about API keys and their workspaces, and manage their federation rules and access lists.
@@ -39,11 +55,19 @@ class ApiKeyService:
     ``users``.
     """
 
-    def __init__(self, uow: UnitOfWork, repositories: ApiKeyRepositories, *, users: UserAccess) -> None:
+    def __init__(
+        self,
+        uow: UnitOfWork,
+        repositories: ApiKeyRepositories,
+        *,
+        users: UserAccess,
+        workspaces_of_organization: WorkspacesOfOrganization,
+    ) -> None:
         self._uow = uow
         self._keys = repositories.keys
         self._federation_rules = repositories.federation_rules
         self._users = users
+        self._workspaces_of_organization = workspaces_of_organization
 
     async def get_workspace_id_for_key(self, key_id: str) -> uuid.UUID | None:
         """Return the ID of the workspace that owns a key, or None when no key has that ID."""
@@ -52,6 +76,34 @@ class ApiKeyService:
     async def get_key_ids_in_workspaces(self, workspace_ids: Sequence[uuid.UUID]) -> list[str]:
         """Return the IDs of the keys in these workspaces, in no particular order."""
         return await self._keys.get_key_ids_in_workspaces(workspace_ids)
+
+    async def reach(self, key_ids: Collection[str], *, organization_id: uuid.UUID) -> list[KeyReach]:
+        """The keys among ``key_ids`` in ``organization_id``, with their reach.
+
+        A key outside the organization is absent rather than refused, like a key
+        that does not exist. Three reads, whatever the number of keys.
+        """
+        async with self._uow:
+            workspace_ids = await self._workspaces_of_organization(organization_id)
+            placements = await self._keys.placements(key_ids, workspace_ids=workspace_ids)
+            owners = await self._users.lists_of(
+                {p.user_id for p in placements if p.allowed_models is None and p.user_id is not None}
+            )
+        reaches: list[KeyReach] = []
+        for placement in placements:
+            allowlist = placement.allowed_models
+            if allowlist is None and placement.user_id is not None and placement.user_id in owners:
+                allowlist = owners[placement.user_id].models
+            reaches.append(
+                KeyReach(
+                    id=placement.id,
+                    workspace_id=placement.workspace_id,
+                    organization_id=organization_id,
+                    user_id=placement.user_id,
+                    allowlist=allowlist,
+                )
+            )
+        return reaches
 
     async def keys_defaulting_end_users_to(self, budget_id: str) -> list[str]:
         """Name the keys that start a new end user on this budget when a request names none."""
