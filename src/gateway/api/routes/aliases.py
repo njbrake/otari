@@ -208,6 +208,40 @@ async def list_aliases(
     )
 
 
+async def stage_alias_replacement(
+    db: AsyncSession, config: GatewayConfig, name: str, *, workspace_id: uuid.UUID
+) -> None:
+    """Stage the removal of a workspace's own alias that a policy of the same name is about to replace.
+
+    Staged rather than committed, so the policy write that follows commits both
+    in one transaction and callers sending the name never find neither. Refuses
+    when the workspace has no such alias, and when the name is also a user's own
+    alias in this workspace or a config.yml one, since the policy would still
+    collide with that. Another workspace's aliases are not read: a name never
+    resolves outside its workspace, and refusing would reveal it to the caller.
+    """
+    rows = (
+        (await db.execute(select(ModelAlias).where(ModelAlias.name == name, ModelAlias.workspace_id == workspace_id)))
+        .scalars()
+        .all()
+    )
+    own = next((row for row in rows if row.workspace_id == workspace_id and row.user_id is None), None)
+    if own is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Alias '{name}' is not a workspace-wide alias of workspace '{workspace_id}'.",
+        )
+    if len(rows) > 1 or name in config.aliases:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"'{name}' is also a user's own alias in this workspace or one in config.yml, so a policy of that "
+                "name would still collide with it. Remove that alias first."
+            ),
+        )
+    await db.delete(own)
+
+
 async def upsert_alias_in_workspace(
     request: AliasRequest,
     db: AsyncSession,

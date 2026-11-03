@@ -3655,6 +3655,34 @@
           }
         },
         {
+          "name": "Get Keys Routing",
+          "request": {
+            "description": "What each key sent in the last 30 days, and whether a failure on each name has a backup.\n\nFor each key in the caller's organization among those named: the model names\nits requests sent, most requested first, each judged as a request from the\nkey would resolve it now (a routing policy, an alias, a catalog ID narrowed\nto the offerings the key may reach, or a pinned ``provider:model``), and the\nrouting policies it sent.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "keys",
+                "routing"
+              ],
+              "query": [
+                {
+                  "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+                  "disabled": false,
+                  "key": "api_key_id",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/keys/routing?api_key_id="
+            }
+          }
+        },
+        {
           "name": "Get Key",
           "request": {
             "description": "Get details of a specific API key in the caller's organization.\n\nRequires master key authentication.",
@@ -5251,7 +5279,7 @@
         {
           "name": "List Visible Routing Policies",
           "request": {
-            "description": "List the routing policies in force in the workspaces this caller may see.\n\nStored policies from the caller's visible workspaces plus the config-file\npolicies, which are deployment-wide and resolve in every workspace. The\nresponse is the shape ``GET /api/v1/routing/policies`` answers, narrowed to the\ncaller's own organization, and narrowed again to one workspace when\n``workspace_id`` names one.",
+            "description": "List the routing policies in force in the workspaces this caller may see.\n\nStored policies from the caller's visible workspaces plus the config-file\npolicies, which are deployment-wide and resolve in every workspace. The\nresponse is the shape ``GET /api/v1/routing/policies`` answers, narrowed to the\ncaller's own organization, and narrowed again to one workspace when\n``workspace_id`` names one. Beside the workspace-wide policies, an owner or\nadmin sees every member's own, and anyone else their own alone; ``user_id``\non such a row is the member's identity id.",
             "header": [],
             "method": "GET",
             "url": {
@@ -5295,7 +5323,7 @@
               },
               "raw": "{\n  \"name\": \"string\",\n  \"spec\": {}\n}"
             },
-            "description": "Create or update a stored policy in one of the organization's workspaces.\n\nOrganization owners and admins only. ``workspace_id`` is required and must\nname a workspace of the caller's own organization; ``user_id`` is not\naccepted here.",
+            "description": "Create or update a stored policy in one of the organization's workspaces.\n\n``workspace_id`` is required and must name a workspace of the caller's own\norganization; ``user_id`` is not accepted here. A workspace-wide policy is an\nowner's or admin's to write. With ``member_id`` the policy is that member's\nown: a member may write their own (creating one only while the workspace lets\nmembers create policies), and an owner or admin anyone's.",
             "header": [
               {
                 "key": "Content-Type",
@@ -5319,9 +5347,45 @@
           }
         },
         {
+          "name": "Copy Organization Routing Policy",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"name\": \"string\",\n  \"workspace_id\": \"00000000-0000-0000-0000-000000000000\"\n}"
+            },
+            "description": "Make the caller's own version of a shared policy: the same name and spec, applying only to their requests.\n\nThe source is the workspace's workspace-wide policy of that name, else the\nconfig.yml one. The copy wins over it for the caller alone, and deleting the\ncopy hands their requests back to it. Creating one follows the workspace's\n``members_create_policies`` like any other policy of a member's own; having\none already is a 409.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "routing-policies",
+                "copy"
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/routing-policies/copy"
+            }
+          }
+        },
+        {
           "name": "Delete Organization Routing Policy",
           "request": {
-            "description": "Delete a stored policy from one of the organization's workspaces. Owners and admins only.",
+            "description": "Delete a stored policy from one of the organization's workspaces.\n\nA workspace-wide policy is an owner's or admin's to delete. A member deletes\ntheir own, whatever ``members_create_policies`` says, and an owner or admin\nanyone's.",
             "header": [],
             "method": "DELETE",
             "url": {
@@ -5342,9 +5406,15 @@
                   "disabled": true,
                   "key": "workspace_id",
                   "value": ""
+                },
+                {
+                  "description": "Delete this member's own policy rather than the workspace-wide one. A member may name only themselves; an owner or admin anyone, including someone who has since left.",
+                  "disabled": true,
+                  "key": "member_id",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/routing-policies/:name?workspace_id=",
+              "raw": "{{baseUrl}}/api/v1/organizations/me/routing-policies/:name?workspace_id=&member_id=",
               "variable": [
                 {
                   "description": "path parameter",
@@ -6352,6 +6422,36 @@
                 "keys"
               ],
               "raw": "{{baseUrl}}/api/v1/organizations/me/keys"
+            }
+          }
+        },
+        {
+          "name": "Get Own Keys Routing",
+          "request": {
+            "description": "What each of the caller's own keys sent in the last 30 days, and whether a failure on each name has a backup.\n\nThe same read as the operator's, narrowed by the owner predicate every route\nhere carries: somebody else's key, named or not, is left out like one that\ndoes not exist.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "keys",
+                "routing"
+              ],
+              "query": [
+                {
+                  "description": "The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused.",
+                  "disabled": false,
+                  "key": "api_key_id",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/keys/routing?api_key_id="
             }
           }
         },
@@ -15019,7 +15119,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"members_see_workspace_totals\": false\n}"
+              "raw": "{\n  \"members_create_policies\": false,\n  \"members_see_workspace_totals\": false\n}"
             },
             "description": "Change what members who do not manage the workspace see; only the fields sent change.\n\nAn organization owner or admin, or an owner or admin of this workspace, may\nchange it. With totals shown, a member may read the workspace's aggregate\nusage and its budget in dollars; hidden, only their own usage and the budget\nas a share of its cap. Neither ever shows a member anyone else's requests,\nkeys or limits. Answers with every setting after the change.",
             "header": [

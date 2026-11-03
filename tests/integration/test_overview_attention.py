@@ -1094,7 +1094,7 @@ def test_the_overview_says_whether_the_named_workspace_shares_its_totals(
     response = client.get(_ENDPOINT, params={"workspace_id": workspace_id}, headers=master_key_header)
 
     assert response.status_code == 200, response.text
-    assert response.json()["visibility"] == {"members_see_workspace_totals": False}
+    assert response.json()["visibility"] == {"members_see_workspace_totals": False, "members_create_policies": True}
 
 
 def test_the_current_month_is_the_default(client: TestClient, master_key_header: dict[str, str]) -> None:

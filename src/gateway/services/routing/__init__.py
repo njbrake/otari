@@ -16,7 +16,8 @@ compiler stays pure and synchronous, and a backend's asynchronous work
 passes the resulting order in as a value.
 
 ``RoutingService`` reads what routing gives an organization's callers: the
-automatic fallbacks a catalog ID gets with no policy, and the traffic that used them.
+automatic fallbacks a catalog ID gets with no policy, and the traffic that used them,
+and for each API key the names it sent and whether a failure on each has a backup.
 
 ``recommend.py`` answers a different question: which model a coding agent's
 subagent should start on. That is put to a decision model, not compiled from

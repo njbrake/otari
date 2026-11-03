@@ -1478,7 +1478,12 @@ def get_user_access(uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> Us
 
 def get_api_key_service(uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> ApiKeyService:
     """Build the request's API key service on the request's Unit of Work; key owners' lists come from organizations."""
-    return ApiKeyService(uow, ApiKeyRepositories.on(uow), users=get_user_access(uow))
+    return ApiKeyService(
+        uow,
+        ApiKeyRepositories.on(uow),
+        users=get_user_access(uow),
+        workspaces_of_organization=WorkspaceRepository(uow).get_ids_by_organization,
+    )
 
 
 ApiKeyServiceDep = Annotated[ApiKeyService, Depends(get_api_key_service)]
@@ -1900,9 +1905,13 @@ async def get_organization_trace_scope(visible: VisibleWorkspacesDep, identity: 
     )
 
 
-def get_routing_service(uow: UnitOfWorkDep, config: Annotated[GatewayConfig, Depends(get_config)]) -> RoutingService:
-    """Build the routing service, and the usage service it reads traffic through, on the request's Unit of Work."""
-    return RoutingService(config, UsageService(uow, UsageLogRepository(uow)))
+def get_routing_service(
+    uow: UnitOfWorkDep,
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    usage_reads: Annotated[UsageReadService, Depends(get_usage_read_service)],
+) -> RoutingService:
+    """Build the routing service, and the usage services it reads traffic through, on the request's Unit of Work."""
+    return RoutingService(config, UsageService(uow, UsageLogRepository(uow)), usage_reads)
 
 
 RoutingServiceDep = Annotated[RoutingService, Depends(get_routing_service)]

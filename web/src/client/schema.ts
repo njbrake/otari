@@ -2118,6 +2118,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/keys/routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Keys Routing
+         * @description What each key sent in the last 30 days, and whether a failure on each name has a backup.
+         *
+         *     For each key in the caller's organization among those named: the model names
+         *     its requests sent, most requested first, each judged as a request from the
+         *     key would resolve it now (a routing policy, an alias, a catalog ID narrowed
+         *     to the offerings the key may reach, or a pinned ``provider:model``), and the
+         *     routing policies it sent.
+         */
+        get: operations["keys-get_keys_routing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/keys/{key_id}": {
         parameters: {
             query?: never;
@@ -3119,6 +3145,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organizations/me/keys/routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Own Keys Routing
+         * @description What each of the caller's own keys sent in the last 30 days, and whether a failure on each name has a backup.
+         *
+         *     The same read as the operator's, narrowed by the owner predicate every route
+         *     here carries: somebody else's key, named or not, is left out like one that
+         *     does not exist.
+         */
+        get: operations["organization-keys-get_own_keys_routing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations/me/keys/{key_id}": {
         parameters: {
             query?: never;
@@ -3868,7 +3918,9 @@ export interface paths {
          *     policies, which are deployment-wide and resolve in every workspace. The
          *     response is the shape ``GET /api/v1/routing/policies`` answers, narrowed to the
          *     caller's own organization, and narrowed again to one workspace when
-         *     ``workspace_id`` names one.
+         *     ``workspace_id`` names one. Beside the workspace-wide policies, an owner or
+         *     admin sees every member's own, and anyone else their own alone; ``user_id``
+         *     on such a row is the member's identity id.
          */
         get: operations["routing-list_visible_routing_policies"];
         put?: never;
@@ -3876,11 +3928,39 @@ export interface paths {
          * Set Organization Routing Policy
          * @description Create or update a stored policy in one of the organization's workspaces.
          *
-         *     Organization owners and admins only. ``workspace_id`` is required and must
-         *     name a workspace of the caller's own organization; ``user_id`` is not
-         *     accepted here.
+         *     ``workspace_id`` is required and must name a workspace of the caller's own
+         *     organization; ``user_id`` is not accepted here. A workspace-wide policy is an
+         *     owner's or admin's to write. With ``member_id`` the policy is that member's
+         *     own: a member may write their own (creating one only while the workspace lets
+         *     members create policies), and an owner or admin anyone's.
          */
         post: operations["routing-set_organization_routing_policy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/routing-policies/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy Organization Routing Policy
+         * @description Make the caller's own version of a shared policy: the same name and spec, applying only to their requests.
+         *
+         *     The source is the workspace's workspace-wide policy of that name, else the
+         *     config.yml one. The copy wins over it for the caller alone, and deleting the
+         *     copy hands their requests back to it. Creating one follows the workspace's
+         *     ``members_create_policies`` like any other policy of a member's own; having
+         *     one already is a 409.
+         */
+        post: operations["routing-copy_organization_routing_policy"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3899,7 +3979,11 @@ export interface paths {
         post?: never;
         /**
          * Delete Organization Routing Policy
-         * @description Delete a stored policy from one of the organization's workspaces. Owners and admins only.
+         * @description Delete a stored policy from one of the organization's workspaces.
+         *
+         *     A workspace-wide policy is an owner's or admin's to delete. A member deletes
+         *     their own, whatever ``members_create_policies`` says, and an owner or admin
+         *     anyone's.
          */
         delete: operations["routing-delete_organization_routing_policy"];
         options?: never;
@@ -12305,6 +12389,98 @@ export interface components {
             workspace_id: string;
         };
         /**
+         * KeyModelPublic
+         * @description One model name a key sent in the window, and whether a failure on it has a backup.
+         */
+        KeyModelPublic: {
+            /**
+             * Backup
+             * @description Whether a failure on this name has somewhere to go. `subscription`: every request was imported usage, which the gateway never routed. `unknown`: the name resolves to nothing now.
+             * @enum {string}
+             */
+            backup: "has_backup" | "no_backup" | "subscription" | "unknown";
+            /**
+             * Kind
+             * @description What the name is to this key now: a routing policy, an alias, a catalog ID, a pinned `provider:model`, or none of them (a name nothing resolves any more).
+             * @enum {string}
+             */
+            kind: "policy" | "alias" | "catalog" | "pinned" | "unknown";
+            /**
+             * Name
+             * @description The name the key's requests sent as `model`; for imported usage, the model that ran.
+             */
+            name: string;
+            /**
+             * Provider
+             * @description The one instance that serves the name, when exactly one does.
+             */
+            provider: string | null;
+            /**
+             * Reason
+             * @description Why there is no backup, when `backup` is `no_backup`: one offering serves it among those the key may reach, a policy or alias with one candidate, a request that named the provider, or no offering the key may reach.
+             */
+            reason: ("single_offering" | "single_target_policy" | "pinned" | "no_allowed_offering") | null;
+            /**
+             * Requests
+             * @description Requests in the window, each counted once however many attempts.
+             */
+            requests: number;
+        };
+        /**
+         * KeyPolicyPublic
+         * @description One routing policy a key sent in the window.
+         */
+        KeyPolicyPublic: {
+            /** Name */
+            name: string;
+            /** Requests */
+            requests: number;
+        };
+        /**
+         * KeyRoutingPublic
+         * @description What one key sent in the window, and what a failure on each name does.
+         */
+        KeyRoutingPublic: {
+            /** Api Key Id */
+            api_key_id: string;
+            /**
+             * Model Count
+             * @description How many names the key sent, including any `models` leaves out.
+             */
+            model_count: number;
+            /**
+             * Models
+             * @description The most requested names first, at most ten.
+             */
+            models: components["schemas"]["KeyModelPublic"][];
+            /**
+             * No Backup Count
+             * @description Of `model_count`, how many have no backup.
+             */
+            no_backup_count: number;
+            /**
+             * Policies
+             * @description Every routing policy the key sent, most requested first.
+             */
+            policies: components["schemas"]["KeyPolicyPublic"][];
+        };
+        /**
+         * KeyRoutingResponse
+         * @description The routing each key's traffic got.
+         */
+        KeyRoutingResponse: {
+            /**
+             * Keys
+             * @description One entry per key asked for that the caller may see, in the order asked; a key the caller may not see is left out, like one that does not exist.
+             */
+            keys: components["schemas"]["KeyRoutingPublic"][];
+            /**
+             * Window Days
+             * @description How many days of traffic the counts cover.
+             */
+            window_days: number;
+        };
+        /**
          * KnownProviderSchema
          * @description A selected provider's autofill hints for the add-provider form.
          */
@@ -14495,6 +14671,50 @@ export interface components {
             /** Data */
             data: components["schemas"]["OrganizationModelPricingPublic"][];
         };
+        /**
+         * OrganizationPolicyRequest
+         * @description A tenant policy write: the operator's body, scoped to a member by identity rather than ``user_id``.
+         */
+        OrganizationPolicyRequest: {
+            /**
+             * Member Id
+             * @description Scope the policy to one member, by identity id: it applies only to requests made with their keys, and wins over a workspace-wide or config policy of the same name for them. A member may name only themselves; an owner or admin may name any active member of the organization who may see the workspace. Omit for a workspace-wide policy, which only an owner or admin may write. `user_id` is not accepted here.
+             */
+            member_id?: string | null;
+            /**
+             * Name
+             * @description Model name callers send, e.g. 'fast'.
+             */
+            name: string;
+            /**
+             * Rename From
+             * @description Current name of the policy to rename, in the same scope, meaning the same workspace and the same user. A rename never moves a policy between them. The stored row keeps its id and created_at and takes `name` and `spec`. Sending it asserts that policy exists, so a name with no stored row is a 404 rather than a create, even when it equals `name`. Omit to create or update the policy named `name`. Renaming changes what callers must send as `model`; usage already recorded keeps the old name.
+             */
+            rename_from?: string | null;
+            /**
+             * Replaces Alias
+             * @description Turn the workspace's own workspace-wide alias of this name into this policy, in one step, so callers sending the name never find neither. Owners and admins, workspace-wide policies only.
+             * @default false
+             */
+            replaces_alias: boolean;
+            /**
+             * Spec
+             * @description The policy body: select (with exactly one `default` entry, last), optional on_failure and guardrails. Same schema as a `routing.policies` entry in config.yml, and closed to unknown keys, so a typo is a 400 rather than a silently ignored setting.
+             */
+            spec: {
+                [key: string]: unknown;
+            };
+            /**
+             * User Id
+             * @description User this policy belongs to. Omit for a policy every caller in the workspace sees. A user-scoped policy resolves only for that user and shadows the workspace-wide one of the same name.
+             */
+            user_id?: string | null;
+            /**
+             * Workspace Id
+             * @description Workspace this policy belongs to. Omit for the deployment's default workspace. The policy resolves only for requests in that workspace, so two workspaces can each define their own 'fast'.
+             */
+            workspace_id?: string | null;
+        };
         /** OrganizationPublic */
         OrganizationPublic: {
             /**
@@ -15302,6 +15522,23 @@ export interface components {
             results: components["schemas"]["GateResultResponse"][];
             /** Schema Version */
             schema_version: string;
+        };
+        /**
+         * PolicyCopyRequest
+         * @description Make the caller's own version of a shared policy.
+         */
+        PolicyCopyRequest: {
+            /**
+             * Name
+             * @description The shared policy to copy: a workspace-wide one in the workspace, or config.yml's.
+             */
+            name: string;
+            /**
+             * Workspace Id
+             * Format: uuid
+             * @description The workspace the copy belongs to, which the caller must see.
+             */
+            workspace_id: string;
         };
         /**
          * PolicyRequest
@@ -19787,6 +20024,11 @@ export interface components {
          */
         WorkspaceVisibility: {
             /**
+             * Members Create Policies
+             * @description Whether members may create routing policies that apply only to their own requests, including their own version of a shared policy. When false they cannot create or copy one, and the ones they have keep working and stay theirs to edit or delete.
+             */
+            members_create_policies: boolean;
+            /**
              * Members See Workspace Totals
              * @description Whether members may read the workspace's aggregate usage (totals, series, and breakdowns by model, provider or status code) and its budget's dollar figures. Never anyone else's requests, keys or limits. When false, a member reads only their own usage and the budget as a percentage.
              */
@@ -19800,6 +20042,11 @@ export interface components {
          *     never told a setting changed when it did not.
          */
         WorkspaceVisibilityUpdate: {
+            /**
+             * Members Create Policies
+             * @description Whether members may create routing policies that apply only to their own requests, including their own version of a shared policy. When false they cannot create or copy one, and the ones they have keep working and stay theirs to edit or delete.
+             */
+            members_create_policies?: boolean | null;
             /**
              * Members See Workspace Totals
              * @description Whether members may read the workspace's aggregate usage (totals, series, and breakdowns by model, provider or status code) and its budget's dollar figures. Never anyone else's requests, keys or limits. When false, a member reads only their own usage and the budget as a percentage.
@@ -23201,6 +23448,38 @@ export interface operations {
             };
         };
     };
+    "keys-get_keys_routing": {
+        parameters: {
+            query: {
+                /** @description The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused. */
+                api_key_id: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyRoutingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     "keys-get_key": {
         parameters: {
             query?: never;
@@ -25167,6 +25446,38 @@ export interface operations {
             };
         };
     };
+    "organization-keys-get_own_keys_routing": {
+        parameters: {
+            query: {
+                /** @description The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused. */
+                api_key_id: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyRoutingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     "organization-keys-delete_own_key": {
         parameters: {
             query?: never;
@@ -26448,7 +26759,40 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PolicyRequest"];
+                "application/json": components["schemas"]["OrganizationPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "routing-copy_organization_routing_policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyCopyRequest"];
             };
         };
         responses: {
@@ -26477,6 +26821,8 @@ export interface operations {
             query?: {
                 /** @description Delete the policy in this workspace of the caller's organization. */
                 workspace_id?: string | null;
+                /** @description Delete this member's own policy rather than the workspace-wide one. A member may name only themselves; an owner or admin anyone, including someone who has since left. */
+                member_id?: string | null;
             };
             header?: never;
             path: {

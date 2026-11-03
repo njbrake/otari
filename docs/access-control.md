@@ -95,6 +95,12 @@ The API key that authenticates a request determines its workspace. A caller
 cannot select another workspace with a header. Master-key inference uses the
 default workspace.
 
+A member may create routing policies that apply only to their own requests,
+while the workspace allows it (`members_create_policies`, on by default, set by
+the organization's or the workspace's owners and admins). Such a policy cannot
+change what anyone else's requests reach, and every request is still held to its
+key's model access. See [Routing](routing.md#managing-policies-at-runtime).
+
 An owner or admin can delete their active organization from Organization →
 General (`DELETE /api/v1/organizations/me`) while it has no usage: the gateway
 refuses an organization whose workspaces still hold usage, API keys, aliases or

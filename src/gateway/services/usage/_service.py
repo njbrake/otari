@@ -1,5 +1,6 @@
 import asyncio
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Collection
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -8,10 +9,16 @@ from typing import cast
 from gateway.core.series import SERIES_TOP_N, dense_series
 from gateway.core.sql import UsageBucketGrain
 from gateway.core.unit_of_work import UnitOfWork
-from gateway.core.usage_filters import SortOrder, UsageCondition, UsageSort
+from gateway.core.usage_filters import SortOrder, UsageCondition, UsageSort, window_rows
 from gateway.exceptions.shared_exceptions import UsageReadsBusyError
 from gateway.models.usage import UsageLog
-from gateway.repositories.usage import UsageReadRepository, UsageRollupRepository, UsageRows, UsageSummaryRepository
+from gateway.repositories.usage import (
+    KeyNameTraffic,
+    UsageReadRepository,
+    UsageRollupRepository,
+    UsageRows,
+    UsageSummaryRepository,
+)
 from gateway.schemas.usage import (
     ActivityGroupBy,
     ActivityGroupOrder,
@@ -136,6 +143,17 @@ class UsageReadService:
         """
         async with self._uow:
             return await self._rollups.rows(conditions, start, end, bucket="hour")
+
+    async def names_by_key(
+        self, api_key_ids: Collection[str], workspace_ids: Collection[uuid.UUID], start: datetime, end: datetime
+    ) -> list[KeyNameTraffic]:
+        """Requests per key and model name sent in ``[start, end)``, for these keys in these workspaces, most first."""
+        if not api_key_ids or not workspace_ids:
+            return []
+        conditions = window_rows(start, end, sorted(workspace_ids), api_key_ids=sorted(api_key_ids))
+        async with self._uow:
+            rows = await self._rollups.rows(conditions, start, end, bucket="hour")
+            return await self._summaries.names_by_key(rows)
 
     async def page(
         self,

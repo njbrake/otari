@@ -165,7 +165,10 @@ export function readMemberReach(
 export function listAskableScopes(viewer: ReachViewer): UsageScopeKey[] {
   return readMemberReach(viewer, {
     status: "known",
-    visibility: { members_see_workspace_totals: true },
+    visibility: {
+      members_see_workspace_totals: true,
+      members_create_policies: true,
+    },
   }).scopes
 }
 

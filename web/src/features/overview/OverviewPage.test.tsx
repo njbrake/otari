@@ -223,7 +223,10 @@ function overviewBody(over: Partial<OverviewSummary> = {}): OverviewSummary {
     scope: "workspace",
     attention: [],
     limits: { kind: "keys", rows: [] },
-    visibility: { members_see_workspace_totals: true },
+    visibility: {
+      members_see_workspace_totals: true,
+      members_create_policies: true,
+    },
     ...over,
   }
 }
@@ -329,7 +332,12 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
           ...b.overviewByScope?.[scope],
           ...(shares === undefined
             ? {}
-            : { visibility: { members_see_workspace_totals: shares } }),
+            : {
+                visibility: {
+                  members_see_workspace_totals: shares,
+                  members_create_policies: true,
+                },
+              }),
         }),
       )
     }
@@ -443,7 +451,12 @@ const BUDGET: WorkspaceSpend = {
 const HIDDEN_BUDGET: WorkspaceSpend = { ...BUDGET, spent: null }
 
 /** The overview's word that the workspace keeps its totals from members. */
-const TOTALS_HIDDEN = { visibility: { members_see_workspace_totals: false } }
+const TOTALS_HIDDEN = {
+  visibility: {
+    members_see_workspace_totals: false,
+    members_create_policies: true,
+  },
+}
 
 function tile(label: string) {
   return screen.getByText(label).parentElement as HTMLElement

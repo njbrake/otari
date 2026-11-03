@@ -20,11 +20,17 @@ const member = { ...manager, isManager: false, ownUserId: undefined }
 
 const shown: MemberTotalsVisibility = {
   status: "known",
-  visibility: { members_see_workspace_totals: true },
+  visibility: {
+    members_see_workspace_totals: true,
+    members_create_policies: true,
+  },
 }
 const hidden: MemberTotalsVisibility = {
   status: "known",
-  visibility: { members_see_workspace_totals: false },
+  visibility: {
+    members_see_workspace_totals: false,
+    members_create_policies: true,
+  },
 }
 
 describe("the member totals allowlists", () => {
@@ -62,7 +68,10 @@ describe("readMemberTotalsVisibility", () => {
   it("reads a failed read as unavailable even over an answer cached earlier", () => {
     expect(
       readMemberTotalsVisibility({
-        data: { members_see_workspace_totals: true },
+        data: {
+          members_see_workspace_totals: true,
+          members_create_policies: true,
+        },
         isError: true,
       }),
     ).toEqual({ status: "unavailable" })
@@ -190,7 +199,10 @@ describe("readMemberReach for a manager", () => {
 
 describe("readMemberTotalsVisibility", () => {
   it("takes a failure over an answer, and an answer over waiting", () => {
-    const visibility = { members_see_workspace_totals: false }
+    const visibility = {
+      members_see_workspace_totals: false,
+      members_create_policies: true,
+    }
     expect(
       readMemberTotalsVisibility({ data: visibility, isError: false }),
     ).toEqual({ status: "known", visibility })

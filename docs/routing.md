@@ -277,16 +277,27 @@ An organization's owners and admins manage their own workspaces' policies and
 aliases through `/api/v1/organizations/me/routing-policies` and
 `/api/v1/organizations/me/aliases`, which the Routing page uses for a caller who
 does not operate the deployment. Those routes require the workspace named, must
-name a workspace of the caller's own organization, accept no user scope, and
-refuse a target the organization holds no provider access for. Both reads take a
-server-capped `limit`, which bounds the response rather than paginating it. A
-member of the organization reads the same two lists and writes neither.
+name a workspace of the caller's own organization, and refuse a target the
+organization holds no provider access for. Both reads take a server-capped
+`limit`, which bounds the response rather than paginating it. Workspace-wide
+policies and every alias are an owner's or admin's to write; a member reads them.
 
-Those routes are workspace-wide entries only, on the reads as much as the
-writes. A stored policy or alias can also be scoped to one user, and `user_id`
-names an API-key user rather than a dashboard identity, so it is neither a
-tenant's to set nor a tenant's to interpret. Managing a user-scoped entry stays
-on the deployment-wide routes.
+A policy can also be one member's own. It applies only to requests made with
+their keys and wins over a workspace-wide or config-file policy of the same name
+for them alone, so nobody else is affected. The tenant routes name the member by
+identity (`member_id`), never by `user_id`, which names an API-key user and is not
+a tenant's to set or interpret. A member may write their own while the
+workspace lets members create policies (`members_create_policies` on the
+workspace's visibility settings, on by default); turning it off keeps the ones
+they have working and theirs to edit or delete. An owner or admin may write any
+member's, and delete the policies of someone who has since left the
+organization. `POST /api/v1/organizations/me/routing-policies/copy` makes the
+caller's own version of a shared policy under the same name, and
+`replaces_alias` on a write turns the workspace's own alias of that name into a
+policy in one step. The policy list shows an owner or admin every member's
+policies and anyone else their own; a policy scoped to a user who is not a member
+of the organization stays on the deployment-wide routes, where only an operator
+can change or delete it, along with every user-scoped alias.
 
 The authenticating API key determines which workspace resolves a policy.
 User-scoped entries take precedence over wider entries. A config-file policy

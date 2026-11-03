@@ -1,5 +1,5 @@
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import NamedTuple, Never
 
@@ -99,6 +99,18 @@ async def get_or_create_attribution_user(db: AsyncSession, *, user_id: str, alia
         if winner is None:
             raise
         return await _revive(winner)
+
+
+async def get_or_create_live_attribution_user(db: AsyncSession, *, user_id: str, alias: str | None) -> User | None:
+    """:func:`get_or_create_attribution_user`, except that a soft-deleted row answers None rather than being revived.
+
+    For a write that needs an owner row but must not restore one an operator
+    revoked through ``DELETE /api/v1/users``.
+    """
+    existing = (await db.execute(select(User).where(User.user_id == user_id))).scalar_one_or_none()
+    if existing is not None:
+        return None if existing.deleted_at is not None else existing
+    return await get_or_create_attribution_user(db, user_id=user_id, alias=alias)
 
 
 async def live_attribution_user_ids(db: AsyncSession, user_ids: Sequence[str]) -> set[str]:
@@ -282,6 +294,17 @@ class UserAccessRepository(BaseRepository[User, Never, Never]):
             await self.db.execute(select(User.allowed_models, User.allowed_tools).where(User.user_id == user_id))
         ).one_or_none()
         return None if row is None else AccessLists(*row)
+
+    async def access_lists_of(self, user_ids: Collection[str]) -> dict[str, AccessLists]:
+        """These users' access lists, by user id; an id with no user is absent."""
+        if not user_ids:
+            return {}
+        rows = (
+            await self.db.execute(
+                select(User.user_id, User.allowed_models, User.allowed_tools).where(User.user_id.in_(sorted(user_ids)))
+            )
+        ).all()
+        return {user_id: AccessLists(models, tools) for user_id, models, tools in rows}
 
     async def live_access_lists(self) -> dict[str, AccessLists]:
         """Every live user's access lists, by user id."""
