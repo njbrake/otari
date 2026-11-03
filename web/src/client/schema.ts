@@ -3119,11 +3119,13 @@ export interface paths {
         };
         /**
          * List Own Keys
-         * @description List the caller's own API keys in their active organization, newest first.
+         * @description List API keys in the caller's active organization, newest first.
          *
-         *     Only keys billed to the caller's own user: an operator-minted key assigned
-         *     to them is theirs to see here, and nobody else's key ever is. Naming a
-         *     workspace outside their organization lists nothing rather than refusing, so
+         *     A member sees only keys billed to their own user: an operator-minted key
+         *     assigned to them is theirs to see here, and nobody else's key ever is. An
+         *     organization owner or admin also sees every other member's key, apart from
+         *     budget-exempt and service keys, which stay the operator's. Naming a
+         *     workspace outside the organization lists nothing rather than refusing, so
          *     the filter reports no more than the unfiltered read does. ``search`` narrows
          *     within the same rows.
          */
@@ -3131,12 +3133,13 @@ export interface paths {
         put?: never;
         /**
          * Create Own Key
-         * @description Create an API key owned by the caller, in a workspace they may see.
+         * @description Create an API key, owned by the caller or, for an organization owner or admin, by a member they name.
          *
-         *     The member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the
-         *     caller's own attribution user, the key is always budget-enforced, and the
-         *     workspace must be visible to the caller (a member of it, or an organization
-         *     owner/admin, who see every workspace). The secret is returned once.
+         *     The tenant counterpart of ``POST /api/v1/keys``: the key is always
+         *     budget-enforced, and the workspace must be visible to the owner (a member of
+         *     it, or an organization owner/admin, who see every workspace). An owner or
+         *     admin sees every workspace, so that check is the owner's. The secret is
+         *     returned once.
          */
         post: operations["organization-keys-create_own_key"];
         delete?: never;
@@ -3154,11 +3157,11 @@ export interface paths {
         };
         /**
          * Get Own Keys Routing
-         * @description What each of the caller's own keys sent in the last 30 days, and whether a failure on each name has a backup.
+         * @description What each key named sent in the last 30 days, and whether a failure on each name has a backup.
          *
-         *     The same read as the operator's, narrowed by the owner predicate every route
-         *     here carries: somebody else's key, named or not, is left out like one that
-         *     does not exist.
+         *     The same read as the operator's, over the keys the list shows the caller: a
+         *     member's own, or for an owner or admin every member's key in the organization. A key
+         *     outside that, named or not, is left out like one that does not exist.
          */
         get: operations["organization-keys-get_own_keys_routing"];
         put?: never;
@@ -3181,14 +3184,14 @@ export interface paths {
         post?: never;
         /**
          * Delete Own Key
-         * @description Delete (revoke) one of the caller's own API keys.
+         * @description Delete (revoke) one of the caller's own API keys, or for an organization owner or admin any member's key.
          */
         delete: operations["organization-keys-delete_own_key"];
         options?: never;
         head?: never;
         /**
          * Update Own Key
-         * @description Update one of the caller's own API keys.
+         * @description Update one of the caller's own API keys, or for an organization owner or admin any member's key.
          */
         patch: operations["organization-keys-update_own_key"];
         trace?: never;
@@ -3260,7 +3263,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate Own Key
-         * @description Rotate the secret of one of the caller's own API keys, in place.
+         * @description Rotate a key's secret in place: the caller's own, or for an organization owner or admin any member's.
          *
          *     Same contract as the operator's rotate: the row keeps its identity, the new
          *     raw key is returned once, and the previous secret stops authenticating
@@ -3986,6 +3989,30 @@ export interface paths {
          *     anyone's.
          */
         delete: operations["routing-delete_organization_routing_policy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/search-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Search Tool Names
+         * @description List the search (or fetch) instance names a key's search tool access list may name.
+         *
+         *     For an owner or admin of the caller's active organization, who sets a key's
+         *     access list for their members; anyone else is refused with 403. Names only:
+         *     no provider, endpoint or key metadata, which stay the operator's.
+         */
+        get: operations["search-tools-list_search_tool_names"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -9771,11 +9798,11 @@ export interface components {
         };
         /**
          * CreateOwnKeyRequest
-         * @description Create-key body for the member surface.
+         * @description Create-key body for the tenant surface.
          *
-         *     Deliberately not ``CreateKeyRequest``: it carries no ``user_id`` (the owner
-         *     is always the caller) and no ``exclude_from_budget`` (a member must not
-         *     exempt their own spend from enforcement).
+         *     Deliberately not ``CreateKeyRequest``: its ``user_id`` names an identity in
+         *     the organization rather than any billing id, and it has no
+         *     ``exclude_from_budget`` (see the module docstring).
          */
         CreateOwnKeyRequest: {
             /**
@@ -9815,6 +9842,11 @@ export interface components {
              * @description Per-key override of the deployment-wide reject_user_mismatch setting: null (default) inherits it, true always rejects a request naming a different 'user', false always accepts it. Spend binds to your own user either way.
              */
             reject_user_mismatch?: boolean | null;
+            /**
+             * User Id
+             * @description Organization owners and admins only: the member who owns the key and whose budget its spend counts toward, by identity id. Must be an active member of your active organization who may see the workspace. Omitted means you.
+             */
+            user_id?: string | null;
             /**
              * Workspace Id
              * @description Workspace this key belongs to, which must be one you may see in your active organization. Omitted means that organization's default workspace, refused when you are not a member of it.
@@ -17235,6 +17267,17 @@ export interface components {
             title: string;
             /** Url */
             url: string;
+        };
+        /**
+         * SearchToolNamesResponse
+         * @description The names a key's or a user's ``allowed_tools`` may list, without anything else about the tools.
+         */
+        SearchToolNamesResponse: {
+            /**
+             * Names
+             * @description Every instance name of the kind asked for, sorted.
+             */
+            names: string[];
         };
         /**
          * SearchToolTestRequest
@@ -26838,6 +26881,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "search-tools-list_search_tool_names": {
+        parameters: {
+            query?: {
+                /** @description Which names to list: 'search' (the default) or 'fetch'. */
+                kind?: "search" | "fetch";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchToolNamesResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

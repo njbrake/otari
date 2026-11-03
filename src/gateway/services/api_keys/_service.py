@@ -77,17 +77,15 @@ class ApiKeyService:
         """Return the IDs of the keys in these workspaces, in no particular order."""
         return await self._keys.get_key_ids_in_workspaces(workspace_ids)
 
-    async def reach(
-        self, key_ids: Collection[str], *, organization_id: uuid.UUID, owner_user_id: str | None = None
-    ) -> list[KeyReach]:
-        """The keys among ``key_ids`` in ``organization_id`` (and owned by ``owner_user_id``), with their reach.
+    async def reach(self, key_ids: Collection[str], *, organization_id: uuid.UUID) -> list[KeyReach]:
+        """The keys among ``key_ids`` in ``organization_id``, with their reach.
 
-        A key either narrowing leaves out is absent rather than refused, like a key
+        A key outside the organization is absent rather than refused, like a key
         that does not exist. Three reads, whatever the number of keys.
         """
         async with self._uow:
             workspace_ids = await self._workspaces_of_organization(organization_id)
-            placements = await self._keys.placements(key_ids, workspace_ids=workspace_ids, owner_user_id=owner_user_id)
+            placements = await self._keys.placements(key_ids, workspace_ids=workspace_ids)
             owners = await self._users.lists_of(
                 {p.user_id for p in placements if p.allowed_models is None and p.user_id is not None}
             )

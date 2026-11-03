@@ -86,6 +86,7 @@ async def _load_key_in_organization(
     organization_id: uuid.UUID,
     *,
     owner_user_id: str | None = None,
+    condition: ColumnElement[bool] | None = None,
 ) -> APIKey:
     """Load a key by id within one organization, or raise 404.
 
@@ -100,6 +101,7 @@ async def _load_key_in_organization(
     ``owner_user_id`` narrows the load to keys billed to that owner, for the
     member-scoped routes in ``organization_keys.py``: somebody else's key in the
     caller's own organization answers the same 404, for the same reason.
+    ``condition`` narrows it the same way by any other rule those routes apply.
     """
     statement = (
         select(APIKey)
@@ -111,6 +113,8 @@ async def _load_key_in_organization(
     )
     if owner_user_id is not None:
         statement = statement.where(col(APIKey.user_id) == owner_user_id)
+    if condition is not None:
+        statement = statement.where(condition)
     result = await db.execute(statement)
     key = result.scalar_one_or_none()
 
