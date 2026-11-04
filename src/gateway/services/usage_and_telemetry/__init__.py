@@ -5,7 +5,7 @@
 when the domain does.
 """
 
-from gateway.repositories.usage_and_telemetry import ServedTraffic
-from gateway.services.usage_and_telemetry._service import UsageService
+from gateway.repositories.usage_and_telemetry import NameAttempts, ServedTraffic
+from gateway.services.usage_and_telemetry._service import TrafficReach, UsageService
 
-__all__ = ["ServedTraffic", "UsageService"]
+__all__ = ["NameAttempts", "ServedTraffic", "TrafficReach", "UsageService"]

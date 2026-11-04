@@ -443,9 +443,10 @@ test.describe("the keys page's one-time secret", () => {
     await captureScreenshot(page, "keys-create-dialog")
   })
 
-  // The same dialog with its disclosure open, which is what makes the body
-  // scroll: header and footer pinned, content moving between them.
-  test("the create dialog, with Advanced open", async ({ page }) => {
+  // The same dialog with its search tools and user matching unfolded, which
+  // is what makes the body scroll: header and footer pinned, content moving
+  // between them.
+  test("the create dialog, with search tools open", async ({ page }) => {
     await login(page)
     await gotoRoute(page, "/keys")
     await expect(
@@ -453,9 +454,11 @@ test.describe("the keys page's one-time secret", () => {
     ).toBeVisible()
     await page.getByRole("button", { name: "Create key" }).first().click()
     const dialog = page.getByRole("dialog")
-    await dialog.getByRole("button", { name: "Advanced" }).click()
-    await expect(dialog.getByText("Restrict this key's models")).toBeVisible()
-    await captureScreenshot(page, "keys-create-dialog-advanced")
+    await dialog
+      .getByRole("button", { name: /^Search tools and user matching/ })
+      .click()
+    await expect(dialog.getByText("Mismatched")).toBeVisible()
+    await captureScreenshot(page, "keys-create-dialog-access")
   })
 })
 

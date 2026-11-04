@@ -22,12 +22,18 @@ export function ModelScopeControl({
   title = "Model access",
   description,
   anyLabel = "Any model",
+  onlyLabel = "Only selected",
+  blockLabel = "Block all",
 }: {
   initial: string[] | undefined
   onChange: (value: string[] | undefined, valid: boolean) => void
   title?: ReactNode
   description?: ReactNode
   anyLabel?: string
+  /** The choice that narrows to a list; a key's form names it in its own words. */
+  onlyLabel?: string
+  /** The choice that allows nothing. */
+  blockLabel?: string
 }) {
   const models = useModels()
   const { isOperator, isSettled } = useDeploymentOperator()
@@ -89,14 +95,14 @@ export function ModelScopeControl({
 
   const copy: AccessListCopy = {
     inherit: anyLabel,
-    only: "Only selected",
-    block: "Block all",
+    only: onlyLabel,
+    block: blockLabel,
     blocked: (
       <>
         <strong>every</strong> model until you change this access.
       </>
     ),
-    pickPrompt: "Pick at least one model below, or choose “Block all”.",
+    pickPrompt: `Pick at least one model below, or choose “${blockLabel}”.`,
     inputLabel: "Add a model",
     placeholder: "Search providers, models, aliases…",
   }

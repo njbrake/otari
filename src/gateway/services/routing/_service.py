@@ -15,7 +15,7 @@ from gateway.services.policy_store import resolve_effective_policy
 from gateway.services.routing.compiler import compile_catalog_plan, reachable_candidates
 from gateway.services.tools import provider_tools
 from gateway.services.usage import KeyNameTraffic, UsageReadService
-from gateway.services.usage_and_telemetry import ServedTraffic, UsageService
+from gateway.services.usage_and_telemetry import ServedTraffic, TrafficReach, UsageService
 
 FALLBACK_WINDOW = timedelta(days=30)
 """How far back the automatic fallbacks look for traffic."""
@@ -36,6 +36,44 @@ class FallbackOffering:
 
 
 @dataclass(frozen=True)
+class KeyRequests:
+    """How many requests one key sent."""
+
+    api_key_id: str
+    requests: int
+
+
+def _most_first(counts: Counter[str]) -> tuple[KeyRequests, ...]:
+    return tuple(
+        KeyRequests(api_key_id=key, requests=n) for key, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    )
+
+
+@dataclass(frozen=True)
+class StepOutcome:
+    """What one step of a plan did: the requests it served, and the attempts on it that failed."""
+
+    position: int
+    served: int
+    failed: int
+
+
+@dataclass(frozen=True)
+class NameTraffic:
+    """The traffic one owner sent under one name in one workspace."""
+
+    workspace_id: uuid.UUID
+    name: str
+    user_id: str | None
+    """Whose requests these are; the owner of a policy of their own is matched on it."""
+    requests: int
+    sent_by: tuple[KeyRequests, ...]
+    """The keys that sent them, most first."""
+    steps: tuple[StepOutcome, ...]
+    """By position in the plan, first first."""
+
+
+@dataclass(frozen=True)
 class AutomaticFallback:
     """One model callers used in the window, its offerings in the order a catalog ID tries them, and its traffic."""
 
@@ -49,6 +87,8 @@ class AutomaticFallback:
     """Of ``requests``, those that did not send the catalog ID and so had no automatic fallback."""
     pinned_provider: str | None
     """The instance most of the pinned requests reached."""
+    sent_by: tuple[KeyRequests, ...] = ()
+    """The keys the reader may see that sent ``requests``, most first."""
 
 
 KEY_MODELS_SHOWN = 10
@@ -114,6 +154,7 @@ class _Tally:
     requests: int = 0
     fell_back: int = 0
     pinned: Counter[str] = field(default_factory=Counter)
+    keys: Counter[str] = field(default_factory=Counter)
 
 
 def _served_selectors(row: ServedTraffic) -> tuple[str, ...]:
@@ -226,8 +267,57 @@ class RoutingService:
             return _Coverage("pinned", "no_backup", "pinned", _instance(selector))
         return _Coverage("unknown", "unknown")
 
+    async def name_traffic(
+        self, *, reach: TrafficReach, names: Collection[str], api_key_ids: Collection[str] | None = None
+    ) -> list[NameTraffic]:
+        """The traffic sent under these names in the window, per workspace and owner, among the rows ``reach`` shows.
+
+        A request counts once, on the row that ended it; each attempt before it
+        that a later one recovered from counts as a failure of its step. A step
+        served the requests whose final, successful attempt it made.
+        """
+        rows = await self._usage.name_attempts(
+            reach=reach, since=datetime.now(UTC) - FALLBACK_WINDOW, names=names, api_key_ids=api_key_ids
+        )
+        requests: Counter[tuple[uuid.UUID, str, str | None]] = Counter()
+        keys: defaultdict[tuple[uuid.UUID, str, str | None], Counter[str]] = defaultdict(Counter)
+        steps: defaultdict[tuple[uuid.UUID, str, str | None], defaultdict[int, list[int]]] = defaultdict(
+            lambda: defaultdict(lambda: [0, 0])
+        )
+        for row in rows:
+            group = (row.workspace_id, row.name, row.user_id)
+            step = steps[group][row.position]
+            if row.status == "success":
+                step[0] += row.attempts
+            else:
+                step[1] += row.attempts
+            if row.status != "absorbed":
+                requests[group] += row.attempts
+                if row.api_key_id is not None:
+                    keys[group][row.api_key_id] += row.attempts
+        traffic = [
+            NameTraffic(
+                workspace_id=workspace_id,
+                name=name,
+                user_id=user_id,
+                requests=requests[(workspace_id, name, user_id)],
+                sent_by=_most_first(keys[(workspace_id, name, user_id)]),
+                steps=tuple(
+                    StepOutcome(position=position, served=served, failed=failed)
+                    for position, (served, failed) in sorted(steps[(workspace_id, name, user_id)].items())
+                ),
+            )
+            for workspace_id, name, user_id in steps
+        ]
+        return sorted(traffic, key=lambda item: (item.name, str(item.workspace_id), item.user_id or ""))
+
     async def automatic_fallbacks(
-        self, *, organization_id: uuid.UUID, workspace_ids: Collection[uuid.UUID]
+        self,
+        *,
+        organization_id: uuid.UUID,
+        workspace_ids: Collection[uuid.UUID],
+        reach: TrafficReach | None = None,
+        api_key_ids: Collection[str] | None = None,
     ) -> list[AutomaticFallback]:
         """Every model these workspaces sent requests to in the window, most requested first.
 
@@ -239,9 +329,16 @@ class RoutingService:
         reached, so traffic on an offering the catalog no longer serves is left
         out. The order is the catalog's, before a key's allow-list or a missing
         credential drops an offering from a request's plan.
+
+        Each model names the keys that sent it where ``reach`` lets the reader
+        see whose requests they are, and ``api_key_ids`` narrows the traffic to
+        those keys' requests among the same.
         """
         traffic = await self._usage.served_traffic(
-            workspace_ids=workspace_ids, since=datetime.now(UTC) - FALLBACK_WINDOW
+            workspace_ids=workspace_ids,
+            since=datetime.now(UTC) - FALLBACK_WINDOW,
+            reach=reach,
+            api_key_ids=api_key_ids,
         )
         models = {model.id: model for model in catalog_models(organization_id=organization_id)}
         model_of = {selector: model.id for model in models.values() for selector in model.offerings}
@@ -255,6 +352,8 @@ class RoutingService:
             tally = tallies.setdefault(model_id, _Tally())
             tally.requests += row.requests
             tally.fell_back += row.fell_back
+            if row.api_key_id is not None:
+                tally.keys[row.api_key_id] += row.requests
             if sent != model_id:
                 tally.pinned[row.provider or (reached or row.model).partition(":")[0]] += row.requests
 
@@ -280,6 +379,7 @@ class RoutingService:
                 fell_back=tally.fell_back,
                 pinned=sum(tally.pinned.values()),
                 pinned_provider=tally.pinned.most_common(1)[0][0] if tally.pinned else None,
+                sent_by=_most_first(tally.keys),
             )
             for model_id, tally in tallies.items()
             if tally.requests > 0

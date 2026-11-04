@@ -86,7 +86,7 @@ export function KeyActionsMenu({
     {
       id: "edit",
       label: "Edit…",
-      hint: undefined,
+      hint: "Name, models, budget, expiry",
       icon: FiEdit2,
       isDisabled: false,
       run: onEdit,

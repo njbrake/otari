@@ -11,6 +11,8 @@ import type {
   CreateKeyResponse,
   CreateOwnKeyRequest,
   FederationRule,
+  KeyRouting,
+  KeyRoutingResponse,
   UpdateKeyRequest,
   UpdateOwnKeyRequest,
 } from "@/client"
@@ -86,6 +88,45 @@ export function useKeysById(ids: readonly string[]) {
     combine: (results) =>
       results.flatMap((result, index) =>
         (result.data ?? []).filter((apiKey) => apiKey.id === ids[index]),
+      ),
+  })
+}
+
+// The routing read takes at most this many keys a call, so a page of more asks
+// in batches. Mirrors the gateway's MAX_FILTER_VALUES.
+const ROUTING_BATCH = 50
+
+/**
+ * What each of `ids` sent in the last 30 days and whether a failure on each
+ * name has a backup, by key id. A key the caller may not see is absent, as from
+ * the list. Batched so a long list stays within the read's bound; each batch is
+ * its own query, so one that fails leaves the rest on screen.
+ */
+export function useKeysRouting(ids: readonly string[]) {
+  const scope = useKeysScope()
+  const batches: string[][] = []
+  for (let start = 0; start < ids.length; start += ROUTING_BATCH) {
+    batches.push(ids.slice(start, start + ROUTING_BATCH))
+  }
+  return useQueries({
+    queries: batches.map((batch) => ({
+      queryKey: [KEYS, scope.base, "routing", batch],
+      queryFn: () => {
+        const params = new URLSearchParams()
+        for (const id of batch) params.append("api_key_id", id)
+        return apiFetch<KeyRoutingResponse>(`${scope.base}/routing?${params}`)
+      },
+      enabled: scope.isReady,
+      staleTime: 5 * 60_000,
+    })),
+    combine: (results) =>
+      new Map<string, KeyRouting>(
+        results.flatMap((result) =>
+          (result.data?.keys ?? []).map((routing) => [
+            routing.api_key_id,
+            routing,
+          ]),
+        ),
       ),
   })
 }

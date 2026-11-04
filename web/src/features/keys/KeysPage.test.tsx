@@ -15,6 +15,7 @@ import type {
   ApiKey,
   Budget,
   DeploymentBootstrap,
+  KeyRouting,
   MembershipRole,
   OrganizationBudget,
   ScopedBudget,
@@ -84,6 +85,15 @@ function stubRegionWidth(width: number) {
   )
 }
 
+/** Unfold the search tools and user matching under a key form's models. */
+async function openAccessDetails(user: UserEvent) {
+  await user.click(
+    await screen.findByRole("button", {
+      name: /^Search tools and user matching/,
+    }),
+  )
+}
+
 async function chooseAction(user: UserEvent, row: HTMLElement, action: string) {
   await user.click(within(row).getByRole("button", { name: /^Actions for / }))
   await user.click(
@@ -143,6 +153,8 @@ function mockApi(
     ceilingStatus?: number
     /** The keys' own ceilings, as the deployment's list answers them. */
     ceilings?: ScopedBudget[]
+    /** What the routing read answers per key; none unless a case says otherwise. */
+    routing?: KeyRouting[]
   } = {},
 ) {
   let list = [...(opts.keys ?? [])]
@@ -155,6 +167,18 @@ function mockApi(
       const url = String(input)
       const method = (init?.method ?? "GET").toUpperCase()
 
+      // Before the keys list: its path is a child of the keys collection.
+      if (url.includes("/keys/routing?")) {
+        const asked = new URL(url, "http://localhost").searchParams.getAll(
+          "api_key_id",
+        )
+        return jsonResponse({
+          window_days: 30,
+          keys: (opts.routing ?? []).filter((row) =>
+            asked.includes(row.api_key_id),
+          ),
+        })
+      }
       if (KEYS_URL.test(url)) {
         if (url.endsWith("/rotate") && method === "POST") {
           const id = url.split("/").slice(-2)[0]
@@ -359,7 +383,7 @@ describe("KeysPage", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("keeps two faces in Owner and folds the lanes into the menu only once they leave the row", async () => {
+  it("names each key's owner under it and folds the lanes into the menu only once they leave the row", async () => {
     const member = "33333333-3333-3333-3333-333333333333"
     stubRegionWidth(1440)
     mockApi({
@@ -378,14 +402,16 @@ describe("KeysPage", () => {
     const usr = userEvent.setup()
     renderPage(<KeysPage />)
 
-    // A member is a person and takes the body face; a raw id is an identifier
-    // and takes the mono one, which is the only thing telling the two apart.
+    // The owner sits on the line under the name, by name where they are a
+    // member and by id otherwise; the id is always on hover.
     const named = await screen.findByText("Alice Example")
-    expect(named).toHaveClass("text-sm", "text-foreground")
     expect(named).toHaveAttribute("title", member)
-    expect(screen.getByText("ci-bot", { selector: "span" })).toHaveClass(
-      "text-mono-caption",
-    )
+    expect(
+      within(screen.getByText("raw").closest("tr")!).getByText("ci-bot"),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("columnheader", { name: "Owner" }),
+    ).not.toBeInTheDocument()
 
     // Last used and Expires are lanes here, and so are the name, the owner and
     // the fingerprint, so the menu repeats none of them. Created has no lane,
@@ -927,7 +953,6 @@ describe("KeysPage", () => {
     // Focus off the picker before reaching for anything else: its popover is
     // open and react-aria aria-hides the rest of the dialog while it is.
     await usr.click(screen.getByLabelText("Name"))
-    await usr.click(screen.getByRole("button", { name: "Advanced" }))
     await usr.click(screen.getByLabelText("Exempt from budget"))
 
     // Out through the guard, which is the only way out of a dirty form.
@@ -936,7 +961,6 @@ describe("KeysPage", () => {
 
     await usr.click(screen.getByRole("button", { name: "Create key" }))
     expect(screen.getByPlaceholderText(/Pick a user/)).toHaveValue("")
-    await usr.click(screen.getByRole("button", { name: "Advanced" }))
     expect(screen.getByLabelText("Exempt from budget")).not.toBeChecked()
     // And nothing is unsaved on arrival, so Escape closes rather than guarding.
     await usr.keyboard("{Escape}")
@@ -954,7 +978,6 @@ describe("KeysPage", () => {
     await usr.click(
       screen.getByRole("button", { name: "Create your first key" }),
     )
-    await usr.click(screen.getByRole("button", { name: "Advanced" }))
     await usr.click(screen.getByLabelText("Exempt from budget"))
 
     await usr.keyboard("{Escape}")
@@ -1112,8 +1135,7 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
-    await user.click(screen.getByRole("button", { name: "Only selected" }))
+    await user.click(screen.getByRole("button", { name: "Only these" }))
     // The scope picker is a catalog combobox, not free text: type to filter, then
     // pick the discovered model.
     await user.type(screen.getByLabelText("Add a model"), "gpt-4o")
@@ -1147,7 +1169,6 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "mlpa")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
     await user.click(screen.getByLabelText("Service key"))
     await user.click(screen.getByRole("button", { name: "Create key" }))
 
@@ -1175,7 +1196,6 @@ describe("KeysPage", () => {
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
     // The exempt toggle lives under the Advanced disclosure.
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
     await user.click(screen.getByLabelText("Exempt from budget"))
     await user.click(screen.getByRole("button", { name: "Create key" }))
 
@@ -1529,7 +1549,6 @@ describe("KeysPage", () => {
       renderPage(<KeysPage />)
 
       await createWithBudget(user)
-      await user.click(screen.getByRole("button", { name: "Advanced" }))
       await user.click(screen.getByLabelText("Exempt from budget"))
       await submitTheCreateDialog(user)
 
@@ -1549,7 +1568,7 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
+    await openAccessDetails(user)
     await pickOption(user, "Mismatched user field", "Always accept")
     await user.click(screen.getByRole("button", { name: "Create key" }))
 
@@ -1710,8 +1729,7 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
-    await user.click(screen.getByRole("button", { name: "Block all" }))
+    await user.click(screen.getByRole("button", { name: "None" }))
     await user.click(screen.getByRole("button", { name: "Create key" }))
 
     const post = fetchMock.mock.calls.find(
@@ -1733,7 +1751,7 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
+    await openAccessDetails(user)
     await user.click(screen.getByRole("button", { name: "No tool" }))
     await user.click(screen.getByRole("button", { name: "Create key" }))
 
@@ -1747,7 +1765,7 @@ describe("KeysPage", () => {
     expect(body.allowed_models).toBeNull()
   })
 
-  it("shows the access it will send after Advanced is hidden and reopened", async () => {
+  it("keeps the access it will send when the search tools are folded away", async () => {
     const fetchMock = mockApi({ keys: [] })
     const user = userEvent.setup()
     renderPage(<KeysPage />)
@@ -1758,12 +1776,15 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
+    await openAccessDetails(user)
     await user.click(screen.getByRole("button", { name: "No tool" }))
-    await user.click(screen.getByRole("button", { name: "Block all" }))
-    await user.click(screen.getByRole("button", { name: "Hide advanced" }))
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
-
+    await user.click(screen.getByRole("button", { name: "None" }))
+    // Folded, the section says what it holds; reopened, it still holds it.
+    await openAccessDetails(user)
+    expect(
+      screen.getByRole("button", { name: /^Search tools and user matching/ }),
+    ).toHaveTextContent("No search tools")
+    await openAccessDetails(user)
     expect(
       screen.getByText(/search tool on \/v1\/search until you change/),
     ).toBeInTheDocument()
@@ -1793,8 +1814,7 @@ describe("KeysPage", () => {
     // Give it an owner so the only reason Create stays disabled is the empty scope.
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
-    await user.click(screen.getByRole("button", { name: "Only selected" }))
+    await user.click(screen.getByRole("button", { name: "Only these" }))
 
     expect(screen.getByRole("button", { name: "Create key" })).toBeDisabled()
   })
@@ -1921,12 +1941,11 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "team-checkout")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
 
     // The "any" mode is labeled as inheritance, not unrestricted, and the owner's
     // access is surfaced for context (a new id starts unrestricted).
     expect(
-      screen.getByRole("button", { name: "Inherit owner access" }),
+      screen.getByRole("button", { name: "All allowed models" }),
     ).toBeInTheDocument()
     expect(screen.getByText(/starts unrestricted/)).toBeInTheDocument()
   })
@@ -2006,6 +2025,7 @@ describe("KeysPage", () => {
 
     const row = (await screen.findByText("ci-bot")).closest("tr")!
     await chooseAction(user, row, "Edit")
+    await openAccessDetails(user)
     await pickOption(user, "Mismatched user field", "Always accept")
     await user.click(screen.getByRole("button", { name: "Save" }))
 
@@ -2087,7 +2107,9 @@ describe("KeysPage", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("shows a key's access scope in its row without a misleading count", async () => {
+  it("shows what a key's model list reaches, by provider and count", async () => {
+    // The Models lane is on the wide table; narrower, it folds into the menu.
+    stubRegionWidth(1440)
     mockApi({
       keys: [
         apiKey({
@@ -2102,10 +2124,14 @@ describe("KeysPage", () => {
     renderPage(<KeysPage />)
 
     const scoped = (await screen.findByText("scoped")).closest("tr")!
-    // A wildcard is many models, so the chip says "Selected models", not "2 models".
-    expect(within(scoped).getByText("Selected models")).toBeInTheDocument()
+    // Counted against the catalog, so a wildcard and a model it already covers
+    // are one model, not two entries.
+    expect(within(scoped).getByText("openai")).toBeInTheDocument()
+    expect(await within(scoped).findByText("1 model")).toBeInTheDocument()
     expect(
-      within(screen.getByText("open").closest("tr")!).getByText("All models"),
+      within(screen.getByText("open").closest("tr")!).getByText(
+        "All allowed models",
+      ),
     ).toBeInTheDocument()
     expect(
       within(screen.getByText("locked").closest("tr")!).getByText("No models"),
@@ -2127,7 +2153,7 @@ describe("KeysPage", () => {
     renderPage(<KeysPage />)
 
     const row = (await screen.findByText("old")).closest("tr")!
-    expect(within(row).getByText("Expired")).toBeInTheDocument()
+    expect(within(row).getByText(/^Expired /)).toBeInTheDocument()
     expect(within(row).getByText("virtual")).toBeInTheDocument()
   })
 
@@ -2224,7 +2250,6 @@ describe("KeysPage", () => {
 
       // A member cannot write a ceiling, so there is no budget to pick.
       expect(screen.queryByText("Budget (optional)")).not.toBeInTheDocument()
-      await usr.click(screen.getByRole("button", { name: "Advanced" }))
       expect(
         screen.queryByLabelText("Exempt from budget"),
       ).not.toBeInTheDocument()
@@ -2339,5 +2364,327 @@ describe("KeysPage usage link", () => {
     expect(
       screen.queryByRole("menuitem", { name: /^View usage/ }),
     ).not.toBeInTheDocument()
+  })
+})
+
+describe("KeysPage routing lanes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  function routing(overrides: Partial<KeyRouting> = {}): KeyRouting {
+    return {
+      api_key_id: "key-1",
+      models: [],
+      model_count: 0,
+      no_backup_count: 0,
+      policies: [],
+      ...overrides,
+    }
+  }
+
+  it("names the model each key sends most, and whether it has a backup", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: [
+        apiKey({ id: "key-1", key_name: "thymeline" }),
+        apiKey({ id: "key-2", key_name: "giftmuse" }),
+        apiKey({ id: "key-3", key_name: "idle" }),
+      ],
+      routing: [
+        routing({
+          api_key_id: "key-1",
+          model_count: 3,
+          no_backup_count: 2,
+          models: [
+            {
+              name: "claude-sonnet-5-5",
+              requests: 1310,
+              kind: "catalog",
+              backup: "no_backup",
+              reason: "single_offering",
+              provider: "thymeline-anthropic",
+            },
+          ],
+        }),
+        routing({
+          api_key_id: "key-2",
+          model_count: 1,
+          models: [
+            {
+              name: "gpt-5.2",
+              requests: 40,
+              kind: "catalog",
+              backup: "has_backup",
+              reason: null,
+              provider: null,
+            },
+          ],
+        }),
+        routing({ api_key_id: "key-3" }),
+      ],
+    })
+    renderPage(<KeysPage />)
+
+    const thymeline = (await screen.findByText("thymeline")).closest("tr")!
+    expect(
+      await within(thymeline).findByText("claude-sonnet-5-5"),
+    ).toBeInTheDocument()
+    expect(within(thymeline).getByText("+2")).toBeInTheDocument()
+    expect(within(thymeline).getByText("No backup")).toBeInTheDocument()
+
+    const giftmuse = screen.getByText("giftmuse").closest("tr")!
+    expect(within(giftmuse).getByText("Has backup")).toBeInTheDocument()
+    expect(within(giftmuse).queryByText("No backup")).not.toBeInTheDocument()
+
+    expect(
+      within(screen.getByText("idle").closest("tr")!).getByText(
+        "Not used (30d)",
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Open Routing" })).toHaveAttribute(
+      "href",
+      "/routing",
+    )
+  })
+
+  const colleague = "44444444-4444-4444-4444-444444444444"
+  const colleagueKeys = [
+    apiKey({ id: "key-1", key_name: "theirs", user_id: colleague }),
+  ]
+  const colleagueMembers = [
+    organizationMember({
+      attribution_user_id: colleague,
+      full_name: "Sam Colleague",
+    }),
+  ]
+
+  it("shows an organization admin each key's owner", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: colleagueKeys,
+      members: colleagueMembers,
+      deploymentOperator: false,
+      role: "admin",
+    })
+    renderPage(<KeysPage />)
+
+    expect(await screen.findByText("Sam Colleague")).toBeInTheDocument()
+    expect(
+      screen.getByText("Every key in this workspace, one per app.", {
+        exact: false,
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("shows a member no owner, every key on their page being theirs", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: colleagueKeys,
+      members: colleagueMembers,
+      deploymentOperator: false,
+      role: "member",
+    })
+    renderPage(<KeysPage />)
+
+    await screen.findByText("theirs")
+    expect(screen.queryByText("Sam Colleague")).not.toBeInTheDocument()
+    expect(
+      screen.getByText("Your keys for calling this gateway, one per app.", {
+        exact: false,
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("opens a key's Edit from its Models lane", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: [
+        apiKey({
+          id: "key-1",
+          key_name: "scoped",
+          allowed_models: ["openai:*"],
+        }),
+      ],
+    })
+    const usr = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await usr.click(await screen.findByRole("button", { name: "openai" }))
+    expect(await screen.findByRole("dialog")).toHaveTextContent("scoped")
+  })
+
+  it("says what Edit changes in the key's menu", async () => {
+    stubRegionWidth(1440)
+    mockApi({ keys: [apiKey({ id: "key-1", key_name: "named" })] })
+    const usr = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await usr.click(
+      await screen.findByRole("button", { name: "Actions for named" }),
+    )
+    expect(
+      await screen.findByRole("menuitem", { name: /^Edit…/ }),
+    ).toHaveTextContent("Name, models, budget, expiry")
+  })
+
+  it("keeps the most-used model on a phone's row", async () => {
+    stubRegionWidth(390)
+    mockApi({
+      keys: [apiKey({ id: "key-1", key_name: "thymeline" })],
+      routing: [
+        routing({
+          model_count: 1,
+          models: [
+            {
+              name: "kimi",
+              requests: 212,
+              kind: "policy",
+              backup: "no_backup",
+              reason: "single_target_policy",
+              provider: "fireworks",
+            },
+          ],
+        }),
+      ],
+    })
+    renderPage(<KeysPage />)
+
+    const list = await screen.findByRole("region", { name: "API keys" })
+    expect(await within(list).findByText("kimi")).toBeInTheDocument()
+    expect(within(list).getByText("No backup")).toBeInTheDocument()
+  })
+})
+
+describe("KeysPage forms", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it("reports in Edit what a key sent and which of its models have no backup", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: [apiKey({ id: "key-1", key_name: "thymeline" })],
+      routing: [
+        {
+          api_key_id: "key-1",
+          model_count: 3,
+          no_backup_count: 2,
+          policies: [{ name: "kimi", requests: 212 }],
+          models: [
+            {
+              name: "claude-sonnet-5-5",
+              requests: 1310,
+              kind: "catalog",
+              backup: "no_backup",
+              reason: "single_offering",
+              provider: "thymeline-anthropic",
+            },
+            {
+              name: "kimi",
+              requests: 212,
+              kind: "policy",
+              backup: "no_backup",
+              reason: "single_target_policy",
+              provider: "fireworks",
+            },
+            {
+              name: "gpt-5.2",
+              requests: 18,
+              kind: "catalog",
+              backup: "has_backup",
+              reason: null,
+              provider: null,
+            },
+          ],
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    const row = (await screen.findByText("thymeline")).closest("tr")!
+    await chooseAction(user, row, "Edit")
+    const routing = await screen.findByRole("region", { name: "Routing" })
+    expect(within(routing).getByText("kimi (212)")).toBeInTheDocument()
+    expect(
+      within(routing).getByText("2 of 3 models have none"),
+    ).toBeInTheDocument()
+    expect(
+      within(routing).getByText("· only thymeline-anthropic serves it"),
+    ).toBeInTheDocument()
+    expect(
+      within(routing).getByText("· policy with one target"),
+    ).toBeInTheDocument()
+    expect(within(routing).queryByText("gpt-5.2")).not.toBeInTheDocument()
+    expect(
+      within(routing).getByRole("link", { name: "Set up routing" }),
+    ).toHaveAttribute("href", "/routing")
+  })
+
+  it("lets an organization admin create a key for a member", async () => {
+    const member = "55555555-5555-5555-5555-555555555555"
+    const fetchMock = mockApi({
+      keys: [],
+      deploymentOperator: false,
+      role: "admin",
+      members: [
+        organizationMember({
+          attribution_user_id: member,
+          full_name: "Priya Member",
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Create your first key" }),
+    )
+    await pickOption(user, "Owner", "Priya Member")
+    await submitTheCreateDialog(user)
+
+    const post = fetchMock.mock.calls.find(
+      ([u, init]) =>
+        String(u).endsWith(`${API_ROOT}/organizations/me/keys`) &&
+        (init?.method ?? "") === "POST",
+    )
+    expect(JSON.parse(String(post?.[1]?.body)).user_id).toBe(member)
+  })
+
+  it("gives a member no owner to pick and no budget to set", async () => {
+    mockApi({ keys: [], deploymentOperator: false, role: "member" })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Create your first key" }),
+    )
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).queryByLabelText("Owner")).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole("region", { name: "Budget" }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(dialog).getByText("Limited to what your admin allows."),
+    ).toBeInTheDocument()
+  })
+
+  it("offers routing as the next step once a key is created", async () => {
+    mockApi({ keys: [], deploymentOperator: false, role: "member" })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Create your first key" }),
+    )
+    await submitTheCreateDialog(user)
+    expect(
+      await screen.findByRole("link", {
+        name: "Next: set up routing for this app",
+      }),
+    ).toHaveAttribute("href", "/routing")
   })
 })

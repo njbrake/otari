@@ -1947,6 +1947,14 @@
             "description": "Requests served in the window, each counted once however many attempts.",
             "title": "Requests",
             "type": "integer"
+          },
+          "sent_by": {
+            "description": "The keys that sent `requests`, most first: everyone's to an owner or admin, a workspace's to its own owners and admins, and otherwise the caller's own keys alone.",
+            "items": {
+              "$ref": "#/components/schemas/KeyRequestsPublic"
+            },
+            "title": "Sent By",
+            "type": "array"
           }
         },
         "required": [
@@ -1956,7 +1964,8 @@
           "requests",
           "fell_back",
           "pinned",
-          "pinned_provider"
+          "pinned_provider",
+          "sent_by"
         ],
         "title": "AutomaticFallbackPublic",
         "type": "object"
@@ -10650,6 +10659,25 @@
         "title": "KeyPolicyPublic",
         "type": "object"
       },
+      "KeyRequestsPublic": {
+        "description": "How many requests one key sent.",
+        "properties": {
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "api_key_id",
+          "requests"
+        ],
+        "title": "KeyRequestsPublic",
+        "type": "object"
+      },
       "KeyRoutingPublic": {
         "description": "What one key sent in the window, and what a failure on each name does.",
         "properties": {
@@ -12293,6 +12321,64 @@
           "flagged"
         ],
         "title": "ModerationResult",
+        "type": "object"
+      },
+      "NameTrafficPublic": {
+        "description": "The traffic one person sent under one policy or alias name in one workspace.",
+        "properties": {
+          "name": {
+            "description": "The name the requests sent as `model`.",
+            "title": "Name",
+            "type": "string"
+          },
+          "requests": {
+            "description": "Requests in the window, each counted once however many attempts.",
+            "title": "Requests",
+            "type": "integer"
+          },
+          "sent_by": {
+            "description": "The keys that sent them, most first.",
+            "items": {
+              "$ref": "#/components/schemas/KeyRequestsPublic"
+            },
+            "title": "Sent By",
+            "type": "array"
+          },
+          "steps": {
+            "description": "By position in the plan, first first.",
+            "items": {
+              "$ref": "#/components/schemas/StepOutcomePublic"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whose requests these are. A member's identity id for a member's own requests, so a policy of their own is matched on it.",
+            "title": "User Id"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "name",
+          "user_id",
+          "requests",
+          "sent_by",
+          "steps"
+        ],
+        "title": "NameTrafficPublic",
         "type": "object"
       },
       "NoulCriteria": {
@@ -19492,6 +19578,30 @@
         "title": "RouterStatus",
         "type": "object"
       },
+      "RoutingTrafficResponse": {
+        "description": "The traffic sent under the routing policies and aliases the caller may see.",
+        "properties": {
+          "names": {
+            "description": "One entry per workspace, name and person: everyone's to an owner or admin, a workspace's to its own owners and admins, and otherwise the caller's own alone.",
+            "items": {
+              "$ref": "#/components/schemas/NameTrafficPublic"
+            },
+            "title": "Names",
+            "type": "array"
+          },
+          "window_days": {
+            "description": "How many days of traffic the counts cover.",
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days",
+          "names"
+        ],
+        "title": "RoutingTrafficResponse",
+        "type": "object"
+      },
       "SandboxCredentialPublic": {
         "description": "Where the key a hosted sandbox provider leases with comes from. Never the key itself.",
         "properties": {
@@ -21371,6 +21481,33 @@
         "title": "SpanPublic",
         "type": "object"
       },
+      "StepOutcomePublic": {
+        "description": "What one step of a plan did in the window.",
+        "properties": {
+          "failed": {
+            "description": "Attempts on this step that failed, whether a later step recovered or not.",
+            "title": "Failed",
+            "type": "integer"
+          },
+          "position": {
+            "description": "The step's place in the plan, 1 for the first.",
+            "title": "Position",
+            "type": "integer"
+          },
+          "served": {
+            "description": "Requests this step answered.",
+            "title": "Served",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "position",
+          "served",
+          "failed"
+        ],
+        "title": "StepOutcomePublic",
+        "type": "object"
+      },
       "StoredSearchToolSchema": {
         "description": "A runtime-stored search or fetch instance. The API key is never returned, only ``last4``.",
         "properties": {
@@ -22418,6 +22555,24 @@
           "cost"
         ],
         "title": "UnitChargeLine",
+        "type": "object"
+      },
+      "UnpricedSelectorsResponse": {
+        "description": "Which models a router that scores by cost could not price.",
+        "properties": {
+          "unpriced": {
+            "description": "The selectors asked about that have no pricing in the workspace, in the order asked. A Smart router (`knn`) policy naming one is refused on save.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Unpriced",
+            "type": "array"
+          }
+        },
+        "required": [
+          "unpriced"
+        ],
+        "title": "UnpricedSelectorsResponse",
         "type": "object"
       },
       "UpdateBudgetRequest": {
@@ -36444,8 +36599,32 @@
     },
     "/api/v1/organizations/me/automatic-fallbacks": {
       "get": {
-        "description": "The models the caller's organization sent requests to in the last 30 days, and the fallback each gets.\n\nA request that sends a model's catalog ID moves to the model's next offering\nwhen one fails, with no policy. Each model lists its offerings in the order\nsuch a request tries them, priced for this organization, with who runs the\nbuilt-in tools on each, beside its traffic: how many requests a backup served,\nand how many named one offering and so had no fallback. The traffic is the\nworkspaces the caller may see in their active organization, by the rule the\norganization's usage reads use.",
+        "description": "The models the caller's organization sent requests to in the last 30 days, and the fallback each gets.\n\nA request that sends a model's catalog ID moves to the model's next offering\nwhen one fails, with no policy. Each model lists its offerings in the order\nsuch a request tries them, priced for this organization, with who runs the\nbuilt-in tools on each, beside its traffic: how many requests a backup served,\nand how many named one offering and so had no fallback. The traffic is the\nworkspaces the caller may see in their active organization, by the rule the\norganization's usage reads use. ``sent_by`` names the keys, and\n``api_key_id`` narrows to them, only among the requests the caller may see\nas someone's: everyone's to an owner or admin, a workspace's to its own\nowners and admins, and otherwise the caller's own.",
         "operationId": "routing-list_automatic_fallbacks",
+        "parameters": [
+          {
+            "description": "Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused.",
+            "in": "query",
+            "name": "api_key_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused.",
+              "title": "Api Key Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36456,6 +36635,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -40072,6 +40261,159 @@
           }
         ],
         "summary": "Copy Organization Routing Policy",
+        "tags": [
+          "routing"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/routing-policies/traffic": {
+      "get": {
+        "description": "The last 30 days of traffic sent under each routing policy and alias name the caller may see.\n\nPer workspace, name and person: the requests, the keys that sent them, and\nwhat each step of the plan did (served, or failed and handed on). Whose\ntraffic follows the organization's usage reads: everyone's to an owner or\nadmin, a workspace's to its own owners and admins, and otherwise the\ncaller's own. The names are the stored policies and aliases of the\nworkspaces the caller may see and the config-file ones.",
+        "operationId": "routing-read_routing_traffic",
+        "parameters": [
+          {
+            "description": "Only stored entries in this workspace. Config-file entries are always included, being deployment-wide. Omit for every workspace this caller may see.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only stored entries in this workspace. Config-file entries are always included, being deployment-wide. Omit for every workspace this caller may see.",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "description": "Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused.",
+            "in": "query",
+            "name": "api_key_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused.",
+              "title": "Api Key Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingTrafficResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Read Routing Traffic",
+        "tags": [
+          "routing"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/routing-policies/unpriced": {
+      "get": {
+        "description": "Which of these models have no pricing, so a Smart router naming them would be refused.\n\nThe check the write runs, asked before it: the dashboard marks each pool model\nthat needs a price and holds the save, rather than letting it fail. Any member\nwho may see the workspace may ask, since a member may write a policy of their\nown there; the answer names no price, only whether one exists.",
+        "operationId": "routing-read_unpriced_router_candidates",
+        "parameters": [
+          {
+            "description": "The workspace a policy naming these models would be stored in.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "description": "The workspace a policy naming these models would be stored in.",
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A model a Smart router pool would name, as `provider:model`. Repeat it, up to a policy's cap on models.",
+            "in": "query",
+            "name": "selector",
+            "required": true,
+            "schema": {
+              "description": "A model a Smart router pool would name, as `provider:model`. Repeat it, up to a policy's cap on models.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 5,
+              "minItems": 1,
+              "title": "Selector",
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnpricedSelectorsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Read Unpriced Router Candidates",
         "tags": [
           "routing"
         ]

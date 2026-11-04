@@ -1,5 +1,6 @@
 """Request and response models of the routing domain."""
 
+import uuid
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -116,6 +117,15 @@ class FallbackOfferingPublic(BaseModel):
     otari_tools: list[str] = Field(description="Built-in tools Otari runs in this provider's place, for that caller.")
 
 
+class KeyRequestsPublic(BaseModel):
+    """How many requests one key sent."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    api_key_id: str
+    requests: int
+
+
 class AutomaticFallbackPublic(BaseModel):
     """One model the caller's organization used in the window, and the fallback a catalog ID gives it."""
 
@@ -133,6 +143,10 @@ class AutomaticFallbackPublic(BaseModel):
         "and so got no automatic fallback."
     )
     pinned_provider: str | None = Field(description="The instance most pinned requests reached.")
+    sent_by: list[KeyRequestsPublic] = Field(
+        description="The keys that sent `requests`, most first: everyone's to an owner or admin, a workspace's "
+        "to its own owners and admins, and otherwise the caller's own keys alone."
+    )
 
 
 class AutomaticFallbacksResponse(BaseModel):
@@ -195,4 +209,49 @@ class KeyRoutingResponse(BaseModel):
     keys: list[KeyRoutingPublic] = Field(
         description="One entry per key asked for that the caller may see, in the order asked; "
         "a key the caller may not see is left out, like one that does not exist."
+    )
+
+
+class StepOutcomePublic(BaseModel):
+    """What one step of a plan did in the window."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    position: int = Field(description="The step's place in the plan, 1 for the first.")
+    served: int = Field(description="Requests this step answered.")
+    failed: int = Field(description="Attempts on this step that failed, whether a later step recovered or not.")
+
+
+class NameTrafficPublic(BaseModel):
+    """The traffic one person sent under one policy or alias name in one workspace."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    workspace_id: uuid.UUID
+    name: str = Field(description="The name the requests sent as `model`.")
+    user_id: str | None = Field(
+        description="Whose requests these are. A member's identity id for a member's own requests, so a policy "
+        "of their own is matched on it."
+    )
+    requests: int = Field(description="Requests in the window, each counted once however many attempts.")
+    sent_by: list[KeyRequestsPublic] = Field(description="The keys that sent them, most first.")
+    steps: list[StepOutcomePublic] = Field(description="By position in the plan, first first.")
+
+
+class RoutingTrafficResponse(BaseModel):
+    """The traffic sent under the routing policies and aliases the caller may see."""
+
+    window_days: int = Field(description="How many days of traffic the counts cover.")
+    names: list[NameTrafficPublic] = Field(
+        description="One entry per workspace, name and person: everyone's to an owner or admin, a workspace's to "
+        "its own owners and admins, and otherwise the caller's own alone."
+    )
+
+
+class UnpricedSelectorsResponse(BaseModel):
+    """Which models a router that scores by cost could not price."""
+
+    unpriced: list[str] = Field(
+        description="The selectors asked about that have no pricing in the workspace, in the order asked. A Smart "
+        "router (`knn`) policy naming one is refused on save."
     )

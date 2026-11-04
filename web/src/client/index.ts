@@ -246,6 +246,9 @@ export type UpdateKeyRequest = Schemas["UpdateKeyRequest"]
 // The member surface's bodies (otari-ai#1941): the operator shapes minus the
 // owner and the budget exemption, which that surface derives or refuses.
 export type CreateOwnKeyRequest = Schemas["CreateOwnKeyRequest"]
+export type KeyRouting = Schemas["KeyRoutingPublic"]
+export type KeyRoutingModel = Schemas["KeyModelPublic"]
+export type KeyRoutingResponse = Schemas["KeyRoutingResponse"]
 export type UpdateOwnKeyRequest = Schemas["UpdateOwnKeyRequest"]
 export type FederationRule = Schemas["FederationRulePublic"]
 export type CreateFederationRuleRequest = Schemas["FederationRuleCreate"]

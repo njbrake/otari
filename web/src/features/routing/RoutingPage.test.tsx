@@ -944,6 +944,7 @@ describe("RoutingPage for an organization admin", () => {
       fallbacks: [
         {
           id: "anthropic/claude-sonnet-5.5",
+          sent_by: [],
           name: "Claude Sonnet 5.5",
           offerings: [
             {

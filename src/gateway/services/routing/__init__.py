@@ -25,7 +25,15 @@ a policy, and the harness acts on the answer itself.
 """
 
 from gateway.exceptions.routing_exceptions import UnreadableRecommendationError
-from gateway.services.routing._service import FALLBACK_WINDOW, AutomaticFallback, FallbackOffering, RoutingService
+from gateway.services.routing._service import (
+    FALLBACK_WINDOW,
+    AutomaticFallback,
+    FallbackOffering,
+    KeyRequests,
+    NameTraffic,
+    RoutingService,
+    StepOutcome,
+)
 from gateway.services.routing.backends import (
     KNN_BACKEND,
     NOOP_BACKEND,
@@ -68,13 +76,16 @@ __all__ = [
     "CompiledPlan",
     "DroppedCandidate",
     "FallbackOffering",
+    "KeyRequests",
     "KnnRoutingMemory",
+    "NameTraffic",
     "NoEligibleCandidatesError",
     "RouterBackend",
     "RouterOrdering",
     "RoutingContext",
     "RoutingDecision",
     "RoutingService",
+    "StepOutcome",
     "RoutingSignal",
     "UnreadableRecommendationError",
     "backend_is_priority",

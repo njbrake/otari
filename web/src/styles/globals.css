@@ -2873,11 +2873,11 @@ main {
 .otari-keys-table .table__column:first-child {
   width: 3rem;
 }
-.otari-keys-table .table__column[data-key="status"] {
-  width: 7.5rem;
+.otari-keys-table .table__column[data-key="models"] {
+  width: 11rem;
 }
-.otari-keys-table .table__column[data-key="owner"] {
-  width: 10.625rem;
+.otari-keys-table .table__column[data-key="most_used"] {
+  width: 11rem;
 }
 .otari-keys-table .table__column[data-key="budget"] {
   width: 10rem;
