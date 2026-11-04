@@ -2,7 +2,7 @@
 
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -268,17 +268,32 @@ class RoutingService:
         return _Coverage("unknown", "unknown")
 
     async def name_traffic(
-        self, *, reach: TrafficReach, names: Collection[str], api_key_ids: Collection[str] | None = None
+        self,
+        *,
+        reach: TrafficReach,
+        everywhere: Collection[str],
+        by_workspace: Mapping[uuid.UUID, Collection[str]],
+        api_key_ids: Collection[str] | None = None,
     ) -> list[NameTraffic]:
-        """The traffic sent under these names in the window, per workspace and owner, among the rows ``reach`` shows.
+        """The traffic sent under routing names in the window, per workspace and owner, among the rows ``reach`` shows.
+
+        A name counts in a workspace where it routes: everywhere for one
+        ``everywhere`` holds (the configured policies and aliases), and in its own
+        workspace for one ``by_workspace`` lists there. The same name sent in a
+        workspace where nothing claims it is a plain model name, not this traffic.
 
         A request counts once, on the row that ended it; each attempt before it
         that a later one recovered from counts as a failure of its step. A step
         served the requests whose final, successful attempt it made.
         """
-        rows = await self._usage.name_attempts(
-            reach=reach, since=datetime.now(UTC) - FALLBACK_WINDOW, names=names, api_key_ids=api_key_ids
-        )
+        candidates = set(everywhere).union(*by_workspace.values())
+        rows = [
+            row
+            for row in await self._usage.name_attempts(
+                reach=reach, since=datetime.now(UTC) - FALLBACK_WINDOW, names=candidates, api_key_ids=api_key_ids
+            )
+            if row.name in everywhere or row.name in by_workspace.get(row.workspace_id, ())
+        ]
         requests: Counter[tuple[uuid.UUID, str, str | None]] = Counter()
         keys: defaultdict[tuple[uuid.UUID, str, str | None], Counter[str]] = defaultdict(Counter)
         steps: defaultdict[tuple[uuid.UUID, str, str | None], defaultdict[int, list[int]]] = defaultdict(

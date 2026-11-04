@@ -259,6 +259,48 @@ def test_an_owner_reads_everyones_traffic_with_its_keys_and_steps(traffic_client
     assert traffic[("one", "short", "member")]["steps"] == [{"position": 1, "served": 1, "failed": 0}]
 
 
+def test_a_name_counts_only_where_it_routes(
+    traffic_client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """A policy stored in one workspace says nothing about the same name sent in another, where it is a model name."""
+    session = db_session_factory()
+    try:
+        session.add(
+            RoutingPolicy(
+                name="only-one",
+                spec={"select": [{"default": _ANTHROPIC}]},
+                workspace_id=world.workspaces["one"],
+            )
+        )
+        session.add_all(
+            [
+                _attempt(
+                    world.workspaces["one"],
+                    world.keys["member"],
+                    world.users["member"],
+                    "only-one",
+                    _ANTHROPIC,
+                    position=1,
+                ),
+                _attempt(
+                    world.workspaces["two"],
+                    world.keys["two_member"],
+                    world.users["two_member"],
+                    "only-one",
+                    _ANTHROPIC,
+                    position=1,
+                ),
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    traffic = _traffic(traffic_client, world, "owner")
+    assert traffic[("one", "only-one", "member")]["requests"] == 1
+    assert ("two", "only-one", "two_member") not in traffic
+
+
 def test_a_member_reads_only_their_own(traffic_client: TestClient, world: _World) -> None:
     traffic = _traffic(traffic_client, world, "member")
     assert set(traffic) == {("one", "fast", "member"), ("one", "short", "member")}

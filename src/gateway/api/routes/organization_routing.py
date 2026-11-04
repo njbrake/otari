@@ -60,6 +60,7 @@ traffic used, and the fallback a catalog ID gives each with no policy.
 """
 
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -522,20 +523,24 @@ async def read_routing_traffic(
     workspaces the caller may see and the config-file ones.
     """
     reach = await _traffic_reach(db, current_identity, visible, workspace_id)
-    in_visible = col(RoutingPolicy.workspace_id).in_(sorted(reach.workspace_ids))
-    stored = set((await db.execute(select(RoutingPolicy.name).where(in_visible).distinct().limit(_MAX_ROWS))).scalars())
-    aliased = set(
-        (
-            await db.execute(
-                select(ModelAlias.name)
-                .where(col(ModelAlias.workspace_id).in_(sorted(reach.workspace_ids)))
-                .distinct()
-                .limit(_MAX_ROWS)
-            )
-        ).scalars()
+    workspaces = sorted(reach.workspace_ids)
+    # Per workspace: a stored name routes only in its own.
+    by_workspace: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
+    for model, workspace_column in ((RoutingPolicy, RoutingPolicy.workspace_id), (ModelAlias, ModelAlias.workspace_id)):
+        pairs = await db.execute(
+            select(workspace_column, model.name)
+            .where(col(workspace_column).in_(workspaces))
+            .distinct()
+            .limit(_MAX_ROWS)
+        )
+        for stored_in, name in pairs.all():
+            by_workspace[stored_in].add(name)
+    traffic = await routing.name_traffic(
+        reach=reach,
+        everywhere=set(config.routing.policies) | set(config.aliases),
+        by_workspace=by_workspace,
+        api_key_ids=api_key_id,
     )
-    names = stored | aliased | set(config.routing.policies) | set(config.aliases)
-    traffic = await routing.name_traffic(reach=reach, names=names, api_key_ids=api_key_id)
     return RoutingTrafficResponse(
         window_days=FALLBACK_WINDOW.days,
         names=[NameTrafficPublic.model_validate(item) for item in traffic],
