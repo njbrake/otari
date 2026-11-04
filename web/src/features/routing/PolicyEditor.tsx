@@ -100,6 +100,14 @@ function moved<T>(list: T[], from: number, to: number): T[] {
   return next
 }
 
+/** Where the entry at `index` lands once the one at `from` moves to `to`. */
+function movedIndex(index: number, from: number, to: number): number {
+  if (index === from) return to
+  if (from < index && index <= to) return index - 1
+  if (to <= index && index < from) return index + 1
+  return index
+}
+
 /** What a step did in the last 30 days, or that a model the stored plan lacks has no history. */
 function stepStat(
   step: StepTraffic | undefined,
@@ -347,12 +355,7 @@ export function PolicyEditor({
                       setPool({
                         models: moved(pool.models, from, to),
                         weights: moved(pool.weights, from, to),
-                        safeIndex:
-                          pool.safeIndex === from
-                            ? to
-                            : pool.safeIndex === to
-                              ? from
-                              : pool.safeIndex,
+                        safeIndex: movedIndex(pool.safeIndex, from, to),
                       })
               }
               onRemove={(index) =>

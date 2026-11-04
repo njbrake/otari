@@ -125,6 +125,8 @@ export function useAutomaticFallbacks(apiKeyIds: readonly string[] = []) {
         `/organizations/me/automatic-fallbacks${keyParams(apiKeyIds)}`,
       ),
     staleTime: 60_000,
+    // Kept while the key filter changes, so the section does not blank.
+    placeholderData: keepPreviousData,
   })
 }
 
@@ -150,6 +152,8 @@ export function useRoutingTraffic(
     },
     staleTime: 60_000,
     enabled,
+    // Kept while the key filter changes, so the list does not empty out.
+    placeholderData: keepPreviousData,
   })
 }
 

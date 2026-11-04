@@ -203,6 +203,50 @@ describe("PolicyDetailPage", () => {
     })
   })
 
+  it("keeps the pool's default on its model when another is dragged past it", async () => {
+    const { calls } = mockApi([
+      policy("smart", {
+        select: [
+          {
+            router: "knn",
+            candidates: [
+              "openai:gpt-5-nano",
+              "openai:gpt-5",
+              "anthropic:claude-sonnet-4-5",
+            ],
+          },
+          { default: "openai:gpt-5" },
+        ],
+      }),
+    ])
+    const user = userEvent.setup()
+    renderPolicy("smart")
+
+    await screen.findByRole("list", { name: "Pool" })
+    const rows = within(
+      screen.getByRole("list", { name: "Pool" }),
+    ).getAllByRole("listitem")
+    fireEvent.dragStart(rows[0].querySelector("[data-model-drag]")!)
+    fireEvent.dragOver(rows[2])
+    fireEvent.drop(rows[2])
+
+    expect(listed("Pool")[0]).toMatch(/DEFAULT.*gpt-5 OpenAI/)
+    await save(user)
+    expect(lastWrite(calls).spec).toEqual({
+      select: [
+        {
+          router: "knn",
+          candidates: [
+            "openai:gpt-5",
+            "anthropic:claude-sonnet-4-5",
+            "openai:gpt-5-nano",
+          ],
+        },
+        { default: "openai:gpt-5" },
+      ],
+    })
+  })
+
   it("shows what each model did in 30 days, by the model rather than the row", async () => {
     mockApi([policy("fast", CHAIN)], null, [], {
       traffic: [
