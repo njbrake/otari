@@ -1,11 +1,13 @@
 """Unit tests for the cross-layer SQL helpers in `gateway.core.sql`."""
 
 import sqlite3
+import uuid
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import Column, MetaData, Table, Uuid, create_engine, insert, select
 
-from gateway.core.sql import LIKE_ESCAPE, contains_pattern, utc_bound
+from gateway.core.sql import LIKE_ESCAPE, contains_pattern, utc_bound, uuid_text
 
 
 def _like(text: str, term: str) -> bool:
@@ -65,3 +67,17 @@ def test_missing_bound_stays_missing() -> None:
 def test_a_naive_stored_timestamp_subtracts_from_an_aware_now() -> None:
     """SQLite hands a timezone-aware column back naive; read through this, it compares with ``now(UTC)``."""
     assert (datetime.now(UTC) - utc_bound(datetime(2026, 5, 19, 12, 0))).total_seconds() >= 0
+
+
+def test_uuid_text_renders_what_str_uuid_gives_on_sqlite_and_postgresql() -> None:
+    """SQLite stores a ``Uuid`` as bare hex, so a plain cast there matches no ``str(uuid)`` id."""
+    identity = uuid.uuid4()
+    table = Table("t", MetaData(), Column("u", Uuid))
+    engine = create_engine("sqlite://")
+    table.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(insert(table).values(u=identity))
+        assert connection.execute(select(uuid_text(table.c.u))).scalar_one() == str(identity)
+    assert str(
+        select(uuid_text(table.c.u)).compile(dialect=create_engine("postgresql+psycopg2://").dialect)
+    ).startswith("SELECT CAST(t.u AS VARCHAR)")

@@ -10,12 +10,15 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal, cast, overload
 
-from sqlalchemy import ColumnElement, Integer, func, text
+from sqlalchemy import ColumnElement, Integer, String, func, text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.compiler import SQLCompiler
+from sqlalchemy.sql.functions import FunctionElement
 
 # How many values one repeatable entity filter (model / user / API key) may carry.
 # Far above what a chart can distinguish (a stacked series folds past eight groups),
@@ -115,6 +118,33 @@ BUCKET_FORMATS: dict[UsageBucketGrain, str] = {
     "hour": "%Y-%m-%dT%H:00:00Z",
     "day": "%Y-%m-%dT00:00:00Z",
 }
+
+
+class uuid_text(FunctionElement[str]):  # noqa: N801  (a SQL function, named like one)
+    """A ``Uuid`` column as the hyphenated lowercase text ``str(uuid)`` gives, on either dialect.
+
+    PostgreSQL stores a native ``uuid`` that casts to that text. SQLite stores
+    the 32 hex digits without hyphens, so a plain cast there matches no id that
+    ``str(uuid)`` wrote and a comparison against one silently finds nothing.
+    """
+
+    type = String()
+    inherit_cache = True
+    name = "uuid_text"
+
+
+@compiles(uuid_text)
+def _uuid_text_default(element: uuid_text, compiler: SQLCompiler, **kw: Any) -> str:
+    return compiler.process(sql_cast(next(iter(element.clauses)), String), **kw)
+
+
+@compiles(uuid_text, "sqlite")
+def _uuid_text_sqlite(element: uuid_text, compiler: SQLCompiler, **kw: Any) -> str:
+    hex_digits = compiler.process(next(iter(element.clauses)), **kw)
+    parts = [
+        f"substr({hex_digits}, {start}, {length})" for start, length in ((1, 8), (9, 4), (13, 4), (17, 4), (21, 12))
+    ]
+    return "lower(" + " || '-' || ".join(parts) + ")"
 
 
 def dialect_name(db: AsyncSession) -> str:

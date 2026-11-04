@@ -4,11 +4,12 @@ import uuid
 from collections.abc import Collection, Iterable
 from typing import Any
 
-from sqlalchemy import Select, String, cast, func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
+from gateway.core.sql import uuid_text
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.budgets import Budget, ScopedBudget
 from gateway.models.tenancy import (
@@ -190,7 +191,7 @@ class OrganizationMemberRepository(
         routing policy of theirs carries as ``users.user_id``. A query to embed
         rather than a list, so it does not grow with the organization.
         """
-        return select(cast(col(OrganizationMember.user_id), String)).where(
+        return select(uuid_text(col(OrganizationMember.user_id))).where(
             col(OrganizationMember.organization_id) == organization_id
         )
 
