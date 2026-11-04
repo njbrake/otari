@@ -186,15 +186,56 @@ function backupSentence(routing: KeyRouting): string {
 }
 
 /**
+ * A link that starts routing for one key: the new-policy page titled for it,
+ * starting on the model the key sends most where that is a concrete
+ * `provider:model` (a catalog ID, an alias or a policy name is no policy
+ * target). The operator creates from the Routing list's dialog instead, which
+ * takes the same `?target=`.
+ */
+export function SetUpRoutingLink({
+  apiKeyId,
+  routing,
+  isDeploymentWide,
+  className = TEXT_LINK_CLASS,
+  children,
+}: {
+  apiKeyId: string
+  routing?: KeyRouting
+  isDeploymentWide: boolean
+  className?: string
+  children: ReactNode
+}) {
+  const top = routing?.models[0]
+  const target = top?.kind === "pinned" ? top.name : ""
+  return isDeploymentWide ? (
+    <Link to="/routing" search={target ? { target } : {}} className={className}>
+      {children}
+    </Link>
+  ) : (
+    <Link
+      to="/routing/new"
+      search={{ key: apiKeyId, ...(target ? { target } : {}) }}
+      className={className}
+    >
+      {children}
+    </Link>
+  )
+}
+
+/**
  * The Routing part of a key's Edit: what a key's requests are routed by, which
  * a key does not own. Policies are chosen by the name a request sends, so this
  * reports the policies the key sent and how many of its names have no backup,
  * the three most used of those, and where routing is set.
  */
 export function KeyRoutingSummary({
+  apiKeyId,
   routing,
+  isDeploymentWide,
 }: {
+  apiKeyId: string
   routing: KeyRouting | undefined
+  isDeploymentWide: boolean
 }) {
   if (!routing) {
     return <p className="text-caption">Reading what this key sent…</p>
@@ -241,9 +282,13 @@ export function KeyRoutingSummary({
         </ul>
       ) : null}
       <p className="text-sm">
-        <Link to="/routing" className={TEXT_LINK_CLASS}>
+        <SetUpRoutingLink
+          apiKeyId={apiKeyId}
+          routing={routing}
+          isDeploymentWide={isDeploymentWide}
+        >
           Set up routing
-        </Link>
+        </SetUpRoutingLink>
       </p>
     </div>
   )

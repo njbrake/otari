@@ -2713,10 +2713,63 @@ describe("KeysPage forms", () => {
       await screen.findByRole("button", { name: "Create your first key" }),
     )
     await submitTheCreateDialog(user)
+    // A member's policy for this key is created on the new-policy page, titled for it.
     expect(
       await screen.findByRole("link", {
         name: "Next: set up routing for this app",
       }),
-    ).toHaveAttribute("href", "/routing")
+    ).toHaveAttribute("href", "/routing/new?key=key-new")
   })
+
+  it.each([
+    {
+      who: "a member",
+      operator: false,
+      href: /^\/routing\/new\?key=key-1&target=openai(:|%3A)gpt-5$/,
+    },
+    {
+      who: "the operator",
+      operator: true,
+      href: /^\/routing\?target=openai(:|%3A)gpt-5$/,
+    },
+  ])(
+    "starts routing for $who on the pinned model a key sends most",
+    async ({ operator, href }) => {
+      stubRegionWidth(1440)
+      mockApi({
+        keys: [apiKey({ id: "key-1", key_name: "thymeline" })],
+        deploymentOperator: operator,
+        ...(operator ? {} : { role: "member" }),
+        routing: [
+          {
+            api_key_id: "key-1",
+            model_count: 1,
+            no_backup_count: 1,
+            policies: [],
+            models: [
+              {
+                name: "openai:gpt-5",
+                requests: 40,
+                kind: "pinned",
+                backup: "no_backup",
+                reason: "pinned",
+                provider: "openai",
+              },
+            ],
+          },
+        ],
+      })
+      const user = userEvent.setup()
+      renderPage(<KeysPage />)
+
+      const row = (await screen.findByText("thymeline")).closest("tr")!
+      await chooseAction(user, row, "Edit")
+      const routing = await screen.findByRole("region", { name: "Routing" })
+      expect(
+        within(routing)
+          .getByRole("link", { name: "Set up routing" })
+          .getAttribute("href"),
+      ).toMatch(href)
+    },
+  )
 })

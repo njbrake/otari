@@ -102,6 +102,7 @@ import {
   KeyModelsCell,
   KeyMostUsedCell,
   KeyRoutingSummary,
+  SetUpRoutingLink,
 } from "./KeyRoutingCells"
 import { summarizeKeyModels } from "./keyModels"
 import {
@@ -819,9 +820,13 @@ function CreateKeyDialog({
             Optional: pick this app's main model and a backup, so a failure does
             not reach your users.
           </span>
-          <Link to="/routing" className={`text-sm ${TEXT_LINK_CLASS}`}>
+          <SetUpRoutingLink
+            apiKeyId={created.id}
+            isDeploymentWide={isDeploymentWide}
+            className={`text-sm ${TEXT_LINK_CLASS}`}
+          >
             Next: set up routing for this app
-          </Link>
+          </SetUpRoutingLink>
         </div>
       </FormDialog>
     )
@@ -1206,7 +1211,11 @@ function EditKeyForm({
         title="Routing"
         caption="Routing policies set the model an app's requests reach and the backups tried if it fails."
       >
-        <KeyRoutingSummary routing={routing} />
+        <KeyRoutingSummary
+          apiKeyId={apiKey.id}
+          routing={routing}
+          isDeploymentWide={isDeploymentWide}
+        />
       </KeyFormSection>
     </FormDialog>
   )
