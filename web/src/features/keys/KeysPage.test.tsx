@@ -2624,6 +2624,38 @@ describe("KeysPage forms", () => {
     ).toHaveAttribute("href", "/routing")
   })
 
+  it("does not claim a backup for names it only imported", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: [apiKey({ id: "key-1", key_name: "thymeline" })],
+      routing: [
+        {
+          api_key_id: "key-1",
+          model_count: 1,
+          no_backup_count: 0,
+          policies: [],
+          models: [
+            {
+              name: "claude-sonnet-5-5",
+              requests: 40,
+              kind: "unknown",
+              backup: "subscription",
+              reason: null,
+              provider: null,
+            },
+          ],
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    const row = (await screen.findByText("thymeline")).closest("tr")!
+    await chooseAction(user, row, "Edit")
+    const routing = await screen.findByRole("region", { name: "Routing" })
+    expect(within(routing).getByText("None without one")).toBeInTheDocument()
+  })
+
   it("lets an organization admin create a key for a member", async () => {
     const member = "55555555-5555-5555-5555-555555555555"
     const fetchMock = mockApi({

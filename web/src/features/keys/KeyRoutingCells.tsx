@@ -138,11 +138,16 @@ export function KeyMostUsedCell({
   )
 }
 
-/** How many of the names a key sent have no backup, as a sentence. */
+/**
+ * How many of the names a key sent have no backup, as a sentence. A count of
+ * zero does not mean every name has one: imported (`subscription`) and
+ * unresolvable (`unknown`) names are counted as neither.
+ */
 function backupSentence(routing: KeyRouting): string {
   if (routing.model_count === 0) return "No requests in the last 30 days"
-  if (routing.no_backup_count === 0) return "Every model it sent has one"
-  return `${routing.no_backup_count} of ${modelCount(routing.model_count)} have none`
+  if (routing.no_backup_count === 0) return "None without one"
+  const verb = routing.no_backup_count === 1 ? "has" : "have"
+  return `${routing.no_backup_count} of ${modelCount(routing.model_count)} ${verb} none`
 }
 
 /**
