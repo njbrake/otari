@@ -22,17 +22,17 @@ Callers send `model: fast`. If the first provider fails before any response is
 sent, Otari tries the fallback. The response keeps the policy name; Activity and
 usage record the models that were attempted.
 
-In the dashboard, choose Create policy on Routing, then Fallback: name it, pick
-the main model, and list at least one backup under "If unavailable, use", each a
-model other than the main one and the other backups. The backups are
-`on_failure`, in the order shown. Create policy offers one kind at a time
-(Fallback, Split traffic, Smart router, Spill over at rate limits, Tier down on
-budget), each with only its own fields. To combine them, open the policy from
-the list once it exists: its page has a section each for the main selection,
-the fallback chain, a budget tier-down and guardrails, and each section saves on
-its own, writing the rest of the policy back unchanged. A policy from
-`config.yml`, or one using options the page cannot show, opens read-only with
-its spec in full.
+In the dashboard, choose Create policy on Routing. In an organization's
+workspace it opens a new-policy page: name the policy, say who it applies to,
+pick the main model under Tried in order, and add backups below it, each a model
+other than the main one and the other backups. The backups are `on_failure`, in
+the order shown. A deployment operator gets a dialog instead, which offers one
+kind at a time (Fallback, Split traffic, Smart router, Spill over at rate
+limits, Tier down on budget). A policy's own page is one form: the main
+selection, its models in the order tried, then rules, budget tier-down,
+guardrails and the spec as JSON, all saved together from one Save. A policy
+from `config.yml`, or one using options the page cannot show, opens read-only
+with its spec in full.
 
 ## Selection and failure are separate
 
