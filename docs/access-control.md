@@ -233,8 +233,8 @@ application has two choices:
 - Make the key a [service key](#service-keys-and-end-users), and each ID
   becomes an end user with spend and a budget of its own.
 
-Set the value in the dashboard's key form (under **Advanced** when creating a
-key, and on the edit form), as `reject_user_mismatch` on `POST` or `PATCH`
+Set the value in the dashboard's create or edit key form (under **Search tools
+and user matching**), as `reject_user_mismatch` on `POST` or `PATCH`
 `/api/v1/keys` and `/api/v1/organizations/me/keys`, or on a key declared in
 config.yml. The deployment-wide default is a runtime setting, changed on the
 Settings page or with `PATCH /api/v1/settings`.
