@@ -269,18 +269,91 @@ describe("NewPolicyPage", () => {
     })
   })
 
-  it("says so when the caller may not create a policy here", async () => {
+  it("sends a caller who may not create one to the read-only list", async () => {
     mockApi([], null, [], {
       context: member(),
       memberPolicies: [],
       membersCreatePolicies: false,
     })
-    renderInWorkspace(<NewPolicyPage />, "/routing/new")
+    renderInWorkspace(<NewPolicyPage />, "/routing/new?key=key-app", [
+      { path: "/routing", element: <p>Routing list</p> },
+    ])
 
-    expect(
+    expect(await screen.findByText("Routing list")).toBeInTheDocument()
+    expect(screen.queryByText(/can't create a policy/i)).toBeNull()
+  })
+
+  it.each([
+    { owner: SAM, label: "a member's", expected: "One person", sent: SAM },
+    { owner: CALLER, label: "their own", expected: "Just me", sent: CALLER },
+    {
+      owner: null,
+      label: "an ownerless",
+      expected: "Everyone in this workspace",
+      sent: undefined,
+    },
+    {
+      owner: "deployment-user",
+      label: "an outsider's",
+      expected: "Everyone in this workspace",
+      sent: undefined,
+    },
+  ])(
+    "starts an admin on whoever $label key belongs to",
+    async ({ owner, expected, sent }) => {
+      const { calls } = mockApi([], null, [], {
+        context: adminContext(),
+        memberPolicies: [],
+        keys: [
+          apiKey({ id: "key-app", key_name: "thymeline", user_id: owner }),
+        ],
+        members: [
+          organizationMember({
+            user_id: SAM,
+            attribution_user_id: SAM,
+            full_name: "Sam Rivera",
+          }),
+        ],
+      })
+      const user = userEvent.setup()
+      renderInWorkspace(<NewPolicyPage />, "/routing/new?key=key-app", OPENED)
+
       await screen.findByRole("heading", {
-        name: "You can't create a policy here",
-      }),
-    ).toBeInTheDocument()
+        level: 1,
+        name: "Routing for thymeline",
+      })
+      expect(await screen.findByRole("radio", { name: expected })).toBeChecked()
+      if (owner === SAM)
+        expect(
+          screen.getByRole("button", { name: /Person/ }),
+        ).toHaveTextContent("Sam Rivera")
+      await nameAndMain(user, "for-the-key")
+      await user.click(screen.getByRole("button", { name: "Create policy" }))
+      expect(written(calls)?.member_id).toBe(sent)
+    },
+  )
+
+  it("keeps an admin's own choice over the key owner's default", async () => {
+    const { calls } = mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [],
+      keys: [apiKey({ id: "key-app", key_name: "thymeline", user_id: SAM })],
+      members: [
+        organizationMember({
+          user_id: SAM,
+          attribution_user_id: SAM,
+          full_name: "Sam Rivera",
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderInWorkspace(<NewPolicyPage />, "/routing/new?key=key-app", OPENED)
+
+    await user.click(
+      await screen.findByRole("radio", { name: "Everyone in this workspace" }),
+    )
+    await nameAndMain(user, "shared-one")
+    await user.click(screen.getByRole("button", { name: "Create policy" }))
+    expect(written(calls)?.member_id).toBeUndefined()
   })
 })

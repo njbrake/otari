@@ -1,7 +1,6 @@
-import { Link, useNavigate } from "@tanstack/react-router"
+import { Link, Navigate, useNavigate } from "@tanstack/react-router"
 import { useState } from "react"
 
-import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { Select } from "@/design-system/forms/Select"
@@ -30,8 +29,10 @@ const APPLIES_TO_HELP: Record<AppliesTo, string> = {
  *
  * `?key=` names the API key it is being set up for, which titles the page, and
  * `?target=` the model it starts from. A member's policy is their own; an owner
- * or admin picks the workspace, themselves or one member. The operator's create
- * stays the dialog on the list, which writes deployment-wide.
+ * or admin picks the workspace, themselves or one member, starting on whoever
+ * the key belongs to. The operator's create stays the dialog on the list, which
+ * writes deployment-wide. A caller who may not create one here goes to the
+ * list, which shows them the policies in force read-only.
  */
 export function NewPolicyPage() {
   const navigate = useNavigate()
@@ -52,8 +53,9 @@ export function NewPolicyPage() {
   const memberLabels = useMemberAttributionLabels()
   const save = useSetOrganizationRoutingPolicy()
   const [name, setName] = useState("")
-  const [appliesTo, setAppliesTo] = useState<AppliesTo>("workspace")
-  const [person, setPerson] = useState("")
+  // Undefined until the caller picks: until then the key's owner decides.
+  const [pickedAppliesTo, setAppliesTo] = useState<AppliesTo>()
+  const [pickedPerson, setPerson] = useState<string>()
   // Seeded once: the model a link starts from, as the main one.
   const [stored] = useState<PolicyDraft>(() => ({
     ...seedDraft("fallback", target),
@@ -70,17 +72,24 @@ export function NewPolicyPage() {
   )
   if (isLoading || isCanCreateOwnLoading)
     return <PageLoading label="Loading routing…" />
-  if (!canEdit && !canCreateOwn)
-    return (
-      <div className="flex flex-col gap-6">
-        {back}
-        <ErrorBanner error={error} />
-        <EmptyState
-          title="You can't create a policy here"
-          description="This workspace's admins have turned off members creating their own policies, or no workspace is selected."
-        />
-      </div>
-    )
+  // Members' own policies turned off, or no workspace selected: the list says
+  // which policies apply, which is what a link here was after.
+  if (!canEdit && !canCreateOwn) return <Navigate to="/routing" replace />
+
+  // Who a policy set up for a key applies to by default: the key's own owner,
+  // as themselves, as the member it belongs to, or the workspace for a key with
+  // no owner the roster names.
+  const keyOwner = forKey?.user_id ?? ""
+  const ownerDefault: AppliesTo =
+    keyOwner === ""
+      ? "workspace"
+      : keyOwner === ownerId
+        ? "me"
+        : memberLabels.has(keyOwner)
+          ? "person"
+          : "workspace"
+  const appliesTo = pickedAppliesTo ?? ownerDefault
+  const person = pickedPerson ?? (ownerDefault === "person" ? keyOwner : "")
 
   // A member's policy is always their own.
   const effective: AppliesTo = manages ? appliesTo : "me"

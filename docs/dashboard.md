@@ -232,8 +232,12 @@ or a custom amount and reset, and a Budget column shows each key's spend this
 period against its limit. A key's Edit reports the routing its requests got,
 and its Set up routing, like the step after creating a key, opens the
 new-policy page for that key, starting on the model it sends most where that
-is a `provider:model`. For an operator it opens the Routing list, with the
-create dialog on that model when there is one. Where the deployment turns on
+is a `provider:model`. For an owner or admin the policy starts out applying to
+whoever the key belongs to: themselves, the member who owns it, or the whole
+workspace for a key with no member behind it. A member whose workspace has
+turned off their own policies lands on the Routing list instead, which shows
+the policies in force read-only. For an operator it opens the Routing list,
+with the create dialog on that model when there is one. Where the deployment turns on
 `federation_member_rules`, a key's actions menu offers Workload identity… to the
 operator, and to an organization owner or admin on their own keys; see [Rules on
 a member's own key](workload-identity.md#rules-on-a-members-own-key).
