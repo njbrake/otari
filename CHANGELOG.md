@@ -4,6 +4,65 @@ All notable changes to Otari will be documented in this file.
 
 The format follows [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.32.0-nb.1](https://github.com/njbrake/otari/releases/tag/v0.32.0-nb.1) - 2026-11-06
+
+
+
+### Bug Fixes
+
+- **BREAKING:** **tools:** Hold an organization's search and fetch endpoint to public addresses by [@daavoo](https://github.com/daavoo) ([`8cceb42`](https://github.com/njbrake/otari/commit/8cceb42cbfe18a13e350a35aa2ed713da93fc138))
+- **release:** Create the tag when it does not exist yet by [@tbille](https://github.com/tbille) ([`5174b37`](https://github.com/njbrake/otari/commit/5174b374aded504273caaf5183248005ec3652cc))
+- **inference:** Scope a caller's end-user tag to their own identifier by [@daavoo](https://github.com/daavoo) ([`1e1ed6f`](https://github.com/njbrake/otari/commit/1e1ed6f2fe3e2f23b2385f617bdc10641718061f))
+- **auth:** Ignore workspace and service account ids in the token exchange by [@daavoo](https://github.com/daavoo) ([`fc32f67`](https://github.com/njbrake/otari/commit/fc32f670caa7350d7d2a9c0120253e1f49855fb6))
+- **web:** Keep the caret in place when editing a search mid-text by [@jigjigjig](https://github.com/jigjigjig) ([`6f5d6ed`](https://github.com/njbrake/otari/commit/6f5d6ed12ae6d35ee2ca6069886cbb208287c57d))
+- **web:** Let the model selector in the Use this model drawer be copied by [@jigjigjig](https://github.com/jigjigjig) ([`0522228`](https://github.com/njbrake/otari/commit/05222284a94472ba24bd80b607a1a24698821e8d))
+- **web:** Keep the model catalog's search and filters when going back by [@jigjigjig](https://github.com/jigjigjig) ([`cc6c503`](https://github.com/njbrake/otari/commit/cc6c50308a3fac1bf028f1b0fee1435ecbc20bdd))
+- **web:** Keep the sidebar's band padding in Safari by [@jigjigjig](https://github.com/jigjigjig) ([`3949b0e`](https://github.com/njbrake/otari/commit/3949b0ed60320a6ca9d164a7786ffc3de13f33b9))
+- **logging:** Mask key- tokens, mixed-case prefixless keys, and uvicorn's own log lines by [@daavoo](https://github.com/daavoo) ([`f1b9ad3`](https://github.com/njbrake/otari/commit/f1b9ad307a4377d8c2a343010c20b7c83aa254db))
+- **billing:** Charge gateway tools by whose account runs them by [@daavoo](https://github.com/daavoo) ([`910de2b`](https://github.com/njbrake/otari/commit/910de2b6b3bcb68627611f810c1a27dfff469492))
+- **providers:** Reject reserved names for hosted providers by [@tbille](https://github.com/tbille) ([`8280637`](https://github.com/njbrake/otari/commit/8280637bfe575aa140b11f71303a40f966f8980b))
+- **config:** Say an empty OTARI_SECRET_KEY reads as unset and name gen-secret-key by [@tbille](https://github.com/tbille) ([`149cb51`](https://github.com/njbrake/otari/commit/149cb51773dbb8a82033f60201cd97248e359b05))
+- **pricing:** Log a warning when require_pricing refuses a request by [@tbille](https://github.com/tbille) ([`d45913b`](https://github.com/njbrake/otari/commit/d45913be27dbeb1492a6c9c66849a6809eb9e008))
+- **logging:** Stop masking an access log line that ends in api_token by [@tbille](https://github.com/tbille) ([`cd73677`](https://github.com/njbrake/otari/commit/cd73677cf8a2e352602a59d8db4919ab1b6c73f0))
+- **config:** Warn about unknown config keys and undiscovered declared models by [@tbille](https://github.com/tbille) ([`481678b`](https://github.com/njbrake/otari/commit/481678b8ed1f8043a56fc04b1cb7763ecf5f0d6d))
+- **responses:** Type the raw event dicts an upstream Otari streams by [@tbille](https://github.com/tbille) ([`71ddc48`](https://github.com/njbrake/otari/commit/71ddc48f8a1b10d54c821f0ef55b7e4f74dd173f))
+- **files:** Start without a provider account pepper, with provider copies off by [@tbille](https://github.com/tbille) ([`dfaee5b`](https://github.com/njbrake/otari/commit/dfaee5b7f9ad64eb70dce432d90715e0d77afb7b))
+- **deps:** Override the packaging cap pinning virtualenv by [@peteski22](https://github.com/peteski22) ([`18ec9a4`](https://github.com/njbrake/otari/commit/18ec9a49ece2a17d6193ec2c64c258482bbbde83))
+- **providers:** Keep moved and imported providers serving every model they served by [@njbrake](https://github.com/njbrake) ([`8d90956`](https://github.com/njbrake/otari/commit/8d9095660337dd05661266b7330e75920b93effe))
+- **providers:** Strip the API root from a hosted otari provider's api_base by [@njbrake](https://github.com/njbrake) ([`f8103dc`](https://github.com/njbrake/otari/commit/f8103dce85a7a72f269e8af5c095b15e565fa014))
+- **overview:** Count hosted providers when deciding a gateway can serve by [@njbrake](https://github.com/njbrake) ([`aca4a5e`](https://github.com/njbrake/otari/commit/aca4a5e6bedc65c2a21ab8522aec5a65d9add678))
+- **auth:** Skip the sign-in stamp while the account row is locked in [#66](https://github.com/njbrake/otari/pull/66) by [@njbrake](https://github.com/njbrake) ([`3e1187f`](https://github.com/njbrake/otari/commit/3e1187f97037cb3467439643d4b1ff4cc5d0f62f))
+- **dashboard:** Keep the Overview chart's Today label on the page late in the month in [#75](https://github.com/njbrake/otari/pull/75) by [@klubrake](https://github.com/klubrake) ([`13c561f`](https://github.com/njbrake/otari/commit/13c561fc2a40a47bc27a625aa044e5b0f91da68c))
+- **usage:** Rank the tool breakdown to the micro-dollar, ties by name in [#77](https://github.com/njbrake/otari/pull/77) by [@klubrake](https://github.com/klubrake) ([`5b29d0f`](https://github.com/njbrake/otari/commit/5b29d0fe2311a1e6d6629515bc120998fcd351a1))
+- **routing:** Stop tenant policy and alias writes revealing other organizations' names in [#81](https://github.com/njbrake/otari/pull/81) by [@njbrake](https://github.com/njbrake) ([`1fcada2`](https://github.com/njbrake/otari/commit/1fcada2739c2a621f7639b405d3d57eec72dc297))
+- **keys:** Keep a key billed outside the organization out of its managers' reach in [#87](https://github.com/njbrake/otari/pull/87) by [@njbrake](https://github.com/njbrake) ([`48f0a05`](https://github.com/njbrake/otari/commit/48f0a0517976793f147e22603d163df57942fc09))
+- **dashboard:** Stop the key routing summary claiming backups it cannot see in [#86](https://github.com/njbrake/otari/pull/86) by [@njbrake](https://github.com/njbrake) ([`f51af90`](https://github.com/njbrake/otari/commit/f51af90f8481248ec602db545925f80d1ce6ff9b))
+- **dashboard:** Keep long Models, Name and Most-used text inside the keys table's lanes in [#91](https://github.com/njbrake/otari/pull/91) by [@klubrake](https://github.com/klubrake) ([`01e8739`](https://github.com/njbrake/otari/commit/01e8739c3ce172147f8c59a2a26a13179e50b7d8))
+- **routing:** Count a routing name's traffic only in workspaces where it routes in [#92](https://github.com/njbrake/otari/pull/92) by [@njbrake](https://github.com/njbrake) ([`eac5b23`](https://github.com/njbrake/otari/commit/eac5b2391cbcce0d54cc5cf086e666261aca9cbb))
+
+
+### Features
+
+- **metrics:** Report each upstream attempt and every coded refusal by [@daavoo](https://github.com/daavoo) ([`b729f72`](https://github.com/njbrake/otari/commit/b729f727ae48fb299ed21983a539c4938246fb9f))
+- **gemini:** Gemini parity for gateway-routed agents by [@daavoo](https://github.com/daavoo) ([`433e379`](https://github.com/njbrake/otari/commit/433e379c1b79409d6c0cebceedd673df4bc87d41))
+- **traces:** Make a coding agent's session readable enough to debug by [@agpituk](https://github.com/agpituk) ([`d6432bc`](https://github.com/njbrake/otari/commit/d6432bc2bd6c13955fc5b7cbdb706d7139806cd4))
+- **traces:** Chart the sessions active over time, in buckets a session can fill by [@agpituk](https://github.com/agpituk) ([`f42772c`](https://github.com/njbrake/otari/commit/f42772cbd5797f84c0e7385a8acc0d15bbf8ac33))
+- **traces:** Price a coding agent's session, its turns and its tool calls by [@agpituk](https://github.com/agpituk) ([`90ee9f2`](https://github.com/njbrake/otari/commit/90ee9f2d28c1af4290ad94017ea55c3c32151b80))
+- **rate-limits:** Count a rule per budget, and report a limit without enforcing it by [@daavoo](https://github.com/daavoo) ([`796344e`](https://github.com/njbrake/otari/commit/796344e2b6b9abbe9833da44371b6a70fb6bddf5))
+- **chat:** Let a provider instance accept named extra request fields by [@daavoo](https://github.com/daavoo) ([`daf77ae`](https://github.com/njbrake/otari/commit/daf77aebc4c1599514060db4a9823b066b7adf2d))
+- **BREAKING:** **hosted-providers:** One catalog update for prices and model lists by [@daavoo](https://github.com/daavoo) ([`830b420`](https://github.com/njbrake/otari/commit/830b42000eae9798b5594d26a7ccc145b1062222))
+- **providers:** Let a hosted provider opt into session affinity by [@njbrake](https://github.com/njbrake) ([`2a362a7`](https://github.com/njbrake/otari/commit/2a362a77085b5081294099fc8dc8ef0ba2d8a2ea))
+- **routing:** Read what each key sent and whether a failure on it has a backup in [#73](https://github.com/njbrake/otari/pull/73) by [@klubrake](https://github.com/klubrake) ([`5effcc5`](https://github.com/njbrake/otari/commit/5effcc5446c4e308084e286a6f8b65fc39930b4c))
+- **routing:** Let members keep routing policies of their own in [#76](https://github.com/njbrake/otari/pull/76) by [@klubrake](https://github.com/klubrake) ([`e867a16`](https://github.com/njbrake/otari/commit/e867a1696cc27cc2c05762305fb395dc5a3a6e72))
+- **keys:** Let organization owners and admins manage every key in their organization in [#80](https://github.com/njbrake/otari/pull/80) by [@njbrake](https://github.com/njbrake) ([`60cbc4e`](https://github.com/njbrake/otari/commit/60cbc4e93abc1e75cfdfba95c83f64ad7d0b2238))
+- **routing:** Show who sent each routing name and what each step did in [#82](https://github.com/njbrake/otari/pull/82) by [@klubrake](https://github.com/klubrake) ([`b37f8ec`](https://github.com/njbrake/otari/commit/b37f8ec9f62c5de472a0f70955fcd9b01e7cee9b))
+- **dashboard:** Redesign the API keys page around what each key sends in [#83](https://github.com/njbrake/otari/pull/83) by [@klubrake](https://github.com/klubrake) ([`b1988cd`](https://github.com/njbrake/otari/commit/b1988cdf611dce04d41e62b48b077af2a3a7837b))
+- **routing:** Redesign the Routing page and policy editor, with members' own policies in [#88](https://github.com/njbrake/otari/pull/88) by [@njbrake](https://github.com/njbrake) ([`0c35c06`](https://github.com/njbrake/otari/commit/0c35c06109bdea1d5049ea7e5366872beee98327))
+- **dashboard:** Open the new-policy page from a key's Set up routing in [#93](https://github.com/njbrake/otari/pull/93) by [@njbrake](https://github.com/njbrake) ([`47eee3c`](https://github.com/njbrake/otari/commit/47eee3c9a5f503866a6342178ba8cf3b909b9f5b))
+
+
+**Full Changelog**: https://github.com/njbrake/otari/compare/v0.27.0-nb.2...v0.32.0-nb.1
+
 ## [0.32.0](https://github.com/mozilla-ai/otari/releases/tag/v0.32.0) - 2026-10-23
 
 
