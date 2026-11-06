@@ -2,7 +2,10 @@ import { Link } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 import { FiAlertTriangle } from "react-icons/fi"
 import type { KeyRouting, KeyRoutingModel } from "@/client"
-import { TEXT_LINK_CLASS } from "@/design-system/actions/TextButton"
+import {
+  DANGER_TEXT_LINK_CLASS,
+  TEXT_LINK_CLASS,
+} from "@/design-system/actions/TextButton"
 import {
   Tooltip,
   type TooltipTriggerProps,
@@ -26,12 +29,13 @@ function modelCount(count: number): string {
 function TruncatingLink({
   tooltip,
   onPress,
-  className = "",
+  tone = "link",
   children,
 }: {
   tooltip: ReactNode
   onPress: () => void
-  className?: string
+  /** `danger` for a lane that says nothing is reachable. */
+  tone?: "link" | "danger"
   children: ReactNode
 }) {
   return (
@@ -41,7 +45,9 @@ function TruncatingLink({
           {...trigger}
           type="button"
           onClick={onPress}
-          className={`block max-w-full truncate text-left text-sm ${TEXT_LINK_CLASS} ${className}`}
+          className={`block max-w-full truncate text-left text-sm ${
+            tone === "danger" ? DANGER_TEXT_LINK_CLASS : TEXT_LINK_CLASS
+          }`}
         >
           {children}
         </button>
@@ -71,7 +77,7 @@ export function KeyModelsCell({
             : "Every request on this key is refused"
         }
         onPress={onOpen}
-        className={summary.kind === "none" ? "text-danger" : ""}
+        tone={summary.kind === "none" ? "danger" : "link"}
       >
         {summary.kind === "all" ? "All allowed models" : "No models"}
       </TruncatingLink>

@@ -78,8 +78,11 @@ export function Tooltip({
         // trigger's default block display would break the row's flex layout.
         // `cursor-default` because the wrapper's `role="button"` is for keyboard
         // reach, and the base layer's pointer for that role would make text look
-        // clickable. A control inside keeps its own pointer.
-        <HeroTooltip.Trigger className="inline-flex cursor-default">
+        // clickable. A control inside keeps its own pointer. `max-w-full` so a
+        // trigger in a fixed-width column is capped to it: an inline-flex box is
+        // otherwise as wide as its text, and a `truncate` inside never gets an
+        // edge to end against (the API keys page's Budget lane ran past it).
+        <HeroTooltip.Trigger className="inline-flex max-w-full cursor-default">
           {children}
         </HeroTooltip.Trigger>
       )}

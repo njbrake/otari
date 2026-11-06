@@ -29,6 +29,8 @@ describe("Tooltip", () => {
     // Reachable like a button, but not dressed as one: text under the pointer
     // stays text.
     expect(trigger).toHaveClass("cursor-default")
+    // Capped to its column, so text inside can truncate rather than run on.
+    expect(trigger).toHaveClass("max-w-full")
   })
 
   it("hands a control the trigger's props instead of wrapping it", () => {
