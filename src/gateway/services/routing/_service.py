@@ -273,26 +273,32 @@ class RoutingService:
         reach: TrafficReach,
         everywhere: Collection[str],
         by_workspace: Mapping[uuid.UUID, Collection[str]],
+        by_person: Mapping[tuple[uuid.UUID, str], Collection[str]] | None = None,
         api_key_ids: Collection[str] | None = None,
     ) -> list[NameTraffic]:
         """The traffic sent under routing names in the window, per workspace and owner, among the rows ``reach`` shows.
 
-        A name counts in a workspace where it routes: everywhere for one
-        ``everywhere`` holds (the configured policies and aliases), and in its own
-        workspace for one ``by_workspace`` lists there. The same name sent in a
-        workspace where nothing claims it is a plain model name, not this traffic.
+        A name counts where it routes: everywhere for one ``everywhere`` holds
+        (the configured policies and aliases), in its own workspace for one
+        ``by_workspace`` lists there, and for one person in their workspace for one
+        ``by_person`` lists under them (a member's own policy). The same name sent
+        where nothing claims it, a colleague's request under another member's own
+        policy name included, is a plain model name, not this traffic.
 
         A request counts once, on the row that ended it; each attempt before it
         that a later one recovered from counts as a failure of its step. A step
         served the requests whose final, successful attempt it made.
         """
-        candidates = set(everywhere).union(*by_workspace.values())
+        personal = by_person or {}
+        candidates = set(everywhere).union(*by_workspace.values(), *personal.values())
         rows = [
             row
             for row in await self._usage.name_attempts(
                 reach=reach, since=datetime.now(UTC) - FALLBACK_WINDOW, names=candidates, api_key_ids=api_key_ids
             )
-            if row.name in everywhere or row.name in by_workspace.get(row.workspace_id, ())
+            if row.name in everywhere
+            or row.name in by_workspace.get(row.workspace_id, ())
+            or (row.user_id is not None and row.name in personal.get((row.workspace_id, row.user_id), ()))
         ]
         requests: Counter[tuple[uuid.UUID, str, str | None]] = Counter()
         keys: defaultdict[tuple[uuid.UUID, str, str | None], Counter[str]] = defaultdict(Counter)

@@ -524,23 +524,29 @@ async def read_routing_traffic(
     """
     reach = await _traffic_reach(db, current_identity, visible, workspace_id)
     workspaces = sorted(reach.workspace_ids)
-    # Per workspace: a stored name routes only in its own. By name, as the lists
-    # are, so at the cap a row they show is still a row counted here.
+    # A stored name routes only in its own workspace, and one scoped to a person
+    # only for that person. By name, as the lists are, so at the cap a row they
+    # show is still a row counted here.
     by_workspace: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
-    for model, workspace_column in ((RoutingPolicy, RoutingPolicy.workspace_id), (ModelAlias, ModelAlias.workspace_id)):
-        pairs = await db.execute(
-            select(workspace_column, model.name)
-            .where(col(workspace_column).in_(workspaces))
+    by_person: defaultdict[tuple[uuid.UUID, str], set[str]] = defaultdict(set)
+    for model in (RoutingPolicy, ModelAlias):
+        rows = await db.execute(
+            select(model.workspace_id, model.user_id, model.name)
+            .where(col(model.workspace_id).in_(workspaces))
             .distinct()
-            .order_by(model.name, workspace_column)
+            .order_by(model.name, model.workspace_id, model.user_id)
             .limit(_MAX_ROWS)
         )
-        for stored_in, name in pairs.all():
-            by_workspace[stored_in].add(name)
+        for stored_in, scoped_to, name in rows.all():
+            if scoped_to is None:
+                by_workspace[stored_in].add(name)
+            else:
+                by_person[(stored_in, scoped_to)].add(name)
     traffic = await routing.name_traffic(
         reach=reach,
         everywhere=set(config.routing.policies) | set(config.aliases),
         by_workspace=by_workspace,
+        by_person=by_person,
         api_key_ids=api_key_id,
     )
     return RoutingTrafficResponse(

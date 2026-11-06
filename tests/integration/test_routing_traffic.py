@@ -363,6 +363,35 @@ def test_at_the_cap_the_names_counted_are_the_first_by_name(
     assert not any(name == "fast" for _, name, _ in traffic)
 
 
+def test_a_members_own_policy_claims_their_traffic_alone(
+    traffic_client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """A policy scoped to one member routes their requests only; a colleague sending the name sends a model name."""
+    session = db_session_factory()
+    try:
+        session.add(
+            RoutingPolicy(
+                name="mine",
+                spec={"select": [{"default": _ANTHROPIC}]},
+                workspace_id=world.workspaces["one"],
+                user_id=str(world.users["member"]),
+            )
+        )
+        session.add_all(
+            [
+                _attempt(world.workspaces["one"], world.keys[who], world.users[who], "mine", _ANTHROPIC, position=1)
+                for who in ("member", "colleague")
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    traffic = _traffic(traffic_client, world, "owner")
+    assert traffic[("one", "mine", "member")]["requests"] == 1
+    assert ("one", "mine", "colleague") not in traffic
+
+
 def test_a_member_reads_only_their_own(traffic_client: TestClient, world: _World) -> None:
     traffic = _traffic(traffic_client, world, "member")
     assert set(traffic) == {("one", "fast", "member"), ("one", "short", "member")}
