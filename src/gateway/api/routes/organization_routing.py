@@ -524,13 +524,15 @@ async def read_routing_traffic(
     """
     reach = await _traffic_reach(db, current_identity, visible, workspace_id)
     workspaces = sorted(reach.workspace_ids)
-    # Per workspace: a stored name routes only in its own.
+    # Per workspace: a stored name routes only in its own. By name, as the lists
+    # are, so at the cap a row they show is still a row counted here.
     by_workspace: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
     for model, workspace_column in ((RoutingPolicy, RoutingPolicy.workspace_id), (ModelAlias, ModelAlias.workspace_id)):
         pairs = await db.execute(
             select(workspace_column, model.name)
             .where(col(workspace_column).in_(workspaces))
             .distinct()
+            .order_by(model.name, workspace_column)
             .limit(_MAX_ROWS)
         )
         for stored_in, name in pairs.all():

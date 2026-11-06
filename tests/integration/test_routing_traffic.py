@@ -20,11 +20,12 @@ from fastapi import status
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from gateway.api.routes import organization_routing
 from gateway.auth.models import hash_key
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.models.api_keys import APIKey
 from gateway.models.providers import ModelAlias
-from gateway.models.routing import RoutingPolicy
+from gateway.models.routing import PolicySpec, RoutingPolicy
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.models.usage import UsageLog
 from gateway.models.users import User as BillingUser
@@ -299,6 +300,67 @@ def test_a_name_counts_only_where_it_routes(
     traffic = _traffic(traffic_client, world, "owner")
     assert traffic[("one", "only-one", "member")]["requests"] == 1
     assert ("two", "only-one", "two_member") not in traffic
+
+
+def test_a_configured_name_counts_in_every_workspace(
+    traffic_client: TestClient,
+    world: _World,
+    test_config: GatewayConfig,
+    db_session_factory: Callable[[], Session],
+) -> None:
+    """A ``config.yml`` policy or alias has no workspace, so no stored row has to claim it for its traffic to count."""
+    test_config.routing.policies["configured-policy"] = PolicySpec.model_validate({"select": [{"default": _ANTHROPIC}]})
+    test_config.aliases["configured-alias"] = _ANTHROPIC
+    session = db_session_factory()
+    try:
+        session.add_all(
+            [
+                _attempt(world.workspaces[workspace], world.keys[who], world.users[who], name, _ANTHROPIC, position=1)
+                for workspace, who in (("one", "member"), ("two", "two_member"))
+                for name in ("configured-policy", "configured-alias")
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    traffic = _traffic(traffic_client, world, "owner")
+    for name in ("configured-policy", "configured-alias"):
+        assert traffic[("one", name, "member")]["requests"] == 1
+        assert traffic[("two", name, "two_member")]["requests"] == 1
+
+
+def test_at_the_cap_the_names_counted_are_the_first_by_name(
+    traffic_client: TestClient,
+    world: _World,
+    db_session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cap counts (workspace, name) pairs, so it keeps the rows the name-ordered policy list shows first."""
+    monkeypatch.setattr(organization_routing, "_MAX_ROWS", 2)
+    session = db_session_factory()
+    try:
+        for workspace, who in (("one", "member"), ("two", "two_member")):
+            session.add(
+                RoutingPolicy(
+                    name="a-first",
+                    spec={"select": [{"default": _ANTHROPIC}]},
+                    workspace_id=world.workspaces[workspace],
+                )
+            )
+            session.add(
+                _attempt(
+                    world.workspaces[workspace], world.keys[who], world.users[who], "a-first", _ANTHROPIC, position=1
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    traffic = _traffic(traffic_client, world, "owner")
+    assert ("one", "a-first", "member") in traffic
+    assert ("two", "a-first", "two_member") in traffic
+    assert not any(name == "fast" for _, name, _ in traffic)
 
 
 def test_a_member_reads_only_their_own(traffic_client: TestClient, world: _World) -> None:
