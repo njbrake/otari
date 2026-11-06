@@ -44,6 +44,7 @@ export function NewPolicyPage() {
     manages,
     canEdit,
     canCreateOwn,
+    isCanCreateOwnLoading,
     ownerId,
     writeWorkspaceId,
   } = useRoutingRows()
@@ -67,7 +68,8 @@ export function NewPolicyPage() {
       / New policy
     </nav>
   )
-  if (isLoading) return <PageLoading label="Loading routing…" />
+  if (isLoading || isCanCreateOwnLoading)
+    return <PageLoading label="Loading routing…" />
   if (!canEdit && !canCreateOwn)
     return (
       <div className="flex flex-col gap-6">

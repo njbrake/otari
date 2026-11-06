@@ -205,6 +205,40 @@ describe("NewPolicyPage", () => {
     expect(main).toHaveTextContent(/MAIN.*gpt-5 OpenAI/)
   })
 
+  it("does not refuse a member while it is still reading whether they may create", async () => {
+    mockApi([], null, [], {
+      context: member(),
+      memberPolicies: [],
+      keys: [apiKey({ id: "key-app", key_name: "thymeline-production" })],
+    })
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const answer = globalThis.fetch
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input)
+        if (url.includes("/visibility")) await held
+        return answer(input, init)
+      },
+    )
+    renderInWorkspace(<NewPolicyPage />, "/routing/new?key=key-app")
+
+    await expect(
+      screen.findByText("You can't create a policy here", undefined, {
+        timeout: 500,
+      }),
+    ).rejects.toThrow()
+
+    release()
+    expect(
+      await screen.findByRole("textbox", { name: /^policy name/i }),
+    ).toBeInTheDocument()
+    vi.unstubAllGlobals()
+  })
+
   it("drops rules written for the workspace when it is made one person's", async () => {
     const { calls } = mockApi([], null, [], {
       context: adminContext(),

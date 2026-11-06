@@ -232,8 +232,8 @@ or a custom amount and reset, and a Budget column shows each key's spend this
 period against its limit. A key's Edit reports the routing its requests got,
 and its Set up routing, like the step after creating a key, opens the
 new-policy page for that key, starting on the model it sends most where that
-is a `provider:model`; for an operator it opens the Routing list's create
-dialog. Where the deployment turns on
+is a `provider:model`. For an operator it opens the Routing list, with the
+create dialog on that model when there is one. Where the deployment turns on
 `federation_member_rules`, a key's actions menu offers Workload identity… to the
 operator, and to an organization owner or admin on their own keys; see [Rules on
 a member's own key](workload-identity.md#rules-on-a-members-own-key).

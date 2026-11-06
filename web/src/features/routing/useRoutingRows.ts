@@ -97,6 +97,8 @@ export function useRoutingRows() {
     isOwn,
     canEditRow,
     canCreateOwn,
+    // Until this settles, `canCreateOwn` is false for lack of an answer, not because of one.
+    isCanCreateOwnLoading: visibility.isLoading,
     writeWorkspaceId,
     isWorkspaceSettled,
   }
