@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { entry, urlOf } from "@/tests/activity"
+import { usageTotals } from "@/tests/fixtures"
 import {
   activityChips,
   BUILT_IN_VIEWS,
@@ -11,6 +12,7 @@ import {
   panelFilterPatch,
   readGroup,
   readSort,
+  statusOptions,
   statusParams,
   togglePatch,
   toSelection,
@@ -32,11 +34,19 @@ describe("statusParams", () => {
     // Keeping "Recovered" also asks for the absorbed rows the list otherwise
     // leaves out, or the pick would read as "Failed" alone.
     expect(statusParams(["error", "absorbed"], [])).toEqual({
-      exclude_status: ["success"],
+      exclude_status: ["success", "incomplete"],
       include_absorbed: true,
     })
     expect(statusParams(["success", "error"], [])).toEqual({
-      exclude_status: ["absorbed"],
+      exclude_status: ["absorbed", "incomplete"],
+    })
+  })
+
+  it("filters to or past an abandoned stream like any other status", () => {
+    expect(statusParams(["incomplete"], [])).toEqual({ status: "incomplete" })
+    expect(statusParams([], ["incomplete"])).toEqual({
+      exclude_status: ["incomplete"],
+      include_absorbed: true,
     })
   })
 
@@ -63,7 +73,28 @@ describe("statusParams", () => {
 
   it("sends nothing when every status is allowed", () => {
     expect(statusParams([], [])).toEqual({})
-    expect(statusParams(["success", "error", "absorbed"], [])).toEqual({})
+    expect(
+      statusParams(["success", "error", "absorbed", "incomplete"], []),
+    ).toEqual({})
+  })
+})
+
+describe("statusOptions", () => {
+  it("counts an abandoned stream as incomplete, not as a success", () => {
+    const totals = usageTotals({
+      request_count: 10,
+      error_count: 2,
+      absorbed_count: 1,
+      incomplete_count: 3,
+    })
+    expect(
+      Object.fromEntries(
+        statusOptions(urlOf(""), totals).map((option) => [
+          option.label,
+          option.count,
+        ]),
+      ),
+    ).toEqual({ Succeeded: 5, Failed: 2, Recovered: 1, Incomplete: 3 })
   })
 })
 
@@ -124,7 +155,7 @@ describe("toUsageFilters", () => {
       WINDOW,
       {},
     )
-    expect(filters.exclude_status).toEqual(["success"])
+    expect(filters.exclude_status).toEqual(["success", "incomplete"])
     expect(filters.include_absorbed).toBe(true)
   })
 

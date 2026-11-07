@@ -154,7 +154,7 @@ export interface UsageFilters {
   exclude_user_id?: string[]
   exclude_api_key_id?: string[]
   exclude_source?: string[]
-  exclude_status?: ("success" | "error" | "absorbed")[]
+  exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[]
   policy_name?: string[]
   exclude_policy_name?: string[]
   // true: only requests a routing policy served; false: only direct ones.

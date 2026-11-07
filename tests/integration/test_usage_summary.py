@@ -130,6 +130,7 @@ def test_summary_empty_range_is_all_zero(client: TestClient, master_key_header: 
         "billed_output_tokens": 0,
         "p95_latency_ms": None,
         "absorbed_count": 0,
+        "incomplete_count": 0,
         "imported_cost": 0.0,
         "billed_cache_read_tokens": 0,
     }

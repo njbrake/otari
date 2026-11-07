@@ -251,6 +251,7 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
                     _imported_cost(u),
                     _summed(u.reasoning_tokens),
                     _summed(u.billed_cache_read_tokens),
+                    _with_status(u, "incomplete"),
                 )
             )
         ).one()
@@ -273,6 +274,7 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
             imported_cost=float(row[15]),
             reasoning_tokens=int(row[16]),
             billed_cache_read_tokens=int(row[17]),
+            incomplete_count=int(row[18]),
         )
 
     async def breakdown(

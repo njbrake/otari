@@ -132,6 +132,9 @@ class UsageTotals(BaseModel):
     # Rows of routed requests' earlier failed attempts (status ``absorbed``), which
     # ``request_count`` and ``error_count`` leave out.
     absorbed_count: int = 0
+    # Streams the client abandoned, billed on an estimate. Counted in
+    # ``request_count`` and not in ``error_count``.
+    incomplete_count: int = 0
     # The part of ``cost`` that came from imported usage (rows this deployment did
     # not serve, such as a Claude Code subscription's). It is what that usage
     # would have cost at API rates, never charged to a budget, so a caller shows

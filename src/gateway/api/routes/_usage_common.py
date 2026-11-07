@@ -52,8 +52,9 @@ SUMMARY_BUCKET_DESC = (
 START_DESC = "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)"
 END_DESC = "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)"
 STATUS_DESC = (
-    "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy "
-    "recovered from, excluded from error_count and request_count)"
+    "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy "
+    "recovered from, excluded from error_count and request_count), or 'incomplete' (a stream "
+    "the client abandoned, billed on an estimate)"
 )
 STATUS_CODE_DESC = (
     "Filter to a single failure status code (e.g. 429 for provider rate limits, "

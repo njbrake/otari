@@ -262,6 +262,20 @@ def test_refinements_narrow_the_summary(client: TestClient, master_key_header: d
     assert summary["totals"]["error_count"] == 1
 
 
+def test_an_abandoned_stream_is_counted_and_filtered_as_incomplete(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    _row(db_session, "ok")
+    _row(db_session, "gone", status="incomplete")
+    db_session.commit()
+    summary = client.get(f"{USAGE}/summary", params={**WINDOW, "dimensions": "none"}, headers=master_key_header).json()
+    assert summary["totals"]["request_count"] == 2
+    assert summary["totals"]["error_count"] == 0
+    assert summary["totals"]["incomplete_count"] == 1
+    assert _ids(client, master_key_header, [("status", "incomplete")]) == {"gone"}
+    assert _ids(client, master_key_header, [("exclude_status", "incomplete")]) == {"ok"}
+
+
 @pytest.mark.parametrize(
     "params",
     [

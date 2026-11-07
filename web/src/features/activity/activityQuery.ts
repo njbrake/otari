@@ -213,7 +213,7 @@ export const VALUE_FILTERS = {
 >
 export type ValueColumn = keyof typeof VALUE_FILTERS
 
-const STATUSES = ["success", "error", "absorbed"] as const
+const STATUSES = ["success", "error", "absorbed", "incomplete"] as const
 export type Status = (typeof STATUSES)[number]
 
 // An absorbed row is an attempt a routing policy recovered from, so the
@@ -222,6 +222,7 @@ export const STATUS_LABELS: Record<Status, string> = {
   success: "Succeeded",
   error: "Failed",
   absorbed: "Recovered",
+  incomplete: "Incomplete",
 }
 
 /**
@@ -306,9 +307,11 @@ export function statusOptions(
     !url.getAll("status").length &&
     !url.getAll("exclude_status").length
       ? {
-          success: totals.request_count - totals.error_count,
+          success:
+            totals.request_count - totals.error_count - totals.incomplete_count,
           error: totals.error_count,
           absorbed: totals.absorbed_count,
+          incomplete: totals.incomplete_count,
         }
       : {}
   return STATUSES.map((status) => ({

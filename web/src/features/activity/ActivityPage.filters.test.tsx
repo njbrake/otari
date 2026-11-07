@@ -62,7 +62,10 @@ describe("ActivityPage", () => {
       const { calls } = mockApi({ rows: [entry()] })
       renderPage(<ActivityPage />, "/activity?status=error&status=absorbed")
       await rowOf("gpt-4o")
-      expect(lastList(calls).getAll("exclude_status")).toEqual(["success"])
+      expect(lastList(calls).getAll("exclude_status")).toEqual([
+        "success",
+        "incomplete",
+      ])
       expect(lastList(calls).get("status")).toBeNull()
       // Recovered is among them, so its rows are asked for.
       expect(lastList(calls).get("include_absorbed")).toBe("true")

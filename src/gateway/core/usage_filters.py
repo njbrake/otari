@@ -263,7 +263,7 @@ SortOrder = Literal["asc", "desc"]
 # ``str | list[str]`` field: on the union it would also cap a single value's
 # character length, rejecting a long provider-qualified model name.
 CappedValues = Annotated[list[str], Field(max_length=MAX_FILTER_VALUES)]
-UsageStatus = Literal["success", "error", "absorbed"]
+UsageStatus = Literal["success", "error", "absorbed", "incomplete"]
 # The grouped columns a group's rows can have no value in: what expanding the group
 # of rows with no key, no session or no billed user filters by.
 NullableUsageField = Literal["api_key_id", "user_id", "source_label"]

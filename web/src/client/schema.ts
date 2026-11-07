@@ -20618,7 +20618,7 @@ export interface components {
             /** Exclude Source */
             exclude_source?: string | string[] | null;
             /** Exclude Status */
-            exclude_status?: ("success" | "error" | "absorbed") | ("success" | "error" | "absorbed")[] | null;
+            exclude_status?: ("success" | "error" | "absorbed" | "incomplete") | ("success" | "error" | "absorbed" | "incomplete")[] | null;
             /** Exclude User Id */
             exclude_user_id?: string | string[] | null;
             /** Ids */
@@ -21138,7 +21138,7 @@ export interface components {
             /** Exclude Source */
             exclude_source?: string | string[] | null;
             /** Exclude Status */
-            exclude_status?: ("success" | "error" | "absorbed") | ("success" | "error" | "absorbed")[] | null;
+            exclude_status?: ("success" | "error" | "absorbed" | "incomplete") | ("success" | "error" | "absorbed" | "incomplete")[] | null;
             /** Exclude User Id */
             exclude_user_id?: string | string[] | null;
             /** Ids */
@@ -21355,6 +21355,11 @@ export interface components {
              * @default 0
              */
             imported_cost: number;
+            /**
+             * Incomplete Count
+             * @default 0
+             */
+            incomplete_count: number;
             /** P95 Latency Ms */
             p95_latency_ms?: number | null;
             /** Prompt Tokens */
@@ -26234,7 +26239,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -26273,7 +26278,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -26334,7 +26339,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -26373,7 +26378,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -30650,7 +30655,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -30697,7 +30702,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -30754,7 +30759,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -30801,7 +30806,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -30866,7 +30871,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -30905,7 +30910,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -30968,7 +30973,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -31007,7 +31012,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -31070,7 +31075,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -31109,7 +31114,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -31182,7 +31187,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -31221,7 +31226,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -31278,7 +31283,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -31317,7 +31322,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -34551,7 +34556,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -34598,7 +34603,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -34688,7 +34693,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -34735,7 +34740,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -34831,7 +34836,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -34870,7 +34875,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -34951,7 +34956,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -34990,7 +34995,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -35082,7 +35087,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -35121,7 +35126,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -35225,7 +35230,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -35264,7 +35269,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
@@ -35319,7 +35324,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
                 user_id?: string[] | null;
-                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                /** @description Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate) */
                 status?: string | null;
                 /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
                 status_code?: number | null;
@@ -35358,7 +35363,7 @@ export interface operations {
                 /** @description Leave out rows from these provenance sources. At most 50 per call. */
                 exclude_source?: string[] | null;
                 /** @description Leave out rows with these statuses. */
-                exclude_status?: ("success" | "error" | "absorbed")[] | null;
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
                 /** @description Only rows served through these routing policies. At most 50 per call. */
                 policy_name?: string[] | null;
                 /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */

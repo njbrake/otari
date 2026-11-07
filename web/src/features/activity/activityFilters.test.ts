@@ -53,7 +53,7 @@ describe("valueFilterModel", () => {
     ).toEqual(["member key-1", "member key-2"])
   })
 
-  it("lists status as its three outcomes rather than from groups", () => {
+  it("lists status as its four outcomes rather than from groups", () => {
     const model = valueFilterModel(urlOf(""), "status", {
       ...names,
       groups: undefined,
@@ -62,6 +62,7 @@ describe("valueFilterModel", () => {
       "Succeeded",
       "Failed",
       "Recovered",
+      "Incomplete",
     ])
     expect(model.isMono).toBe(false)
   })
