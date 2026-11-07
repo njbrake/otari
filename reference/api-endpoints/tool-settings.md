@@ -1,0 +1,29 @@
+# Tool settings
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/tool-settings" method="get" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/tool-settings" method="patch" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/tool-settings/guardrails/catalog" method="get" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/tool-settings/guardrails/profiles" method="get" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/tool-settings/sandbox/credential" method="put" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/tool-settings/sandbox/credential" method="delete" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/tool-settings/{service}/test" method="post" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}

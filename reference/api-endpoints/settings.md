@@ -1,0 +1,41 @@
+# Settings
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/settings" method="get" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/settings" method="patch" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/settings/country-database" method="get" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/settings/country-database" method="put" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/settings/country-database" method="delete" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/settings/mail" method="get" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/settings/mail/test" method="post" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/settings/maintenance-mode" method="get" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/settings/maintenance-mode" method="patch" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/settings/master-key/rotate" method="post" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}

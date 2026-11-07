@@ -1,0 +1,45 @@
+# Web search keys
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/web-search-keys" method="get" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/web-search-keys" method="post" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/web-search-keys/{key_id}" method="patch" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/web-search-keys/{key_id}" method="delete" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/web-search-keys/{key_id}/archive" method="post" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/web-search-keys/{key_id}/default" method="post" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/web-search-keys/{key_id}/default" method="delete" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/web-search-keys/{key_id}/restore" method="post" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/workspaces/{workspace_id}/web-search-keys" method="get" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/workspaces/{workspace_id}/web-search-keys/{key_id}" method="patch" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/workspaces/{workspace_id}/web-search-keys/{key_id}" method="delete" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
