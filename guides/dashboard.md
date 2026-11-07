@@ -355,7 +355,9 @@ the rest), and a view can be saved by name, as on Activity. A key's actions menu
 on the API keys page has View usage, which opens Usage filtered to that key.
 
 A routed request is one row, served by whichever attempt succeeded; its earlier
-failed attempts are counted on it and listed under it on request. Opening a row
+failed attempts are counted on it and listed under it on request. A stream the
+client abandoned is marked Incomplete, at its estimated cost, and the status
+filter picks or leaves those out like Succeeded, Failed and Recovered. Opening a row
 shows the request beside the log: its routing plan, source, token composition,
 cost and timing. Live updates bring the log up to now every ten seconds, and the
 totals, latency, chart and a grouped log every minute. They hold still while you

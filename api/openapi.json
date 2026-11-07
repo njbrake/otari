@@ -26298,7 +26298,8 @@
                 "enum": [
                   "success",
                   "error",
-                  "absorbed"
+                  "absorbed",
+                  "incomplete"
                 ],
                 "type": "string"
               },
@@ -26307,11 +26308,12 @@
                   "enum": [
                     "success",
                     "error",
-                    "absorbed"
+                    "absorbed",
+                    "incomplete"
                   ],
                   "type": "string"
                 },
-                "maxItems": 3,
+                "maxItems": 4,
                 "type": "array"
               },
               {
@@ -28003,7 +28005,8 @@
                 "enum": [
                   "success",
                   "error",
-                  "absorbed"
+                  "absorbed",
+                  "incomplete"
                 ],
                 "type": "string"
               },
@@ -28012,11 +28015,12 @@
                   "enum": [
                     "success",
                     "error",
-                    "absorbed"
+                    "absorbed",
+                    "incomplete"
                   ],
                   "type": "string"
                 },
-                "maxItems": 3,
+                "maxItems": 4,
                 "type": "array"
               },
               {
@@ -28639,6 +28643,11 @@
             "default": 0.0,
             "title": "Imported Cost",
             "type": "number"
+          },
+          "incomplete_count": {
+            "default": 0,
+            "title": "Incomplete Count",
+            "type": "integer"
           },
           "p95_latency_ms": {
             "anyOf": [
@@ -38459,7 +38468,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -38472,7 +38481,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -38852,11 +38861,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -39246,7 +39256,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -39259,7 +39269,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -39639,11 +39649,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -47998,7 +48009,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -48011,7 +48022,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -48469,11 +48480,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -48817,7 +48829,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -48830,7 +48842,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -49288,11 +49300,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -49698,7 +49711,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -49711,7 +49724,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -50091,11 +50104,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -50492,7 +50506,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -50505,7 +50519,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -50885,11 +50899,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -51274,7 +51289,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -51287,7 +51302,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -51667,11 +51682,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -52165,7 +52181,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -52178,7 +52194,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -52558,11 +52574,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -52891,7 +52908,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -52904,7 +52921,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -53284,11 +53301,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -59779,7 +59797,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -59792,7 +59810,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -60250,11 +60268,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -60598,7 +60617,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -60611,7 +60630,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -61069,11 +61088,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -61517,7 +61537,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -61530,7 +61550,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -61910,11 +61930,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -62329,7 +62350,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -62342,7 +62363,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -62722,11 +62743,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -63151,7 +63173,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -63164,7 +63186,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -63544,11 +63566,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -64080,7 +64103,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -64093,7 +64116,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -64473,11 +64496,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
@@ -64794,7 +64818,7 @@
             }
           },
           {
-            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
             "in": "query",
             "name": "status",
             "required": false,
@@ -64807,7 +64831,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "description": "Filter to a single status: 'success', 'error', 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count), or 'incomplete' (a stream the client abandoned, billed on an estimate)",
               "title": "Status"
             }
           },
@@ -65187,11 +65211,12 @@
                     "enum": [
                       "success",
                       "error",
-                      "absorbed"
+                      "absorbed",
+                      "incomplete"
                     ],
                     "type": "string"
                   },
-                  "maxItems": 3,
+                  "maxItems": 4,
                   "type": "array"
                 },
                 {
