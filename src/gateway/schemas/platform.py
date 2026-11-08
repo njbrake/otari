@@ -21,7 +21,7 @@ class TypeCount(BaseModel):
 
 
 class AllocationStat(BaseModel):
-    """Live traced memory allocated at one source line."""
+    """Live traced memory allocated at one source line, or in one file."""
 
     location: str
     size_bytes: int
@@ -43,6 +43,7 @@ class TracemallocStats(BaseModel):
     peak_bytes: int
     baseline_taken: bool
     top_allocations: list[AllocationStat]
+    top_files: list[AllocationStat]
     top_growth: list[AllocationGrowth]
 
 

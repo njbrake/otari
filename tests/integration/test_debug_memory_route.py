@@ -152,6 +152,8 @@ def test_reading_while_tracing_reports_allocations_and_growth(
     assert 0 < len(traced["top_allocations"]) <= 100
     assert all(":" in row["location"] and "site-packages" not in row["location"] for row in traced["top_allocations"])
     assert any("test_debug_memory_route.py" in row["location"] for row in traced["top_growth"])
+    assert 0 < len(traced["top_files"]) <= 100
+    assert all(not row["location"].rpartition(":")[2].isdigit() for row in traced["top_files"])
 
 
 def test_trim_reports_rss_around_the_call(diagnostics_client: TestClient, master_key_header: dict[str, str]) -> None:

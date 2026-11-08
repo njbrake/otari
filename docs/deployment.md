@@ -97,7 +97,7 @@ list, up to 100.
 | `mallinfo` | glibc's allocator state: `uordblks` in use, `fordblks` free, `arena` and `hblkhd` obtained from the kernel, `keepcost` trimmable at the top of the heap. Null off glibc. |
 | `allocated_blocks`, `gc_count` | Python's allocated block count and the collector's generation counters. |
 | `top_types` | The most numerous live objects the collector tracks, by type. |
-| `tracemalloc` | Traced `current_bytes` and `peak_bytes`, `top_allocations` by `file:line`, and `top_growth` since the baseline. Null, with a `tracemalloc_hint`, unless tracing. |
+| `tracemalloc` | Traced `current_bytes` and `peak_bytes`, `top_allocations` by `file:line`, `top_files` by file (what each package holds), and `top_growth` since the baseline. Null, with a `tracemalloc_hint`, unless tracing. |
 | `trim` | The result of `?trim=true`: RSS before and after `malloc_trim(0)`. Null when not requested or off glibc. |
 
 Take the same reading after a deploy and again after traffic. If `rss_bytes`

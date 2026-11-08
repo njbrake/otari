@@ -9,6 +9,7 @@ import pytest
 
 from gateway.services.platform import MemoryDiagnosticsService, _memory_diagnostics
 from gateway.services.platform._memory_diagnostics import (
+    by_file,
     load_libc,
     parse_proc_status,
     read_mallinfo,
@@ -114,6 +115,12 @@ def test_traced_totals_drops_excluded_files() -> None:
     )
 
     assert totals == {"/app/x.py:2": (3, 1)}
+
+
+def test_by_file_merges_the_lines_of_each_file() -> None:
+    merged = by_file({"pkg/a.py:1": (10, 1), "pkg/a.py:9": (5, 2), "pkg/b.py:3": (7, 1)})
+
+    assert merged == {"pkg/a.py": (15, 3), "pkg/b.py": (7, 1)}
 
 
 def test_top_allocations_is_bounded_and_ordered() -> None:

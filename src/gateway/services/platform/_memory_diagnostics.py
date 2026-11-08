@@ -140,6 +140,16 @@ def traced_totals(
     return totals
 
 
+def by_file(totals: _TracedTotals) -> dict[str, tuple[int, int]]:
+    """Per-line totals merged per file, so a package's share reads as one row."""
+    merged: dict[str, tuple[int, int]] = {}
+    for location, (size, count) in totals.items():
+        filename = location.rpartition(":")[0]
+        merged_size, merged_count = merged.get(filename, (0, 0))
+        merged[filename] = (merged_size + size, merged_count + count)
+    return merged
+
+
 def top_allocations(totals: _TracedTotals, limit: int) -> list[AllocationStat]:
     """The ``limit`` lines holding the most traced memory."""
     largest = heapq.nlargest(limit, totals.items(), key=lambda item: item[1][0])
@@ -214,6 +224,7 @@ class MemoryDiagnosticsService:
             peak_bytes=peak_bytes,
             baseline_taken=baseline_taken,
             top_allocations=top_allocations(totals, limit),
+            top_files=top_allocations(by_file(totals), limit),
             top_growth=top_growth(totals, self._baseline or {}, limit),
         )
 
