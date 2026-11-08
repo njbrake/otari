@@ -51,6 +51,7 @@ _SETTING_NAMES = frozenset(
         "db_pool_size",
         "db_pool_timeout",
         "db_statement_timeout_ms",
+        "debug_memory",
         "decision_providers",
         "default_pricing",
         "docs_url",

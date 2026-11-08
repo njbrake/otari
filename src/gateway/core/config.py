@@ -801,6 +801,13 @@ class GatewayConfig(
         default=False,
         description="Enable Prometheus metrics endpoint at /metrics",
     )
+    debug_memory: Annotated[bool, OMITTED] = Field(
+        default=False,
+        description=(
+            "Serve the process memory diagnostics endpoint to the deployment's operator. "
+            "Off by default, which leaves the path a 404."
+        ),
+    )
     accept_incoming_trace_context: Annotated[bool, Shown(SettingsGroup.GENERAL)] = Field(
         default=False,
         description=(

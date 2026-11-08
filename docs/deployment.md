@@ -77,6 +77,48 @@ errors, latency and spend without reading the usage log:
 `provider:model` adds a series per distinct model, so restrict keys to the
 models they may use where callers are not trusted to pick.
 
+### Diagnose memory growth
+
+When a process's memory keeps growing with traffic, turn on the diagnostics
+endpoint and compare readings over time. Set `OTARI_DEBUG_MEMORY=true` and
+restart; while it is off, the path is a 404. Call it with the master key:
+
+```bash
+curl -H "Otari-Key: Bearer $OTARI_MASTER_KEY" \
+  "https://gateway.example.com/api/v1/debug/memory?limit=25"
+```
+
+An operator's dashboard session is accepted too. `limit` sets the length of each
+list, up to 100.
+
+| Field | How to read it |
+| --- | --- |
+| `rss_bytes`, `peak_rss_bytes` | Resident memory now and at its highest (`VmRSS`, `VmHWM`). Null where `/proc` is missing. |
+| `mallinfo` | glibc's allocator state: `uordblks` in use, `fordblks` free, `arena` and `hblkhd` obtained from the kernel, `keepcost` trimmable at the top of the heap. Null off glibc. |
+| `allocated_blocks`, `gc_count` | Python's allocated block count and the collector's generation counters. |
+| `top_types` | The most numerous live objects the collector tracks, by type. |
+| `tracemalloc` | Traced `current_bytes` and `peak_bytes`, `top_allocations` by `file:line`, and `top_growth` since the baseline. Null, with a `tracemalloc_hint`, unless tracing. |
+| `trim` | The result of `?trim=true`: RSS before and after `malloc_trim(0)`. Null when not requested or off glibc. |
+
+Take the same reading after a deploy and again after traffic. If `rss_bytes`
+grows while `mallinfo.uordblks` stays flat, the heap is fragmenting. If
+`uordblks` grows with it, something is holding on to memory. `?trim=true`
+tests the first case: a large drop from `rss_before_bytes` to `rss_after_bytes`
+means the memory was free but not returned to the kernel.
+
+To see which lines allocate, set `PYTHONTRACEMALLOC=1` and restart, or `5` to
+record deeper tracebacks. Tracing keeps a record of every live allocation, so
+RSS and CPU rise while it is on, and more at `5`; readings taken with it on are
+not comparable to readings taken with it off, and it should come off when you
+are done. The first call takes the baseline `top_growth` compares against, and
+`?reset_baseline=true` takes a new one; `baseline_taken` says when a call did.
+
+A call walks every live object, which pauses requests briefly, so poll it
+minutes apart. While tracing, a call also copies every trace into Python
+objects: on a heap of about 750 MB that took seconds and raised RSS by hundreds
+of megabytes, so leave room under the container's memory limit and read
+`rss_bytes` from a call made before any traced one.
+
 ### Verify the image
 
 Each published image carries a signed build provenance attestation, which ties it
