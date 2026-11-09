@@ -20,16 +20,22 @@ def _load() -> tuple[datetime, ModelsDevCatalog]:
 
 
 @cache
+def bundled_generation() -> PriceGeneration:
+    """The packaged catalog's prices as the baseline generation, effective from the day it was generated."""
+    generated_at, catalog = _load()
+    return PriceGeneration(effective_at=generated_at, index=ModelsDevPriceIndex.from_catalog(catalog), baseline=True)
+
+
 def load_bundled_index() -> ModelsDevPriceIndex:
     """The packaged catalog's price index, built once per process."""
-    return ModelsDevPriceIndex.from_catalog(_load()[1])
+    return bundled_generation().index
 
 
 def bundled_catalog() -> ModelsDevCatalog:
-    """The packaged catalog, read once per process."""
+    """The packaged catalog, read once until :func:`release_bundled_catalog` lets it go."""
     return _load()[1]
 
 
-def bundled_generation() -> PriceGeneration:
-    """The packaged catalog's prices as the baseline generation, effective from the day it was generated."""
-    return PriceGeneration(effective_at=_load()[0], index=load_bundled_index(), baseline=True)
+def release_bundled_catalog() -> None:
+    """Free the packaged catalog's model facts once another catalog serves them; its prices stay."""
+    _load.cache_clear()
