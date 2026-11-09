@@ -10,6 +10,15 @@ export const TEXT_LINK_CLASS =
   "text-link underline underline-offset-2 hover:decoration-2 focus-visible:otari-focus-ring"
 
 /**
+ * The same face in the danger color, for a link that names something broken
+ * ("No models"). Its own class rather than `text-danger` added to the one
+ * above: both set the color, and `.text-link` comes later in the built CSS, so
+ * the addition never shows.
+ */
+export const DANGER_TEXT_LINK_CLASS =
+  "text-danger underline underline-offset-2 hover:decoration-2 focus-visible:otari-focus-ring"
+
+/**
  * An action set as a link, for a verb inside a sentence or a caption line:
  * "Clear filters", "Reset", "Dismiss".
  *

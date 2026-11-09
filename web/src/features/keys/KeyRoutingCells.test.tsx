@@ -35,6 +35,18 @@ describe("KeyModelsCell", () => {
   })
 })
 
+describe("KeyModelsCell for a key that reaches nothing", () => {
+  it("says so in the danger color, not the link's", () => {
+    render(<KeyModelsCell summary={{ kind: "none" }} onOpen={() => {}} />)
+
+    // Both classes set the color and `.text-link` wins on order, so the danger
+    // tone has to replace it rather than sit beside it.
+    const link = screen.getByRole("button", { name: "No models" })
+    expect(link).toHaveClass("text-danger")
+    expect(link).not.toHaveClass("text-link")
+  })
+})
+
 describe("KeyMostUsedCell", () => {
   it("keeps the whole name on hover when the column cuts it short", () => {
     const routing = {
