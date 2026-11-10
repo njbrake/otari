@@ -55,6 +55,16 @@ WORKDIR /app
 # distrusted emSign roots, whatever the system trust store says.
 RUN pip install --no-cache-dir --upgrade "pip>=26.2.2"
 
+# jemalloc replaces glibc malloc, whose arenas fragment under a long-lived
+# gateway: in production, glibc's free-but-held heap grew tenfold over a day
+# while the heap in use stayed flat. The symlink gives LD_PRELOAD one path on
+# both amd64 and arm64. Set LD_PRELOAD to an empty value to run on glibc malloc.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libjemalloc2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s "$(ls /usr/lib/*-linux-gnu/libjemalloc.so.2)" /usr/local/lib/libjemalloc.so.2 \
+    && test -e /usr/local/lib/libjemalloc.so.2
+
 RUN useradd -m -u 1000 otari && chown otari:otari /app
 
 COPY --from=builder --chown=otari:otari /app/.venv /app/.venv
@@ -82,5 +92,10 @@ ARG OTARI_VERSION=0.0.0-dev
 ENV OTARI_VERSION=${OTARI_VERSION}
 ENV OTARI_HOST=0.0.0.0
 ENV OTARI_PORT=8000
+# One process, so two arenas are plenty; the background thread returns freed
+# pages to the kernel within seconds instead of on the next allocation.
+# MALLOC_ARENA_MAX is a glibc setting and does nothing while jemalloc is loaded.
+ENV LD_PRELOAD=/usr/local/lib/libjemalloc.so.2
+ENV MALLOC_CONF=background_thread:true,narenas:2,dirty_decay_ms:5000,muzzy_decay_ms:5000
 
 CMD ["otari", "serve"]

@@ -30,7 +30,7 @@ async def read_memory(
     reset_baseline: bool = False,
     trim: bool = False,
 ) -> MemoryDiagnostics:
-    """Report this process's memory, optionally trimming the glibc heap afterward."""
+    """Report this process's memory, optionally trimming the heap afterward on glibc malloc."""
     return await _diagnostics.read(limit=limit, reset_baseline=reset_baseline, trim=trim)
 
 

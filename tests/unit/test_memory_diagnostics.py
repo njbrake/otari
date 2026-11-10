@@ -1,6 +1,10 @@
 """Pure helpers behind the memory diagnostics endpoint."""
 
+import os
+import subprocess
+import sys
 import tracemalloc
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -9,9 +13,11 @@ import pytest
 
 from gateway.services.platform import MemoryDiagnosticsService, _memory_diagnostics
 from gateway.services.platform._memory_diagnostics import (
+    active_allocator,
     by_file,
     load_libc,
     parse_proc_status,
+    read_jemalloc,
     read_mallinfo,
     strip_site_packages,
     top_allocations,
@@ -20,6 +26,8 @@ from gateway.services.platform._memory_diagnostics import (
     traced_totals,
     trim_heap,
 )
+
+_JEMALLOC_PATHS = sorted(Path("/usr/lib").glob("*-linux-gnu/libjemalloc.so.2"))
 
 _STATUS = "Name:\tpython\nVmPeak:\t  9999 kB\nVmHWM:\t  2048 kB\nVmRSS:\t  1024 kB\nThreads:\t4\n"
 
@@ -50,13 +58,97 @@ def test_read_mallinfo_maps_the_named_fields() -> None:
 
 def test_read_mallinfo_reads_the_real_allocator_where_it_exists() -> None:
     libc = load_libc()
-    if getattr(libc, "mallinfo2", None) is None:
-        pytest.skip("this libc has no mallinfo2")
+    if getattr(libc, "mallinfo2", None) is None or active_allocator(libc) != "glibc":
+        pytest.skip("not running on glibc malloc with mallinfo2")
 
     stats = read_mallinfo(libc)
 
     assert stats is not None
     assert stats.uordblks > 0
+
+
+def test_active_allocator_is_unknown_without_a_libc() -> None:
+    assert active_allocator(None) is None
+
+
+@pytest.mark.parametrize(
+    ("symbols", "expected"),
+    [
+        ({"mallctl": object(), "mallinfo2": object()}, "jemalloc"),
+        ({"tc_malloc": object(), "mallinfo2": object()}, "other"),
+        ({"mi_malloc": object(), "mallinfo2": object()}, "other"),
+        ({"mallinfo2": object()}, "glibc"),
+        ({}, None),
+    ],
+)
+def test_active_allocator_names_the_allocator_by_its_symbols(symbols: dict[str, object], expected: str | None) -> None:
+    assert active_allocator(SimpleNamespace(**symbols)) == expected
+
+
+@pytest.mark.skipif(
+    "LD_PRELOAD" in os.environ or getattr(load_libc(), "mallinfo2", None) is None,
+    reason="needs a process on glibc malloc",
+)
+def test_active_allocator_reports_glibc_when_nothing_is_preloaded() -> None:
+    assert active_allocator(load_libc()) == "glibc"
+
+
+@pytest.mark.skipif(not _JEMALLOC_PATHS, reason="libjemalloc2 is not installed")
+def test_a_preloaded_jemalloc_is_detected_and_read() -> None:
+    script = (
+        "from gateway.services.platform._memory_diagnostics import active_allocator, load_libc, read_jemalloc;"
+        "libc = load_libc(); print(active_allocator(libc)); print(read_jemalloc(libc).resident > 0)"
+    )
+    env = {**os.environ, "LD_PRELOAD": str(_JEMALLOC_PATHS[0])}
+
+    output = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, check=True)
+
+    assert output.stdout.split() == ["jemalloc", "True"]
+
+
+def _fake_mallctl(values: dict[bytes, int], *, failing: bytes | None = None) -> Any:
+    def mallctl(name: bytes, oldp: Any, oldlenp: Any, newp: Any, newlen: int) -> int:
+        if name == failing:
+            return 2
+        if oldp is not None:
+            oldp._obj.value = values[name]
+        return 0
+
+    return mallctl
+
+
+def test_read_jemalloc_maps_the_named_stats() -> None:
+    names = ("allocated", "active", "resident", "mapped", "retained")
+    values = {f"stats.{name}".encode(): index for index, name in enumerate(names, start=1)}
+
+    stats = read_jemalloc(SimpleNamespace(mallctl=_fake_mallctl(values)))
+
+    assert stats is not None
+    assert stats.model_dump() == dict(zip(names, range(1, 6), strict=True))
+
+
+@pytest.mark.parametrize("failing", [b"epoch", b"stats.resident"])
+def test_read_jemalloc_is_null_when_a_read_fails(failing: bytes) -> None:
+    values = dict.fromkeys(
+        (b"stats.allocated", b"stats.active", b"stats.resident", b"stats.mapped", b"stats.retained"), 1
+    )
+
+    assert read_jemalloc(SimpleNamespace(mallctl=_fake_mallctl(values, failing=failing))) is None
+
+
+def test_measure_skips_glibc_readings_under_another_allocator(monkeypatch: pytest.MonkeyPatch) -> None:
+    trim = MagicMock(return_value=1)
+    libc = SimpleNamespace(mallinfo2=MagicMock(), malloc_trim=trim)
+    monkeypatch.setattr(_memory_diagnostics, "load_libc", lambda: libc)
+    monkeypatch.setattr(_memory_diagnostics, "active_allocator", lambda _libc: "other")
+
+    reading = MemoryDiagnosticsService()._measure(3, False, True)
+
+    assert reading.allocator == "other"
+    assert reading.mallinfo is None
+    assert reading.jemalloc is None
+    assert reading.trim is None
+    trim.assert_not_called()
 
 
 @pytest.mark.parametrize(("returned", "released"), [(1, True), (0, False)])
@@ -174,6 +266,7 @@ def test_measure_survives_a_platform_without_proc_or_glibc(monkeypatch: pytest.M
 
     assert reading.rss_bytes is None
     assert reading.peak_rss_bytes is None
+    assert reading.allocator is None
     assert reading.mallinfo is None
     assert reading.trim is None
     assert len(reading.top_types) == 3
