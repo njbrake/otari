@@ -105,7 +105,7 @@ list, up to 100.
 | Field | How to read it |
 | --- | --- |
 | `rss_bytes`, `peak_rss_bytes` | Resident memory now and at its highest (`VmRSS`, `VmHWM`). Null where `/proc` is missing. |
-| `allocator` | The `malloc` the process calls: `glibc`, `jemalloc` (the image's default) or `other` for another preloaded allocator. Null where it cannot be told. |
+| `allocator` | The `malloc` the process calls: `glibc`, `jemalloc` (the image's default) or `other` for a preloaded tcmalloc or mimalloc. Null where it cannot be told. |
 | `mallinfo` | glibc's allocator state: `uordblks` in use, `fordblks` free, `arena` and `hblkhd` obtained from the kernel, `keepcost` trimmable at the top of the heap. Null unless `allocator` is `glibc`. |
 | `jemalloc` | jemalloc's counters: `allocated` in use, `active` in pages holding it, `resident` and `mapped` from the kernel, `retained` unmapped but kept. Null unless `allocator` is `jemalloc`. |
 | `allocated_blocks`, `gc_count` | Python's allocated block count and the collector's generation counters. |

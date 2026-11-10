@@ -35,6 +35,8 @@ _TRACEMALLOC_HINT = "tracemalloc is off. Set PYTHONTRACEMALLOC=1 in the environm
 _TracedTotals = Mapping[str, tuple[int, int]]
 
 _JEMALLOC_STATS = ("allocated", "active", "resident", "mapped", "retained")
+# tcmalloc and mimalloc, which export these beside the malloc they replace.
+_OTHER_ALLOCATOR_SYMBOLS = ("tc_malloc", "mi_malloc")
 
 
 class _Mallinfo2(ctypes.Structure):
@@ -62,26 +64,19 @@ def load_libc() -> Any | None:
         return None
 
 
-def _address(function: Any) -> int | None:
-    return ctypes.cast(function, ctypes.c_void_p).value
-
-
 def active_allocator(libc: Any | None) -> Allocator | None:
     """Which ``malloc`` this process calls, or None where that cannot be told.
 
-    glibc's own ``malloc`` differing from the one the process resolves means
-    another allocator was preloaded over it, whose state ``mallinfo2`` does not see.
+    A preloaded allocator is told by an entry point only it exports, since
+    ``malloc``'s own address is the executable's PLT stub in a non-PIE build.
     """
     if libc is None:
         return None
     if getattr(libc, "mallctl", None) is not None:
         return "jemalloc"
-    try:
-        glibc = ctypes.CDLL("libc.so.6")
-        own_malloc = _address(glibc.malloc)
-    except (OSError, AttributeError):
-        return None
-    return "glibc" if _address(libc.malloc) == own_malloc else "other"
+    if any(getattr(libc, name, None) is not None for name in _OTHER_ALLOCATOR_SYMBOLS):
+        return "other"
+    return "glibc" if getattr(libc, "mallinfo2", None) is not None else None
 
 
 def read_jemalloc(libc: Any) -> JemallocStats | None:

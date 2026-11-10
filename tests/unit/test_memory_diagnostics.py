@@ -71,8 +71,18 @@ def test_active_allocator_is_unknown_without_a_libc() -> None:
     assert active_allocator(None) is None
 
 
-def test_active_allocator_names_jemalloc_by_its_mallctl() -> None:
-    assert active_allocator(SimpleNamespace(mallctl=object())) == "jemalloc"
+@pytest.mark.parametrize(
+    ("symbols", "expected"),
+    [
+        ({"mallctl": object(), "mallinfo2": object()}, "jemalloc"),
+        ({"tc_malloc": object(), "mallinfo2": object()}, "other"),
+        ({"mi_malloc": object(), "mallinfo2": object()}, "other"),
+        ({"mallinfo2": object()}, "glibc"),
+        ({}, None),
+    ],
+)
+def test_active_allocator_names_the_allocator_by_its_symbols(symbols: dict[str, object], expected: str | None) -> None:
+    assert active_allocator(SimpleNamespace(**symbols)) == expected
 
 
 @pytest.mark.skipif(
