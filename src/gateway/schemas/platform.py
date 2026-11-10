@@ -1,6 +1,10 @@
 """Response models of the platform domain."""
 
+from typing import Literal
+
 from pydantic import BaseModel
+
+Allocator = Literal["glibc", "jemalloc", "other"]
 
 
 class MallinfoStats(BaseModel):
@@ -11,6 +15,16 @@ class MallinfoStats(BaseModel):
     uordblks: int
     fordblks: int
     keepcost: int
+
+
+class JemallocStats(BaseModel):
+    """jemalloc's process-wide counters, named after its ``stats.*`` mallctl keys."""
+
+    allocated: int
+    active: int
+    resident: int
+    mapped: int
+    retained: int
 
 
 class TypeCount(BaseModel):
@@ -60,7 +74,9 @@ class MemoryDiagnostics(BaseModel):
 
     rss_bytes: int | None
     peak_rss_bytes: int | None
+    allocator: Allocator | None
     mallinfo: MallinfoStats | None
+    jemalloc: JemallocStats | None
     allocated_blocks: int
     gc_count: tuple[int, int, int]
     top_types: list[TypeCount]

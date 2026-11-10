@@ -16,7 +16,9 @@ from typing import Any
 from gateway.schemas.platform import (
     AllocationGrowth,
     AllocationStat,
+    Allocator,
     HeapTrim,
+    JemallocStats,
     MallinfoStats,
     MemoryDiagnostics,
     TracemallocStats,
@@ -31,6 +33,8 @@ _TRACEMALLOC_HINT = "tracemalloc is off. Set PYTHONTRACEMALLOC=1 in the environm
 
 # location -> (size in bytes, allocation count)
 _TracedTotals = Mapping[str, tuple[int, int]]
+
+_JEMALLOC_STATS = ("allocated", "active", "resident", "mapped", "retained")
 
 
 class _Mallinfo2(ctypes.Structure):
@@ -56,6 +60,46 @@ def load_libc() -> Any | None:
         return ctypes.CDLL(None)
     except (OSError, TypeError):
         return None
+
+
+def _address(function: Any) -> int | None:
+    return ctypes.cast(function, ctypes.c_void_p).value
+
+
+def active_allocator(libc: Any | None) -> Allocator | None:
+    """Which ``malloc`` this process calls, or None where that cannot be told.
+
+    glibc's own ``malloc`` differing from the one the process resolves means
+    another allocator was preloaded over it, whose state ``mallinfo2`` does not see.
+    """
+    if libc is None:
+        return None
+    if getattr(libc, "mallctl", None) is not None:
+        return "jemalloc"
+    try:
+        glibc = ctypes.CDLL("libc.so.6")
+        own_malloc = _address(glibc.malloc)
+    except (OSError, AttributeError):
+        return None
+    return "glibc" if _address(libc.malloc) == own_malloc else "other"
+
+
+def read_jemalloc(libc: Any) -> JemallocStats | None:
+    """jemalloc's counters, refreshed by advancing its ``epoch``, or None if unreadable."""
+    mallctl = libc.mallctl
+    mallctl.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+    mallctl.restype = ctypes.c_int
+    epoch = ctypes.c_uint64(1)
+    if mallctl(b"epoch", None, None, ctypes.byref(epoch), ctypes.sizeof(epoch)) != 0:
+        return None
+    values: dict[str, int] = {}
+    for name in _JEMALLOC_STATS:
+        value = ctypes.c_size_t()
+        size = ctypes.c_size_t(ctypes.sizeof(value))
+        if mallctl(f"stats.{name}".encode(), ctypes.byref(value), ctypes.byref(size), None, 0) != 0:
+            return None
+        values[name] = value.value
+    return JemallocStats(**values)
 
 
 def read_mallinfo(libc: Any | None) -> MallinfoStats | None:
@@ -193,7 +237,11 @@ class MemoryDiagnosticsService:
             # The cheap readings go first, before the snapshot and the object
             # walk allocate on the heap they describe.
             rss_bytes, peak_rss_bytes = _read_rss()
-            mallinfo = read_mallinfo(libc)
+            allocator = active_allocator(libc)
+            # mallinfo2 and malloc_trim describe glibc's heap even when another
+            # allocator serves every request, so they are read only on glibc.
+            mallinfo = read_mallinfo(libc) if allocator == "glibc" else None
+            jemalloc = read_jemalloc(libc) if allocator == "jemalloc" else None
             allocated_blocks = sys.getallocatedblocks()
             gc_count = gc.get_count()
 
@@ -204,13 +252,15 @@ class MemoryDiagnosticsService:
             return MemoryDiagnostics(
                 rss_bytes=rss_bytes,
                 peak_rss_bytes=peak_rss_bytes,
+                allocator=allocator,
                 mallinfo=mallinfo,
+                jemalloc=jemalloc,
                 allocated_blocks=allocated_blocks,
                 gc_count=gc_count,
                 top_types=types,
                 tracemalloc=traced,
                 tracemalloc_hint=None if tracing else _TRACEMALLOC_HINT,
-                trim=_trim(libc) if trim else None,
+                trim=_trim(libc) if trim and allocator == "glibc" else None,
             )
 
     def _trace(self, limit: int, reset_baseline: bool) -> TracemallocStats:

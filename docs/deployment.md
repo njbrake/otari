@@ -77,6 +77,17 @@ errors, latency and spend without reading the usage log:
 `provider:model` adds a series per distinct model, so restrict keys to the
 models they may use where callers are not trusted to pick.
 
+### Memory allocator
+
+The image runs Otari on jemalloc rather than glibc's `malloc`, whose arenas
+fragment in a long-lived process: memory freed after a burst of traffic stays
+held by the process instead of returning to the kernel. The image sets
+`LD_PRELOAD=/usr/local/lib/libjemalloc.so.2` and a conservative `MALLOC_CONF`
+(two arenas, and a background thread returning freed pages after about five
+seconds). Override `MALLOC_CONF` to tune it. To run on glibc instead, set
+`LD_PRELOAD` to an empty value (`docker run -e LD_PRELOAD= ...`).
+`MALLOC_ARENA_MAX` is a glibc setting, so it only takes effect on glibc.
+
 ### Diagnose memory growth
 
 When a process's memory keeps growing with traffic, turn on the diagnostics
@@ -94,15 +105,18 @@ list, up to 100.
 | Field | How to read it |
 | --- | --- |
 | `rss_bytes`, `peak_rss_bytes` | Resident memory now and at its highest (`VmRSS`, `VmHWM`). Null where `/proc` is missing. |
-| `mallinfo` | glibc's allocator state: `uordblks` in use, `fordblks` free, `arena` and `hblkhd` obtained from the kernel, `keepcost` trimmable at the top of the heap. Null off glibc. |
+| `allocator` | The `malloc` the process calls: `glibc`, `jemalloc` (the image's default) or `other` for another preloaded allocator. Null where it cannot be told. |
+| `mallinfo` | glibc's allocator state: `uordblks` in use, `fordblks` free, `arena` and `hblkhd` obtained from the kernel, `keepcost` trimmable at the top of the heap. Null unless `allocator` is `glibc`. |
+| `jemalloc` | jemalloc's counters: `allocated` in use, `active` in pages holding it, `resident` and `mapped` from the kernel, `retained` unmapped but kept. Null unless `allocator` is `jemalloc`. |
 | `allocated_blocks`, `gc_count` | Python's allocated block count and the collector's generation counters. |
 | `top_types` | The most numerous live objects the collector tracks, by type. |
 | `tracemalloc` | Traced `current_bytes` and `peak_bytes`, `top_allocations` by `file:line`, `top_files` by file (what each package holds), and `top_growth` since the baseline. Null, with a `tracemalloc_hint`, unless tracing. |
-| `trim` | The result of `?trim=true`: RSS before and after `malloc_trim(0)`. Null when not requested or off glibc. |
+| `trim` | The result of `?trim=true`: RSS before and after `malloc_trim(0)`. Null when not requested or unless `allocator` is `glibc`. |
 
 Take the same reading after a deploy and again after traffic. If `rss_bytes`
-grows while `mallinfo.uordblks` stays flat, the heap is fragmenting. If
-`uordblks` grows with it, something is holding on to memory. `?trim=true`
+grows while `mallinfo.uordblks` (on jemalloc, `jemalloc.allocated`) stays flat,
+the heap is fragmenting. If it grows with `rss_bytes`, something is holding on
+to memory. `?trim=true`
 tests the first case: a large drop from `rss_before_bytes` to `rss_after_bytes`
 means the memory was free but not returned to the kernel.
 

@@ -102,7 +102,9 @@ def test_reading_without_tracing_names_the_environment_variable(
     assert set(body) == {
         "rss_bytes",
         "peak_rss_bytes",
+        "allocator",
         "mallinfo",
+        "jemalloc",
         "allocated_blocks",
         "gc_count",
         "top_types",
@@ -159,7 +161,7 @@ def test_reading_while_tracing_reports_allocations_and_growth(
 def test_trim_reports_rss_around_the_call(diagnostics_client: TestClient, master_key_header: dict[str, str]) -> None:
     body = diagnostics_client.get(_PATH, params={"trim": True}, headers=master_key_header).json()
 
-    if body["mallinfo"] is None:
-        pytest.skip("not running on glibc")
+    if body["allocator"] != "glibc":
+        pytest.skip("not running on glibc malloc")
     assert set(body["trim"]) == {"rss_before_bytes", "rss_after_bytes", "released"}
     assert isinstance(body["trim"]["released"], bool)
