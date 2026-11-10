@@ -278,6 +278,13 @@ def test_the_fallback_is_the_bundled_catalog() -> None:
     assert catalog.model_for("openai", "gpt-4o") is not None
 
 
+def test_serving_a_catalog_releases_the_bundled_one() -> None:
+    with patch.object(mcs, "release_bundled_catalog") as release:
+        mcs.serve_catalog(EMPTY, datetime.now(UTC))
+
+    release.assert_called_once_with()
+
+
 V2_URL, V1_URL = (source.url for source in MODELS_DEV_SOURCES)
 
 # A document each reader reads the same, so either URL serves it.

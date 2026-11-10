@@ -26,7 +26,7 @@ import httpx
 
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
-from gateway.services.pricing import bundled_catalog
+from gateway.services.pricing import bundled_catalog, release_bundled_catalog
 from gateway.types.model_endpoint import ModelEndpoint, models_dev_endpoints
 from gateway.types.model_type import ModelType, models_dev_model_type
 from gateway.types.models_dev import MODELS_DEV_SOURCES, ModelsDevCatalog, ModelsDevModel, ModelsDevSource
@@ -152,6 +152,7 @@ def serve_catalog(catalog: ModelsDevCatalog, fetched_at: datetime) -> None:
     """Serve ``catalog``, downloaded at ``fetched_at``: a stored copy, or one this worker fetched."""
     _cache.data = catalog
     _cache.fetched_at = fetched_at
+    release_bundled_catalog()
 
 
 def clear_catalog_cache() -> None:

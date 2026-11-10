@@ -108,3 +108,15 @@ def test_a_bundled_price_snapshot_with_its_meta_reads_without_the_meta() -> None
 def test_a_stored_catalog_this_gateway_cannot_read_is_refused(document: object) -> None:
     with pytest.raises(ValueError, match="stored models.dev catalog"):
         read_catalog_document(document)
+
+
+def test_catalogs_read_apart_share_their_text() -> None:
+    raw = {"p": {"id": "p", "models": {"m": {"id": "m", "name": "A model name", "family": "fam"}}}}
+    stored = {"_meta": {"format": CATALOG_FORMAT}, **catalog_document(parse_catalog(raw))}
+
+    first = read_catalog_document(json.loads(json.dumps(stored))).providers["p"].models["m"]
+    second = read_catalog_document(json.loads(json.dumps(stored))).providers["p"].models["m"]
+    parsed = parse_catalog(json.loads(json.dumps(raw))).providers["p"].models["m"]
+
+    assert first.name is second.name is parsed.name
+    assert first.family is second.family is parsed.family

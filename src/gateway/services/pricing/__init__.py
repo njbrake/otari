@@ -40,6 +40,7 @@ from gateway.services.pricing.bundled import (
     bundled_catalog,
     bundled_generation,
     load_bundled_index,
+    release_bundled_catalog,
 )
 from gateway.services.pricing.generations import (
     MAX_RESIDENT_GENERATIONS,
@@ -96,6 +97,7 @@ __all__ = [
     "current_index",
     "invalid_rate_count",
     "load_bundled_index",
+    "release_bundled_catalog",
     "model_search_rate",
     "paid_by_the_deployment",
     "parse_rate",

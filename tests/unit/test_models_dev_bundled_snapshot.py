@@ -19,6 +19,7 @@ from gateway.services.pricing import (
     bundled_catalog,
     bundled_generation,
     load_bundled_index,
+    release_bundled_catalog,
     reset_generations,
     set_accepted_generations,
 )
@@ -185,3 +186,13 @@ def test_the_release_script_refuses_a_document_it_cannot_read(tmp_path: Path) ->
     assert result.returncode == 1
     assert "models.dev v2 catalog refused: the document lists no models" in result.stderr
     assert not (tmp_path / "out.json").exists()
+
+
+def test_releasing_the_bundled_catalog_keeps_its_prices() -> None:
+    generation = bundled_generation()
+    catalog = bundled_catalog()
+
+    release_bundled_catalog()
+
+    assert bundled_generation() is generation
+    assert bundled_catalog() is not catalog
