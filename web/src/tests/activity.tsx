@@ -106,6 +106,8 @@ export function mockApi(
     traceDetail?: TraceDetail
     // The session a request was traced into; without one, the lookup is a 404.
     requestTrace?: TraceSummary
+    // The gateway tools the window ran, as the summary's tool breakdown.
+    tools?: string[]
     // The deployment's spend ceilings, which the session panel reads per key.
     ceilings?: ScopedBudget[]
   } = {},
@@ -171,6 +173,7 @@ export function mockApi(
             else if (groupBy === "provider") add(row.provider)
             else if (groupBy === "status") add(row.status)
             else if (groupBy === "policy") add(row.policy_name ?? null)
+            else if (groupBy === "source") add(row.source)
             else if (groupBy === "api_key")
               add(row.api_key_id, row.api_key_name ?? null)
           }
@@ -240,6 +243,13 @@ export function mockApi(
               is_other: false,
             }),
           ),
+          by_tool: (opts.tools ?? []).map((tool) => ({
+            tool,
+            calls: 1,
+            errors: 0,
+            requests: 1,
+            cost: 0,
+          })),
           by_source: Array.from(new Set(rows.map((r) => r.source))).map(
             (s) => ({
               key: s,

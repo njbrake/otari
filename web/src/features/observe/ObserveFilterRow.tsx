@@ -3,7 +3,12 @@ import {
   FilterChips,
 } from "@/design-system/navigation/FilterChips"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
-import { STATUS_OPTIONS } from "@/features/activity/activityModel"
+import {
+  describeSource,
+  PRICED_OPTIONS,
+  STATUS_OPTIONS,
+  TOOL_OPTIONS,
+} from "@/features/activity/activityModel"
 import { providerDisplayName } from "@/shared/helpers/providers"
 import { findPreset, localMidnightIso } from "@/shared/helpers/timeRange"
 import {
@@ -44,11 +49,20 @@ const CLEARED: Partial<Record<ObserveUrlKey, string | []>> = {
   tokens_gt: "",
   cost_gt: "",
   latency_ms_gt: "",
+  priced: "",
+  tool: "",
+  source: "",
+  exclude_source: [],
+  source_label: "",
+  status_code: "",
+  endpoint: "",
 }
 
 /**
- * The row over a Sessions tab's table: the window, and the filters set from the
- * table's column headers (`ObserveColumnFilter`) as removable chips. A filter
+ * The row over a Sessions tab's table: the window, and every filter applied, as
+ * removable chips: those set from the table's column headers
+ * (`ObserveColumnFilter`) and those only a link sets. It is the page's one
+ * chip row. A filter
  * the current view cannot apply stays visible and removable, marked as not
  * applied, rather than being dropped silently.
  */
@@ -143,6 +157,24 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
       },
     ]
   }
+  // One value of a key only the request log reads.
+  const singleChip = (
+    param: ObserveUrlKey,
+    label: string,
+    display: (value: string) => string,
+  ): FilterChip[] => {
+    const value = url.get(param)
+    return value
+      ? [
+          {
+            key: param,
+            label,
+            value: requestOnly(display(value)),
+            onClear: () => patch({ [param]: "" }),
+          },
+        ]
+      : []
+  }
   const chips: FilterChip[] = [
     ...(status
       ? [
@@ -211,6 +243,20 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
           },
         ]
       : []),
+    ...singleChip("priced", "Priced", (value) =>
+      labelFrom(PRICED_OPTIONS, value),
+    ),
+    ...singleChip("tool", "Tool", (value) => labelFrom(TOOL_OPTIONS, value)),
+    ...singleChip("source", "Source", describeSource),
+    ...valueChips("Source", "exclude_source", describeSource, {
+      negate: true,
+      onlyRequests: true,
+    }),
+    // Set by a link rather than a funnel: the session a request ran in, the
+    // status code a failure was answered with, the endpoint it was called on.
+    ...singleChip("source_label", "Session", (value) => value),
+    ...singleChip("status_code", "Status code", (value) => value),
+    ...singleChip("endpoint", "Endpoint", (value) => value),
     ...thresholdChip("tokens_gt"),
     ...thresholdChip("cost_gt"),
     ...thresholdChip("latency_ms_gt"),

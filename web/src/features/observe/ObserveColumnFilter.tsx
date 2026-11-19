@@ -2,6 +2,9 @@ import { useEffect, useState } from "react"
 
 import { ColumnFilter } from "@/design-system/data/ColumnFilter"
 import { ColumnFilterList } from "@/design-system/data/ColumnFilterList"
+import { TOOL_OPTIONS } from "@/features/activity/activityModel"
+import { useUsageSummary } from "@/shared/api/usage"
+import { useSurfaces } from "@/shared/hooks/useDeployment"
 import {
   type ExtraKey,
   type ObserveFilterState,
@@ -11,6 +14,7 @@ import {
   THRESHOLDS,
   type ThresholdKey,
   useObserveFilterState,
+  useObserveUsageFilters,
   useValueOptions,
   VALUE_KEYS,
   type ValueDimension,
@@ -23,6 +27,7 @@ export type FilterSection =
   | { kind: "values"; dimension: ValueDimension }
   | { kind: "threshold"; key: ThresholdKey }
   | { kind: "extra"; key: ExtraKey }
+  | { kind: "tool" }
 
 const TITLES: Record<ValueDimension, string> = {
   model: "Model",
@@ -31,16 +36,30 @@ const TITLES: Record<ValueDimension, string> = {
   provider: "Provider",
   status: "Status",
   policy: "Routing policy",
+  source: "Source",
 }
 
-// A filter beside a column's values, and the URL value that means it is on.
+// A filter beside a column's values: the URL key it writes, and its choices,
+// one at a time, each the value that means it is on.
 const EXTRAS: Record<
   ExtraKey,
-  { label: string; key: ObserveUrlKey; on: string }
+  { key: ObserveUrlKey; choices: { on: string; label: string }[] }
 > = {
-  unpriced: { label: "Unpriced only", key: "priced", on: "false" },
-  direct: { label: "Direct requests only", key: "routed", on: "false" },
+  priced: {
+    key: "priced",
+    choices: [
+      { on: "true", label: "Priced only" },
+      { on: "false", label: "Unpriced only" },
+    ],
+  },
+  direct: {
+    key: "routed",
+    choices: [{ on: "false", label: "Direct requests only" }],
+  },
 }
+
+// The gateway tools a request can be filtered to; "All" is no filter.
+const TOOLS = TOOL_OPTIONS.filter((option) => option.value !== "")
 
 // How long the search box waits for typing to stop before it asks the server.
 const SEARCH_SETTLE_MS = 250
@@ -49,7 +68,11 @@ const SEARCH_SETTLE_MS = 250
 function offered(section: FilterSection, state: ObserveFilterState): boolean {
   if (section.kind !== "values") return state.isRequests
   if (section.dimension === "user") return !state.isMine
-  if (section.dimension === "provider" || section.dimension === "policy")
+  if (
+    section.dimension === "provider" ||
+    section.dimension === "policy" ||
+    section.dimension === "source"
+  )
     return state.isRequests
   return true
 }
@@ -58,6 +81,7 @@ function offered(section: FilterSection, state: ObserveFilterState): boolean {
 function clearedKeys(section: FilterSection): Record<string, string | []> {
   if (section.kind === "threshold") return { [section.key]: "" }
   if (section.kind === "extra") return { [EXTRAS[section.key].key]: "" }
+  if (section.kind === "tool") return { tool: "" }
   const keys = VALUE_KEYS[section.dimension]
   return {
     [keys.include]: keys.isSingle ? "" : [],
@@ -70,8 +94,10 @@ function isActive(section: FilterSection, state: ObserveFilterState): boolean {
     return readThreshold(state.url.get(section.key)) !== undefined
   if (section.kind === "extra") {
     const extra = EXTRAS[section.key]
-    return state.url.get(extra.key) === extra.on
+    const value = state.url.get(extra.key)
+    return extra.choices.some((choice) => choice.on === value)
   }
+  if (section.kind === "tool") return state.url.get("tool") !== ""
   const { selected, excluded } = valuesOf(state, section.dimension)
   return selected.length > 0 || (state.isRequests && excluded.length > 0)
 }
@@ -80,7 +106,8 @@ function isActive(section: FilterSection, state: ObserveFilterState): boolean {
  * The funnel in a Sessions or Requests column header, holding that column's
  * filters: a checklist of its values, each of which can also be left out on
  * Requests, thresholds to show only the rows above, and what else the column
- * alone can say (unpriced rows under Cost, direct requests under Routing).
+ * alone can say (priced or unpriced rows under Cost, direct requests under
+ * Routing, a gateway tool under Model, the source under API key).
  *
  * Values load when the panel opens, busiest first, searched on the server.
  * Under Mine a User funnel draws nothing, since the scope already decided whose
@@ -142,14 +169,26 @@ export function ObserveColumnFilter({
             />
           )
         }
+        if (section.kind === "tool") {
+          return <ToolSection key="tool" view={view} state={state} />
+        }
         const extra = EXTRAS[section.key]
+        const value = state.url.get(extra.key)
         return (
           <ColumnFilterList
             key={section.key}
             label={`More ${label} filters`}
-            options={[{ value: extra.on, label: extra.label }]}
-            selected={state.url.get(extra.key) === extra.on ? [extra.on] : []}
-            onChange={(values) => state.patch({ [extra.key]: values[0] ?? "" })}
+            selectionMode="single"
+            options={extra.choices.map((choice) => ({
+              value: choice.on,
+              label: choice.label,
+            }))}
+            selected={
+              extra.choices.some((choice) => choice.on === value) ? [value] : []
+            }
+            onChange={(values) =>
+              state.patch({ [extra.key]: values.at(-1) ?? "" })
+            }
           />
         )
       })}
@@ -180,6 +219,15 @@ function ValuesSection({
   const keys = VALUE_KEYS[dimension]
   const { selected, excluded } = valuesOf(state, dimension)
   const canExclude = state.isRequests && keys.exclude !== undefined
+  // Provenance earns a list only once there is more than one source to choose
+  // between: most gateways see only their own traffic. A source already
+  // filtered on keeps it, so the filter stays clearable here.
+  if (
+    dimension === "source" &&
+    selected.length + excluded.length === 0 &&
+    (read.isLoading || read.options.length < 2)
+  )
+    return null
   return (
     <ColumnFilterList
       label={TITLES[dimension]}
@@ -209,3 +257,39 @@ function ValuesSection({
     />
   )
 }
+
+/**
+ * The gateway tool a request ran, one at a time. Offered once the window holds
+ * tool usage, or a tool filter is already set: most gateways run no tools, and a
+ * filter whose every choice returns nothing is noise.
+ */
+function ToolSection({
+  view,
+  state,
+}: {
+  view: ObserveView
+  state: ObserveFilterState
+}) {
+  const hasSurface = useSurfaces()
+  const filters = useObserveUsageFilters(view, "tool", true)
+  const summary = useUsageSummary(
+    filters,
+    "day",
+    TOOL_DIMENSION,
+    hasSurface("usage") && state.isResolved,
+  )
+  const tool = state.url.get("tool")
+  if (!tool && !summary.data?.by_tool?.length) return null
+  return (
+    <ColumnFilterList
+      label="Gateway tool"
+      title="Gateway tool"
+      selectionMode="single"
+      options={TOOLS}
+      selected={tool ? [tool] : []}
+      onChange={(values) => state.patch({ tool: values.at(-1) ?? "" })}
+    />
+  )
+}
+
+const TOOL_DIMENSION: "tool"[] = ["tool"]

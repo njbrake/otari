@@ -56,6 +56,7 @@ function usageParams(filters: UsageFilters): URLSearchParams {
   appendAll("exclude_model", filters.exclude_model)
   appendAll("exclude_user_id", filters.exclude_user_id)
   appendAll("exclude_api_key_id", filters.exclude_api_key_id)
+  appendAll("exclude_source", filters.exclude_source)
   appendAll("exclude_status", filters.exclude_status)
   appendAll("policy_name", filters.policy_name)
   appendAll("exclude_policy_name", filters.exclude_policy_name)

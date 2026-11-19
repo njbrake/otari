@@ -148,6 +148,7 @@ export interface UsageFilters {
   exclude_model?: string[]
   exclude_user_id?: string[]
   exclude_api_key_id?: string[]
+  exclude_source?: string[]
   exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[]
   policy_name?: string[]
   exclude_policy_name?: string[]

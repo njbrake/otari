@@ -326,3 +326,54 @@ describe("ObserveFilterRow refinements", () => {
     ).toBeInTheDocument()
   })
 })
+
+describe("ObserveFilterRow link and column chips", () => {
+  it("names the request log's own filters and clears them with the rest", async () => {
+    const user = userEvent.setup()
+    mockApi({ rows: [entry()] })
+    await renderBar(
+      "requests",
+      "?priced=false&tool=web_fetch&source=claude_code&exclude_source=codex&source_label=sess-1&status_code=403&endpoint=/v1/messages",
+    )
+
+    for (const [label, value] of [
+      ["Priced", "Unpriced"],
+      ["Tool", "Web fetch"],
+      ["Source", "Claude Code"],
+      ["Source", "not Codex"],
+      ["Session", "sess-1"],
+      ["Status code", "403"],
+      ["Endpoint", "/v1/messages"],
+    ]) {
+      expect(screen.getByText(value), label).toBeInTheDocument()
+    }
+
+    await user.click(screen.getByRole("button", { name: "Clear all" }))
+    await waitFor(() => expect(urlParams().has("priced")).toBe(false))
+    for (const key of [
+      "tool",
+      "source",
+      "exclude_source",
+      "source_label",
+      "status_code",
+      "endpoint",
+    ]) {
+      expect(urlParams().has(key)).toBe(false)
+    }
+  })
+
+  it("marks them as not applied on Sessions, each still removable", async () => {
+    const user = userEvent.setup()
+    mockApi({ rows: [entry()] })
+    await renderBar("sessions", "?source_label=sess-1&priced=true")
+
+    expect(
+      screen.getByText("sess-1 (not applied to sessions)"),
+    ).toBeInTheDocument()
+    await user.click(
+      screen.getByRole("button", { name: "Remove Priced filter" }),
+    )
+    await waitFor(() => expect(urlParams().has("priced")).toBe(false))
+    expect(urlParams().get("source_label")).toBe("sess-1")
+  })
+})

@@ -2,7 +2,10 @@ import { useMemo } from "react"
 
 import type { UsageFilters, ValueGroupBy } from "@/client"
 import type { ColumnFilterOption } from "@/design-system/data/ColumnFilterList"
-import { STATUS_OPTIONS } from "@/features/activity/activityModel"
+import {
+  describeSource,
+  STATUS_OPTIONS,
+} from "@/features/activity/activityModel"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { userDisplay } from "@/features/users/userDisplay"
 import { useUsageValueGroups } from "@/shared/api/usage"
@@ -26,12 +29,13 @@ export type ValueDimension =
   | "provider"
   | "status"
   | "policy"
+  | "source"
 
 /** A threshold a row must exceed, on the token, cost and latency columns. */
 export type ThresholdKey = "tokens_gt" | "cost_gt" | "latency_ms_gt"
 
-/** A filter a column carries beside its values: unpriced rows, direct requests. */
-export type ExtraKey = "unpriced" | "direct"
+/** A filter a column carries beside its values: priced or unpriced rows, direct requests. */
+export type ExtraKey = "priced" | "direct"
 
 const URL_DEFAULTS = {
   scope: "",
@@ -55,6 +59,7 @@ const URL_DEFAULTS = {
   latency_ms_gt: "",
   priced: "",
   source: "",
+  exclude_source: "",
   source_label: "",
   endpoint: "",
   status_code: "",
@@ -75,6 +80,7 @@ export const VALUE_KEYS: Record<
   provider: { include: "provider", isSingle: true },
   status: { include: "status", exclude: "exclude_status", isSingle: true },
   policy: { include: "policy_name", exclude: "exclude_policy_name" },
+  source: { include: "source", exclude: "exclude_source", isSingle: true },
 }
 
 /** The presets each threshold offers, and how a value reads. */
@@ -164,7 +170,7 @@ export function valuesOf(
  */
 function usageFiltersFor(
   state: ObserveFilterState,
-  leaveOut: ValueDimension,
+  leaveOut: ValueDimension | "tool",
 ): Omit<UsageFilters, "workspace_id" | "start_date" | "end_date"> {
   const { url, isRequests } = state
   const all = (dimension: ValueDimension) =>
@@ -211,11 +217,13 @@ function usageFiltersFor(
           latency_ms_gt: threshold("latency_ms_gt"),
           priced:
             priced === "true" ? true : priced === "false" ? false : undefined,
-          source: url.get("source") || undefined,
+          source:
+            leaveOut === "source" ? undefined : url.get("source") || undefined,
+          exclude_source: out("source"),
           source_label: url.get("source_label") || undefined,
           endpoint: url.get("endpoint") || undefined,
           status_code: url.get("status_code") || undefined,
-          tool: url.get("tool") || undefined,
+          tool: leaveOut === "tool" ? undefined : url.get("tool") || undefined,
         }
       : {}),
   }
@@ -228,6 +236,7 @@ const GROUP_BY: Record<ValueDimension, ValueGroupBy> = {
   provider: "provider",
   status: "status",
   policy: "policy",
+  source: "source",
 }
 
 // Values per read; past them the list says how many more there are.
@@ -237,6 +246,44 @@ const PAGE = 50
 // funnel and the chips naming its values) would key two reads of one list. To
 // the minute, they share it.
 const MINUTE_MS = 60_000
+
+/**
+ * Every filter the view applies, over the window it shows, with one column's own
+ * filters left out. The window is re-read off the clock when `enabled` turns on,
+ * so a menu opened an hour on reads the hour it is in.
+ */
+export function useObserveUsageFilters(
+  view: ObserveView,
+  leaveOut: ValueDimension | "tool",
+  enabled: boolean,
+): UsageFilters {
+  const state = useObserveFilterState(view)
+  const { url } = state
+  const { selected: workspace } = useSelectedWorkspace()
+  const range = url.get("range")
+  const startParam = url.get("start_date")
+  const endParam = url.get("end_date")
+  const minute = enabled ? Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS : 0
+  const win = useMemo(
+    () =>
+      windowFor(
+        view,
+        { range, start_date: startParam, end_date: endParam },
+        minute || Date.now(),
+      ),
+    [view, range, startParam, endParam, minute],
+  )
+  const restKey = JSON.stringify(usageFiltersFor(state, leaveOut))
+  return useMemo(
+    () => ({
+      ...(JSON.parse(restKey) as UsageFilters),
+      workspace_id: workspace?.workspace_id,
+      start_date: win.start || undefined,
+      end_date: win.end || undefined,
+    }),
+    [restKey, workspace?.workspace_id, win],
+  )
+}
 
 /**
  * One column's values over the window the view shows, busiest first, searched
@@ -257,33 +304,9 @@ export function useValueOptions(
   isError: boolean
 } {
   const state = useObserveFilterState(view)
-  const { url } = state
   const hasSurface = useSurfaces()
   const memberLabels = useMemberAttributionLabels()
-  const { selected: workspace } = useSelectedWorkspace()
-  const range = url.get("range")
-  const startParam = url.get("start_date")
-  const endParam = url.get("end_date")
-  const minute = enabled ? Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS : 0
-  const win = useMemo(
-    () =>
-      windowFor(
-        view,
-        { range, start_date: startParam, end_date: endParam },
-        minute || Date.now(),
-      ),
-    [view, range, startParam, endParam, minute],
-  )
-  const restKey = JSON.stringify(usageFiltersFor(state, dimension))
-  const filters: UsageFilters = useMemo(
-    () => ({
-      ...(JSON.parse(restKey) as UsageFilters),
-      workspace_id: workspace?.workspace_id,
-      start_date: win.start || undefined,
-      end_date: win.end || undefined,
-    }),
-    [restKey, workspace?.workspace_id, win],
-  )
+  const filters = useObserveUsageFilters(view, dimension, enabled)
   const read = useUsageValueGroups(
     filters,
     GROUP_BY[dimension],
@@ -316,6 +339,8 @@ export function useValueOptions(
           label: group.label ?? `${key.slice(0, 8)}…`,
           count,
         }
+      case "source":
+        return { value: key, label: describeSource(key), count }
       default:
         return { value: key, label: key, count }
     }
@@ -349,16 +374,15 @@ function withPickedLabels(
   values: { selected: string[]; excluded: string[] },
   memberLabels: ReadonlyMap<string, string>,
 ): ColumnFilterOption[] {
-  if (dimension !== "provider" && dimension !== "user") return options
+  const name = {
+    provider: providerDisplayName,
+    source: describeSource,
+    user: (value: string) => userDisplay(value, null, memberLabels).label,
+  }[dimension as string]
+  if (name === undefined) return options
   const missing = [...values.selected, ...values.excluded]
     .filter((value) => !options.some((option) => option.value === value))
-    .map((value) => ({
-      value,
-      label:
-        dimension === "provider"
-          ? providerDisplayName(value)
-          : userDisplay(value, null, memberLabels).label,
-    }))
+    .map((value) => ({ value, label: name(value) }))
   return [...missing, ...options]
 }
 

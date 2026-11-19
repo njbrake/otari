@@ -1,5 +1,5 @@
 import { useLocation } from "@tanstack/react-router"
-import { screen, waitFor, within } from "@testing-library/react"
+import { act, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -371,11 +371,11 @@ describe("ObserveColumnFilter writing the URL", () => {
 })
 
 describe("ObserveColumnFilter thresholds and extras", () => {
-  it("shows only the rows above a threshold, and the unpriced ones", async () => {
+  it("shows only the rows above a threshold, and the priced or unpriced ones", async () => {
     mockApi({ rows: [entry()] })
     renderFunnel("requests", "Cost", [
       { kind: "threshold", key: "cost_gt" },
-      { kind: "extra", key: "unpriced" },
+      { kind: "extra", key: "priced" },
     ])
     const { user, panel } = await open("Cost")
 
@@ -386,6 +386,14 @@ describe("ObserveColumnFilter thresholds and extras", () => {
       within(panel).getByRole("checkbox", { name: "Unpriced only" }),
     )
     await waitFor(() => expect(urlParams().get("priced")).toBe("false"))
+    // The two are one choice: picking Priced only replaces Unpriced only.
+    await user.click(
+      within(panel).getByRole("checkbox", { name: "Priced only" }),
+    )
+    await waitFor(() => expect(urlParams().get("priced")).toBe("true"))
+    expect(
+      within(panel).getByRole("checkbox", { name: "Unpriced only" }),
+    ).not.toBeChecked()
     expect(
       screen.getByRole("button", { name: "Filter Cost", hidden: true }),
     ).toHaveClass("text-accent")
@@ -418,5 +426,38 @@ describe("ObserveColumnFilter thresholds and extras", () => {
     renderFunnel("sessions", "Cost", [{ kind: "threshold", key: "cost_gt" }])
     await waitFor(() => expect(document.querySelector("output")).not.toBeNull())
     expect(screen.queryByRole("button", { name: "Filter Cost" })).toBeNull()
+  })
+})
+
+describe("ObserveColumnFilter source", () => {
+  it("lists the sources to pick or leave out once there is more than one", async () => {
+    mockApi({
+      rows: [
+        entry({ id: "a", source: "gateway" }),
+        entry({ id: "b", source: "claude_code" }),
+      ],
+    })
+    renderFunnel("requests", "API key", values("api_key", "source"))
+    const { user, panel } = await open("API key")
+
+    const sources = await within(panel).findByRole("group", { name: "Source" })
+    await user.click(
+      within(sources).getByRole("button", { name: "Exclude Claude Code" }),
+    )
+    await waitFor(() =>
+      expect(urlParams().getAll("exclude_source")).toEqual(["claude_code"]),
+    )
+  })
+
+  it("is left out where the window holds one source and none is filtered", async () => {
+    const { calls } = mockApi({ rows: [entry({ source: "gateway" })] })
+    renderFunnel("requests", "API key", values("api_key", "source"))
+    const { panel } = await open("API key")
+
+    await within(panel).findByRole("group", { name: "API key" })
+    await waitFor(() => expect(reading(calls, "source")).toBeDefined())
+    // Let the answer render before saying nothing did.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(within(panel).queryByRole("group", { name: "Source" })).toBeNull()
   })
 })

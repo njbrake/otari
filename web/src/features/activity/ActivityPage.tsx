@@ -15,11 +15,6 @@ import { useIsMobile } from "@/design-system/hooks/useIsMobile"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import {
-  type FilterChip,
-  FilterChips,
-} from "@/design-system/navigation/FilterChips"
-import { FilterSelect } from "@/design-system/navigation/FilterSelect"
-import {
   type PricingUnit,
   pricingUnitForEndpoint,
 } from "@/features/models/pricingUnit"
@@ -59,17 +54,14 @@ import { useUrlState } from "@/shared/helpers/urlState"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { ActivityTimeline } from "./ActivityTimeline"
 import {
-  describeSource,
   findGroupsMissingEarlierAttempts,
   findRequestOutcome,
   formatLatencyCell,
   getActivityRowClassName,
   getActivityRowKey,
   indexGroupOutcomes,
-  PRICED_OPTIONS,
   resolveExtentWindow,
   resolveWindow,
-  TOOL_OPTIONS,
 } from "./activityModel"
 import { InFlightControl } from "./InFlightControl"
 import { RequestPeek } from "./RequestPeek"
@@ -84,9 +76,8 @@ import {
   TIME_COLUMN,
 } from "./requestColumns"
 
-// The only breakdown this page asks the summary for: whether the window contains
-// gateway-run tool calls, which decides if the Tool filter is worth offering.
-const TOOL_BREAKDOWN: SummaryDimension[] = ["tool"]
+// The timeline reads the summary's series and no breakdown.
+const NO_BREAKDOWNS: SummaryDimension[] = []
 
 const DEFAULT_PAGE_SIZE = 50
 
@@ -94,26 +85,28 @@ const DEFAULT_PAGE_SIZE = 50
 // output, so the Input and Output columns carry the same one.
 const FUNNELS = {
   user: [{ kind: "values", dimension: "user" }],
+  // The Model cell carries the tool marker, so the tool filter is here.
   model: [
     { kind: "values", dimension: "model" },
     { kind: "values", dimension: "provider" },
+    { kind: "tool" },
   ],
   routing: [
     { kind: "values", dimension: "policy" },
     { kind: "extra", key: "direct" },
   ],
-  api_key: [{ kind: "values", dimension: "api_key" }],
+  api_key: [
+    { kind: "values", dimension: "api_key" },
+    { kind: "values", dimension: "source" },
+  ],
   tokens: [{ kind: "threshold", key: "tokens_gt" }],
   cost: [
     { kind: "threshold", key: "cost_gt" },
-    { kind: "extra", key: "unpriced" },
+    { kind: "extra", key: "priced" },
   ],
   latency: [{ kind: "threshold", key: "latency_ms_gt" }],
   status: [{ kind: "values", dimension: "status" }],
 } as const satisfies Record<string, FilterSection[]>
-
-// The source picker's option list: the sources with usage in the window.
-const SOURCE_BREAKDOWN: SummaryDimension[] = ["source"]
 
 // All filter + pagination state, with defaults, kept in the URL.
 const URL_DEFAULTS = {
@@ -405,52 +398,6 @@ function ActivityPageContent({
   const newRowsRelevant = page === 0 && !filters.end_date
   const liveCount = useLiveUsageCount(filters, newRowsRelevant)
 
-  // Source options: the sources with usage in the window. This must ignore the
-  // source filter itself, or picking Claude Code would hide every other source
-  // and switching would mean clearing first. The session/endpoint drill-down
-  // chips are not applied either, so the list stays complete (and the picker
-  // useful) while a drill-down narrows everything else. The model, user, key
-  // and provider funnels fetch their own options when opened.
-  const sourceSuggestFilters: UsageFilters = useMemo(
-    () => ({
-      workspace_id: workspace?.workspace_id,
-      start_date: win.start,
-      end_date: win.end,
-      status: statusFilter || undefined,
-      model: modelFilters.length > 0 ? modelFilters : undefined,
-      user_id: userFilters.length > 0 ? userFilters : undefined,
-      api_key_id: apiKeyFilters.length > 0 ? apiKeyFilters : undefined,
-      provider: providerFilter || undefined,
-      ...refinements,
-    }),
-    [
-      refinements,
-      workspace?.workspace_id,
-      win,
-      statusFilter,
-      modelFilters,
-      userFilters,
-      apiKeyFilters,
-      providerFilter,
-    ],
-  )
-  const sourceSummary = useUsageSummary(
-    sourceSuggestFilters,
-    "day",
-    SOURCE_BREAKDOWN,
-  )
-  // A drill-down can name a source with no rows in the window; keep it listed so
-  // the select shows the filter that is actually applied.
-  const sourceBreakdown = sourceSummary.data?.by_source
-  const sourceOptions = useMemo(() => {
-    const seen = (sourceBreakdown ?? [])
-      .filter((group) => !group.is_other && group.key !== null)
-      .map((group) => group.key as string)
-    return sourceFilter && !seen.includes(sourceFilter)
-      ? [sourceFilter, ...seen]
-      : seen
-  }, [sourceBreakdown, sourceFilter])
-
   // The timeline histogram spans the whole preset *extent* (the rolling preset
   // window, independent of any brushed sub-window), so the brush always has
   // context to zoom back out into. For the unbounded "All", `extentWin` carries an
@@ -512,14 +459,12 @@ function ActivityPageContent({
       priced,
     ],
   )
-  // The timeline reads `series`; the tool dimension is requested so the Tool filter
-  // knows whether this window contains any gateway-run tool calls. With
-  // NO_BREAKDOWNS the server returns `by_tool: []` by contract, which left the
-  // selector permanently hidden unless a tool filter was already in the URL.
+  // The timeline reads `series`. Whether the window holds tool usage is the
+  // Model funnel's own read, made when it opens.
   const contextSummary = useUsageSummary(
     contextFilters,
     extentBucket,
-    TOOL_BREAKDOWN,
+    NO_BREAKDOWNS,
   )
   const timelineSeries = (contextSummary.data?.series ?? []).map((point) => ({
     bucketStart: point.bucket_start,
@@ -619,76 +564,6 @@ function ActivityPageContent({
       hasRefinements ||
       timeFiltered,
   )
-
-  // This page's own filters as removable chips (time is driven by the timeline,
-  // and model, user, key and status are the Overview's). Values show the human label
-  // where one exists.
-  const labelFrom = (
-    options: { value: string; label: string }[],
-    value: string,
-  ) => options.find((option) => option.value === value)?.label ?? value
-  const filterChips: FilterChip[] = [
-    ...(pricedFilter
-      ? [
-          {
-            key: "priced",
-            label: "Priced",
-            value: labelFrom(PRICED_OPTIONS, pricedFilter),
-            onClear: () => url.patch({ priced: "" }),
-          },
-        ]
-      : []),
-    ...(sourceFilter
-      ? [
-          {
-            key: "source",
-            label: "Source",
-            value: describeSource(sourceFilter),
-            onClear: () => url.patch({ source: "" }),
-          },
-        ]
-      : []),
-    ...(statusCodeFilter
-      ? [
-          {
-            key: "status_code",
-            label: "Status code",
-            value: statusCodeFilter,
-            onClear: () => url.patch({ status_code: "" }),
-          },
-        ]
-      : []),
-    ...(sessionFilter
-      ? [
-          {
-            key: "session",
-            label: "Session",
-            value: sessionFilter,
-            onClear: () => url.patch({ source_label: "" }),
-          },
-        ]
-      : []),
-    ...(endpointFilter
-      ? [
-          {
-            key: "endpoint",
-            label: "Endpoint",
-            value: endpointFilter,
-            onClear: () => url.patch({ endpoint: "" }),
-          },
-        ]
-      : []),
-    ...(toolFilter
-      ? [
-          {
-            key: "tool",
-            label: "Tool",
-            value: labelFrom(TOOL_OPTIONS, toolFilter),
-            onClear: () => url.patch({ tool: "" }),
-          },
-        ]
-      : []),
-  ]
 
   const setModelPrice = useSetPricing()
   // Bumped on every open of the price dialog and used as its key, so the
@@ -808,14 +683,13 @@ function ActivityPageContent({
     void usage.refetch()
     void count.refetch()
     // Re-read alongside the count it is compared against, or the badge would keep
-    // offering rows the refresh just loaded. Guarded for the same reason as the
-    // source summary below: refetch() ignores `enabled`.
+    // offering rows the refresh just loaded. Guarded because refetch() ignores
+    // `enabled`.
     if (newRowsRelevant) {
       void liveCount.refetch()
     }
     void inFlight.refetch()
     void contextSummary.refetch()
-    void sourceSummary.refetch()
   }
 
   // A rolling preset clears any explicit bounds; a timeline selection sets them
@@ -1016,43 +890,6 @@ function ActivityPageContent({
               </span>
             }
           />
-          <FilterChips chips={filterChips} toggleLabel="More filters">
-            <FilterSelect
-              label="Priced?"
-              value={pricedFilter}
-              onChange={(value) => url.patch({ priced: value })}
-              options={PRICED_OPTIONS}
-            />
-            {/* Only offered once the window actually contains tool usage, following the
-              source select below: a filter whose every option returns nothing is
-              noise on the majority of gateways, which run no tools at all. */}
-            {toolFilter || contextSummary.data?.by_tool?.length ? (
-              <FilterSelect
-                label="Tool"
-                value={toolFilter}
-                onChange={(value) => url.patch({ tool: value })}
-                options={TOOL_OPTIONS}
-              />
-            ) : null}
-            {/* Provenance only earns a select once there is more than one source
-              to choose between: most gateways see only their own traffic, and a
-              filter with a single option is noise. A drill-down that arrives
-              with a source applied keeps the select so it stays clearable. */}
-            {sourceOptions.length > 1 || sourceFilter ? (
-              <FilterSelect
-                label="Source"
-                value={sourceFilter}
-                onChange={(value) => url.patch({ source: value })}
-                options={[
-                  { value: "", label: "All" },
-                  ...sourceOptions.map((source) => ({
-                    value: source,
-                    label: describeSource(source),
-                  })),
-                ]}
-              />
-            ) : null}
-          </FilterChips>
         </div>
 
         <div className="flex flex-col gap-3">

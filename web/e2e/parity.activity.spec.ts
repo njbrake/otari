@@ -98,7 +98,7 @@ test.describe("activity log", () => {
     }
   })
 
-  test("model and user filters compose, and Clear all drops the shared ones together", async ({
+  test("model and user filters compose, and Clear all drops every filter", async ({
     page,
   }) => {
     await login(page)
@@ -117,21 +117,23 @@ test.describe("activity log", () => {
     await expect(rows(page)).toHaveCount(COUNTS.unpriced + COUNTS.errors)
     await expect(filterChip(page, "User", PARITY.users.light)).toBeVisible()
 
-    // Clear all drops the shared filters (model, user, key, status) in one press.
-    // The control removes itself once there is nothing left to clear, which is
-    // the tightest statement that none survived. The source scoping is the log's
-    // own filter, so it stays until its chip is cleared.
-    await page.getByRole("button", { name: "Clear all" }).click()
-    await expect(page.getByRole("button", { name: "Clear all" })).toBeHidden()
-    await expect(
-      filterChip(page, "Model", PARITY.models.unpriced.model),
-    ).toBeHidden()
+    // A chip clears only its own filter: without the model and user the log is
+    // back to the fixture, still scoped to its source.
+    await filterChip(page, "Model", PARITY.models.unpriced.model)
+      .getByRole("button")
+      .click()
+    await filterChip(page, "User", PARITY.users.light)
+      .getByRole("button")
+      .click()
     await expect(filterChip(page, "Source", PARITY.source)).toBeVisible()
     await expect(rows(page)).toHaveCount(ALL)
 
-    // Clearing the source as well widens the log past the fixture rather than
-    // back to it.
-    await filterChip(page, "Source", PARITY.source).getByRole("button").click()
+    // Clear all drops every filter in the one chip row, the source scoping
+    // included, so the log widens past the fixture. The control removes itself
+    // once there is nothing left to clear, which is the tightest statement that
+    // none survived.
+    await page.getByRole("button", { name: "Clear all" }).click()
+    await expect(page.getByRole("button", { name: "Clear all" })).toBeHidden()
     await expect(filterChip(page, "Source", PARITY.source)).toBeHidden()
     await expect
       .poll(() => rows(page).count())

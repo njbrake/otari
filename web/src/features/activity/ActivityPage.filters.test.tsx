@@ -7,7 +7,6 @@ import { ActivityPage } from "@/features/activity/ActivityPage"
 import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
 import { API_ROOT } from "@/shared/api/client"
 import { entry, listCalls, mockApi, renderPage } from "@/tests/activity"
-import { pickOption, selectTrigger } from "@/tests/select"
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -39,7 +38,13 @@ describe("ActivityPage filter serialization", () => {
     // Home's "See the refusals" links here with the code it counted, so the
     // list is the refused requests rather than every failure.
     const { calls } = mockApi({ rows: [entry()] })
-    renderPage(<ActivityPage />, "/activity?status_code=403&range=24h")
+    renderPage(
+      <>
+        <ObserveFilterRow view="requests" />
+        <ActivityPage embedded />
+      </>,
+      "/requests?status_code=403&range=24h",
+    )
 
     await screen.findByText("gpt-4o")
     const requested = calls.map((c) => c.url)
@@ -51,23 +56,59 @@ describe("ActivityPage filter serialization", () => {
         `${path} dropped the status code`,
       ).toBe(true)
     }
-    expect(screen.getByText(/Status code/)).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Remove Status code filter" }),
+    ).toBeInTheDocument()
   })
 
-  it("offers Web fetch as a named tool filter", async () => {
+  it("offers Web fetch as a named tool filter under the Model column", async () => {
     const user = userEvent.setup()
     const { calls } = mockApi({ rows: [entry()] })
-    renderPage(<ActivityPage />, "/activity?tool=web_search&range=24h")
+    renderPage(<ActivityPage embedded />, "/requests?tool=web_search&range=24h")
     await screen.findByText("gpt-4o")
 
-    await pickOption(user, "Tool", "Web fetch")
+    await user.click(screen.getByRole("button", { name: "Filter Model" }))
+    const panel = await screen.findByRole("dialog", { name: "Filter Model" })
+    const tools = await within(panel).findByRole("group", {
+      name: "Gateway tool",
+    })
+    expect(
+      within(tools).getByRole("checkbox", { name: "Web search" }),
+    ).toBeChecked()
+    await user.click(within(tools).getByRole("checkbox", { name: "Web fetch" }))
 
-    expect(selectTrigger("Tool")).toHaveTextContent("Web fetch")
     await waitFor(() =>
       expect(
         listCalls(calls).some((url) => url.includes("tool=web_fetch")),
       ).toBe(true),
     )
+  })
+
+  it("offers the tool filter only once the window has tool usage", async () => {
+    const user = userEvent.setup()
+    mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage embedded />, "/requests")
+    await screen.findByText("gpt-4o")
+
+    await user.click(screen.getByRole("button", { name: "Filter Model" }))
+    const panel = await screen.findByRole("dialog", { name: "Filter Model" })
+    await within(panel).findByRole("group", { name: "Provider" })
+    expect(
+      within(panel).queryByRole("group", { name: "Gateway tool" }),
+    ).toBeNull()
+  })
+
+  it("offers the tool filter where the window ran a tool", async () => {
+    const user = userEvent.setup()
+    mockApi({ rows: [entry()], tools: ["web_search"] })
+    renderPage(<ActivityPage embedded />, "/requests")
+    await screen.findByText("gpt-4o")
+
+    await user.click(screen.getByRole("button", { name: "Filter Model" }))
+    const panel = await screen.findByRole("dialog", { name: "Filter Model" })
+    expect(
+      await within(panel).findByRole("group", { name: "Gateway tool" }),
+    ).toBeInTheDocument()
   })
 })
 
