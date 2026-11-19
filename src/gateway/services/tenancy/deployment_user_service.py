@@ -8,9 +8,9 @@ deployment-wide concepts were the ``is_superuser`` flag and the
 ``tenancy_bootstrap_user_id`` marker, neither of which had an API, so the
 recourse for a stuck or abusive account was SQL (mozilla-ai/otari#797).
 
-Four operations: list every identity, deactivate or reactivate one, flip its
-``is_superuser`` flag, and generate a password for one, which is how a deployment
-that sends no mail gets a member signed in. Creating and inviting stay
+Three operations, and deliberately only three: list every identity, deactivate
+or reactivate one, and flip its ``is_superuser`` flag. Handing the bootstrap
+operator role on is identity's (``IdentityService``). Creating and inviting stay
 with the organization surface, which is where the membership that makes an
 identity useful is created, and deleting is not here at all for the reason
 ``routes/organizations.py`` gives about deleting an organization: historical
@@ -41,26 +41,25 @@ granting yourself back a cleared flag, or reactivating the bootstrap identity,
 something an operator can still do here.
 """
 
-import secrets
-import uuid
-from datetime import UTC, datetime
+from __future__ import annotations
 
-from sqlalchemy.exc import SQLAlchemyError
+import uuid
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.identity_exceptions import (
     BootstrapOperatorProtectedError,
     DeploymentAdministrationUnavailableError,
     DeploymentUserNotFoundError,
-    DeploymentUserOwnPasswordError,
     DeploymentUserSelfChangeError,
     EmptyDeploymentUserUpdateError,
-    SignInAddressRequiredError,
 )
 from gateway.log_config import logger
 from gateway.models.tenancy import (
     DeploymentUserOrganizationPublic,
-    DeploymentUserPasswordPublic,
     DeploymentUserPublic,
     DeploymentUsersPublic,
     DeploymentUserUpdateRequest,
@@ -72,14 +71,14 @@ from gateway.repositories.tenancy import OrganizationMemberRepository, UserRepos
 from gateway.services.dashboard_session_service import revoke_user_dashboard_sessions
 from gateway.services.tenancy.provisioning_service import load_bootstrap_identity
 
-# 24 URL-safe characters: 144 bits, past MIN_PASSWORD_LENGTH and inside bcrypt's 72 bytes.
-GENERATED_PASSWORD_BYTES = 18
+if TYPE_CHECKING:
+    from gateway.services.identity import SelfServiceKeyDeactivationListener
 
 
-class DeploymentUserService:
-    """Reads and writes identities across the whole deployment."""
+class DeploymentAdministrationAccess:
+    """Reads identities and administration authority across the whole deployment."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.users = UserRepository(db)
         self.members = OrganizationMemberRepository(db)
@@ -99,8 +98,27 @@ class DeploymentUserService:
         """
         if actor.is_superuser:
             return True
+        return await self.is_bootstrap_operator(actor)
+
+    async def is_bootstrap_operator(self, actor: User) -> bool:
+        """Whether this caller is the identity the bootstrap marker names, read fresh from the database."""
         bootstrap = await load_bootstrap_identity(self.db)
         return bootstrap is not None and bootstrap.id == actor.id
+
+    async def administration_access_ids(self, actors: Iterable[User]) -> set[uuid.UUID]:
+        """Which of ``actors`` may reach the surface, in one lookup rather than one each.
+
+        The plural form of ``has_administration_access``, for a caller deciding over a set of
+        accounts at once. Both read the same marker, so neither can answer differently.
+        """
+        candidates = list(actors)
+        superusers = {actor.id for actor in candidates if actor.is_superuser}
+        if len(superusers) == len(candidates):
+            return superusers
+        bootstrap = await load_bootstrap_identity(self.db)
+        if bootstrap is None:
+            return superusers
+        return superusers | {actor.id for actor in candidates if actor.id == bootstrap.id}
 
     async def list_users(
         self,
@@ -131,6 +149,19 @@ class DeploymentUserService:
             ],
             count=count,
         )
+
+    async def _require_administration_access(self, actor: User) -> None:
+        """Raise the 404 unless this caller operates the deployment."""
+        if not await self.has_administration_access(actor):
+            raise DeploymentAdministrationUnavailableError
+
+
+class DeploymentUserService(DeploymentAdministrationAccess):
+    """Administer identities, notifying credential owners in the same transaction."""
+
+    def __init__(self, db: AsyncSession, *, uow: UnitOfWork, keys: SelfServiceKeyDeactivationListener) -> None:
+        super().__init__(db)
+        self.uow, self.keys = uow, keys
 
     async def update_user(
         self,
@@ -164,36 +195,35 @@ class DeploymentUserService:
                 raise DeploymentUserSelfChangeError(
                     "You cannot deactivate your own account or remove your own operator access"
                 )
-            bootstrap = await load_bootstrap_identity(self.db)
-            if bootstrap is not None and bootstrap.id == target.id:
+            if await self.is_bootstrap_operator(target):
                 raise BootstrapOperatorProtectedError(
                     "The deployment's bootstrap operator cannot be deactivated or have its operator access removed"
                 )
 
-        if request.is_active is not None:
-            target.is_active = request.is_active
-        if request.is_active is False:
-            target.email_verification_token_hash = None
-            target.email_verification_token_expires_at = None
-            target.password_reset_token_hash = None
-            target.password_reset_token_expires_at = None
-        if request.is_superuser is not None:
-            target.is_superuser = request.is_superuser
-        self.db.add(target)
-        try:
+        async with self.uow:
+            # App-key issuance holds this lock until its credential is committed.
+            target = await self.users.get_locked(user_id)
+            if target is None:
+                raise DeploymentUserNotFoundError(user_id)
+            # Read under the target's lock, which a handover to it holds until the marker has moved, so a
+            # handover that lands while this waits is seen here rather than overwritten.
+            if removes_access and await self.is_bootstrap_operator(target):
+                raise BootstrapOperatorProtectedError(
+                    "The deployment's bootstrap operator cannot be deactivated or have its operator access removed"
+                )
+            if request.is_active is not None:
+                target.is_active = request.is_active
+            if request.is_active is False:
+                target.email_verification_token_hash = None
+                target.email_verification_token_expires_at = None
+                target.password_reset_token_hash = None
+                target.password_reset_token_expires_at = None
+            if request.is_superuser is not None:
+                target.is_superuser = request.is_superuser
+            self.db.add(target)
             if request.is_active is False:
                 await revoke_user_dashboard_sessions(self.db, target.id)
-            await self.db.commit()
-        except SQLAlchemyError:
-            # The same reason ``OrganizationService`` rolls back rather than
-            # letting the failure travel: SQLAlchemy leaves a session whose
-            # flush failed unusable, so a caller that reuses it gets
-            # ``PendingRollbackError`` from its next statement instead of the
-            # failure that actually happened. The request path is covered either
-            # way, since ``get_db`` closes the session at teardown; a
-            # service-layer caller (every service-level test here is one) is not.
-            await self.db.rollback()
-            raise
+                await self.keys.deactivate_self_service_keys(target.id)
         await self.db.refresh(target)
         # Operator access opens shared session content and, where enabled, break-glass,
         # so who granted or removed it, and who deactivated whom, is on the record.
@@ -213,41 +243,6 @@ class DeploymentUserService:
             bootstrap_id=bootstrap.id if bootstrap is not None else None,
             actor_id=actor.id,
         )
-
-    async def generate_password(self, *, actor: User, user_id: uuid.UUID) -> DeploymentUserPasswordPublic:
-        """Replace one identity's password with a generated one, and return it once.
-
-        For a deployment that sends no mail, where neither the signup claim nor
-        the reset link can reach anybody, so the operator hands the password over
-        themselves. The operator vouches for the address the way a verified
-        signup would, so the account can sign in straight away; ``set_password``
-        stores the hash, ends the account's sessions and clears its outstanding
-        tokens.
-        """
-        await self._require_administration_access(actor)
-        target = await self.users.get(user_id)
-        if target is None:
-            raise DeploymentUserNotFoundError(user_id)
-        if target.id == actor.id:
-            raise DeploymentUserOwnPasswordError
-        if target.email is None:
-            raise SignInAddressRequiredError
-
-        # Imported here, not at the top: user_service imports organization_service,
-        # which imports this module.
-        from gateway.services.tenancy.user_service import set_password
-
-        password = secrets.token_urlsafe(GENERATED_PASSWORD_BYTES)
-        if target.email_verified_at is None:
-            target.email_verified_at = datetime.now(UTC)
-        await set_password(self.db, target, new_password=password)
-        logger.info("Operator %s set a generated password on account %s", actor.id, target.id)
-        return DeploymentUserPasswordPublic(password=password)
-
-    async def _require_administration_access(self, actor: User) -> None:
-        """Raise the 404 unless this caller operates the deployment."""
-        if not await self.has_administration_access(actor):
-            raise DeploymentAdministrationUnavailableError
 
 
 def _to_public(
@@ -281,4 +276,4 @@ def _to_public(
     )
 
 
-__all__ = ["DeploymentUserService"]
+__all__ = ["DeploymentAdministrationAccess", "DeploymentUserService"]

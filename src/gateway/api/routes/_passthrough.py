@@ -8,7 +8,7 @@ that scaffold; each route supplies only its endpoint-specific pieces: the budget
 estimate, the provider call, and its ``PassthroughBilling``, which says what the
 result reports. The pricing domain prices that report; no route prices itself.
 
-Provider failures are classified by ``classify_provider_error``, the helper the
+Provider failures are classified by :class:`UpstreamFailure`, the classifier the
 chat, messages, and responses routes use, so a provider's refusal of the
 caller's request (an upstream 400 or 404, an operation or parameter the provider
 does not support) answers with the same 4xx and redacted detail there, a
@@ -31,7 +31,7 @@ import json
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Generic, Protocol, TypeVar
@@ -48,6 +48,7 @@ from gateway.api.deps import (
     get_config,
     get_db,
     get_log_writer,
+    get_unavailable_model_reporter,
     model_provider_port_on,
 )
 from gateway.api.request_id import set_request_id
@@ -61,18 +62,12 @@ from gateway.api.routes._helpers import (
 )
 from gateway.api.routes._pipeline import (
     HOSTED_CREDENTIAL_UNUSABLE_DETAIL,
-    PROVIDER_CREDENTIALS_DETAIL,
     _elapsed_ms,
     _raise_for_unresolvable_model,
-    _stored_error_message,
-    classify_provider_error,
-    failure_status_code,
     log_gateway_rejection,
-    provider_error_headers,
-    provider_failure_detail,
+    request_started,
     throttle_early_rejection,
 )
-from gateway.api.routes._unavailable_models import note_unavailable_model
 from gateway.core.config import REQUEST_ID_HEADER, GatewayConfig
 from gateway.core.database import DATABASE_ERRORS, describe_database_error, release_session
 from gateway.core.error_codes import (
@@ -80,18 +75,21 @@ from gateway.core.error_codes import (
     MODEL_NOT_ALLOWED,
     PRICING_REQUIRED,
     PROVIDER_CREDENTIAL_REJECTED,
+    RefusalException,
+    body_fields_of,
     error_headers,
 )
+from gateway.core.error_details import ProviderDetail
 from gateway.core.metered_pricing import BillableUsage, billable_usage, price_billable_usage
 from gateway.core.provider_params import SENSITIVE_PARAM_FIELDS
 from gateway.exceptions import TenancyError
 from gateway.inflight import track_request
 from gateway.log_config import logger
-from gateway.model_labeling import relabel_model, served_model_headers
+from gateway.model_labeling import relabel_model
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
 from gateway.models.usage import UsageLog
-from gateway.ports.billing_port import FUNDS_CHECK_UNAVAILABLE_DETAIL, BillingPort, InsufficientFundsError
+from gateway.ports.billing_port import FUNDS_CHECK_UNAVAILABLE_DETAIL, NO_TOOLS, BillingPort, InsufficientFundsError
 from gateway.ports.model_provider_port import HostedAccessDeniedError, ModelProviderPort
 from gateway.rate_limit import check_rate_limit, rate_limit_headers
 from gateway.schemas.inference import DecisionRequest, DecisionResponse
@@ -121,7 +119,9 @@ from gateway.services.inference import (
     PassthroughBilling,
     ReportedUsage,
     UnknownDecisionProviderError,
+    UpstreamFailure,
     admit_deployment_paid,
+    billed_model,
     decision_body,
     describe_port_error,
     is_provider_credential_rejection,
@@ -138,7 +138,7 @@ from gateway.services.model_access import (
     resolve_request_allowlist,
     unresolvable_model_detail,
 )
-from gateway.services.pricing import UsageCharge, can_price, price_usage
+from gateway.services.pricing import NO_FACTS, PriceFacts, UsageCharge, apply_rules, can_price, price_usage
 from gateway.services.pricing_service import (
     ResolvedPricing,
     find_model_pricing,
@@ -166,7 +166,7 @@ from gateway.services.providers import (
     serve_on_hosted_provider,
     unpriced_model_refusal,
 )
-from gateway.services.upstream_redaction import PASSTHROUGH_PROVIDER_ERROR_DETAIL
+from gateway.services.upstream_redaction import PASSTHROUGH_PROVIDER_ERROR_DETAIL, stored_error_message
 from gateway.services.workspace_scope import organization_for_workspace_id, resolve_workspace_id
 
 ResultT = TypeVar("ResultT")
@@ -183,17 +183,18 @@ def provider_call_failure(exc: Exception) -> HTTPException:
     if is_provider_credential_rejection(exc):
         return HTTPException(
             status_code=status.HTTP_424_FAILED_DEPENDENCY,
-            detail=PROVIDER_CREDENTIALS_DETAIL,
+            detail=ProviderDetail.CREDENTIALS,
             headers=error_headers(PROVIDER_CREDENTIAL_REJECTED),
         )
-    mapping = classify_provider_error(exc)
+    failure = UpstreamFailure(exc)
+    mapping = failure.mapping
     if mapping is not None:
         return HTTPException(
             status_code=mapping.status_code,
             detail=mapping.detail,
-            headers=with_retry_hint(exc, mapping.status_code, provider_error_headers(exc, mapping.status_code)),
+            headers=with_retry_hint(exc, mapping.status_code, failure.headers),
         )
-    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM provider error")
+    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=ProviderDetail.ERROR)
 
 
 def parse_provider(provider: str) -> LLMProvider:
@@ -323,11 +324,11 @@ class PassthroughOutcome(Generic[ResultT]):
     """A successful pass-through provider call plus response metadata."""
 
     result: ResultT
-    """The provider result, relabeled to the selector the caller sent unless ``relabel`` is off."""
+    """The provider result, relabeled to the request alias when applicable."""
     resolved: ResolvedProvider
     """The resolved selector the call was dispatched against."""
     headers: dict[str, str]
-    """The request id, rate-limit and served-model headers, for routes that build their own response object."""
+    """The request id and rate-limit headers, for routes that build their own response object."""
     user_id: str
     """The user the request was billed to, whose rows it wrote."""
     workspace_id: uuid.UUID
@@ -365,8 +366,12 @@ async def run_passthrough(
     request_params: Collection[str] = (),
     reserve_before_resolve: bool = False,
     relabel: bool = True,
+    price_facts: PriceFacts = NO_FACTS,
 ) -> PassthroughOutcome[ResultT]:
     """Run the shared pass-through scaffold around a single provider call.
+
+    ``price_facts`` is what the request says about itself that a price's rules
+    ask (an image's size and quality); the result settles at the rules it meets.
 
     Steps: resolve the billed user (honoring ``config.reject_user_mismatch``),
     rate limit, resolve the provider selector, look up pricing, reserve the
@@ -432,6 +437,7 @@ async def run_passthrough(
     # `request_group_id`, as the completion pipeline does.
     request_id = str(uuid.uuid4())
     set_request_id(raw_request, response, request_id)
+    unavailable_model_reporter = get_unavailable_model_reporter(raw_request)
     # Anchor request latency at the earliest point in the scaffold (monotonic,
     # so it is immune to wall-clock steps); recorded on the usage log below.
     started_at = time.monotonic()
@@ -475,7 +481,6 @@ async def run_passthrough(
                 api_key_id=api_key_id,
                 user_id=api_key.user_id,
                 model=model,
-                requested_model=model,
                 provider=None,
                 endpoint=endpoint,
                 detail=str(exc.detail),
@@ -501,7 +506,6 @@ async def run_passthrough(
             api_key_id=api_key_id,
             user_id=user_id,
             model=row_model,
-            requested_model=model,
             provider=row_provider,
             endpoint=endpoint,
             detail=detail,
@@ -528,6 +532,8 @@ async def run_passthrough(
                 counts_toward_budget=not budget_exempt,
                 scope=BudgetScopeRequest(api_key=api_key, provider_instance=row_provider),
                 organization_id=organization_id,
+                # A rate free for text that prices this request on another slot is held to the dollar budget.
+                model_is_free=False if estimated_cost > ZERO else None,
             )
         except HTTPException as exc:
             if exc.status_code != status.HTTP_404_NOT_FOUND:
@@ -541,11 +547,11 @@ async def run_passthrough(
 
     async def _refuse(
         reservation: ReservationHandle, resolved: ResolvedProvider, status_code: int, detail: str, **headers: str
-    ) -> HTTPException:
+    ) -> RefusalException:
         """Refund ``reservation``, record the refusal, and return the exception to raise."""
         await refund_reservation(db, reservation)
         await _log_rejection(detail, row_model=resolved.model, row_provider=resolved.instance, status_code=status_code)
-        return HTTPException(status_code=status_code, detail=detail, headers=headers or None)
+        return RefusalException(status_code, detail, headers=headers or None)
 
     async def _serve_hosted(
         resolved: ResolvedProvider, reservation: ReservationHandle, country_gate: CountryGate
@@ -599,6 +605,7 @@ async def run_passthrough(
                 billing_port_on(raw_request, db),
                 deployment_paid=True,
                 organization_id=organization_id,
+                billed=billed_model(served.provider, served.model),
                 api_key_id=api_key_id,
                 user_id=user_id,
                 request_id=request_id,
@@ -609,7 +616,7 @@ async def run_passthrough(
                 served,
                 status.HTTP_402_PAYMENT_REQUIRED,
                 exc.public_message,
-                **error_headers(INSUFFICIENT_FUNDS),
+                **error_headers(INSUFFICIENT_FUNDS, billing_url=exc.action_url),
             ) from exc
         except Exception as exc:
             logger.error(
@@ -919,9 +926,11 @@ async def run_passthrough(
                         strategy=config.budget_strategy,
                     )
                 except HTTPException as exc:
-                    raise await _refuse(
+                    refused = await _refuse(
                         reservation, resolved, exc.status_code, str(exc.detail), **(exc.headers or {})
-                    ) from exc
+                    )
+                    refused.fields = body_fields_of(exc)
+                    raise refused from exc
 
     refused_model = refuse_model(resolved) if refuse_model is not None else None
     if refused_model is not None:
@@ -953,7 +962,6 @@ async def run_passthrough(
             user_id=user_id,
             timestamp=datetime.now(UTC),
             model=resolved.model,
-            requested_model=model,
             provider=resolved.instance,
             endpoint=endpoint,
             status=row_status,
@@ -1010,6 +1018,7 @@ async def run_passthrough(
             units=reported.units,
             quantities=reported.quantities,
             slot=billing.slot,
+            facts=replace(price_facts, at=request_started(usage_log)),
         )
         cost = charge.cost if charge is not None else None
         if charge is not None:
@@ -1025,6 +1034,7 @@ async def run_passthrough(
         if deployment_charge is not None:
             await deployment_charge.settle(
                 cost,
+                tools=NO_TOOLS,
                 model=resolved.model,
                 description=f"{resolved.instance}:{resolved.model}",
                 expects_cost=not billing.bills_on_completion,
@@ -1056,14 +1066,15 @@ async def run_passthrough(
         raise
     except Exception as e:
         if hosted_instance is not None:
-            note_unavailable_model(
-                config, hosted_instance, resolved.model, e, deployment_paid=deployment_charge is not None
+            unavailable_model_reporter.report(
+                e, instance=hosted_instance, model=resolved.model, uses_deployment_credential=True
             )
         caller_params = frozenset(request_params) - SENSITIVE_PARAM_FIELDS
+        failure = UpstreamFailure(e, request_params=caller_params)
         failed_row = _usage_row(
             "error",
-            error_message=_stored_error_message(str(e)),
-            status_code=failure_status_code(e, request_params=caller_params),
+            error_message=stored_error_message(str(e)),
+            status_code=failure.logged_status,
         )
         if not served:
             record_attempt(
@@ -1087,7 +1098,7 @@ async def run_passthrough(
         if mapped is not None:
             raise mapped from e
 
-        mapping = classify_provider_error(e, request_params=caller_params)
+        mapping = failure.mapping
         if mapping is not None:
             logger.warning(
                 "Provider call failed for %s:%s (status %s)", resolved.provider, resolved.model, mapping.status_code
@@ -1101,27 +1112,25 @@ async def run_passthrough(
                     model=resolved.model,
                     dispatch_model=resolved.dispatch_model,
                 ),
-                headers=with_retry_hint(e, mapping.status_code, provider_error_headers(e, mapping.status_code)),
+                headers=with_retry_hint(e, mapping.status_code, failure.headers),
             ) from e
 
         _, error_class = classify_local_attempt_error(e)
         logger.error("Provider call failed for %s:%s (%s): %s", resolved.provider, resolved.model, error_class, e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=provider_failure_detail(e, PASSTHROUGH_PROVIDER_ERROR_DETAIL),
+            detail=failure.unclassified_detail(PASSTHROUGH_PROVIDER_ERROR_DETAIL),
             headers=with_retry_hint(e, status.HTTP_502_BAD_GATEWAY, None),
         ) from e
 
-    headers = dict(rate_limit_headers(rate_limit_info)) if rate_limit_info else {}
-    if relabel:
-        headers.update(served_model_headers(result, requested=model, provider=resolved.instance, model=resolved.model))
+    headers = rate_limit_headers(rate_limit_info) if rate_limit_info else {}
     if response is not None:
         for key, value in headers.items():
             response.headers[key] = value
     headers[REQUEST_ID_HEADER] = request_id
 
-    if relabel:
-        relabel_model(result, resolved.alias or model)
+    if relabel and resolved.alias is not None:
+        relabel_model(result, resolved.alias)
 
     return PassthroughOutcome(
         result=result,
@@ -1267,7 +1276,7 @@ def decision_status_error(status_code: int | None) -> HTTPException:
     if status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN):
         return HTTPException(
             status_code=status.HTTP_424_FAILED_DEPENDENCY,
-            detail=PROVIDER_CREDENTIALS_DETAIL,
+            detail=ProviderDetail.CREDENTIALS,
             headers=error_headers(PROVIDER_CREDENTIAL_REJECTED),
         )
     return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=PASSTHROUGH_PROVIDER_ERROR_DETAIL)
@@ -1313,7 +1322,9 @@ class SelectorDecision:
             result = DecisionResponse.model_validate(await request_decision(self._provider, body))
         except DecisionProviderError as exc:
             raise DecisionCallError(
-                str(exc), logged_status=failure_status_code(exc), response=decision_status_error(exc.status_code)
+                str(exc),
+                logged_status=UpstreamFailure(exc).logged_status,
+                response=decision_status_error(exc.status_code),
             ) from exc
         except ValidationError as exc:
             # The error's own text quotes the upstream body, so only its size is kept.
@@ -1562,12 +1573,14 @@ async def run_decision(
         )
         cost: Decimal | None = None
         if pricing is not None:
-            cost, row.billing_meters, row.pricing_breakdown = price_billable_usage(
-                pricing,
+            applied = apply_rules(pricing, PriceFacts(context=outcome.input_tokens, at=request_started(row)))
+            cost, row.billing_meters, lines = price_billable_usage(
+                applied.rate,
                 billable_usage(
                     input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens, cache_tokens_included=True
                 ),
             )
+            row.pricing_breakdown = applied.explain(lines)
         elif outcome.charge is not None:
             cost = outcome.charge
         elif quote.charge is not None:
@@ -1592,6 +1605,9 @@ async def run_decision(
                 await billing.charge(
                     organization_id=funding.organization_id,
                     amount=cost,
+                    # A decision is priced by the service that answers it, not by a model's rates.
+                    billed=None,
+                    tools=NO_TOOLS,
                     description=f"{provider_name}:{model}",
                     api_key_id=api_key_id,
                 )
@@ -1609,7 +1625,7 @@ async def run_decision(
         )
     except DecisionCallError as exc:
         await log_writer.put(
-            usage_row(status="error", error_message=_stored_error_message(str(exc)), status_code=exc.logged_status)
+            usage_row(status="error", error_message=stored_error_message(str(exc)), status_code=exc.logged_status)
         )
         await undo()
         logger.error("Decision failed for %s:%s: %s", provider_name, model, exc)

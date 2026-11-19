@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -135,10 +135,31 @@ describe("WorkspaceDetailPage", () => {
       "true",
     )
     expect(screen.getByLabelText("Name")).toHaveValue("Default Workspace")
-    expect(screen.getByRole("link", { name: "← Workspaces" })).toHaveAttribute(
-      "href",
-      "/workspaces",
+    expect(
+      await screen.findByRole("link", { name: "← Workspaces" }),
+    ).toHaveAttribute("href", "/workspaces")
+  })
+
+  it("leaves out the way to the Workspaces list for someone who may not open it", async () => {
+    // A workspace's own admin who does not manage the organization opens this
+    // page, but the list is an organization owner's or admin's.
+    mockApi({
+      context: organizationContext({
+        role: "member",
+        workspace_memberships: [
+          { workspace_id: WORKSPACE, name: "Default Workspace", role: "admin" },
+        ],
+      }),
+    })
+    renderPage()
+
+    // Save opens on an edit once the context says they manage this
+    // workspace, which is the answer the link waits on too.
+    await userEvent.type(await screen.findByLabelText("Name"), " 2")
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled(),
     )
+    expect(screen.queryByRole("link", { name: "← Workspaces" })).toBeNull()
   })
 
   it("says a workspace it cannot find is not found", async () => {
@@ -205,6 +226,20 @@ describe("WorkspaceDetailPage", () => {
 
     const removed = requests.find((request) => request.method === "DELETE")
     expect(removed?.url).toContain("default-openai")
+  })
+
+  it("holds the per-provider add row for a caller who cannot manage the workspace", async () => {
+    mockApi({
+      context: organizationContext({ role: "member" }),
+      budgets: [budget({ budget_id: "bud-team", name: "Team standard" })],
+    })
+    renderPage()
+
+    await screen.findByText("Per-provider defaults")
+    expect(
+      await screen.findByRole("button", { name: / Provider$/ }),
+    ).toBeDisabled()
+    expect(screen.getByRole("button", { name: / Budget$/ })).toBeDisabled()
   })
 
   it("withholds the default-budget controls from a non-operator", async () => {

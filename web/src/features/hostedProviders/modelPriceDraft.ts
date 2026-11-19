@@ -15,9 +15,12 @@
 import type {
   CreateHostedModelRequest,
   HostedModel,
+  HostedModelRates,
+  SetPricingRequest,
   UpdateHostedModelRequest,
 } from "@/client"
 import {
+  hasOutputRate,
   type PricingUnit,
   pricingUnitOf,
   toEnteredRate,
@@ -53,6 +56,7 @@ const asText = (value: number | null | undefined) =>
 export function draftFrom(model: HostedModel): PriceDraft {
   const unit = pricingUnitOf(model.unit)
   const input = model.input_price_per_million
+  const output = model.output_price_per_million
   return {
     model: model.model,
     unit,
@@ -61,7 +65,12 @@ export function draftFrom(model: HostedModel): PriceDraft {
         ? input
         : toEnteredRate(input, unit),
     ),
-    output: unit === "token" ? asText(model.output_price_per_million) : "",
+    output:
+      unit === "token"
+        ? asText(output)
+        : hasOutputRate(unit) && output !== null && output !== undefined
+          ? asText(toEnteredRate(output, unit))
+          : "",
     cacheRead:
       unit === "token" ? asText(model.cache_read_price_per_million) : "",
     cacheWrite:
@@ -99,14 +108,16 @@ export function readDraft(draft: PriceDraft): DraftReading {
     cacheRead: parsePrice(draft.cacheRead),
     cacheWrite: parsePrice(draft.cacheWrite),
   }
-  // A request or image price is one rate: the hidden boxes are not read.
+  // A request or image price is one rate: the hidden boxes are not read. A
+  // minute of audio reads its output box too, a blank one pricing no output.
   if (draft.unit !== "token") {
     return {
       parsed,
       hasBasePair: parsed.input.value !== undefined,
       halfAPair: false,
       hasCacheRate: false,
-      allParse: parsed.input.ok,
+      allParse:
+        parsed.input.ok && (!hasOutputRate(draft.unit) || parsed.output.ok),
     }
   }
   return {
@@ -141,7 +152,9 @@ function priceFields(draft: PriceDraft) {
   if (draft.unit !== "token") {
     return {
       input_price_per_million: toStoredRate(input, draft.unit),
-      output_price_per_million: 0,
+      output_price_per_million: hasOutputRate(draft.unit)
+        ? toStoredRate(parsed.output.value ?? 0, draft.unit)
+        : 0,
       cache_read_price_per_million: null,
       cache_write_price_per_million: null,
       unit: draft.unit,
@@ -177,4 +190,29 @@ export function createBody(draft: PriceDraft): CreateHostedModelRequest {
 /** The PATCH body: a blanked cache box clears the stored rate, explicitly. */
 export function repriceBody(draft: PriceDraft): UpdateHostedModelRequest {
   return priceFields(draft)
+}
+
+/**
+ * A region's own price, as `POST /pricing` stores it under
+ * `<provider>@<slug>:<model>`. Same rates as a reprice: a blanked cache box
+ * clears the rate rather than inheriting the previous one.
+ */
+export function regionPriceBody(
+  draft: PriceDraft,
+  modelKey: string,
+): SetPricingRequest {
+  return { model_key: modelKey, ...priceFields(draft) }
+}
+
+/**
+ * The price a region sets of its own for a model, if it sets one. Read as an
+ * own property, since a slug such as `constructor` would otherwise find one on
+ * the object's prototype.
+ */
+export function regionRatesOf(
+  model: Pick<HostedModel, "region_rates">,
+  slug: string,
+): HostedModelRates | undefined {
+  const rates = model.region_rates
+  return rates && Object.hasOwn(rates, slug) ? rates[slug] : undefined
 }

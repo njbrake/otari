@@ -47,8 +47,6 @@ from gateway.services.budgets import BudgetService
 from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.organization_service import OrganizationService
 
-from .tenancy_helpers import visibility_service
-
 pytestmark = pytest.mark.asyncio
 
 
@@ -332,7 +330,6 @@ async def test_list_in_scopes_matches_what_the_organization_surface_lists(async_
             async_db,
             OrganizationService(async_db, membership_listener=None),
         ),
-        visibility_service(async_db, uow),
         users=get_user_access(uow),
     )
     surface = await service.list_organization_ceilings(user=acme_owner)

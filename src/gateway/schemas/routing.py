@@ -128,15 +128,6 @@ class FallbackOfferingPublic(BaseModel):
     otari_tools: list[str] = Field(description="Built-in tools Otari runs in this provider's place, for that caller.")
 
 
-class KeyRequestsPublic(BaseModel):
-    """How many requests one key sent."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    api_key_id: str
-    requests: int
-
-
 class PinnedTrafficPublic(BaseModel):
     """The requests one API key sent naming a provider or a policy rather than the catalog ID, by provider reached."""
 
@@ -170,10 +161,6 @@ class AutomaticFallbackPublic(BaseModel):
         "and so got no automatic fallback."
     )
     pinned_provider: str | None = Field(description="The instance most pinned requests reached.")
-    sent_by: list[KeyRequestsPublic] = Field(
-        description="The keys that sent `requests`, most first: everyone's to an owner or admin, a workspace's "
-        "to its own owners and admins, and otherwise the caller's own keys alone."
-    )
     pinned_keys: list[PinnedTrafficPublic] = Field(
         description="`pinned` by API key and the provider that served it, most first. "
         "Includes requests that named a policy, which may have fallen back within it."
@@ -185,98 +172,6 @@ class AutomaticFallbacksResponse(BaseModel):
 
     window_days: int = Field(description="How many days of traffic the counts cover.")
     models: list[AutomaticFallbackPublic] = Field(description="Most requested first.")
-
-
-class KeyModelPublic(BaseModel):
-    """One model name a key sent in the window, and whether a failure on it has a backup."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    name: str = Field(
-        description="The name the key's requests sent as `model`; for imported usage, the model that ran."
-    )
-    requests: int = Field(description="Requests in the window, each counted once however many attempts.")
-    kind: Literal["policy", "alias", "catalog", "pinned", "unknown"] = Field(
-        description="What the name is to this key now: a routing policy, an alias, a catalog ID, a pinned "
-        "`provider:model`, or none of them (a name nothing resolves any more)."
-    )
-    backup: Literal["has_backup", "no_backup", "subscription", "unknown"] = Field(
-        description="Whether a failure on this name has somewhere to go. `subscription`: every request was "
-        "imported usage, which the gateway never routed. `unknown`: the name resolves to nothing now."
-    )
-    reason: Literal["single_offering", "single_target_policy", "pinned", "no_allowed_offering"] | None = Field(
-        description="Why there is no backup, when `backup` is `no_backup`: one offering serves it among those the "
-        "key may reach, a policy or alias with one candidate, a request that named the provider, or no offering "
-        "the key may reach."
-    )
-    provider: str | None = Field(description="The one instance that serves the name, when exactly one does.")
-
-
-class KeyPolicyPublic(BaseModel):
-    """One routing policy a key sent in the window."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    name: str
-    requests: int
-
-
-class KeyRoutingPublic(BaseModel):
-    """What one key sent in the window, and what a failure on each name does."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    api_key_id: str
-    models: list[KeyModelPublic] = Field(description="The most requested names first, at most ten.")
-    model_count: int = Field(description="How many names the key sent, including any `models` leaves out.")
-    no_backup_count: int = Field(description="Of `model_count`, how many have no backup.")
-    policies: list[KeyPolicyPublic] = Field(description="Every routing policy the key sent, most requested first.")
-
-
-class KeyRoutingResponse(BaseModel):
-    """The routing each key's traffic got."""
-
-    window_days: int = Field(description="How many days of traffic the counts cover.")
-    keys: list[KeyRoutingPublic] = Field(
-        description="One entry per key asked for that the caller may see, in the order asked; "
-        "a key the caller may not see is left out, like one that does not exist."
-    )
-
-
-class StepOutcomePublic(BaseModel):
-    """What one step of a plan did in the window."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    position: int = Field(description="The step's place in the plan, 1 for the first.")
-    served: int = Field(description="Requests this step answered.")
-    failed: int = Field(description="Attempts on this step that failed, whether a later step recovered or not.")
-
-
-class NameTrafficPublic(BaseModel):
-    """The traffic one person sent under one policy or alias name in one workspace."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    workspace_id: uuid.UUID
-    name: str = Field(description="The name the requests sent as `model`.")
-    user_id: str | None = Field(
-        description="Whose requests these are. A member's identity id for a member's own requests, so a policy "
-        "of their own is matched on it."
-    )
-    requests: int = Field(description="Requests in the window, each counted once however many attempts.")
-    sent_by: list[KeyRequestsPublic] = Field(description="The keys that sent them, most first.")
-    steps: list[StepOutcomePublic] = Field(description="By position in the plan, first first.")
-
-
-class RoutingTrafficResponse(BaseModel):
-    """The traffic sent under the routing policies and aliases the caller may see."""
-
-    window_days: int = Field(description="How many days of traffic the counts cover.")
-    names: list[NameTrafficPublic] = Field(
-        description="One entry per workspace, name and person: everyone's to an owner or admin, a workspace's to "
-        "its own owners and admins, and otherwise the caller's own alone."
-    )
 
 
 # Subagent routers: the stored decision models that recommend a subagent's model
@@ -296,7 +191,7 @@ class AgentRecommenderCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: str = Field(
-        min_length=1, max_length=32, description="The decision provider: typesafe, openrouter or llamacpp."
+        min_length=1, max_length=32, description="The decision provider: typesafe, openrouter, gemini or llamacpp."
     )
     model: str = Field(min_length=1, max_length=255, description="The decision model, as the provider names it.")
     api_base: str | None = Field(

@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
@@ -238,7 +237,6 @@ def selection_consults_router(
 def _select_head(
     spec: PolicySpec,
     *,
-    policy_name: str,
     user_id: str | None,
     key_id: str | None,
     budget: BudgetState,
@@ -321,7 +319,6 @@ def compile_policy(
     budget = budget or BudgetState()
     selected = _select_head(
         spec,
-        policy_name=policy_name,
         user_id=user_id,
         key_id=key_id,
         budget=budget,
@@ -361,6 +358,7 @@ def compile_policy(
                 profile=guardrail.profile,
                 url=guardrail.url,
                 mode=guardrail.mode,
+                on=guardrail.on,
                 on_unavailable=guardrail.on_unavailable,
                 validate_kwargs=guardrail.validate_kwargs,
             )
@@ -368,32 +366,6 @@ def compile_policy(
         ],
         dropped=dropped,
     )
-
-
-def reachable_candidates(
-    config: GatewayConfig,
-    policy_name: str,
-    selectors: Sequence[str],
-    *,
-    allowlist: list[str] | None,
-    workspace_id: uuid.UUID | None,
-) -> list[Attempt]:
-    """What ``selectors`` resolve to for a caller, in order, by the rules a compiled plan applies.
-
-    The allow-list, the organization key's restriction, duplicates and the cap,
-    as ``compile_policy`` filters them, without its warning: a read asking what a
-    policy could reach is not a request whose plan lost a candidate.
-    """
-    attempts, _ = _resolve_candidates(
-        config,
-        [(selector, "default") for selector in selectors],
-        display_model=policy_name,
-        allowlist=allowlist,
-        workspace_id=workspace_id,
-        # A read with no request behind it has no country to hold candidates to.
-        country_gate=None,
-    )
-    return attempts
 
 
 def compile_catalog_plan(

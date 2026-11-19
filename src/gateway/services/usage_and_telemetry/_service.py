@@ -1,20 +1,15 @@
 """The usage domain's reads, each in a block of its own on the Unit of Work it was built with."""
 
 import uuid
-from collections.abc import Collection
-from dataclasses import dataclass, replace
+from collections.abc import AsyncIterator, Collection
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from gateway.core.metered_pricing import quantize_cost
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.usage_and_telemetry_exceptions import UsageSeriesTooLongError
-from gateway.repositories.usage_and_telemetry import (
-    NameAttempts,
-    ServedTraffic,
-    UsageFilters,
-    UsageLogRepository,
-    UsageScope,
-)
+from gateway.repositories.usage_and_telemetry import ServedTraffic, UsageFilters, UsageLogRepository, UsageScope
 from gateway.schemas.usage_and_telemetry import (
     Bucket,
     RequestSettlement,
@@ -29,6 +24,8 @@ from gateway.schemas.usage_and_telemetry import (
 )
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.organizations import UserAccess
+from gateway.services.usage_and_telemetry._model_groups import grouped_models
+from gateway.services.usage_and_telemetry._read_gate import HeavyUsageReads
 from gateway.services.usage_and_telemetry._window import (
     MAX_SERIES_POINTS,
     SERIES_TOP_N,
@@ -73,20 +70,6 @@ _ALL_SUMMARY_DIMENSIONS: set[str] = set(_SUMMARY_DIMENSIONS) | {_ERROR_TAXONOMY_
 _SERIES_DIMENSIONS: dict[str, str] = {"model": "model", "user_id": "user", "api_key_id": "api_key", "source": "source"}
 
 
-@dataclass(frozen=True)
-class TrafficReach:
-    """The workspaces a reader reads, and whose rows in them they may see as someone's.
-
-    ``everyone_in`` are the workspaces whose every row is theirs to see (None:
-    all of ``workspace_ids``); in the rest they see their own rows alone, by
-    ``own_user_id``. The rule the organization's usage reads draw.
-    """
-
-    workspace_ids: frozenset[uuid.UUID]
-    everyone_in: frozenset[uuid.UUID] | None
-    own_user_id: str | None
-
-
 class UsageService:
     """Usage rows, read inside a scope the caller derived.
 
@@ -95,53 +78,36 @@ class UsageService:
     """
 
     def __init__(
-        self, uow: UnitOfWork, usage_logs: UsageLogRepository, *, keys: ApiKeyService, users: UserAccess
+        self,
+        uow: UnitOfWork,
+        usage_logs: UsageLogRepository,
+        *,
+        keys: ApiKeyService,
+        users: UserAccess,
+        heavy_reads: HeavyUsageReads,
     ) -> None:
         self._uow = uow
         self._usage_logs = usage_logs
         self._keys = keys
         self._users = users
+        # Shared by every request this worker serves.
+        self._heavy_reads = heavy_reads
 
-    async def served_traffic(
-        self,
-        *,
-        workspace_ids: Collection[uuid.UUID],
-        since: datetime,
-        reach: TrafficReach | None = None,
-        api_key_ids: Collection[str] | None = None,
-    ) -> list[ServedTraffic]:
-        """The requests served here since ``since`` in these workspaces, by name sent, offering reached and key.
+    @asynccontextmanager
+    async def _heavy_read(self) -> AsyncIterator[None]:
+        """One block of the Unit of Work, opened once this worker's gate admits it."""
+        async with self._heavy_reads.turn(self._uow), self._uow:
+            yield
 
-        A row's key is named only where ``reach`` lets the reader see whose it is;
-        with no ``reach``, never. ``api_key_ids`` narrows to rows the reader may see.
-        """
+    async def reassign_owner(self, user_ids: Collection[str], to_user_id: str) -> None:
+        """Move these users' usage onto ``to_user_id``, clearing the caller-supplied fields that could name a person."""
         async with self._uow:
-            return await self._usage_logs.served_traffic(
-                workspace_ids=workspace_ids,
-                since=since,
-                everyone_in=reach.everyone_in if reach is not None else frozenset(),
-                own_user_id=reach.own_user_id if reach is not None else None,
-                api_key_ids=api_key_ids,
-            )
+            await self._usage_logs.reassign_owner(user_ids, to_user_id)
 
-    async def name_attempts(
-        self,
-        *,
-        reach: TrafficReach,
-        since: datetime,
-        names: Collection[str],
-        api_key_ids: Collection[str] | None = None,
-    ) -> list[NameAttempts]:
-        """The attempts made since ``since`` for these names sent, among the rows ``reach`` lets the reader see."""
+    async def served_traffic(self, *, workspace_ids: Collection[uuid.UUID], since: datetime) -> list[ServedTraffic]:
+        """The requests served here since ``since`` in these workspaces, by name sent, offering reached and key."""
         async with self._uow:
-            return await self._usage_logs.name_attempts(
-                workspace_ids=reach.workspace_ids,
-                since=since,
-                names=names,
-                everyone_in=reach.everyone_in,
-                own_user_id=reach.own_user_id,
-                api_key_ids=api_key_ids,
-            )
+            return await self._usage_logs.served_traffic(workspace_ids=workspace_ids, since=since)
 
     async def page(self, filters: UsageFilters, scope: UsageScope, *, skip: int, limit: int) -> list[UsageEntry]:
         """The rows matching these filters inside this scope, most recent first, each labeled with its user and key.
@@ -169,7 +135,7 @@ class UsageService:
 
     async def count(self, filters: UsageFilters, scope: UsageScope, *, imported_only: bool = False) -> int:
         """How many rows match these filters inside this scope; with ``imported_only``, only imported rows."""
-        async with self._uow:
+        async with self._heavy_read():
             return await self._usage_logs.count_matching(filters, scope, imported_only=imported_only)
 
     async def request_settlement(self, request_id: str, *, api_key_id: str | None) -> RequestSettlement | None:
@@ -182,12 +148,18 @@ class UsageService:
         """
         async with self._uow:
             rows = await self._usage_logs.request_rows(request_id, api_key_id=api_key_id)
-        if rows.served == 0 and rows.errors == 0:
+        if rows.served == 0 and rows.errors == 0 and rows.incomplete == 0:
             return None
+        cost_usd = f"{quantize_cost(rows.cost):.6f}" if rows.priced_rows and rows.cost is not None else None
+        # Only where every priced row recorded its tool part: a partial sum would understate it.
+        tool_cost_known = cost_usd is not None and rows.tool_costed_rows == rows.priced_rows
         return RequestSettlement(
             request_id=request_id,
-            status="error" if rows.errors else "success",
-            cost_usd=f"{quantize_cost(rows.cost):.6f}" if rows.priced_rows and rows.cost is not None else None,
+            status="error" if rows.errors else "incomplete" if rows.incomplete else "success",
+            cost_usd=cost_usd,
+            tool_cost_usd=(
+                f"{quantize_cost(rows.tool_cost):.6f}" if tool_cost_known and rows.tool_cost is not None else None
+            ),
             prompt_tokens=rows.prompt_tokens,
             completion_tokens=rows.completion_tokens,
             total_tokens=rows.total_tokens,
@@ -218,7 +190,7 @@ class UsageService:
         # ``none`` is dropped rather than rejected: it exists only so a caller can send
         # an empty selection, and it never contributes a dimension of its own.
         requested = _ALL_SUMMARY_DIMENSIONS if dimensions is None else {d for d in dimensions if d != "none"}
-        async with self._uow:
+        async with self._heavy_read():
             totals = await self._usage_logs.totals(filters, scope)
             breakdowns = {
                 name: await self._breakdown(filters, scope, totals, dimension=name, limit=cap)
@@ -283,7 +255,7 @@ class UsageService:
         if (end - start) / step > MAX_SERIES_POINTS:
             raise UsageSeriesTooLongError(MAX_SERIES_POINTS, bucket)
         dimension = _SERIES_DIMENSIONS[group_by]
-        async with self._uow:
+        async with self._heavy_read():
             totals = await self._usage_logs.totals(filters, scope)
             groups = await self._breakdown(filters, scope, totals, dimension=dimension, limit=SERIES_TOP_N)
             points = await self._usage_logs.grouped_series(
@@ -308,11 +280,15 @@ class UsageService:
     ) -> list[UsageGroupRow]:
         """One dimension's top groups, labeled where the key is an opaque id, with the remainder folded.
 
-        Only the user and key dimensions need a label: a model, source or endpoint
-        already reads as its own name. Resolving it here is what lets a client
-        offer a user or key filter without holding those whole tables.
+        The user and key dimensions are labeled because their keys are ids:
+        resolving the label here is what lets a client offer a user or key filter
+        without holding those whole tables. A model is labeled and grouped with
+        its other spellings (:func:`grouped_models`); a source or endpoint
+        already reads as its own name.
         """
         rows = await self._usage_logs.groups(filters, scope, dimension=dimension, limit=limit)
+        if dimension == "model":
+            return _with_fold(grouped_models(rows), totals)
         keys = {row.key for row in rows if row.key is not None}
         if dimension == "user":
             labels = await self._users.aliases(keys)

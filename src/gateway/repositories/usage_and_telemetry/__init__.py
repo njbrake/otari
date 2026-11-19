@@ -1,7 +1,6 @@
 """Data access for usage rows."""
 
 from gateway.repositories.usage_and_telemetry.usage_log_repository import (
-    NameAttempts,
     RequestRows,
     ServedTraffic,
     UsageFilters,
@@ -12,7 +11,6 @@ from gateway.repositories.usage_and_telemetry.usage_log_repository import (
 )
 
 __all__ = [
-    "NameAttempts",
     "RequestRows",
     "ServedTraffic",
     "UsageFilters",

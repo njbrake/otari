@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router"
 import { useState } from "react"
-import { TEXT_LINK_CLASS, TextButton } from "@/design-system/actions/TextButton"
+import { Button } from "@/design-system/actions/Button"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { useDeploymentOperator } from "@/shared/api/organizations"
 import { usePricing } from "@/shared/api/pricing"
@@ -26,10 +26,9 @@ function isPriced(model: string, pricedKeys: Set<string>): boolean {
 // A notice beside `PricingWarning` in the shell: successful requests in the last
 // day whose model usage had no price, so the response carried no inline cost and
 // anything billing from it charged nothing for the model (#1625). Scoped to the
-// selected workspace, as the Activity rows it links to are; each one's details
-// offer "Set model price". Deployment-operator-only, because a price is a
-// deployment-wide write. Dismissible per tab. One line, because it sits above
-// every page: the models it names are what to act on, and Activity has the rest.
+// selected workspace, as the Activity rows it links to are; each row there offers
+// "Price this model". Deployment-operator-only, because a price is a
+// deployment-wide write. Dismissible per tab.
 export function UnpricedUsageWarning() {
   const { isOperator } = useDeploymentOperator()
   const { selected: workspace } = useSelectedWorkspace()
@@ -77,37 +76,44 @@ export function UnpricedUsageWarning() {
       className="mx-auto w-full max-w-[112.5rem] shrink-0 px-4 md:px-6"
     >
       <InfoBanner tone="warning">
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="min-w-0 flex-1">
-            {formatNumber(requests)} {requests === 1 ? "request" : "requests"}{" "}
-            in the last 24 hours had no model price
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span>
+            <strong className="font-semibold">
+              {formatNumber(requests)} {requests === 1 ? "request" : "requests"}{" "}
+              in the last 24 hours had no model price
+            </strong>
             {workspace ? ` in ${workspace.name}` : ""}
             {named.length > 0 ? (
               <>
                 :{" "}
-                <span className="text-mono-caption [overflow-wrap:anywhere]">
-                  {named.join(", ")}
-                </span>
+                {named.map((model, index) => (
+                  <span key={model}>
+                    {index > 0 ? ", " : ""}
+                    <code className="break-all">{model}</code>
+                  </span>
+                ))}
                 {more > 0 ? ` and ${formatNumber(more)} more` : ""}
               </>
             ) : null}
+            . Their model tokens carried no cost.{" "}
+            <Link
+              to="/requests"
+              search={{
+                status: "success",
+                priced: "false",
+                range: "24h",
+                source: "gateway",
+              }}
+              className="underline underline-offset-2"
+            >
+              View unpriced requests
+            </Link>{" "}
+            to set a price for each model.
           </span>
-          <Link
-            to="/activity"
-            search={{
-              status: "success",
-              priced: "false",
-              range: "24h",
-              source: "gateway",
-            }}
-            className={`text-sm ${TEXT_LINK_CLASS}`}
-          >
-            View them
-          </Link>
-          <span className="text-sm">
-            <TextButton onPress={() => setDismissed(true)}>Dismiss</TextButton>
-          </span>
-        </span>
+          <Button size="sm" onPress={() => setDismissed(true)}>
+            Dismiss
+          </Button>
+        </div>
       </InfoBanner>
     </div>
   )

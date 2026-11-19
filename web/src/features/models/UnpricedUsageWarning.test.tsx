@@ -20,16 +20,7 @@ import {
 import { withRouter } from "@/tests/router"
 
 function modelRow(key: string, requests: number): UsageGroupRow {
-  return {
-    key,
-    cost: 0,
-    tokens: 0,
-    requests,
-    is_other: false,
-    imported_cost: 0,
-    error_count: 0,
-    cache_read_tokens: 0,
-  }
+  return { key, cost: 0, tokens: 0, requests, is_other: false }
 }
 
 function summary(requests: number, byModel: UsageGroupRow[]): UsageSummary {
@@ -46,9 +37,6 @@ function summary(requests: number, byModel: UsageGroupRow[]): UsageSummary {
     by_endpoint: [],
     by_provider: [],
     by_tool: [],
-    by_policy: [],
-    by_workspace: [],
-    by_channel: [],
     by_tag: [],
     errors_by_status_code: [],
     series: [],
@@ -108,29 +96,19 @@ describe("UnpricedUsageWarning", () => {
 
     expect(
       await screen.findByText(
-        /^19 requests in the last 24 hours had no model price/,
+        "19 requests in the last 24 hours had no model price",
       ),
     ).toBeInTheDocument()
     // Busiest first, so the model costing the most unbilled traffic leads.
-    expect(
-      screen.getByText("gemini-3.7-flash, gemini-3.8-flash"),
-    ).toBeInTheDocument()
-    // One line, and never a claim that the requests were recorded at $0: their
-    // cost is empty, not zero.
-    expect(screen.queryByText(/\$0/)).not.toBeInTheDocument()
+    const names = screen.getAllByText(/^gemini-/).map((el) => el.textContent)
+    expect(names).toEqual(["gemini-3.7-flash", "gemini-3.8-flash"])
     // The link lands on the same rows the count is taken from.
-    expect(screen.getByRole("link", { name: "View them" })).toHaveAttribute(
+    expect(
+      screen.getByRole("link", { name: "View unpriced requests" }),
+    ).toHaveAttribute(
       "href",
-      "/activity?status=success&priced=false&range=24h&source=gateway",
+      "/requests?status=success&priced=false&range=24h&source=gateway",
     )
-    // Underlined at rest, as the Dismiss beside it is: hue alone does not mark
-    // a link.
-    for (const link of [
-      screen.getByRole("link", { name: "View them" }),
-      screen.getByRole("button", { name: "Dismiss" }),
-    ]) {
-      expect(link.className.split(" ")).toContain("underline")
-    }
 
     const params = summaryParams(spy)
     expect(params.get("status")).toBe("success")
@@ -187,7 +165,7 @@ describe("UnpricedUsageWarning", () => {
 
     expect(
       await screen.findByText(
-        /^1 request in the last 24 hours had no model price/,
+        "1 request in the last 24 hours had no model price",
       ),
     ).toBeInTheDocument()
   })
@@ -237,7 +215,7 @@ describe("UnpricedUsageWarning", () => {
 
     expect(
       await screen.findByText(
-        /^2 requests in the last 24 hours had no model price/,
+        "2 requests in the last 24 hours had no model price",
       ),
     ).toBeInTheDocument()
   })
@@ -257,7 +235,7 @@ describe("UnpricedUsageWarning", () => {
 
     expect(
       await screen.findByText(
-        /^4 requests in the last 24 hours had no model price/,
+        "4 requests in the last 24 hours had no model price",
       ),
     ).toBeInTheDocument()
     expect(screen.queryByText("gemini-3.7-flash")).not.toBeInTheDocument()

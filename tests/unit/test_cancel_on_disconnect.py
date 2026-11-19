@@ -3,9 +3,11 @@
 import asyncio
 from typing import Any
 
+import pytest
 from fastapi import APIRouter, FastAPI
 from starlette.types import Message
 
+from gateway.api.routes import calling_key, catalog, organization_usage, usage
 from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 
 
@@ -126,3 +128,13 @@ def test_a_write_whose_client_leaves_still_finishes() -> None:
 
     assert handler.finished
     assert not handler.cancelled
+
+
+@pytest.mark.parametrize(
+    "router",
+    [usage.operator_router, organization_usage.router, calling_key.router, catalog.router],
+    ids=["usage", "organization_usage", "calling_key", "catalog"],
+)
+def test_every_router_serving_a_heavy_usage_read_stops_it_when_its_caller_leaves(router: APIRouter) -> None:
+    assert router.routes
+    assert all(isinstance(route, CancelOnDisconnectRoute) for route in router.routes)

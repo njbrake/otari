@@ -16,14 +16,13 @@ import { CountryDatabaseCard } from "@/features/settings/CountryDatabaseCard"
 import { MailDeliveryCard } from "@/features/settings/MailDeliveryCard"
 import { MaintenanceModeCard } from "@/features/settings/MaintenanceModeCard"
 import { RateLimitsCard } from "@/features/settings/RateLimitsCard"
+import { UpdateCheckCard } from "@/features/settings/UpdateCheckCard"
 import { useRotateMasterKey } from "@/shared/api/auth"
 import {
   useHostedProviders,
   useReencryptHostedProviders,
 } from "@/shared/api/hostedProviders"
 import { useSettings, useUpdateSettings } from "@/shared/api/settings"
-import { useIsPhone } from "@/shared/hooks/useIsPhone"
-import { useMediaQuery } from "@/shared/hooks/useMediaQuery"
 
 // A single settable field maps onto one key of UpdateSettingsRequest. The keys
 // come from the backend's `settable` marking, so cast at this one boundary.
@@ -198,7 +197,7 @@ function TextSetting({
   const hasChanged = saved !== committed
 
   return (
-    <div className="flex max-w-full min-w-0 items-center gap-2">
+    <div className="flex items-center gap-2">
       <input
         type="text"
         aria-label={field.key}
@@ -206,7 +205,7 @@ function TextSetting({
         disabled={disabled}
         placeholder="unset"
         onChange={(event) => setDraft(event.target.value)}
-        className={`w-56 min-w-0 ${INPUT_CLASS}`}
+        className={`w-56 ${INPUT_CLASS}`}
       />
       <Button
         size="sm"
@@ -341,9 +340,7 @@ function ConfigRow({
           // description here measured 1211px, about 175 characters to the line,
           // roughly twice a readable measure. The row still spans the page; the
           // sentence inside it does not have to.
-          <p className="mt-1 max-w-prose text-caption break-words">
-            {field.description}
-          </p>
+          <p className="mt-1 max-w-prose text-caption">{field.description}</p>
         ) : null}
       </div>
       {/* `min-w-0`, not `shrink-0`: a column that refuses to shrink keeps its
@@ -628,12 +625,6 @@ export function SettingsPage() {
   const [search, setSearch] = useState("")
   const [settableOnly, setSettableOnly] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
-  // The "/" hint is offered only where there is a keyboard to press it: a fine
-  // pointer at a desk width. On a phone it promises a key nobody has, and it is
-  // what truncated the placeholder.
-  const hasFinePointer = useMediaQuery("(pointer: fine)")
-  const isPhone = useIsPhone()
-  const offersShortcutHint = hasFinePointer && !isPhone
 
   // "/" focuses the search box (a common shortcut for filter-heavy pages),
   // unless the user is already typing in a field.
@@ -670,11 +661,7 @@ export function SettingsPage() {
 
   return (
     <div className="flex flex-col">
-      <PageIntro title="Settings">
-        Every effective gateway setting. Settable fields apply immediately and
-        persist across restarts; startup-only fields are shown for reference and
-        change only via config.yml or environment variables (then a restart).
-      </PageIntro>
+      <PageIntro title="Settings" />
 
       <ErrorBanner error={settings.error ?? updateSettings.error} />
 
@@ -683,11 +670,15 @@ export function SettingsPage() {
           ref={searchRef}
           type="search"
           aria-label="Search settings"
+          // The shortcut is a keyboard's, so the hint asks for a fine pointer
+          // rather than for the field helper's "not coarse": with no pointer
+          // to go on, a hint about a key nobody may have is left out.
           placeholder={
-            offersShortcutHint
+            window.matchMedia?.("(pointer: fine)").matches
               ? "Search settings (press / to focus)…"
               : "Search settings…"
           }
+          aria-keyshortcuts="/"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           onKeyDown={(event) => {
@@ -739,6 +730,7 @@ export function SettingsPage() {
       <MaintenanceModeCard />
 
       <CountryDatabaseCard />
+      <UpdateCheckCard />
 
       {data ? (
         <p className="pt-6 text-xs text-subtle">

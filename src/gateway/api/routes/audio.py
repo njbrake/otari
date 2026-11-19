@@ -1,5 +1,6 @@
 """OpenAI-compatible audio transcription and speech endpoints."""
 
+import asyncio
 import io
 import mimetypes
 from decimal import Decimal
@@ -19,6 +20,7 @@ from gateway.api.deps import (
     verify_api_key_or_master_key,
     verify_api_key_or_master_key_for_upload,
 )
+from gateway.api.key_scopes import key_scope
 from gateway.api.routes._helpers import bounded_body
 from gateway.api.routes._passthrough import run_passthrough
 from gateway.api.routes._request_body import MULTIPART_OVERHEAD_BYTES, form_field
@@ -34,9 +36,10 @@ from gateway.core.config import (
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
 from gateway.services.budgets import report_estimate
-from gateway.services.inference import TRANSCRIPTION_BILLING, speech_billing, speech_cost_headers
+from gateway.services.inference import audio_seconds, speech_billing, speech_cost_headers, transcription_billing
 from gateway.services.log_writer import LogWriter
 from gateway.services.provider_kwargs import ResolvedProvider
+from gateway.types.key_scope import KeyScope
 
 router = APIRouter(tags=["audio"])
 
@@ -102,12 +105,13 @@ def _named_audio(data: bytes, upload: UploadFile) -> io.BytesIO:
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}},
         },
     },
-    openapi_extra={
-        "requestBody": {
+    openapi_extra=key_scope(
+        KeyScope.INFERENCE_RUN,
+        requestBody={
             "required": True,
             "content": {"multipart/form-data": {"schema": _TRANSCRIPTION_BODY_SCHEMA}},
-        }
-    },
+        },
+    ),
 )
 async def create_transcription(
     raw_request: Request,
@@ -137,12 +141,20 @@ async def create_transcription(
         temperature = form_field(form, "temperature", _OPTIONAL_FLOAT_ADAPTER)
         user = form_field(form, "user", _OPTIONAL_STRING_ADAPTER)
 
+        # The upload's own length, for a model that reports tokens and no
+        # duration. Read off the loop on the first dispatch, so a request
+        # refused before it is never read, and kept for any fallback.
+        measured: list[Decimal | None] = []
+
         async def call_provider(resolved: ResolvedProvider) -> Transcription:
             if file.size is not None and file.size > _MAX_AUDIO_UPLOAD_BYTES:
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                     detail=f"Audio file exceeds maximum upload size of {_MAX_AUDIO_UPLOAD_BYTES // (1024 * 1024)} MB",
                 )
+            if not measured:
+                await file.seek(0)
+                measured.append(await asyncio.to_thread(audio_seconds, file.file))
             await file.seek(0)
             file_bytes = await file.read()
 
@@ -164,10 +176,10 @@ async def create_transcription(
             return await atranscription(**transcription_kwargs)
 
         # Transcription is exempt from require_pricing. The reservation estimate
-        # is 0, because the audio's length is not read here: the reservation still
-        # enforces per-user state (user exists, not blocked, not already over
-        # budget), and settlement bills the length or the tokens the provider
-        # reports, or one request, as the rate prices them.
+        # is 0: the reservation still enforces per-user state (user exists, not
+        # blocked, not already over budget), and settlement bills the length the
+        # provider reports, else the length measured, or the tokens it reports,
+        # or one request, as the rate prices them.
         outcome = await run_passthrough(
             endpoint=USAGE_ENDPOINT_TRANSCRIPTIONS,
             raw_request=raw_request,
@@ -192,7 +204,7 @@ async def create_transcription(
             lookup_pricing=True,
             reserve_before_resolve=True,
             relabel=False,
-            billing=TRANSCRIPTION_BILLING,
+            billing=transcription_billing(lambda: measured[0] if measured else None),
         )
         return outcome.result.model_dump()
 
@@ -249,6 +261,7 @@ _SPEECH_COST_HEADERS: dict[str, Any] = {
             },
         },
     },
+    openapi_extra=key_scope(KeyScope.INFERENCE_RUN),
 )
 async def create_speech(
     raw_request: Request,

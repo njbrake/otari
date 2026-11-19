@@ -1,15 +1,28 @@
 /**
  * What an activity row means, shared by the page and by the parts it renders.
  *
- * The derivations a row, a cell or the request panel needs: where it came
- * from, why it failed, what it was billed for, and how a routed request's
- * attempts fit together. Kept out of the components so they can be tested
- * without rendering one.
+ * The page reads these to build its columns and its filters; the extracted
+ * components read them to render one row, one cell or one detail panel. Split
+ * out of `ActivityPage.tsx` so neither imports the other, and so the
+ * derivations can be tested without rendering a page.
+ *
+ * The formatters here are deliberately not reconciled with
+ * `shared/helpers/format.ts`, whose `formatUsd`, `formatTokens` and
+ * `formatLatency` disagree with them on rounding, grouping and the
+ * absent-value spelling; otari#1335 tracks it.
  */
 
 import type { ChargeLine, UsageEntry } from "@/client"
 import { isUnitChargeLine } from "@/client"
-import { formatNumber } from "@/shared/helpers/format"
+import { formatDuration } from "@/features/traces/format"
+import { API_ROOT } from "@/shared/api/client"
+import {
+  formatCost,
+  formatNumber,
+  formatTokensCompact,
+  formatUnitRate,
+  formatUsdCompact,
+} from "@/shared/helpers/format"
 import {
   ACTIVITY_DEFAULT_KEY,
   ACTIVITY_PRESETS,
@@ -19,17 +32,62 @@ import {
   YEAR_SPAN_S,
 } from "@/shared/helpers/timeRange"
 
+// ---------- formatting ----------
+
+export function formatUSD(value: number | null): string {
+  if (value === null) return "—"
+  // Below four decimals a real charge would read "$0.00", the same as free.
+  return value !== 0 && Math.abs(value) < 0.0001
+    ? formatUnitRate(value)
+    : formatCost(value)
+}
+
+// The log's number lanes are sized to "999,999" and "$9,999.99". Past those a
+// value goes compact ("1.23B", "$12.3M") rather than spilling into the next
+// lane; the caller puts the exact figure in the title.
+export const isCompactCount = (value: number) => Math.abs(value) >= 1_000_000
+export const isCompactUSD = (value: number) => Math.abs(value) >= 10_000
+
+export function formatTokenLane(value: number | null): string {
+  if (value === null) return "—"
+  return isCompactCount(value)
+    ? formatTokensCompact(value)
+    : formatNumber(value)
+}
+
+export function formatUSDLane(value: number | null): string {
+  if (value === null || !isCompactUSD(value)) return formatUSD(value)
+  return formatUsdCompact(value)
+}
+
+// The full grouped count rather than the compact `formatTokens`: a request log
+// is read for the exact number of tokens a call billed, where a tile is read
+// for scale.
+export function formatTokenCount(value: number | null): string {
+  return value === null ? "—" : formatNumber(value)
+}
+
+// A charge line is discriminated by which rate it carries: token meters price per
+// million, gateway-run tool meters price per call.
+
 // Token lines first, tool lines after, each group keeping the order the writers
 // emitted. "Billed meters" otherwise reads as an unordered mix once a row has both.
-// A line is told apart by its rate: token meters price per million, gateway-run
-// tool meters per call.
 export function sortChargeLines(lines: readonly ChargeLine[]): ChargeLine[] {
   return [...lines].sort(
     (a, b) => Number(isUnitChargeLine(a)) - Number(isUnitChargeLine(b)),
   )
 }
 
-// Coarser than a settled request's latency: this is a wall-clock wait an
+// A row that recorded no latency (historical rows, batch jobs) renders as an em
+// dash so the column stays aligned, which is what the shared helper's
+// `undefined` leaves each surface to decide.
+export function formatLatencyCell(ms: number | null): string {
+  // Rolled up past a minute ("3h 03m", not "11000.00 s"), and never negative: a
+  // clock step between the start and end stamps is not a time anyone waited.
+  return ms === null ? "—" : formatDuration(Math.max(0, ms))
+}
+
+// Coarser than the settled Total time column: this is a wall-clock wait an
 // operator is watching rather than a measurement, so sub-second precision is
 // noise. Minutes appear because a stuck local model is the case this exists for.
 export function formatElapsed(ms: number): string {
@@ -39,18 +97,67 @@ export function formatElapsed(ms: number): string {
   return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`
 }
 
-// The time presets and window math are shared with the Usage page via
-// `@/shared/helpers/timeRange`. Activity keeps a truthful "All": newest first,
-// the list endpoint applies no default and no clamp, so an omitted start really
-// is all-time.
+// Stable row-key getter and row class so DataTable's per-row cache holds
+// across re-renders (see the DataTable docstring); an inline arrow here would
+// rebuild every row on each selection click.
+export const getActivityRowKey = (entry: UsageEntry): string => entry.id
+
+// An absorbed attempt is a failure a routing policy recovered from, so the
+// request it belongs to succeeded. Styling it like an error would make a working
+// fallback chain read as an outage, which is the same reason the server keeps it
+// out of error_count. Amber says "something happened here" without saying "this
+// request failed".
+export const getActivityRowClassName = (
+  entry: UsageEntry,
+): string | undefined => {
+  if (entry.status === "error") return "bg-danger-subtle"
+  if (entry.status === "absorbed") return "bg-warning-subtle"
+  return undefined
+}
+
+// ---------- filter option sets ----------
+//
+// The time presets and window math live in `@/shared/helpers/timeRange` (see the
+// ActivityTimeline selector). Activity keeps a
+// truthful "All": its raw list endpoint applies no default and no clamp, so an
+// omitted start really is all-time.
+
+export const STATUS_OPTIONS: { label: string; value: string }[] = [
+  { label: "All", value: "" },
+  { label: "Success", value: "success" },
+  { label: "Error", value: "error" },
+  // An attempt a routing policy recovered from. Listed because the rows are
+  // rendered and styled distinctly, so an operator who spots one has to be able
+  // to filter to the rest of them.
+  { label: "Absorbed", value: "absorbed" },
+  // A stream the client abandoned, billed from an estimate.
+  { label: "Incomplete", value: "incomplete" },
+]
+
+export const PRICED_OPTIONS: { label: string; value: string }[] = [
+  { label: "All", value: "" },
+  { label: "Priced", value: "true" },
+  { label: "Unpriced", value: "false" },
+]
+
+// Gateway-run tools an operator can filter on. "Any tool" also matches MCP tools,
+// whose names come from the caller's own server and so cannot be enumerated here.
+export const TOOL_OPTIONS: { label: string; value: string }[] = [
+  { label: "All", value: "" },
+  { label: "Any tool", value: "any" },
+  { label: "Web search", value: "web_search" },
+  { label: "Web fetch", value: "web_fetch" },
+  { label: "Code execution", value: "code_execution" },
+]
 
 // Resolve the query window. Explicit start_date/end_date bounds (a custom range,
-// or a drill-down from the Usage page) take precedence; otherwise a preset anchors
+// or a link that carries one) take precedence; otherwise a preset anchors
 // `start` to "now minus N", and "all" (or an empty custom range) leaves it open.
 // `now` is a parameter, not a call inside, so a caller deriving more than one
 // window can hand both the same clock reading. Read independently they land
-// milliseconds apart, and `useActivityWindow` compares two of them for strict
-// inequality, so drift of a single millisecond changes what the page does.
+// milliseconds apart, and `winOutsideExtent` in `ActivityPage` compares two of
+// them for strict inequality, so drift of a single millisecond changes what the
+// page does.
 export function resolveWindow(
   range: string,
   start: string,
@@ -92,6 +199,19 @@ export function resolveExtentWindow(
   return win
 }
 
+// The column's words, in their own casing, rather than `status.toUpperCase()`
+// on the raw enum: a repeated column carries its labels in the case they are
+// written in, and uppercase emphasis would fall equally on the
+// successes, which is the last thing a column built to surface exceptions
+// wants to draw the eye to. Unknown values still render their slug.
+const STATUS_LABELS: Record<string, string> = {
+  error: "Error",
+  absorbed: "Absorbed",
+  incomplete: "Incomplete",
+  skipped: "Skipped",
+  success: "Success",
+}
+
 // How the gateway marks an absorbed row whose candidate was skipped rather than
 // called (`SKIPPED_ATTEMPT_PREFIX` in `api/routes/_pipeline.py`): a model a
 // per-model rate limit had no room on, so the request moved to the next one.
@@ -110,6 +230,31 @@ export function describeSkip(entry: UsageEntry): string {
   return (entry.error_message ?? "").slice(SKIPPED_ATTEMPT_PREFIX.length)
 }
 
+/** The status word a row shows: a skip is not a failure, so it does not say "Absorbed". */
+export function displayStatus(entry: UsageEntry): string {
+  return isSkippedAttempt(entry) ? "skipped" : entry.status
+}
+
+// Why a candidate was skipped, short enough for a row: "rate limit 'x' full" when
+// a per-model limit had no room, "too large for rate limit 'x'" when the request's
+// token estimate alone is over it (`_count_rule` in `rate_limit.py`).
+function skipCause(entry: UsageEntry): string {
+  const reason = describeSkip(entry)
+  const rule = /rate limit '([^']+)'/i.exec(reason)?.[1]
+  if (!rule) return "could not serve"
+  return reason.startsWith("Request needs")
+    ? `too large for rate limit '${rule}'`
+    : `rate limit '${rule}' full`
+}
+
+function skipReason(entry: UsageEntry): string {
+  return `skipped, ${skipCause(entry)}`
+}
+
+export function describeStatus(status: string): string {
+  return STATUS_LABELS[status] ?? status
+}
+
 // Friendly labels for known provenance sources; unknown sources render their slug.
 const SOURCE_LABELS: Record<string, string> = {
   gateway: "Gateway",
@@ -121,182 +266,25 @@ export function describeSource(source: string): string {
   return SOURCE_LABELS[source] ?? source
 }
 
-// Whether a row was imported (an agent's own usage, reported to the gateway)
-// rather than served by it. Imported usage was paid for by a subscription, so it
-// carries an equivalent cost that nothing billed.
-export function isImported(entry: UsageEntry): boolean {
-  return entry.source !== "gateway"
-}
-
-/** An id with no name to show, shortened to a recognizable prefix. */
-export function shortId(id: string): string {
-  return `${id.slice(0, 8)}…`
-}
-
-// What the Source column shows: the API key a gateway request came in on, or
-// where an imported row came from.
-export function describeRowSource(entry: UsageEntry): string {
-  if (isImported(entry)) return describeSource(entry.source)
-  if (entry.api_key_id === null) return "No key"
-  return entry.api_key_name ?? shortId(entry.api_key_id)
-}
-
-// The gateway-run tools by what they do. An MCP tool's name comes from the
-// caller's own server, so an unknown one is de-underscored rather than dropped.
-const TOOL_LABELS: Record<string, string> = {
-  any: "any tool",
-  web_search: "web search",
-  web_fetch: "web fetch",
-  code_execution: "code execution",
-}
-
-export function describeTool(tool: string): string {
-  return TOOL_LABELS[tool] ?? tool.replaceAll("_", " ")
-}
-
-// The name the caller sent, when it says something the model does not: an
-// alias. A routing policy's name is the Policy column's to show, and a name
-// equal to the model says nothing new.
-export function requestedAlias(entry: UsageEntry): string | undefined {
-  const requested = entry.requested_model
-  if (!requested || requested === entry.model) return undefined
-  if (requested === entry.policy_name) return undefined
-  if (requested === findPricingSelector(entry)) return undefined
-  return requested
-}
-
-// Why a request failed, in words, beside the status code. Read off the code,
-// except a 400 whose message says the prompt did not fit, which is common
-// enough on agent traffic to name.
-const FAILURE_REASONS: Record<number, string> = {
-  400: "Bad request",
-  401: "Unauthorized",
-  402: "Payment required",
-  403: "Forbidden",
-  404: "Not found",
-  408: "Timed out",
-  413: "Too large",
-  422: "Invalid request",
-  429: "Rate limited",
-  500: "Provider error",
-  502: "Bad gateway",
-  503: "Unavailable",
-  504: "Upstream timeout",
-  529: "Overloaded",
-}
-
-/** An outcome led by its status code, where one was recorded: "429 Rate limited". */
-export function withStatusCode(code: number | null, outcome: string): string {
-  return code === null ? outcome : `${code} ${outcome}`
-}
-
-export function describeFailure(entry: UsageEntry): string {
-  const message = (entry.error_message ?? "").toLowerCase()
-  if (
-    message.includes("too long") ||
-    message.includes("context length") ||
-    message.includes("context window")
-  ) {
-    return "Context too long"
-  }
-  return (
-    (entry.status_code !== null && FAILURE_REASONS[entry.status_code]) ||
-    "Failed"
-  )
-}
-
-/** How a request ended: served, an attempt a fallback recovered from, or failed. */
-export type OutcomeKind = "success" | "recovered" | "failed"
-
-export interface RowOutcome {
-  kind: OutcomeKind
-  /** The status code, or the outcome in a word where none was recorded. */
-  label: string
-  /**
-   * The one thing worth adding, or "": why it failed, or on a served request
-   * how many earlier attempts a fallback recovered.
-   */
-  note: string
-}
-
 /**
- * A row's outcome, read the same way wherever the row is shown (a cell, a
- * phone row, the request panel), so no two of them can disagree about it. An
- * absorbed row is an attempt a routing policy recovered from: the request it
- * belonged to was served, so it reads as recovered rather than failed.
+ * The path a request was called on. A row this gateway served stores its
+ * endpoint as an identifier without the API's mount (`/v1/chat/completions`,
+ * which is also a pricing key), so the mount is put back for display; an
+ * imported row's endpoint is whatever its source reported.
  */
-export function rowOutcome(entry: UsageEntry): RowOutcome {
-  const code =
-    entry.status_code === null ? undefined : String(entry.status_code)
-  if (entry.status === "success") {
-    return {
-      kind: "success",
-      label: code ?? "OK",
-      note: entry.absorbed_attempts
-        ? `${formatNumber(entry.absorbed_attempts)} recovered`
-        : "",
-    }
-  }
-  // A stream the client abandoned before the provider reported usage: billed on
-  // an estimate of its tokens, so it is neither a failure nor a full success.
-  if (entry.status === "incomplete") {
-    return {
-      kind: "recovered",
-      label: "Incomplete",
-      note: "client left; tokens estimated",
-    }
-  }
-  // A skipped candidate was never called (a per-model rate limit had no room),
-  // so it says why it was passed over rather than reading as a failure.
-  if (isSkippedAttempt(entry)) {
-    return { kind: "recovered", label: "Skipped", note: describeSkip(entry) }
-  }
-  const kind = entry.status === "absorbed" ? "recovered" : "failed"
-  return {
-    kind,
-    label: code ?? (kind === "recovered" ? "Recovered" : "Failed"),
-    note: describeFailure(entry),
-  }
+export function calledPath(
+  entry: Pick<UsageEntry, "endpoint" | "source">,
+): string {
+  return entry.source === "gateway" && entry.endpoint.startsWith("/v1/")
+    ? `${API_ROOT}${entry.endpoint.slice("/v1".length)}`
+    : entry.endpoint
 }
 
-/**
- * What a row cost, as the log reports it: nothing for a request that was not
- * served (a failure, or an attempt a fallback recovered), "unpriced" for a
- * served one with no price, and otherwise its cost, which imported usage
- * carries as an equivalent nothing billed.
- */
-export type RowCost =
-  | { kind: "none" }
-  | { kind: "unpriced" }
-  | { kind: "priced"; cost: number; isBilled: boolean }
-
-export function rowCost(entry: UsageEntry): RowCost {
-  if (entry.status === "incomplete" && entry.cost !== null) {
-    return { kind: "priced", cost: entry.cost, isBilled: true }
-  }
-  if (entry.status !== "success") return { kind: "none" }
-  if (entry.cost === null) return { kind: "unpriced" }
-  return { kind: "priced", cost: entry.cost, isBilled: !isImported(entry) }
-}
-
-/**
- * What a set of requests cost, split the way the page reports it: what the
- * gateway billed, and what imported usage came to, which a subscription paid
- * for. The totals' `cost` holds both.
- */
-export function splitCost(
-  totals: { cost: number; imported_cost: number } | undefined,
-): { billed: number; subscription: number } {
-  const subscription = totals?.imported_cost ?? 0
-  return {
-    billed: Math.max(0, (totals?.cost ?? 0) - subscription),
-    subscription,
-  }
-}
-
+// ---------- token composition ----------
+//
 // One total is the least useful number on the row: on a cached agent workload it
 // is ~98% cache read, so every row shows a large, similar-looking figure. The
-// composition is what varies, so the column renders the split.
+// row shows input and output apart, and Input names its cache share.
 
 export interface TokenComposition {
   // Input tokens billed at the full input rate (the prompt minus whatever was
@@ -308,7 +296,7 @@ export interface TokenComposition {
   total: number
 }
 
-function readPositive(value: unknown): number {
+export function readPositive(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : 0
@@ -378,9 +366,14 @@ export function listToolUsage(entry: UsageEntry): ToolUsage[] {
     .sort((a, b) => b.billed - a.billed || a.tool.localeCompare(b.tool))
 }
 
-/** How many times the gateway ran a tool for this row, across every tool. */
-export function countToolCalls(entry: UsageEntry): number {
-  return listToolUsage(entry).reduce((sum, tool) => sum + tool.billed, 0)
+// "web search x3" / "web search x3, 1 failed". The tool name is de-underscored for
+// reading; failures are named rather than folded into the count, because a failed
+// call is not billed and an operator chasing a cost needs that distinction.
+export function formatToolUsage(usage: ToolUsage): string {
+  const label = usage.tool.replaceAll("_", " ")
+  const parts = usage.billed ? [`${label} \u00d7${usage.billed}`] : [label]
+  if (usage.errors) parts.push(`${usage.errors} failed`)
+  return parts.join(", ")
 }
 
 // Cost attributable to gateway-run tools on this row, from the rate stored with the
@@ -392,50 +385,6 @@ export function computeToolCost(entry: UsageEntry): number | null {
     (sum, usage) => sum + usage.billed * (usage.unitRate ?? 0),
     0,
   )
-}
-
-// Segment order runs input side first (fresh, then the two cache buckets), then
-// output. Shading is one hue at four lightnesses, assigned for legibility rather
-// than for price: every fill clears the track it sits on, adjacent fills differ
-// enough to show their boundary, and the bucket that is usually the bulk (cache
-// read) takes a mid tone instead of the palest step, so a cache-heavy row reads
-// as a filled bar and a fresh-input row as a dark one. Nothing is encoded by hue,
-// and the tooltip / accessible name carry every number, so the bar adds a shape
-// to scan and removes no information.
-export const TOKEN_SEGMENTS: {
-  key: keyof Omit<TokenComposition, "total">
-  label: string
-  /** The segment's ground, a whole class so Tailwind emits it. */
-  fill: string
-}[] = [
-  { key: "fresh", label: "Fresh input", fill: "bg-chart-ramp-1" },
-  { key: "cacheRead", label: "Cache read", fill: "bg-chart-ramp-3" },
-  { key: "cacheWrite", label: "Cache write", fill: "bg-chart-ramp-4" },
-  { key: "output", label: "Output", fill: "bg-chart-ramp-2" },
-]
-
-/** A composition's segments in bar order, leaving out the buckets it has none of. */
-export function tokenSegments(composition: TokenComposition) {
-  return TOKEN_SEGMENTS.map((segment) => ({
-    ...segment,
-    value: composition[segment.key],
-  })).filter((segment) => segment.value > 0)
-}
-
-/**
- * The share of input served from the cache. `input` is every input token,
- * both cache buckets included: a composition's input side, a group's
- * `input_tokens`, the totals' `billed_input_tokens`. One denominator, so a
- * row, a group and the totals line answer the same question. Zero with no
- * input.
- */
-export function cacheHitFraction(cacheRead: number, input: number): number {
-  return input > 0 ? cacheRead / input : 0
-}
-
-/** A composition's input side: fresh input and both cache buckets. */
-export function compositionInput(composition: TokenComposition): number {
-  return composition.total - composition.output
 }
 
 // The pricing key a usage row bills against. A row stores the instance and the
@@ -452,11 +401,13 @@ export function findPricingSelector(entry: UsageEntry): string {
     : `${entry.provider}:${entry.model}`
 }
 
+// ---------- routing ----------
+//
 // A routed request writes one usage row per attempt (all sharing a
 // `request_group_id`), so a single row answers only half of what an operator
 // wants: "attempt 1 of 2 failed" without saying what served the request. These
-// helpers name why each attempt was chosen and reassemble a plan from the rows of
-// one group.
+// helpers turn the stored attribution into the sentence the Routing column shows,
+// and reassemble a plan from the rows of one group.
 
 // Plain English for a compiled attempt's `selection_reason`. The stored values are
 // the compiler's vocabulary (`static`, `default`, `on_failure`, `condition:<keys>`,
@@ -484,6 +435,154 @@ export function describeSelectionReason(
     return name ? `chosen by router ${name}` : "chosen by a router"
   }
   return reason.replaceAll("_", " ")
+}
+
+// What a group's request ended up doing, read off its outcome row. Absorbed rows
+// are attempts the policy recovered from, so exactly one row per finished group is
+// the outcome: the attempt that served, or the terminal failure.
+export interface GroupOutcome {
+  /** Qualified target of the attempt that served, or null when none did. */
+  servedBy: string | null
+  servedPosition: number | null
+  /** The candidates skipped before it, each as "target (why)", when the page holds their rows. */
+  spilledFrom: string[]
+}
+
+// Index the outcome of every group represented in `rows`. Built from rows the page
+// already holds first, then filled in from a batched lookup, so the common case
+// (a group's attempts are adjacent in a newest-first list) costs no extra request.
+export function indexGroupOutcomes(
+  rows: readonly UsageEntry[],
+): Map<string, GroupOutcome> {
+  const skipped = new Map<string, string[]>()
+  for (const row of sortPlanRows(rows)) {
+    if (!row.request_group_id || !isSkippedAttempt(row)) continue
+    skipped.set(row.request_group_id, [
+      ...(skipped.get(row.request_group_id) ?? []),
+      `${findPricingSelector(row)} (${skipCause(row)})`,
+    ])
+  }
+  return new Map(
+    rows.flatMap((row): [string, GroupOutcome][] =>
+      row.request_group_id && row.status !== "absorbed"
+        ? [
+            [
+              row.request_group_id,
+              {
+                servedBy:
+                  row.status === "success" ? findPricingSelector(row) : null,
+                servedPosition:
+                  row.status === "success"
+                    ? (row.attempt_position ?? null)
+                    : null,
+                spilledFrom: skipped.get(row.request_group_id) ?? [],
+              },
+            ],
+          ]
+        : [],
+    ),
+  )
+}
+
+// Groups whose served row is on this page while an earlier attempt's row is not,
+// which a page boundary does. Their outcome is known but incomplete: without the
+// earlier rows, the served row cannot say what it spilled over from.
+export function findGroupsMissingEarlierAttempts(
+  rows: readonly UsageEntry[],
+): string[] {
+  const positions = new Map<string, Set<number>>()
+  for (const row of rows) {
+    if (!row.request_group_id || row.attempt_position == null) continue
+    const seen = positions.get(row.request_group_id) ?? new Set<number>()
+    seen.add(row.attempt_position)
+    positions.set(row.request_group_id, seen)
+  }
+  return rows.flatMap((row) => {
+    const position = row.attempt_position ?? 1
+    if (row.status !== "success" || !row.request_group_id || position <= 1)
+      return []
+    const seen = positions.get(row.request_group_id) ?? new Set<number>()
+    for (let earlier = 1; earlier < position; earlier += 1) {
+      if (!seen.has(earlier)) return [row.request_group_id]
+    }
+    return []
+  })
+}
+
+// The row that stands for request `requestId` among `rows`: its outcome (the
+// attempt that served, or the terminal failure), else its latest attempt while the
+// request is still settling. `requestId` is the `Otari-Request-ID` the caller got
+// back, which every row the request wrote carries as its `request_group_id`.
+export function findRequestOutcome(
+  rows: readonly UsageEntry[],
+  requestId: string,
+): UsageEntry | undefined {
+  const attempts = sortPlanRows(
+    rows.filter((row) => row.request_group_id === requestId),
+  )
+  return (
+    attempts.find((row) => row.status !== "absorbed") ??
+    attempts[attempts.length - 1]
+  )
+}
+
+// One line of prose for a row's place in its plan, replacing the "attempt 1/2 ·
+// default" shorthand: that read as a fraction of something unnamed, said nothing
+// about whether the attempt worked, and pointed at no other row. `outcome` is the
+// group's outcome when it is known, which is what lets an absorbed row name the
+// model that served in its place.
+export function describeAttempt(
+  entry: UsageEntry,
+  outcome: GroupOutcome | null,
+): string | null {
+  const reason = describeSelectionReason(entry.selection_reason)
+  const position = entry.attempt_position
+  const total = entry.attempt_count
+  // A policy with one candidate has no plan to place the row in, so the only thing
+  // worth saying is why that candidate was picked.
+  if (position == null || total == null || total <= 1) return reason
+  const attempt = `attempt ${position} of ${total}`
+  if (isSkippedAttempt(entry)) {
+    return outcome?.servedBy
+      ? `${attempt} ${skipReason(entry)}, served by ${outcome.servedBy}`
+      : `${attempt} ${skipReason(entry)}`
+  }
+  if (entry.status === "absorbed") {
+    if (outcome?.servedBy)
+      return `${attempt} failed, served by ${outcome.servedBy}`
+    // Not "and so did the rest": the group's outcome row is an error, but the walk
+    // may have stopped on it (a non-retryable status, a lock-in) with later
+    // candidates never called, which is what that row's own sentence says.
+    if (outcome) return `${attempt} failed, and the request ended in an error`
+    return `${attempt} failed, fell back`
+  }
+  if (entry.status === "error") {
+    // The walk stops early on a non-retryable failure, a lock-in, or a
+    // gateway-side refusal, so the later candidates were not necessarily tried.
+    return position < total
+      ? `${attempt} failed, no further candidate tried`
+      : `${attempt} failed, plan exhausted`
+  }
+  const served = reason
+    ? `served on ${attempt} (${reason})`
+    : `served on ${attempt}`
+  const spilledFrom = outcome?.spilledFrom ?? []
+  return spilledFrom.length > 0
+    ? `${served}, spilled over from ${spilledFrom.join(", ")}`
+    : served
+}
+
+// Per-attempt outcome for the plan table. Terser than the row sentence, which has
+// to stand alone; here the table's shape already says which attempt this is.
+export function describeAttemptOutcome(entry: UsageEntry): string {
+  if (isSkippedAttempt(entry)) return `skipped: ${describeSkip(entry)}`
+  if (entry.status === "absorbed")
+    return entry.status_code === null
+      ? "failed, fell back"
+      : `failed ${entry.status_code}, fell back`
+  if (entry.status === "error")
+    return entry.status_code === null ? "failed" : `failed ${entry.status_code}`
+  return "served the request"
 }
 
 // Attempts in plan order. `attempt_position` is authoritative; timestamp is the

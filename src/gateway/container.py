@@ -42,6 +42,7 @@ from gateway.adapters.identity_provider_adapter import DeploymentIdentityProvide
 from gateway.adapters.model_provider_adapter import HostedProviderModelProviderAdapter
 from gateway.adapters.provider_file_adapter import AnyLlmProviderFiles
 from gateway.adapters.rate_limit_store_adapter import build_rate_limit_store
+from gateway.adapters.signup_invite_adapter import NullSignupInviteAdapter
 from gateway.adapters.telemetry_storage_adapter import DatabaseTelemetryStorageAdapter
 from gateway.adapters.usage_signal_adapter import NullUsageSignalAdapter
 from gateway.core.config import GatewayConfig
@@ -59,6 +60,7 @@ from gateway.ports.identity_provider_port import IdentityProviderPort
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.ports.provider_file_port import ProviderFilePort
 from gateway.ports.rate_limit_store_port import RateLimitStorePort
+from gateway.ports.signup_invite_port import SignupInvitePort
 from gateway.ports.telemetry_storage_port import TelemetryStoragePort
 from gateway.ports.usage_signal_port import UsageSignalPort
 from gateway.repositories.tenancy import UserRepository
@@ -270,6 +272,12 @@ def _telemetry_storage_adapter(session: AsyncSession | None) -> TelemetryStorage
 def _growth_signal_adapter(session: AsyncSession | None) -> GrowthSignalPort:
     """Build the core ``GrowthSignalPort`` adapter for one request."""
     return NullGrowthSignalAdapter(session)
+
+
+def _signup_invite_adapter(session: AsyncSession | None) -> SignupInvitePort:
+    """Build the core ``SignupInvitePort`` adapter, which knows no token."""
+    del session
+    return NullSignupInviteAdapter()
 
 
 def _usage_signal_adapter(session: AsyncSession | None) -> UsageSignalPort:
@@ -508,6 +516,8 @@ def build_container(
     # Growth and support-messenger notifications: the base has no vendor of its
     # own, so every lifecycle event is a no-op.
     container.bind(GrowthSignalPort, _growth_signal_adapter)
+    # Invitations that prove an address at sign-up: the base sends none.
+    container.bind(SignupInvitePort, _signup_invite_adapter)
     # Settled usage rows: the base reports them to nobody, its usage table
     # being the whole record. Resolved once, when the usage log writer is built.
     container.bind(UsageSignalPort, _usage_signal_adapter)
@@ -562,7 +572,7 @@ def build_container(
         # it is recorded rather than refused. Worth stating even so: which build
         # a process is running is otherwise invisible until traffic exposes it.
         container.summary = f"no bootstrap, core defaults for {_port_names(container)}"
-        logger.info("Composition root: %s", container.summary)
+        logger.debug("Composition root: %s", container.summary)
         return container
     if not bootstrap_selector.strip():
         # A blank-but-present selector is a broken deployment rather than a
@@ -591,6 +601,7 @@ def build_container(
     rebound = sorted(_port_name(port) for port, factory in container.bindings() if defaults.get(port) is not factory)
     _verify_port_shape(container, ModelProviderPort)
     _verify_port_shape(container, UsageSignalPort)
+    _verify_port_shape(container, GrowthSignalPort)
     container.summary = f"{bootstrap_selector} rebound {', '.join(rebound) or 'no ports'}"
     contributed = ", ".join(contribution.capability for contribution in container.router_contributions())
     if contributed:

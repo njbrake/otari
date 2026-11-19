@@ -179,6 +179,21 @@ def test_huggingface_backend_via_implementation(index: ModelsDevPriceIndex) -> N
     assert price.provider_id == "togetherai"
 
 
+@pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "anthropic:claude-sonnet-4-5"])
+def test_an_otari_provider_prices_a_vendor_prefixed_id_from_the_vendor(index: ModelsDevPriceIndex, model: str) -> None:
+    price = index.resolve("otari-ai", model, implementation="otari")
+    assert price is not None
+    assert price.reference == "models.dev:anthropic/claude-sonnet-4-5"
+
+
+def test_a_vendor_prefixed_id_is_not_split_for_any_other_provider(index: ModelsDevPriceIndex) -> None:
+    assert index.resolve("openai-eu", "anthropic:claude-sonnet-4-5", implementation="openai") is None
+
+
+def test_an_otari_provider_does_not_price_a_model_its_vendor_does_not_list(index: ModelsDevPriceIndex) -> None:
+    assert index.resolve("otari-ai", "anthropic/no-such-model", implementation="otari") is None
+
+
 def test_huggingface_unpinned_uses_the_router_listing(index: ModelsDevPriceIndex) -> None:
     price = index.resolve("huggingface", "meta-llama/Llama-3.3-70B-Instruct")
     assert price is not None
@@ -542,6 +557,68 @@ def test_hosts_that_write_the_same_block_in_another_order_still_agree() -> None:
     entry = index.resolve(None, "shared-model")
 
     assert entry is not None and entry.pricing is not None
+
+
+def _ovhcloud(**models: float) -> ModelsDevPriceIndex:
+    listing = {m: {"id": m, "cost": {"input": rate, "output": rate}} for m, rate in models.items()}
+    return ModelsDevPriceIndex.from_document(
+        {
+            "ovhcloud": {"id": "ovhcloud", "models": listing},
+            "scaleway": {
+                "id": "scaleway",
+                "models": {m.casefold(): {"id": m.casefold(), "cost": {"input": 9}} for m in models},
+            },
+        }
+    )
+
+
+def test_a_provider_id_that_differs_only_in_case_is_priced_from_its_provider() -> None:
+    """models.dev lowercases OVHcloud's ids; the provider lists them in mixed case."""
+    index = _ovhcloud(**{"mistral-small-3.2-24b-instruct-2506": 0.1})
+    found = index.resolve("ovhcloud", "Mistral-Small-3.2-24B-Instruct-2506")
+    assert found is not None
+    assert (found.provider_id, found.input) == ("ovhcloud", Decimal("0.1"))
+
+
+def test_a_case_folded_match_in_the_provider_beats_another_providers_price() -> None:
+    found = _ovhcloud(m=0.01).resolve("ovhcloud", "M")
+    assert found is not None
+    assert (found.provider_id, found.input) == ("ovhcloud", Decimal("0.01"))
+
+
+def test_the_exact_id_beats_one_that_differs_only_in_case() -> None:
+    index = _ovhcloud(**{"model-a": 1, "Model-A": 2})
+    found = index.resolve("ovhcloud", "Model-A")
+    assert found is not None
+    assert found.input == Decimal(2)
+
+
+def test_a_huggingface_backend_id_that_differs_only_in_case_is_priced() -> None:
+    found = _ovhcloud(**{"qwen3-32b": 0.5}).resolve("huggingface", "Qwen3-32B:ovh")
+    assert found is not None
+    assert found.provider_id == "ovhcloud"
+
+
+def test_an_id_listed_twice_resolves_alike_in_any_case() -> None:
+    listing = {"a": {"id": "Qwen3-32B", "cost": {"input": 1}}, "b": {"id": "Qwen3-32B", "cost": {"input": 2}}}
+    index = ModelsDevPriceIndex.from_document({"ovhcloud": {"id": "ovhcloud", "models": listing}})
+    exact = index.resolve("ovhcloud", "Qwen3-32B")
+    folded = index.resolve("ovhcloud", "qwen3-32b")
+    assert exact is not None
+    assert folded is exact
+
+
+def test_an_exact_id_under_a_later_provider_beats_one_in_another_case_under_an_earlier_one() -> None:
+    """Vertex's Claude models map to two provider ids; every exact id is tried before any case-folded one."""
+    index = ModelsDevPriceIndex.from_document(
+        {
+            "google-vertex-anthropic": {"id": "google-vertex-anthropic", "models": {"model-a": {"cost": {"input": 1}}}},
+            "google-vertex": {"id": "google-vertex", "models": {"Model-A": {"cost": {"input": 2}}}},
+        }
+    )
+    found = index.resolve("vertexaianthropic", "Model-A")
+    assert found is not None
+    assert (found.provider_id, found.input) == ("google-vertex", Decimal(2))
 
 
 def test_equal_rates_share_one_decimal() -> None:

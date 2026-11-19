@@ -105,6 +105,7 @@ async function renderDialog(startAt?: Intent) {
         <CreatePolicyDialog
           isOpen
           startAt={startAt}
+          isDeploymentWide
           workspaceId={null}
           onClose={onClose}
         />

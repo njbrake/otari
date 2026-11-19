@@ -6,6 +6,8 @@ from gateway.exceptions import (
     TenancyNotFoundError,
     TenancyValidationError,
 )
+from gateway.models.api_keys import DisabledReason
+from gateway.types.key_scope import KeyScope
 
 
 class DeclaredKeySecretInUseError(TenancyConflictError):
@@ -19,6 +21,22 @@ class DeclaredKeySecretInUseError(TenancyConflictError):
             f"the secret of declared key '{config_name}' already belongs to another key; "
             "choose a new secret or delete that key"
         )
+
+
+class KeyScopeMissingError(TenancyForbiddenError):
+    """The request's API key lacks the scope something the request asked for requires."""
+
+    def __init__(self, scope: KeyScope, what: str):
+        super().__init__(f"This API key lacks the '{scope.value}' scope, which {what} requires.")
+        self.scope = scope
+
+    @property
+    def challenge(self) -> dict[str, str]:
+        """The ``WWW-Authenticate`` header naming the scope, as RFC 6750 section 3.1 shapes it.
+
+        NOTE: the value is quoted, which is safe only while every scope is drawn from ``KeyScope``.
+        """
+        return {"WWW-Authenticate": f'Bearer error="insufficient_scope", scope="{self.scope.value}"'}
 
 
 class FederationIssuerNotAllowedError(TenancyValidationError):
@@ -59,11 +77,19 @@ class FederationRuleNotFoundError(TenancyNotFoundError):
         super().__init__(f"Federation rule '{rule_id}' not found")
 
 
-class OperatorDisabledKeyError(TenancyForbiddenError):
-    """A key's owner tried to switch on a key an operator switched off, which only an operator may undo."""
+class KeyEnableRefusedError(TenancyForbiddenError):
+    """The caller cannot enable a key disabled for a reason they cannot clear.
 
-    def __init__(self) -> None:
-        super().__init__("An operator switched this key off; ask them to switch it back on.")
+    The message names who can clear the reason, not who set it, because an
+    operator-clearable reason is also set by workspace and organization removal.
+    """
+
+    def __init__(self, reason: DisabledReason) -> None:
+        super().__init__(
+            "This key is disabled and only an operator can enable it."
+            if reason.operator_may_clear
+            else "This key is disabled and cannot be enabled again. Create a new key."
+        )
 
 
 class EndUserSettingsOnPlainKeyError(TenancyValidationError):
@@ -85,3 +111,10 @@ class OrganizationServiceKeyUncappedError(TenancyValidationError):
 
     def __init__(self) -> None:
         super().__init__("An organization's service key always has a max_end_users.")
+
+
+class AppKeyOwnerInactiveError(TenancyForbiddenError):
+    """The approving identity no longer has an active spend identity."""
+
+    def __init__(self) -> None:
+        super().__init__("Your spend identity has been deactivated")

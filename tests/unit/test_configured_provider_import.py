@@ -20,7 +20,7 @@ def test_an_entry_with_a_key_and_an_endpoint_is_copied_serving_its_roster() -> N
         "https://eu.test/v1",
     )
     assert plan.create.client_args == {"x": 1}
-    assert plan.create.serves_unlisted_models is True
+    assert plan.create.serves_unlisted_models is False
 
 
 def test_an_entry_named_after_its_implementation_keeps_no_name_of_its_own() -> None:

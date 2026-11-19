@@ -15,6 +15,10 @@ import type {
   CatalogResponse,
   DeploymentBootstrap,
   DeploymentUser,
+  McpCatalogServer,
+  McpCatalogSyncStatus,
+  OidcConnection,
+  OidcConnectionDomain,
   Organization,
   OrganizationContext,
   OrganizationDomain,
@@ -23,12 +27,16 @@ import type {
   OrganizationMember,
   OrganizationPricingOverride,
   OrganizationSpendCeiling,
+  OrganizationSso,
+  OrganizationSsoEnforcement,
+  OrganizationSsoPreflight,
+  OrganizationSsoPreflightMember,
   OrgProviderKey,
   OrgProviderModel,
   PendingOrganizationInvitation,
   PricingResponse,
   ScopedBudget,
-  UsageSeriesPoint,
+  UpdateCheckStatus,
   UsageTotals,
   User,
   Workspace,
@@ -107,28 +115,6 @@ export function usageTotals(overrides: Partial<UsageTotals> = {}): UsageTotals {
     error_count: 0,
     unpriced_requests: 0,
     avg_latency_ms: null,
-    p95_latency_ms: null,
-    absorbed_count: 0,
-    incomplete_count: 0,
-    imported_cost: 0,
-    billed_cache_read_tokens: 0,
-    ...overrides,
-  }
-}
-
-export function seriesPoint(
-  overrides: Partial<UsageSeriesPoint> & Pick<UsageSeriesPoint, "bucket_start">,
-): UsageSeriesPoint {
-  return {
-    cost: 0,
-    tokens: 0,
-    requests: 0,
-    errors: 0,
-    imported_cost: 0,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_tokens: 0,
-    cache_write_tokens: 0,
     ...overrides,
   }
 }
@@ -163,6 +149,7 @@ export const SURFACES = [
   "health_checks",
   "hosted_providers",
   "keys",
+  "mcp_catalog",
   "models",
   "organization_guardrails",
   "organization_providers",
@@ -173,6 +160,7 @@ export const SURFACES = [
   "routing",
   "settings",
   "tools",
+  "update_check",
   "usage",
   "users",
   "workspaces",
@@ -211,6 +199,8 @@ export function bootstrap(
     oauth_providers: [],
     mail_ready: false,
     feedback_enabled: true,
+    // Off, so a page test sends no connect read: the connect tests turn it on.
+    platform_connect: false,
     // Off, the setting default: the workload identity tests turn it on.
     federation_member_rules: false,
     // Off by default, matching the config default; the public-catalog tests
@@ -334,6 +324,8 @@ export function organizationMember(
     // up does. Both shapes have to render, so the builder ships neither and a
     // test names the one it is about.
     email: null,
+    // False by default; a test about an SSO member says so.
+    is_sso_account: false,
     full_name: "Operator",
     role: "owner",
     status: "active",
@@ -502,9 +494,11 @@ export function apiKey(overrides: Partial<ApiKey> = {}): ApiKey {
     last_used_at: null,
     expires_at: null,
     is_active: true,
-    operator_disabled: false,
+    disabled_reason: null,
+    operator_can_enable: true,
     allowed_models: null,
     allowed_tools: null,
+    scopes: ["inference:run"],
     exclude_from_budget: false,
     reject_user_mismatch: null,
     is_service_key: false,
@@ -628,6 +622,7 @@ export function workspaceActivation(
     latest_attempt: null,
     experience_eligible: true,
     dismissed: false,
+    issued_key: null,
     ...overrides,
   }
 }
@@ -646,6 +641,7 @@ export function organizationGuardrail(
     has_credential: false,
     definition_id: null,
     mode: "monitor",
+    on: ["input"],
     on_unavailable: "block",
     validate_kwargs: null,
     enabled: true,
@@ -697,6 +693,103 @@ export function organizationDomain(
   }
 }
 
+/** One of the organization's email domains, as its own SSO connection reports it. */
+export function oidcConnectionDomain(
+  overrides: Partial<OidcConnectionDomain> = {},
+): OidcConnectionDomain {
+  return {
+    domain: "acme.example",
+    enabled: true,
+    proof_expires_at: "2099-01-01T00:00:00+00:00",
+    ...overrides,
+  }
+}
+
+/**
+ * An organization's own bring-your-own OIDC connection, as its admins see it.
+ *
+ * Carries only the last four characters of the client secret, which the
+ * connection never serves back.
+ */
+export function oidcConnection(
+  overrides: Partial<OidcConnection> = {},
+): OidcConnection {
+  return {
+    id: "88888888-8888-8888-8888-888888888888",
+    issuer: "https://idp.acme.example",
+    resolved_issuer: "https://idp.acme.example",
+    client_id: "acme-dashboard",
+    client_secret_last4: "wxyz",
+    display_name: "Acme Okta",
+    default_role: "member",
+    enabled: true,
+    discovered_at: "2026-08-24T00:00:00+00:00",
+    domains: [oidcConnectionDomain()],
+    ...overrides,
+  }
+}
+
+/** The caller's organization's current sign-in enforcement. Off, with no exception recorded, by default. */
+export function organizationSsoEnforcement(
+  overrides: Partial<OrganizationSsoEnforcement> = {},
+): OrganizationSsoEnforcement {
+  return {
+    required: false,
+    break_glass_user_id: null,
+    break_glass_waived: false,
+    ...overrides,
+  }
+}
+
+/**
+ * What `GET`/`PUT`/`POST /organizations/me/sso` answer with.
+ *
+ * `connection` defaults to null, the state before an organization has saved
+ * one, so a test about a configured connection passes it explicitly rather
+ * than inheriting the happy path by accident.
+ */
+export function organizationSso(
+  overrides: Partial<OrganizationSso> = {},
+): OrganizationSso {
+  return {
+    connection: null,
+    redirect_uri: "https://otari.example.com/auth/sso/callback",
+    enforcement: organizationSsoEnforcement(),
+    ...overrides,
+  }
+}
+
+/** One member the preflight report samples, for recognizing who they are. */
+export function organizationSsoPreflightMember(
+  overrides: Partial<OrganizationSsoPreflightMember> = {},
+): OrganizationSsoPreflightMember {
+  return {
+    user_id: "66666666-6666-6666-6666-666666666666",
+    email: "member@acme.example",
+    full_name: "Pat Member",
+    ...overrides,
+  }
+}
+
+/**
+ * What `GET /organizations/me/sso/preflight` answers with.
+ *
+ * Nobody affected by default, the common case the design describes for a
+ * young organization, so a test about the warning passes a sample explicitly.
+ */
+export function organizationSsoPreflight(
+  overrides: Partial<OrganizationSsoPreflight> = {},
+): OrganizationSsoPreflight {
+  return {
+    total_members: 1,
+    affected_count: 0,
+    affected_members: [],
+    affected_members_truncated: false,
+    break_glass_candidates: [],
+    ...overrides,
+  }
+}
+
 /**
  * One rate an organization has stored for a model.
  *
@@ -741,6 +834,7 @@ export function orgProviderModel(
     id: "77777777-7777-7777-7777-777777777777",
     org_provider_key_id: "66666666-6666-6666-6666-666666666666",
     model: "gpt-4o",
+    type: "chat",
     input_price_per_million: 2.5,
     output_price_per_million: 10,
     cache_read_price_per_million: null,
@@ -817,6 +911,7 @@ export function workspaceHostedProvider(
     served_models: ["gemini-2.5-flash", "gemini-2.5-pro"],
     served_by_own_key: false,
     zero_data_retention: false,
+    data_locations: [null],
     ...overrides,
   }
 }
@@ -892,12 +987,69 @@ export function workspaceMcpServer(
     // defaults to.
     everyone_tools: ["*"],
     read_tools: [],
+    // A builder that names read tools is a manager's labels; one that names
+    // none follows the server, as a fresh row does.
+    read_tools_from_server: overrides.read_tools === undefined,
+    needs_setup: false,
     // The token is write-only, so this is all a response ever says about it.
     has_token: false,
+    // One workspace token for every caller, as a create defaults to.
+    credential_mode: "shared",
+    oauth_client_id: null,
+    has_oauth_client_secret: false,
+    // Reached only by a request that names it, as a create defaults to.
+    attach_by_default: false,
     // Never checked, which is how a row stored before checks existed reads.
     health: null,
     created_at: "2026-08-01T00:00:00+00:00",
     updated_at: "2026-08-01T00:00:00+00:00",
+    ...overrides,
+  }
+}
+
+/** A server the MCP catalog lists. */
+export function mcpCatalogServer(
+  overrides: Partial<McpCatalogServer> = {},
+): McpCatalogServer {
+  return {
+    id: "66666666-6666-6666-6666-666666666666",
+    name: "io.example/sentry",
+    title: "Sentry",
+    description: "Read issues and events.",
+    url: "https://mcp.sentry.example/mcp",
+    requires_token: false,
+    website_url: null,
+    icon_url: null,
+    logo_url: null,
+    logo_tone: null,
+    publisher_kind: "vendor",
+    version: "1.0.0",
+    source: "registry",
+    ...overrides,
+  }
+}
+
+/** The catalog's sync status on a deployment that has never synced. */
+export function mcpCatalogSyncStatus(
+  overrides: Partial<McpCatalogSyncStatus> = {},
+): McpCatalogSyncStatus {
+  return {
+    mode: "manual",
+    running: false,
+    requested: false,
+    outcome: null,
+    error: null,
+    started_at: null,
+    finished_at: null,
+    last_completed_at: null,
+    next_sync_at: null,
+    pages: 0,
+    fetched: 0,
+    kept: 0,
+    removed: 0,
+    server_count: 0,
+    is_stale: true,
+    next_request_at: null,
     ...overrides,
   }
 }
@@ -934,6 +1086,28 @@ export function workspaceMcpServerGrant(
     tools: ["*"],
     created_at: "2026-08-01T00:00:00+00:00",
     updated_at: "2026-08-01T00:00:00+00:00",
+    ...overrides,
+  }
+}
+
+/** The update check as a new install reports it: nobody has answered yet. */
+export function updateCheckStatus(
+  overrides: Partial<UpdateCheckStatus> = {},
+): UpdateCheckStatus {
+  return {
+    enabled: null,
+    answered_by: null,
+    preset_by: null,
+    current_version: "v0.30.1",
+    checkable: true,
+    install_id: "2f1c7e0e-8a43-4f53-9a6e-2c1d4f1e9b70",
+    endpoint: "https://api.otari.ai/api/v1/update-checks",
+    last_checked_at: null,
+    next_check_at: null,
+    latest_version: null,
+    release_url: null,
+    update_available: false,
+    advisories: [],
     ...overrides,
   }
 }

@@ -128,11 +128,6 @@ def test_summary_empty_range_is_all_zero(client: TestClient, master_key_header: 
         "unpriced_requests": 0,
         "billed_input_tokens": 0,
         "billed_output_tokens": 0,
-        "p95_latency_ms": None,
-        "absorbed_count": 0,
-        "incomplete_count": 0,
-        "imported_cost": 0.0,
-        "billed_cache_read_tokens": 0,
     }
     assert body["by_model"] == []
     assert body["by_user"] == []
@@ -141,9 +136,6 @@ def test_summary_empty_range_is_all_zero(client: TestClient, master_key_header: 
     assert body["by_source_label"] == []
     assert body["by_endpoint"] == []
     assert body["by_provider"] == []
-    assert body["by_policy"] == []
-    assert body["by_workspace"] == []
-    assert body["by_channel"] == []
     assert body["series"] == []
 
 
@@ -224,6 +216,40 @@ def test_summary_breakdowns_reconcile_with_totals(
         assert sum(r["requests"] for r in body[dimension]) == body["totals"]["request_count"], dimension
     # by_model is ordered by spend desc: gpt-4 (0.20) before claude (0.05).
     assert [r["key"] for r in body["by_model"]] == ["gpt-4", "claude"]
+
+
+def test_summary_groups_a_models_spellings_under_one_name(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    """Two providers' spellings of one model share a group and a name; a different build does not.
+
+    The rows stay one per spelling, since the key is what a model filter matches.
+    """
+    now = datetime.now(UTC) - timedelta(hours=1)
+    for model, provider, cost in (
+        ("accounts/fireworks/models/deepseek-v4p1-flash-1017", "fireworks", 0.30),
+        ("deepseek-ai/DeepSeek-V4.1-Flash-1017", "nebius", 0.20),
+        ("deepseek-ai/DeepSeek-V4.1-Pro-1017", "nebius", 0.10),
+    ):
+        _make_log(db_session, user_id="spell", timestamp=now, model=model, provider=provider, cost=cost)
+    _make_log(db_session, user_id="spell", timestamp=now, model="claude-opus-5-5", provider="anthropic", cost=0.05)
+    db_session.commit()
+
+    body = client.get(
+        SUMMARY_PATH, headers=master_key_header, params={"user_id": "spell", "dimensions": ["model", "user"]}
+    ).json()
+    rows = {row["key"]: row for row in body["by_model"]}
+    fireworks = rows["accounts/fireworks/models/deepseek-v4p1-flash-1017"]
+    nebius = rows["deepseek-ai/DeepSeek-V4.1-Flash-1017"]
+    pro = rows["deepseek-ai/DeepSeek-V4.1-Pro-1017"]
+    assert len(rows) == 4
+    assert fireworks["model_group"] == nebius["model_group"] != pro["model_group"]
+    # No catalog is indexed here, so the group is named by the least of its cleaned ids.
+    assert fireworks["label"] == nebius["label"] == "DeepSeek-V4.1-Flash-1017"
+    assert pro["label"] == "DeepSeek-V4.1-Pro-1017"
+    assert rows["claude-opus-5-5"]["label"] == "claude-opus-5-5"
+    # Only a model row is grouped.
+    assert all(row["model_group"] is None for row in body["by_user"])
 
 
 def test_summary_top_n_fold_reconciles(
@@ -853,7 +879,7 @@ def test_grouped_series_requires_master_key_and_group_by(client: TestClient) -> 
 
 
 def test_grouped_series_rejects_unknown_group_by(client: TestClient, master_key_header: dict[str, str]) -> None:
-    assert client.get(SERIES_PATH, headers=master_key_header, params={"group_by": "endpoint"}).status_code == 422
+    assert client.get(SERIES_PATH, headers=master_key_header, params={"group_by": "provider"}).status_code == 422
     # group_by is required.
     assert client.get(SERIES_PATH, headers=master_key_header).status_code == 422
 
@@ -1031,7 +1057,7 @@ def test_grouped_series_honors_provider_and_session_filters(
 def test_grouped_series_caps_hourly_buckets(client: TestClient, master_key_header: dict[str, str]) -> None:
     """An hourly grid over a too-wide window is rejected, not ballooned.
 
-    /summary densifies then caps at MAX_SERIES_POINTS; the grouped series is
+    /summary densifies then caps at _MAX_SERIES_POINTS; the grouped series is
     sparse per (bucket, group), so it bounds the bucket grid up front.
     """
     resp = client.get(
@@ -1073,7 +1099,7 @@ def test_tool_breakdown_counts_the_row_that_served_not_the_absorbed_attempt(
     So ``calls`` comes from the serving row while ``requests`` stays 1.
 
     Note what this does and does not prove. It does not exercise
-    ``request_count`` in the aggregate: the query already restricts to rows
+    ``_request_count_expr`` in the aggregate: the query already restricts to rows
     carrying tool meters, and an absorbed row never has them, so it is excluded
     before the count is taken. That expression is defensive there, and the invariant
     it defends (absorbed rows carry no tool ledger) is asserted directly in

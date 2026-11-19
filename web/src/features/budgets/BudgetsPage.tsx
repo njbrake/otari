@@ -56,7 +56,6 @@ import {
 } from "@/shared/api/workspaces"
 import { formatDateTime, formatUsd } from "@/shared/helpers/format"
 import { useHeldDialogTarget } from "@/shared/hooks/useHeldDialogTarget"
-
 import {
   budgetLabel,
   budgetLabeler,
@@ -485,7 +484,7 @@ function ResetHistory({
     )
   }
   return (
-    <div className="overflow-x-auto overscroll-x-contain px-4 py-3">
+    <div className="overflow-x-auto px-4 py-3">
       <table className="w-full border-collapse text-xs">
         <thead className="text-left text-muted">
           <tr>
@@ -601,6 +600,13 @@ function DeploymentBudgetsPage() {
   }
   const [editing, setEditing] = useState<string>()
   const [historyOpen, setHistoryOpen] = useState<string>()
+  // The history renders under the whole list, which on a phone is a column of
+  // tall cards, so opening it brings it into view rather than appearing to do
+  // nothing.
+  const historyRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (historyOpen) historyRef.current?.scrollIntoView?.({ block: "nearest" })
+  }, [historyOpen])
   const [pendingDelete, setPendingDelete] = useState<Budget>()
   const [assignmentError, setAssignmentError] = useState<Error>()
   const [pendingAssignments, setPendingAssignments] = useState<{
@@ -776,7 +782,7 @@ function DeploymentBudgetsPage() {
             />
             <RowAction
               icon={FiEdit2}
-              label="Edit"
+              label="Edit…"
               onPress={() => {
                 setAddOpen(false)
                 setEditing(budget.budget_id)
@@ -785,7 +791,8 @@ function DeploymentBudgetsPage() {
             {isOrganizationOwned(budget) ? null : (
               <RowAction
                 icon={FiTrash2}
-                label="Delete"
+                label="Delete…"
+                isDestructive
                 onPress={() => setPendingDelete(budget)}
               />
             )}
@@ -870,10 +877,7 @@ function DeploymentBudgetsPage() {
             Create budget
           </Button>
         }
-      >
-        Define spending limits and reset schedules. Assign a budget to users to
-        enforce it.
-      </PageIntro>
+      />
 
       <ErrorBanner
         error={
@@ -960,6 +964,7 @@ function DeploymentBudgetsPage() {
         <TableScrollFrame className="otari-budgets-table">
           <DataTable
             ariaLabel="Budgets"
+            mobileLayout="cards"
             columns={columns}
             rows={rows}
             getRowKey={getBudgetRowKey}
@@ -970,23 +975,28 @@ function DeploymentBudgetsPage() {
       )}
 
       {historyBudget ? (
-        <Section className="border-y border-border">
-          <div className="flex items-center justify-between border-b border-border py-2">
-            <span className="text-body">
-              Reset history — {nameBudget(historyBudget)}
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              onPress={() => setHistoryOpen(undefined)}
-            >
-              Close
-            </Button>
-          </div>
-          {/* The query's own array, not a defaulted copy: a fresh `[]` each
+        <div ref={historyRef}>
+          <Section className="border-y border-border">
+            <div className="flex items-center justify-between border-b border-border py-2">
+              <span className="text-body">
+                Reset history — {nameBudget(historyBudget)}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onPress={() => setHistoryOpen(undefined)}
+              >
+                Close
+              </Button>
+            </div>
+            {/* The query's own array, not a defaulted copy: a fresh `[]` each
               render would rebuild the alias map on every paint. */}
-          <ResetHistory budgetId={historyBudget.budget_id} users={users.data} />
-        </Section>
+            <ResetHistory
+              budgetId={historyBudget.budget_id}
+              users={users.data}
+            />
+          </Section>
+        </div>
       ) : null}
 
       <ConfirmDialog

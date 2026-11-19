@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { useEffect, useId, useState } from "react"
+import { useEffect, useState } from "react"
 import { Checkbox as AriaCheckbox } from "react-aria-components"
 
 // The box visual, split out so it can hold optimistic state: react-aria only
@@ -98,7 +98,6 @@ export function Checkbox({
   onChange,
   isDisabled = false,
   ariaLabel,
-  description,
   hasTouchTarget = false,
   isIndeterminate = false,
   className = "",
@@ -119,11 +118,6 @@ export function Checkbox({
    */
   ariaLabel?: string
   /**
-   * Help text shown under the control and announced with it, the way `Field`'s
-   * description is.
-   */
-  description?: ReactNode
-  /**
    * A 44px target for a box that is 16px. For a list whose only other control
    * is at the far edge of the row, where `CopyButton`'s pseudo-element bleed
    * cannot be used: a 14px bleed each way would overlap the row above and
@@ -137,11 +131,9 @@ export function Checkbox({
   className?: string
   children: ReactNode
 }) {
-  const descriptionId = useId()
-  const box = (
+  return (
     <AriaCheckbox
       aria-label={ariaLabel}
-      aria-describedby={description ? descriptionId : undefined}
       isSelected={isSelected}
       isIndeterminate={isIndeterminate}
       onChange={onChange}
@@ -171,14 +163,5 @@ export function Checkbox({
         </>
       )}
     </AriaCheckbox>
-  )
-  if (!description) return box
-  return (
-    <div className="flex flex-col gap-1">
-      {box}
-      <p id={descriptionId} className="text-caption">
-        {description}
-      </p>
-    </div>
   )
 }

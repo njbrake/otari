@@ -8,6 +8,7 @@ import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import { bootstrap } from "@/tests/fixtures"
+import { routeLocation } from "@/tests/location"
 import { AppProviders } from "@/tests/providers"
 import { recordEvent, resetTelemetrySpy } from "@/tests/telemetry"
 
@@ -175,14 +176,14 @@ describe("Login", () => {
 
     expect(
       screen.getByRole("link", { name: /Set your password/ }),
-    ).toHaveAttribute("href", "#/signup")
+    ).toHaveAttribute("href", "/signup")
     expect(
       screen.getByRole("link", { name: /Forgot your password/ }),
-    ).toHaveAttribute("href", "#/recover-password")
+    ).toHaveAttribute("href", "/recover-password")
     await userEvent.setup().click(screen.getByRole("button", { name: "Help" }))
     expect(
       screen.getByRole("link", { name: /verification link/ }),
-    ).toHaveAttribute("href", "#/resend-verification")
+    ).toHaveAttribute("href", "/resend-verification")
   })
 
   it("hides recovery on an unclaimed deployment, where no password exists to reset", async () => {
@@ -709,7 +710,7 @@ describe("Login", () => {
     expect(await screen.findByText(refusal)).toBeInTheDocument()
     expect(
       screen.getByRole("link", { name: "Send a new verification link" }),
-    ).toHaveAttribute("href", "#/resend-verification")
+    ).toHaveAttribute("href", "/resend-verification")
 
     // The link describes the refusal, not the page, so typing takes both away.
     await user.type(screen.getByLabelText("Password"), "x")
@@ -1220,7 +1221,7 @@ describe("Login with a passkey", () => {
     // The ceremony is open. Fill the form and submit it anyway.
     await user.type(screen.getByLabelText("Email"), "operator@example.com")
     await user.type(screen.getByLabelText("Password"), "a-real-password")
-    expect(screen.getByRole("button", { name: /Sign in/ })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDisabled()
     await user.keyboard("{Enter}")
 
     expect(
@@ -1432,11 +1433,11 @@ describe("Login with a passkey", () => {
     // `window.location.assign` is not implemented in jsdom, and the whole point
     // of the success path is that it leaves the page, so it is stubbed and
     // asserted on rather than allowed to run.
-    function stubNavigation(hash = "") {
+    function stubNavigation(route = "/") {
       const assign = vi.fn()
       Object.defineProperty(window, "location", {
         configurable: true,
-        value: { ...window.location, assign, hash },
+        value: { ...window.location, ...routeLocation(route), assign },
       })
       return assign
     }
@@ -1456,9 +1457,12 @@ describe("Login with a passkey", () => {
         </Mounted>,
       )
       // A deployment that registered no OAuth client carries no affordance at
-      // all: absent rather than disabled.
+      // all: absent rather than disabled. The company row is excluded from
+      // this match: it carries no such gate and is offered regardless.
       expect(
-        screen.queryByRole("button", { name: /Sign in with/ }),
+        screen.queryByRole("button", {
+          name: /^Sign in with (?!your company\b)/,
+        }),
       ).not.toBeInTheDocument()
 
       rerender(
@@ -1534,8 +1538,8 @@ describe("Login with a passkey", () => {
 
     it("remembers the link the sign-in screen stood in for, to return to it", async () => {
       // `DeploymentRoot` renders this screen in place of the page a signed-out
-      // visitor asked for, so the hash here is that page.
-      const assign = stubNavigation("#/organization/billing")
+      // visitor asked for, so the route here is that page.
+      const assign = stubNavigation("/organization/billing")
       vi.spyOn(globalThis, "fetch").mockResolvedValue(
         jsonResponse({
           authorization_url: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
@@ -1554,8 +1558,8 @@ describe("Login with a passkey", () => {
       )
 
       await waitFor(() => expect(assign).toHaveBeenCalled())
-      expect(window.sessionStorage.getItem("otari.oauth.return-hash")).toBe(
-        "#/organization/billing",
+      expect(window.sessionStorage.getItem("otari.oauth.return-route")).toBe(
+        "/organization/billing",
       )
     })
 
@@ -1635,7 +1639,7 @@ describe("Login with a passkey", () => {
       expect(assign).not.toHaveBeenCalled()
       expect(window.sessionStorage.getItem("otari.oauth.state")).toBeNull()
       expect(
-        window.sessionStorage.getItem("otari.oauth.return-hash"),
+        window.sessionStorage.getItem("otari.oauth.return-route"),
       ).toBeNull()
       await waitFor(() =>
         expect(recordEvent).toHaveBeenCalledWith(
@@ -1646,6 +1650,38 @@ describe("Login with a passkey", () => {
           },
         ),
       )
+    })
+  })
+
+  describe("Company sign-in (SSO)", () => {
+    it("renders the SSO row last, after the provider, passkey and credential rows", () => {
+      render(
+        <Mounted signInMethods={["password"]} oauthProviders={["google"]}>
+          <Harness />
+        </Mounted>,
+      )
+
+      const methodButtons = screen
+        .getAllByRole("button")
+        .filter((button) => /^Sign in with/.test(button.textContent ?? ""))
+
+      expect(methodButtons.at(-1)).toHaveTextContent(
+        "Sign in with your company (SSO)",
+      )
+    })
+
+    it("is offered on a deployment that configures no OAuth provider and no passkey", () => {
+      render(
+        <Mounted signInMethods={["master_key"]}>
+          <Harness />
+        </Mounted>,
+      )
+
+      expect(
+        screen.getByRole("button", {
+          name: "Sign in with your company (SSO)",
+        }),
+      ).toBeInTheDocument()
     })
   })
 })

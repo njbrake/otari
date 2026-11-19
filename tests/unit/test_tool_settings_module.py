@@ -205,10 +205,17 @@ def test_the_provider_pair_describes_the_synthesized_instance() -> None:
     config = GatewayConfig(web_search_provider="tavily", web_search_provider_api_key="tvly-key")
     synthesized = synthesized_search_instance(config)
     assert synthesized == SynthesizedSearchInstance(
-        provider="tavily", api_key="tvly-key", provider_defaults={"include_raw_content": True}
+        provider="tavily", api_key="tvly-key", options={"include_raw_content": True}
     )
     assert synthesized.name == "tavily"
     assert "tvly-key" not in repr(synthesized)
+
+
+def test_the_provider_pairs_key_is_stripped() -> None:
+    config = GatewayConfig(web_search_provider="tavily", web_search_provider_api_key=" tvly-key\n")
+    synthesized = synthesized_search_instance(config)
+    assert synthesized is not None
+    assert synthesized.api_key == "tvly-key"
 
 
 def test_the_provider_wins_over_the_url() -> None:
@@ -462,7 +469,6 @@ def test_instances_are_flagged_library_backed_or_not() -> None:
     instances = effective_search_instances(config)
     assert instances["exa"].library_backed is True
     assert instances["local"].library_backed is True
-    assert instances["local"].provider_defaults == {}
     assert instances["retired"].library_backed is False
 
 
@@ -481,8 +487,6 @@ def test_an_instance_is_hashable_and_cannot_change_the_configuration() -> None:
     assert hash(instance) == hash(effective_search_instances(config)["local"])
     with pytest.raises(TypeError):
         instance.options["categories"] = "it"  # type: ignore[index]
-    with pytest.raises(TypeError):
-        instance.provider_defaults["method"] = "post"  # type: ignore[index]
     assert config.search_tools["local"]["options"] == {"categories": "news"}
 
 
@@ -590,6 +594,19 @@ def test_the_lenient_load_warns_with_names_and_never_values(caplog: pytest.LogCa
         assert value not in logged
 
 
+def test_a_tool_whose_cost_tier_the_provider_refuses_is_logged_as_not_running(caplog: pytest.LogCaptureFixture) -> None:
+    config = GatewayConfig(
+        search_tools={"cheap": {"provider": "fake", "options": {"depth": "Basic"}}},
+        fetch_tools={"reader": {"provider": "fake", "options": {"depth": "deep"}}},
+    )
+    logged = _warnings(caplog, config)
+    assert "search_tools.cheap does not run: fake does not take the value of its option 'depth'" in logged
+    assert "fetch_tools.reader does not run: fake does not take the value of its option 'depth'" in logged
+    assert "Basic" not in logged
+    assert "deep" not in logged
+    assert in_loop_default(config) is None
+
+
 # --------------------------------------------------------------------------- #
 # Fetch for enrichment, and defaults or fetch_tools that name nothing
 # --------------------------------------------------------------------------- #
@@ -662,7 +679,7 @@ def test_the_warning_names_the_instances_a_default_may_name(caplog: pytest.LogCa
 def test_the_warning_with_no_usable_instance_says_so(caplog: pytest.LogCaptureFixture) -> None:
     config = _with_stored(GatewayConfig(), local=_RETIRED, other=_RETIRED)
     logged = _warnings(caplog, config)
-    assert "None of them is on a provider the in-loop tool can use yet" in logged
+    assert "None of them can run" in logged
     assert "Set web_search_default_tool to one of" not in logged
 
 

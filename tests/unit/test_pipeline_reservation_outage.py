@@ -18,13 +18,17 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import gateway.api.routes._pipeline as pipeline
+from _unavailable_model_support import reporter_with_null_listener
 from gateway.api.routes import chat, messages
 from gateway.container import build_container
 from gateway.core.config import API_ROOT, GatewayConfig
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.repositories.budgets import HeldAmounts
 from gateway.services import pricing_service
 from gateway.services.budgets import _reservations
+from gateway.services.tools import WorkspaceCodeExecutionPolicies
+from gateway.types.key_scope import KeyScopeSet
 
 
 def _stub_preamble(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -37,6 +41,7 @@ def _stub_preamble(monkeypatch: pytest.MonkeyPatch) -> None:
             reject_user_mismatch=None,
             is_service_key=False,
             workspace_id=uuid.uuid4(),
+            scopes=KeyScopeSet.unscoped(is_service_key=False),
         ), False
 
     async def none(*args: Any, **kwargs: Any) -> None:
@@ -51,14 +56,18 @@ def _stub_preamble(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _resolve(adapter: Any, db: AsyncMock) -> pipeline.RequestContext:
-    app = SimpleNamespace(state=SimpleNamespace(container=build_container(config=GatewayConfig())))
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            container=build_container(config=GatewayConfig()), unavailable_model_reporter=reporter_with_null_listener()
+        )
+    )
     request = Request({"type": "http", "method": "POST", "path": f"{API_ROOT}/messages", "headers": [], "app": app})
     return await pipeline.resolve_request_context(
         adapter=adapter,
         raw_request=request,
         response=Response(),
         db=cast(AsyncSession, db),
-        uow=cast(Any, None),
+        uow=cast(UnitOfWork, object()),
         config=GatewayConfig(require_pricing=False),
         log_writer=cast(Any, object()),
         model="openai:gpt-4",
@@ -67,8 +76,17 @@ async def _resolve(adapter: Any, db: AsyncMock) -> pipeline.RequestContext:
         estimate_max_output_tokens=None,
         master_key_user_required_detail="user required",
         user_forbidden_detail="forbidden",
-        code_execution_policies=cast(Any, object()),
+        code_execution_policies=cast(WorkspaceCodeExecutionPolicies, object()),
         model_provider=cast(ModelProviderPort, object()),
+        declared=pipeline.DeclaredTools(
+            guardrails=None,
+            guardrail_targets=tuple,
+            tools=None,
+            mcp_servers=None,
+            mcp_server_ids=None,
+            max_tool_iterations=None,
+            tools_header=None,
+        ),
     )
 
 
@@ -145,7 +163,7 @@ async def test_a_failed_user_hold_gives_the_ceilings_holds_back(monkeypatch: pyt
             db,
             object(),
             scoped=scoped,
-            held=HeldAmounts(amount=Decimal(3), tokens=10, requests=1),
+            ceiling_held=HeldAmounts(amount=Decimal(3), tokens=10, requests=1),
         )
 
     db.rollback.assert_awaited_once()

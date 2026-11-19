@@ -4,24 +4,25 @@ import type { ChargeLine, UsageEntry } from "@/client"
 import { entry } from "@/tests/activity"
 import {
   buildTokenComposition,
-  cacheHitFraction,
   computeToolCost,
-  countToolCalls,
-  describeFailure,
-  describeRowSource,
-  describeSkip,
+  describeAttempt,
+  describeAttemptOutcome,
+  findGroupsMissingEarlierAttempts,
+  findRequestOutcome,
   formatElapsed,
-  isImported,
-  isSkippedAttempt,
+  formatLatencyCell,
+  formatTokenLane,
+  formatToolUsage,
+  formatUSD,
+  formatUSDLane,
+  getActivityRowClassName,
+  indexGroupOutcomes,
   listToolUsage,
-  requestedAlias,
+  readPositive,
   resolveExtentWindow,
   resolveWindow,
-  rowCost,
-  rowOutcome,
   sortChargeLines,
   sortPlanRows,
-  tokenSegments,
 } from "./activityModel"
 
 /** A fixed clock, so a rolling preset's start is an exact instant to compare. */
@@ -97,6 +98,29 @@ describe("resolveExtentWindow", () => {
     expect(resolveExtentWindow("custom", NOW)).toEqual({
       start: "2025-01-15T12:00:00.000Z",
     })
+  })
+})
+
+describe("readPositive", () => {
+  it("passes a positive number through", () => {
+    expect(readPositive(42)).toBe(42)
+  })
+
+  it("floors anything a meter could carry that is not one", () => {
+    // Meters arrive as unknown JSON, so a string, a negative, a NaN or an
+    // Infinity all have to read as no usage rather than reaching the arithmetic.
+    for (const value of [
+      0,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      "5",
+      null,
+      undefined,
+      {},
+    ]) {
+      expect(readPositive(value)).toBe(0)
+    }
   })
 })
 
@@ -208,6 +232,30 @@ describe("listToolUsage", () => {
   })
 })
 
+describe("formatToolUsage", () => {
+  it("de-underscores the name and names the failures separately", () => {
+    expect(
+      formatToolUsage({
+        tool: "web_search",
+        billed: 3,
+        errors: 1,
+        unitRate: null,
+      }),
+    ).toBe("web search ×3, 1 failed")
+  })
+
+  it("drops the count for a tool that only failed", () => {
+    expect(
+      formatToolUsage({
+        tool: "web_fetch",
+        billed: 0,
+        errors: 2,
+        unitRate: null,
+      }),
+    ).toBe("web fetch, 2 failed")
+  })
+})
+
 describe("computeToolCost", () => {
   it("bills each tool at the rate stored with the row", () => {
     expect(
@@ -255,6 +303,274 @@ describe("computeToolCost", () => {
 
   it("answers zero for a row with no tool calls", () => {
     expect(computeToolCost(entry({ billing_meters: null }))).toBe(0)
+  })
+})
+
+describe("findGroupsMissingEarlierAttempts", () => {
+  it("names a served group whose skipped attempt fell on the next page", () => {
+    // Newest first, so a page that ends on the served row leaves its earlier
+    // attempt for the next page.
+    const page = [attempt({ id: "b", status: "success", attempt_position: 2 })]
+    expect(findGroupsMissingEarlierAttempts(page)).toEqual(["grp-1"])
+  })
+
+  it("leaves a group alone once every earlier attempt is on the page", () => {
+    const page = [
+      attempt({ id: "b", status: "success", attempt_position: 2 }),
+      attempt({ id: "a", status: "absorbed", attempt_position: 1 }),
+    ]
+    expect(findGroupsMissingEarlierAttempts(page)).toEqual([])
+  })
+
+  it("asks nothing of a request served on its first attempt", () => {
+    const page = [attempt({ id: "a", status: "success", attempt_position: 1 })]
+    expect(findGroupsMissingEarlierAttempts(page)).toEqual([])
+  })
+})
+
+describe("findRequestOutcome", () => {
+  it("picks the attempt that served over the ones it fell over from", () => {
+    const rows = [
+      attempt({ id: "a", status: "absorbed", attempt_position: 1 }),
+      attempt({ id: "b", status: "success", attempt_position: 2 }),
+    ]
+    expect(findRequestOutcome(rows, "grp-1")?.id).toBe("b")
+  })
+
+  it("picks the terminal failure when no candidate served", () => {
+    const rows = [
+      attempt({ id: "a", status: "absorbed", attempt_position: 1 }),
+      attempt({ id: "b", status: "error", attempt_position: 2 }),
+    ]
+    expect(findRequestOutcome(rows, "grp-1")?.id).toBe("b")
+  })
+
+  it("falls back to the latest attempt while the request has no outcome row", () => {
+    const rows = [
+      attempt({ id: "b", status: "absorbed", attempt_position: 2 }),
+      attempt({ id: "a", status: "absorbed", attempt_position: 1 }),
+    ]
+    expect(findRequestOutcome(rows, "grp-1")?.id).toBe("b")
+  })
+
+  it("ignores rows of another request and finds nothing for an unknown id", () => {
+    const rows = [attempt({ id: "a", request_group_id: "grp-2" })]
+    expect(findRequestOutcome(rows, "grp-1")).toBeUndefined()
+  })
+})
+
+describe("indexGroupOutcomes", () => {
+  it("indexes the served target of a group by its outcome row", () => {
+    const rows = [
+      attempt({ id: "a", status: "absorbed", attempt_position: 1 }),
+      attempt({
+        id: "b",
+        status: "success",
+        attempt_position: 2,
+        provider: "openai",
+        model: "gpt-4o-mini",
+      }),
+    ]
+    expect(indexGroupOutcomes(rows).get("grp-1")).toEqual({
+      servedBy: "openai:gpt-4o-mini",
+      servedPosition: 2,
+      spilledFrom: [],
+    })
+  })
+
+  it("names the candidates a group skipped before the one that served", () => {
+    const rows = [
+      attempt({
+        id: "b",
+        status: "success",
+        attempt_position: 2,
+        provider: "overflow",
+        model: "gpt-4o-mini",
+      }),
+      attempt({
+        id: "a",
+        status: "absorbed",
+        status_code: 429,
+        error_message:
+          "Skipped: Rate limit 'flash-cap' exceeded: 2 requests per minute",
+        attempt_position: 1,
+        provider: "primary",
+        model: "gpt-4o-mini",
+      }),
+    ]
+    const outcome = indexGroupOutcomes(rows).get("grp-1") ?? null
+
+    expect(outcome?.spilledFrom).toEqual([
+      "primary:gpt-4o-mini (rate limit 'flash-cap' full)",
+    ])
+    expect(describeAttempt({ ...rows[0], attempt_count: 2 }, outcome)).toMatch(
+      /^served on attempt 2 of 2.*, spilled over from primary:gpt-4o-mini \(rate limit 'flash-cap' full\)$/,
+    )
+  })
+
+  it("says a skipped candidate was too large for a limit rather than full", () => {
+    const rows = [
+      attempt({
+        id: "b",
+        status: "success",
+        attempt_position: 2,
+        provider: "overflow",
+        model: "gpt-4o-mini",
+      }),
+      attempt({
+        id: "a",
+        status: "absorbed",
+        status_code: 429,
+        error_message:
+          "Skipped: Request needs an estimated 5,000 tokens; rate limit 'flash-cap' allows 1,000 per minute",
+        attempt_position: 1,
+        provider: "primary",
+        model: "gpt-4o-mini",
+      }),
+    ]
+
+    expect(indexGroupOutcomes(rows).get("grp-1")?.spilledFrom).toEqual([
+      "primary:gpt-4o-mini (too large for rate limit 'flash-cap')",
+    ])
+  })
+
+  it("records a terminal failure as a group with no server", () => {
+    const rows = [
+      attempt({ id: "a", status: "absorbed", attempt_position: 1 }),
+      attempt({ id: "b", status: "error", attempt_position: 2 }),
+    ]
+    expect(indexGroupOutcomes(rows).get("grp-1")).toEqual({
+      servedBy: null,
+      servedPosition: null,
+      spilledFrom: [],
+    })
+  })
+
+  it("has no entry for a group whose rows are all absorbed", () => {
+    // Which is exactly the page the status=absorbed filter shows, and why the
+    // page looks the missing outcomes up separately.
+    const rows = [attempt({ id: "a", status: "absorbed", attempt_position: 1 })]
+    expect(indexGroupOutcomes(rows).has("grp-1")).toBe(false)
+  })
+
+  it("ignores a row that belongs to no group", () => {
+    expect(indexGroupOutcomes([entry({ request_group_id: null })]).size).toBe(0)
+  })
+})
+
+describe("describeAttempt", () => {
+  const served = {
+    servedBy: "openai:gpt-4o",
+    servedPosition: 2,
+    spilledFrom: [],
+  }
+
+  it("names the model that served in an absorbed attempt's place", () => {
+    expect(
+      describeAttempt(
+        attempt({ status: "absorbed", attempt_position: 1 }),
+        served,
+      ),
+    ).toBe("attempt 1 of 2 failed, served by openai:gpt-4o")
+  })
+
+  it("says the request ended in an error when the known outcome served nothing", () => {
+    expect(
+      describeAttempt(attempt({ status: "absorbed", attempt_position: 1 }), {
+        servedBy: null,
+        servedPosition: null,
+        spilledFrom: [],
+      }),
+    ).toBe("attempt 1 of 2 failed, and the request ended in an error")
+  })
+
+  it("says only that it fell back when the outcome is unknown", () => {
+    expect(
+      describeAttempt(
+        attempt({ status: "absorbed", attempt_position: 1 }),
+        null,
+      ),
+    ).toBe("attempt 1 of 2 failed, fell back")
+  })
+
+  it("distinguishes a walk that stopped early from an exhausted plan", () => {
+    expect(
+      describeAttempt(attempt({ status: "error", attempt_position: 1 }), null),
+    ).toBe("attempt 1 of 2 failed, no further candidate tried")
+    expect(
+      describeAttempt(attempt({ status: "error", attempt_position: 2 }), null),
+    ).toBe("attempt 2 of 2 failed, plan exhausted")
+  })
+
+  it("carries the selection reason into a successful attempt's sentence", () => {
+    expect(
+      describeAttempt(
+        attempt({
+          status: "success",
+          attempt_position: 2,
+          selection_reason: "on_failure",
+        }),
+        served,
+      ),
+    ).toBe("served on attempt 2 of 2 (a fallback candidate)")
+  })
+
+  it("names the catalog's choice when a catalog ID led the plan", () => {
+    expect(
+      describeAttempt(
+        attempt({
+          status: "success",
+          attempt_position: 1,
+          selection_reason: "catalog",
+        }),
+        served,
+      ),
+    ).toBe("served on attempt 1 of 2 (the catalog's first choice)")
+  })
+
+  it("says only why the candidate was picked when the plan has one target", () => {
+    expect(
+      describeAttempt(
+        attempt({
+          status: "success",
+          attempt_count: 1,
+          attempt_position: 1,
+          selection_reason: "static",
+        }),
+        null,
+      ),
+    ).toBe("the policy's only target")
+  })
+
+  it("answers null for a row carrying neither a plan nor a reason", () => {
+    expect(
+      describeAttempt(
+        attempt({ attempt_count: null, attempt_position: null }),
+        null,
+      ),
+    ).toBeNull()
+  })
+})
+
+describe("describeAttemptOutcome", () => {
+  it("names the status code where the attempt has one", () => {
+    expect(
+      describeAttemptOutcome(attempt({ status: "absorbed", status_code: 429 })),
+    ).toBe("failed 429, fell back")
+    expect(
+      describeAttemptOutcome(attempt({ status: "error", status_code: 500 })),
+    ).toBe("failed 500")
+  })
+
+  it("omits a status code the row does not carry", () => {
+    expect(
+      describeAttemptOutcome(
+        attempt({ status: "absorbed", status_code: null }),
+      ),
+    ).toBe("failed, fell back")
+    expect(
+      describeAttemptOutcome(attempt({ status: "error", status_code: null })),
+    ).toBe("failed")
   })
 })
 
@@ -320,8 +636,39 @@ describe("sortChargeLines", () => {
   })
 })
 
-describe("formatElapsed", () => {
-  it("counts elapsed wall-clock time in whole seconds, then minutes", () => {
+describe("the row formatters", () => {
+  // These disagree with shared/helpers/format.ts on the absent-value spelling,
+  // which is the disagreement otari#1335 tracks; pin it so a later swap is a
+  // deliberate change rather than a silent one.
+  it("spell an absent money or token value as an em dash", () => {
+    expect(formatUSD(null)).toBe("—")
+    expect(formatUSD(0)).toBe("$0.00")
+    expect(formatLatencyCell(null)).toBe("—")
+    expect(formatLatencyCell(842)).toBe("842 ms")
+  })
+
+  it("roll a long total time up into minutes, hours and days, never below zero", () => {
+    expect(formatLatencyCell(11_000_000)).toBe("3h 03m")
+    expect(formatLatencyCell(259_200_000)).toBe("3d 00h")
+    expect(formatLatencyCell(-5)).toBe("0 ms")
+  })
+
+  it("show a sub-cent charge rather than rounding it to free", () => {
+    expect(formatUSD(0.000001)).toBe("$0.000001")
+    expect(formatUSD(0.0024)).toBe("$0.0024")
+  })
+
+  it("shorten a lane's number only past what the lane holds", () => {
+    expect(formatTokenLane(999_999)).toBe("999,999")
+    expect(formatTokenLane(1_234_567_890)).toBe("1.23B")
+    expect(formatTokenLane(98_765_432)).toBe("98.8M")
+    expect(formatTokenLane(null)).toBe("—")
+    expect(formatUSDLane(1_284.56)).toBe("$1,284.56")
+    expect(formatUSDLane(12_345_678.9)).toBe("$12.3M")
+    expect(formatUSDLane(null)).toBe("—")
+  })
+
+  it("count elapsed wall-clock time in whole seconds, then minutes", () => {
     expect(formatElapsed(0)).toBe("0s")
     expect(formatElapsed(59_999)).toBe("59s")
     expect(formatElapsed(60_000)).toBe("1m 00s")
@@ -329,234 +676,17 @@ describe("formatElapsed", () => {
   })
 })
 
-describe("describeRowSource", () => {
-  it("names the key a gateway request came in on", () => {
+describe("getActivityRowClassName", () => {
+  it("tints an absorbed attempt as caution, not as a failure", () => {
+    // A routing policy recovered from it, so the request succeeded.
+    expect(getActivityRowClassName(entry({ status: "absorbed" }))).toBe(
+      "bg-warning-subtle",
+    )
+    expect(getActivityRowClassName(entry({ status: "error" }))).toBe(
+      "bg-danger-subtle",
+    )
     expect(
-      describeRowSource(
-        entry({ source: "gateway", api_key_id: "k-1", api_key_name: "ci" }),
-      ),
-    ).toBe("ci")
-  })
-
-  it("names where an imported row came from, not the key its hook used", () => {
-    const row = entry({
-      source: "claude_code",
-      api_key_id: "k-1",
-      api_key_name: "laptop",
-    })
-    expect(isImported(row)).toBe(true)
-    expect(describeRowSource(row)).toBe("Claude Code")
-  })
-
-  it("says so when a gateway request carried no key", () => {
-    expect(
-      describeRowSource(entry({ source: "gateway", api_key_id: null })),
-    ).toBe("No key")
-  })
-})
-
-describe("requestedAlias", () => {
-  it("names an alias the caller sent", () => {
-    expect(
-      requestedAlias(
-        entry({ requested_model: "fast", model: "claude-haiku-4-5" }),
-      ),
-    ).toBe("fast")
-  })
-
-  it("stays quiet when the name was the model or the policy", () => {
-    expect(
-      requestedAlias(entry({ requested_model: "gpt-4o", model: "gpt-4o" })),
+      getActivityRowClassName(entry({ status: "success" })),
     ).toBeUndefined()
-    expect(
-      requestedAlias(
-        entry({
-          requested_model: "openai:gpt-4o",
-          provider: "openai",
-          model: "gpt-4o",
-        }),
-      ),
-    ).toBeUndefined()
-    expect(
-      requestedAlias(
-        entry({ requested_model: "cheap-first", policy_name: "cheap-first" }),
-      ),
-    ).toBeUndefined()
-    expect(requestedAlias(entry({ requested_model: null }))).toBeUndefined()
-  })
-})
-
-describe("describeFailure", () => {
-  it("reads the reason off the status code", () => {
-    expect(describeFailure(entry({ status: "error", status_code: 429 }))).toBe(
-      "Rate limited",
-    )
-    expect(
-      describeFailure(entry({ status: "absorbed", status_code: 529 })),
-    ).toBe("Overloaded")
-  })
-
-  it("names a prompt that did not fit, whatever its code", () => {
-    expect(
-      describeFailure(
-        entry({
-          status: "error",
-          status_code: 400,
-          error_message: "prompt is too long: 1021334 tokens > 1000000 maximum",
-        }),
-      ),
-    ).toBe("Context too long")
-  })
-
-  it("falls back to Failed for a code it does not know, or none", () => {
-    expect(describeFailure(entry({ status: "error", status_code: 418 }))).toBe(
-      "Failed",
-    )
-    expect(describeFailure(entry({ status: "error", status_code: null }))).toBe(
-      "Failed",
-    )
-  })
-})
-
-describe("rowOutcome", () => {
-  it("reads a served request by its code, noting what a fallback recovered", () => {
-    expect(rowOutcome(entry({ status_code: 200 }))).toEqual({
-      kind: "success",
-      label: "200",
-      note: "",
-    })
-    expect(
-      rowOutcome(entry({ status_code: null, absorbed_attempts: 2 })),
-    ).toEqual({ kind: "success", label: "OK", note: "2 recovered" })
-  })
-
-  it("reads an abandoned stream's estimated row as incomplete, not failed", () => {
-    expect(
-      rowOutcome(entry({ status: "incomplete", status_code: null })),
-    ).toEqual({
-      kind: "recovered",
-      label: "Incomplete",
-      note: "client left; tokens estimated",
-    })
-  })
-
-  it("reads an absorbed attempt as recovered, not failed", () => {
-    expect(rowOutcome(entry({ status: "absorbed", status_code: 529 }))).toEqual(
-      { kind: "recovered", label: "529", note: "Overloaded" },
-    )
-    expect(
-      rowOutcome(entry({ status: "absorbed", status_code: null })).label,
-    ).toBe("Recovered")
-  })
-
-  it("reads a skipped candidate by why it was skipped, not as a failure", () => {
-    const skipped = entry({
-      status: "absorbed",
-      status_code: 429,
-      error_message: "Skipped: Rate limit 'per-model' is full",
-    })
-    expect(isSkippedAttempt(skipped)).toBe(true)
-    expect(describeSkip(skipped)).toBe("Rate limit 'per-model' is full")
-    expect(rowOutcome(skipped)).toEqual({
-      kind: "recovered",
-      label: "Skipped",
-      note: "Rate limit 'per-model' is full",
-    })
-    expect(
-      isSkippedAttempt(entry({ status: "absorbed", error_message: "boom" })),
-    ).toBe(false)
-  })
-
-  it("reads a failure with its reason", () => {
-    expect(rowOutcome(entry({ status: "error", status_code: 429 }))).toEqual({
-      kind: "failed",
-      label: "429",
-      note: "Rate limited",
-    })
-    expect(
-      rowOutcome(entry({ status: "error", status_code: null })).label,
-    ).toBe("Failed")
-  })
-})
-
-describe("rowCost", () => {
-  it("charges nothing for a request that was not served", () => {
-    expect(rowCost(entry({ status: "error", cost: null }))).toEqual({
-      kind: "none",
-    })
-    expect(rowCost(entry({ status: "absorbed", cost: 0.02 }))).toEqual({
-      kind: "none",
-    })
-  })
-
-  it("charges an abandoned stream its estimated cost", () => {
-    expect(rowCost(entry({ status: "incomplete", cost: 0.004 }))).toEqual({
-      kind: "priced",
-      cost: 0.004,
-      isBilled: true,
-    })
-  })
-
-  it("says a served request with no price is unpriced", () => {
-    expect(rowCost(entry({ cost: null }))).toEqual({ kind: "unpriced" })
-  })
-
-  it("marks an imported row's cost as one nothing billed", () => {
-    expect(rowCost(entry({ cost: 0.5 }))).toEqual({
-      kind: "priced",
-      cost: 0.5,
-      isBilled: true,
-    })
-    expect(rowCost(entry({ cost: 0.5, source: "claude_code" }))).toEqual({
-      kind: "priced",
-      cost: 0.5,
-      isBilled: false,
-    })
-  })
-})
-
-describe("countToolCalls", () => {
-  it("adds up the calls of every tool, and is zero with none", () => {
-    expect(countToolCalls(entry())).toBe(0)
-    expect(
-      countToolCalls(
-        entry({
-          billing_meters: {
-            tools: {
-              web_search: { billed: 3, errors: 0 },
-              web_fetch: { billed: 2, errors: 1 },
-            },
-          },
-        }),
-      ),
-    ).toBe(5)
-  })
-})
-
-describe("tokenSegments", () => {
-  it("lists the buckets in bar order, leaving out the empty ones", () => {
-    expect(
-      tokenSegments({
-        fresh: 10,
-        cacheRead: 0,
-        cacheWrite: 5,
-        output: 2,
-        total: 17,
-      }).map((segment) => [segment.key, segment.value]),
-    ).toEqual([
-      ["fresh", 10],
-      ["cacheWrite", 5],
-      ["output", 2],
-    ])
-  })
-})
-
-describe("cacheHitFraction", () => {
-  it("is the cache read over every input token", () => {
-    expect(cacheHitFraction(75, 100)).toBe(0.75)
-  })
-
-  it("is zero with no input", () => {
-    expect(cacheHitFraction(0, 0)).toBe(0)
   })
 })

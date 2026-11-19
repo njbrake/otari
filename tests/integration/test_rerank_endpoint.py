@@ -59,8 +59,7 @@ def test_rerank_with_api_key(
     assert "results" in data
     assert len(data["results"]) == 3
     assert data["results"][0]["relevance_score"] == 0.95
-    # The fork answers with the name the caller sent (njbrake/otari#5).
-    assert data["model"] == "cohere:rerank-v3.5"
+    assert data["model"] == "rerank-v3.5"
 
 
 def test_rerank_master_key_requires_user(

@@ -4,7 +4,6 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { useCallback, useSyncExternalStore } from "react"
 import type {
   BlockedEmailCreated,
   BlockedEmails,
@@ -12,23 +11,15 @@ import type {
   DashboardBuild,
   DeploymentAdminAccess,
   DeploymentUser,
-  DeploymentUserPassword,
   DeploymentUsers,
   PasswordLink,
   UpdateDeploymentUserRequest,
 } from "@/client"
-import {
-  ApiError,
-  apiFetch,
-  DASHBOARD_BUILD_PATH,
-  siteFetch,
-} from "@/shared/api/client"
+import { apiFetch, DASHBOARD_BUILD_PATH, siteFetch } from "@/shared/api/client"
 import {
   BUILD,
   BUILD_POLL_MS,
   DEPLOYMENT_ADMIN,
-  GATEWAY_LIVENESS,
-  GATEWAY_LIVENESS_RECHECK_MS,
   ORGANIZATION_MEMBERS,
 } from "@/shared/api/queryKeys"
 
@@ -50,117 +41,6 @@ export function useDashboardBuild() {
   })
 }
 
-// apiFetch normalizes an unreachable gateway to ApiError status 0 ("Network
-// error: could not reach the gateway."). A 401/403 is a different failure: the
-// backend answered, it just rejected the key, and that already bounces to
-// sign-in, so it is not "can't connect".
-function isUnreachable(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 0
-}
-
-// When the newest query that failed to reach the gateway failed, or 0 when none
-// is currently in that state. Scanning the whole cache keeps the answer the same
-// wherever the operator is standing. A failure left on a page they navigated
-// away from stays in the cache until it is collected, which is why this is only
-// a suspicion for the probe to settle rather than the answer itself.
-//
-// The cache is an external store and is read as one. Subscribing in an effect
-// and calling `setState` from the listener does not hold here: the cache emits
-// synchronously when an observer is created, and an observer is created when a
-// component calls `useQuery` during its render, so the listener runs inside
-// another component's render pass. React calls that a bad `setState` in render.
-// `useSyncExternalStore` is the primitive for this shape, and React owns the
-// timing, so the same notification arrives safely.
-function useUnreachableSince(): number {
-  const queryClient = useQueryClient()
-
-  // `useSyncExternalStore` identity-checks `subscribe` and re-subscribes when it
-  // changes, so this is held stable rather than rebuilt every render. That is
-  // the "a reference something else identity-checks" case performance.md keeps,
-  // not memoization by reflex.
-  const subscribe = useCallback(
-    (onStoreChange: () => void) =>
-      queryClient.getQueryCache().subscribe(onStoreChange),
-    [queryClient],
-  )
-
-  // Runs on every notification and more than once per render, so it stays a
-  // scan that returns a number. React compares snapshots with `Object.is`, so
-  // returning anything carrying an identity of its own would loop. The probe's
-  // own failures are left out: they are the verdict, not a new suspicion.
-  const getSnapshot = useCallback(
-    () =>
-      queryClient
-        .getQueryCache()
-        .getAll()
-        .reduce(
-          (newest, query) =>
-            query.queryKey[0] !== GATEWAY_LIVENESS &&
-            query.state.status === "error" &&
-            isUnreachable(query.state.error)
-              ? Math.max(newest, query.state.errorUpdatedAt)
-              : newest,
-          0,
-        ),
-    [queryClient],
-  )
-
-  return useSyncExternalStore(subscribe, getSnapshot)
-}
-
-/**
- * True once a request has failed to reach the gateway and a liveness probe,
- * retries included, has failed too. Clears when the probe next succeeds.
- *
- * One request failing at the network layer is not evidence the gateway is down:
- * a laptop waking from sleep, a Wi-Fi or VPN change, or an edge proxy dropping a
- * pooled connection each fail a single fetch against a healthy backend, and the
- * build poll every page runs does not retry. So a failed query only starts the
- * probe, and the probe's answer is the verdict. The liveness route does no I/O,
- * so it answers whenever the process does.
- *
- * The probe runs when the newest unreachable failure is newer than its own last
- * success, and keeps re-asking for as long as it fails. It retries before
- * settling on an error (the delay is the client's default), and it runs whatever
- * the browser believes about being online, because an offline browser cannot
- * reach the gateway either and the answer should say so. Each attempt has a
- * short deadline of its own rather than `apiFetch`'s 30s: the route does no
- * I/O, so a gateway that has not answered it in a few seconds is not answering,
- * and three full-length attempts would hold the alarm back for a minute and a
- * half while every page spins.
- *
- * "Down" is read from the timestamps, not `status`: a query that has never held
- * data goes back to `pending` on every refetch, so `isError` would drop the
- * banner for the length of each recheck while the gateway is still down.
- */
-const GATEWAY_LIVENESS_TIMEOUT_MS = 5_000
-
-export function useGatewayUnreachable(): boolean {
-  const unreachableSince = useUnreachableSince()
-  const liveness = useQuery({
-    queryKey: [GATEWAY_LIVENESS],
-    queryFn: () =>
-      apiFetch<string>("/health/liveness", {
-        signal: AbortSignal.timeout(GATEWAY_LIVENESS_TIMEOUT_MS),
-      }),
-    enabled: (query) =>
-      isDown(query.state) || unreachableSince > query.state.dataUpdatedAt,
-    retry: 2,
-    networkMode: "always",
-    refetchInterval: (query) =>
-      isDown(query.state) ? GATEWAY_LIVENESS_RECHECK_MS : false,
-    refetchOnWindowFocus: true,
-    staleTime: 0,
-  })
-  return isDown(liveness)
-}
-
-function isDown(state: {
-  errorUpdatedAt: number
-  dataUpdatedAt: number
-}): boolean {
-  return state.errorUpdatedAt > state.dataUpdatedAt
-}
 // Every model the configured credentials can reach, per provider. Distinct from
 // useModels: that is the catalog served to API callers (curated by
 // model_discovery, aliases listed, targets withheld), while this is what an
@@ -190,17 +70,27 @@ function isDown(state: {
 // server-side predicate on a read the shell already makes (otari#836).
 // ---------------------------------------------------------------------------
 
+// No `enabled` parameter: both callers sit behind routes whose surfaces
+// (`admin`, `hosted_providers`, `agent_recommenders`) every gateway publishes. Not inferred from a
+// 404 either: the ordinary retry policy applies, and a failure is a failure.
+const accessQuery = {
+  queryKey: [DEPLOYMENT_ADMIN, "access"],
+  queryFn: () => apiFetch<DeploymentAdminAccess>("/admin/access"),
+  staleTime: 60_000,
+}
+
 export function useDeploymentAdminAccess() {
+  return useQuery({ ...accessQuery, select: (body) => body.granted })
+}
+
+/**
+ * Whether the caller is the bootstrap operator, the one account that may hand
+ * that role on. A gateway older than the field answers `false`.
+ */
+export function useIsBootstrapOperator() {
   return useQuery({
-    queryKey: [DEPLOYMENT_ADMIN, "access"],
-    queryFn: () =>
-      apiFetch<DeploymentAdminAccess>("/admin/access").then(
-        (body) => body.granted,
-      ),
-    staleTime: 60_000,
-    // No `enabled` parameter: both callers sit behind routes whose surfaces
-    // (`admin`, `hosted_providers`, `agent_recommenders`) every gateway publishes. Not inferred from a
-    // 404 either: the ordinary retry policy applies, and a failure is a failure.
+    ...accessQuery,
+    select: (body) => body.is_bootstrap_operator ?? false,
   })
 }
 
@@ -257,13 +147,28 @@ export function useUpdateDeploymentUser() {
   })
 }
 
-export function useGenerateDeploymentUserPassword() {
+/**
+ * Make another operator the bootstrap operator.
+ *
+ * Invalidates the access read as well as the list: the caller stops being the
+ * bootstrap operator, so the control that did this goes away.
+ */
+export function useHandOverBootstrapOperator() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) =>
-      apiFetch<DeploymentUserPassword>(
-        `/admin/users/${encodeURIComponent(id)}/password`,
-        { method: "POST" },
+    mutationFn: ({
+      id,
+      currentPassword,
+    }: {
+      id: string
+      currentPassword: string
+    }) =>
+      apiFetch<void>(
+        `/admin/users/${encodeURIComponent(id)}/bootstrap-operator`,
+        {
+          method: "POST",
+          body: JSON.stringify({ current_password: currentPassword }),
+        },
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: [DEPLOYMENT_ADMIN] })

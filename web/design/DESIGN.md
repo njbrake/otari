@@ -64,7 +64,7 @@ for a component, not for those.
 | `metrics/SeverityMark` | `SeverityMark`, and the `Severity` type |
 | `metrics/TrendChip` | `TrendChip`, `trendState`, and the `Trend*` types |
 | `metrics/charts` | `TrendChart`, `Sparkline`, `ChartLegend`, and the `SeriesDef` / `StackedPoint` types |
-| `feedback/ErrorBanner` · `/InfoBanner` · `/EmptyState` · `/EmptyMessage` · `/PageLoading` · `/PageError` · `/ConfirmDialog` · `/FormDialog` · `/ErrorBoundary` · `/Skeleton` · `/LoadingBar` · `/errorMessage` | one each |
+| `feedback/ErrorBanner` · `/InfoBanner` · `/EmptyState` · `/EmptyMessage` · `/PageLoading` · `/PageError` · `/ConfirmDialog` · `/FormDialog` · `/ErrorBoundary` · `/Skeleton` · `/errorMessage` | one each |
 | `feedback/Dialog` | `Dialog`, `DialogSection`, and the `DialogSize` / `ScanTone` types |
 | `forms/Field` · `/SecretField` · `/TextArea` · `/SearchField` · `/FieldAction` | one component each |
 | `forms/Select` | `Select`, and the `SelectOption` type |
@@ -79,17 +79,18 @@ for a component, not for those.
 | `forms/optionKey` | `optionKey`, `optionValue`. Internal to the two selects |
 | `actions/Button` | `Button`, and the `ButtonVariant` / `ButtonSize` / `ButtonProps` types |
 | `actions/IconButton` | `IconButton` |
-| `actions/ConfirmButton` · `/RefreshButton` · `/CopyButton` · `/TextButton` | one each |
+| `actions/ConfirmButton` · `/RefreshButton` · `/CopyButton` | one each |
 | `actions/CopyField` | `CopyField`, `CopyableValue` |
-| `actions/RowAction` | `RowAction`, `RowActionRow` |
+| `actions/RowAction` | `RowAction`, `RowActionRow`, and `RowMenuContext`, which `ConfirmRowAction` asks through |
+| `actions/RowMenu` | `RowMenu`, and the `RowMenuAction` type |
 | `actions/ConfirmRowAction` | `ConfirmRowAction` |
 | `data/DataTable` | `DataTable`, and the `DataTableColumn` type |
 | `data/TablePagination` | `TablePagination`, `PAGE_SIZE_OPTIONS` |
 | `data/BulkActionBar` | `BulkActionBar` |
 | `navigation/TabRow` | `TabRow`, `Tab` |
 | `navigation/Segmented` · `/FilterSelect` · `/FilterMultiComboBox` · `/Disclosure` · `/DisclosureRow` · `/DocsLink` | one each |
-| `overlays/Tooltip` · `/Popover` · `/Sheet` | one each |
-| `overlays/Menu` | `Menu`, `MenuButton`, `MenuItem`, `MenuSection`, `MenuSubmenu`. The list and its rows are useless apart |
+| `navigation/FilterChips` | `FilterChips`, and the `FilterChip` type |
+| `overlays/Tooltip` · `/Popover` | one each |
 | `indicators/Dot` · `/Badge` · `/DismissChip` · `/Kbd` · `/Avatar` | one each |
 | `indicators/Chip` | `Chip`, and the `ChipTone` type |
 | `layout/Divider` | `Divider` |
@@ -210,8 +211,8 @@ and [web/AGENTS.md](../AGENTS.md).
 | [data.md](data.md) | `DataTable`, pagination, bulk actions |
 | [metrics.md](metrics.md) | KPI strip, trends, meters, status marks, charts |
 | [feedback.md](feedback.md) | Banners, empty states, loading, dialogs |
-| [navigation.md](navigation.md) | `TabRow`, `Segmented`, applied filters, the rail |
-| [overlays.md](overlays.md) | `Tooltip`, `Popover`, `Menu`, `Sheet`, the dialogs, and which of them a thing wants |
+| [navigation.md](navigation.md) | `TabRow`, `Segmented`, `FilterChips`, the rail |
+| [overlays.md](overlays.md) | `Tooltip`, `Popover`, the two dialogs, and which of them a thing wants |
 | [motion-and-access.md](motion-and-access.md) | Durations, press, focus, 44px floor, reduced motion |
 
 Visual reference, in two places. The Paper file `Otari / Neat shell` has the

@@ -1,16 +1,20 @@
 """Heavy usage reads take turns, so one dashboard page cannot run them all at once."""
 
 import asyncio
-from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any, cast
 
-from gateway.core.unit_of_work import UnitOfWork
-from gateway.repositories.usage import UsageReadRepository, UsageRollupRepository, UsageSummaryRepository
-from gateway.services.usage import UsageReadService
+import pytest
 
-START = datetime(2026, 10, 1, tzinfo=UTC)
-END = datetime(2026, 10, 2, tzinfo=UTC)
+from gateway.core.unit_of_work import UnitOfWork
+from gateway.exceptions.usage_and_telemetry_exceptions import UsageReadsBusyError
+from gateway.repositories.usage_and_telemetry import UsageFilters, UsageLogRepository, UsageScope
+from gateway.services.api_keys import ApiKeyService
+from gateway.services.organizations import UserAccess
+from gateway.services.usage_and_telemetry import HeavyUsageReads, UsageService
+
+FILTERS = UsageFilters()
+SCOPE = cast(UsageScope, object())
 
 
 class _Counter:
@@ -56,7 +60,11 @@ class _FakeUnitOfWork:
             self.connections.leave()
 
 
-class _SlowSummaries:
+class _Stop(Exception):
+    """Ends a read once it has done the part being counted."""
+
+
+class _SlowUsageLogs:
     """Answers every read after a pause, counting how many are running."""
 
     def __init__(self, uow: _FakeUnitOfWork, running: _Counter) -> None:
@@ -71,47 +79,34 @@ class _SlowSummaries:
         self._uow.connections.sample()
         self._running.leave()
 
-    async def tool_usage(self, tools: Any, rows: Any) -> list[Any]:
+    async def count_matching(self, filters: Any, scope: Any, *, imported_only: bool) -> int:
         await self._work()
-        return []
+        return 0
 
-    async def totals(self, rows: Any, status: str | None) -> Any:
+    async def totals(self, filters: Any, scope: Any) -> Any:
         await self._work()
         raise _Stop
 
 
-class _Rollups:
-    """Hands back a relation without reading anything, so the summaries' pause is the only work."""
-
-    async def rows(self, *args: Any, **kwargs: Any) -> Any:
-        return object()
-
-
-class _Stop(Exception):
-    """Ends a read once it has done the part being counted."""
-
-
-def _service(gate: asyncio.Semaphore, connections: _Counter, running: _Counter) -> UsageReadService:
+def _service(gate: HeavyUsageReads, connections: _Counter, running: _Counter) -> UsageService:
     uow = _FakeUnitOfWork(connections)
     # Authentication and scope resolution read on the request's session before the service is called.
     uow.statement()
-    return UsageReadService(
+    return UsageService(
         cast(UnitOfWork, uow),
-        cast(UsageReadRepository, object()),
-        cast(UsageSummaryRepository, _SlowSummaries(uow, running)),
-        cast(UsageRollupRepository, _Rollups()),
-        gate,
+        cast(UsageLogRepository, _SlowUsageLogs(uow, running)),
+        keys=cast(ApiKeyService, object()),
+        users=cast(UserAccess, object()),
+        heavy_reads=gate,
     )
 
 
 def test_no_more_heavy_reads_run_at_once_than_the_limit() -> None:
-    gate = asyncio.Semaphore(2)
+    gate = HeavyUsageReads(2)
     connections, running = _Counter(), _Counter()
 
     async def main() -> None:
-        await asyncio.gather(
-            *(_service(gate, connections, running).tools(conditions=[], start=START, end=END) for _ in range(6))
-        )
+        await asyncio.gather(*(_service(gate, connections, running).count(FILTERS, SCOPE) for _ in range(6)))
 
     asyncio.run(main())
 
@@ -121,22 +116,38 @@ def test_no_more_heavy_reads_run_at_once_than_the_limit() -> None:
 
 
 def test_every_kind_of_heavy_read_shares_the_one_limit() -> None:
-    gate = asyncio.Semaphore(1)
+    gate = HeavyUsageReads(1)
     connections, running = _Counter(), _Counter()
 
     async def summary() -> None:
-        try:
-            await _service(gate, connections, running).summary(
-                conditions=[], status=None, bucket="day", dimensions=["none"], start=START, end=END
-            )
-        except _Stop:
-            pass
+        with pytest.raises(_Stop):
+            await _service(gate, connections, running).summary(FILTERS, SCOPE, bucket="day", dimensions=["none"])
 
-    async def tools() -> None:
-        await _service(gate, connections, running).tools(conditions=[], start=START, end=END)
+    async def grouped_series() -> None:
+        with pytest.raises(_Stop):
+            await _service(gate, connections, running).grouped_series(FILTERS, SCOPE, bucket="day", group_by="model")
+
+    async def count() -> None:
+        await _service(gate, connections, running).count(FILTERS, SCOPE)
 
     async def main() -> None:
-        await asyncio.gather(summary(), tools(), summary(), tools())
+        await asyncio.gather(summary(), count(), grouped_series(), summary(), count())
+
+    asyncio.run(main())
+
+    assert running.most == 1
+
+
+def test_a_read_that_waits_too_long_is_refused_and_takes_no_turn() -> None:
+    gate = HeavyUsageReads(1, wait_s=0.01)
+    connections, running = _Counter(), _Counter()
+
+    async def main() -> None:
+        async with gate.turn(cast(UnitOfWork, _FakeUnitOfWork(connections))):
+            with pytest.raises(UsageReadsBusyError):
+                await _service(gate, connections, running).count(FILTERS, SCOPE)
+        # The refused read gave back nothing it did not take, so the one turn is free again.
+        await _service(gate, connections, running).count(FILTERS, SCOPE)
 
     asyncio.run(main())
 

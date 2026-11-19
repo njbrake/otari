@@ -5,36 +5,23 @@ import { describe, expect, it } from "vitest"
 
 import {
   deltaFraction,
-  formatCompact,
   formatCost,
-  formatDuration,
+  formatCount,
   formatFileSize,
   formatLatency,
-  formatMultiple,
   formatNumber,
   formatPct,
   formatRate,
   formatRelative,
   formatReleaseDate,
   formatScore,
-  formatSeconds,
   formatSpend,
   formatTokens,
   formatTokensCompact,
   formatUnitRate,
   formatUsd,
-  formatUsdAxis,
   formatUsdCompact,
   formatUsdHeadline,
-  formatUsdLimit,
-  formatUtcDateTime,
-  formatUtcDay,
-  formatUtcMinute,
-  formatUtcMonth,
-  formatUtcMonthName,
-  formatUtcMonthYear,
-  formatUtcTime,
-  formatUtcWeekdayHour,
 } from "@/shared/helpers/format"
 
 describe("formatNumber", () => {
@@ -51,14 +38,6 @@ describe("formatUsd", () => {
     expect(formatUsd(1240.5)).toBe("$1,240.50")
     // No sub-cent precision here (unlike formatCost): tiles stay readable.
     expect(formatUsd(0.004)).toBe("$0.00")
-  })
-})
-
-describe("formatUsdLimit", () => {
-  it("writes a limit as it was set", () => {
-    expect(formatUsdLimit(1000)).toBe("$1,000")
-    expect(formatUsdLimit(25)).toBe("$25")
-    expect(formatUsdLimit(12.5)).toBe("$12.50")
   })
 })
 
@@ -95,28 +74,6 @@ describe("formatScore", () => {
   })
 })
 
-describe("usage chart and tile figures", () => {
-  it("sizes axis dollars compactly", () => {
-    expect(formatUsdAxis(200)).toBe("$200")
-    expect(formatUsdAxis(1500)).toBe("$1.5K")
-    expect(formatUsdAxis(0)).toBe("$0")
-    expect(formatUsdAxis(0.0001, 0.0001)).toBe("$0.0001")
-    expect(formatUsdAxis(0.0003, 0.0001)).toBe("$0.0003")
-  })
-
-  it("says a multiple with one decimal", () => {
-    expect(formatMultiple(3.94)).toBe("3.9×")
-    expect(formatMultiple(2)).toBe("2.0×")
-  })
-
-  it("says a duration to the minute", () => {
-    expect(formatDuration(30_000)).toBe("<1m")
-    expect(formatDuration(55 * 60_000)).toBe("55m")
-    expect(formatDuration(2 * 3_600_000)).toBe("2h")
-    expect(formatDuration(6 * 3_600_000 + 40 * 60_000)).toBe("6h 40m")
-  })
-})
-
 describe("formatTokensCompact and formatUsdCompact", () => {
   it("keep three significant figures", () => {
     expect(formatTokensCompact(1_234_567_890)).toBe("1.23B")
@@ -124,6 +81,13 @@ describe("formatTokensCompact and formatUsdCompact", () => {
     expect(formatTokensCompact(10_000_000)).toBe("10M")
     expect(formatUsdCompact(12_345_678.9)).toBe("$12.3M")
     expect(formatUsdCompact(100_000)).toBe("$100K")
+  })
+})
+
+describe("formatCount", () => {
+  it("groups a whole count", () => {
+    expect(formatCount(24108)).toBe("24,108")
+    expect(formatCount(7)).toBe("7")
   })
 })
 
@@ -154,7 +118,6 @@ describe("formatPct", () => {
     expect(formatPct(0)).toBe("0.0%")
     expect(formatPct(0.021)).toBe("2.1%")
     expect(formatPct(1.25)).toBe("125.0%")
-    expect(formatPct(0.964, 0)).toBe("96%")
   })
 })
 
@@ -290,40 +253,6 @@ describe("formatRelative", () => {
 
   it("returns 'never' for missing timestamps", () => {
     expect(formatRelative(null, now)).toBe("never")
-  })
-})
-
-describe("the gateway's clock", () => {
-  // 09:05:07 UTC, and still the 27th: a zone behind UTC would read the 26th.
-  const MOMENT = "2026-09-27T09:05:07Z"
-
-  it("reads a request's moment in UTC, whatever the browser's zone", () => {
-    expect(formatUtcTime(MOMENT)).toBe("09:05")
-    expect(formatUtcTime(MOMENT, true)).toBe("09:05:07")
-    expect(formatUtcDay(MOMENT)).toBe("Sep 27")
-    expect(formatUtcMonth(MOMENT)).toBe("Sep")
-    expect(formatUtcMonthName(MOMENT)).toBe("September")
-    expect(formatUtcMonthYear(MOMENT)).toBe("September 2026")
-    expect(formatUtcMinute(MOMENT)).toBe("Sep 27 09:05")
-    expect(formatUtcDateTime(MOMENT)).toBe("2026-09-27 09:05:07 UTC")
-    expect(formatUtcWeekdayHour(MOMENT)).toBe("Sun 09h")
-  })
-
-  it("keeps midnight at 00, not 24", () => {
-    expect(formatUtcTime("2026-09-27T00:00:00Z")).toBe("00:00")
-  })
-
-  it("takes epoch milliseconds, and hands back what is not a date", () => {
-    expect(formatUtcTime(Date.parse(MOMENT))).toBe("09:05")
-    expect(formatUtcDateTime("not a date")).toBe("not a date")
-  })
-})
-
-describe("thresholds", () => {
-  it("reads a round number compactly and a duration in seconds", () => {
-    expect(formatCompact(500_000)).toBe("500K")
-    expect(formatSeconds(10_000)).toBe("10 s")
-    expect(formatSeconds(2_500)).toBe("2.5 s")
   })
 })
 

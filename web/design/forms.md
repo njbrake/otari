@@ -55,7 +55,7 @@ SecretField: { label, value, onChange, placeholder?, description?, shouldReserve
 SearchField: { label, value, onChange, placeholder = "Search", isDisabled?, className? }
 Toggle: { label, isSelected, onChange: (next: boolean) => void, isDisabled? }
 Checkbox: { isSelected, onChange: (next: boolean) => void, isDisabled?, ariaLabel?,
-  description?, children }
+  children }
 Select: { label, value, onChange, options: SelectOption[], description?, placeholder?,
   isRequired?, isDisabled?, isInvalid?, errorMessage?, shouldReserveMessage?, className? }
 ComboBoxField: { label, value, onChange, onQueryChange?, options: ComboBoxOption[],
@@ -184,8 +184,8 @@ who knows an id reaches the row named for a person.
 ## Field height is a property of the place, not of the field
 
 A field is **36px**. Inside a named dense place it is **32px**, and below `md`
-every place raises it to **44px**, so the dense size is a desktop size the phone
-layout takes back off. Three places exist:
+every field, in a place or not, is **44px**, so both desk sizes are sizes the
+phone layout takes back off. Three places exist:
 
 | Place | Component that puts it on |
 | --- | --- |
@@ -196,15 +196,13 @@ layout takes back off. Three places exist:
 `.otari-settings` differs from the other two in one way worth knowing: on a
 phone its field also gains block padding, where a toolbar's keeps the dense 4px.
 That is because the row's control stops sharing the row and stacks full width
-under its label there, so it is a form field again rather than one of a strip of
-small ones.
+under its label there, so it is a form field again rather than one of a strip
+of small ones.
 
-**Every field is 16px on a phone, whatever place it is in.** iOS zooms the page
-when a field under 16px takes focus and leaves it zoomed after the keyboard
-goes, so `design-system.css` sets `.input`, `.textarea` and the search field to
-`--text-base` below `md`. A field that is not one of those (a bare `<input>`
-with classes of its own) misses the rule, which is one more reason to build it
-from `INPUT_CLASS`.
+Type is not a place's to choose on a touch screen: every text field there is
+16px whatever its class says (`globals.css`, the text-entry floor), because iOS
+zooms the page into a smaller one on focus, and an iPhone held sideways is wider
+than the 640px step at which HeroUI's own fields drop to 14px.
 
 **No call site picks a height.** A page says "this row is a toolbar" and every
 control in it agrees on a size, which is what stopped the six pages with a filter
@@ -286,9 +284,6 @@ The box fills with `--color-control-indicator` and the mark is
 Pass `ariaLabel` when the visible label repeats across the page (one workspace list
 per guardrail, say). Keep the visible text inside it so speech input still reaches
 the control.
-
-Pass `description` for help text under a checkbox rather than a sibling paragraph:
-it is linked to the control, so a screen reader announces it with the label.
 
 A label that wraps keeps the box beside its first line: the box sits in a slot one
 body line tall. Do not re-align it from the call site.

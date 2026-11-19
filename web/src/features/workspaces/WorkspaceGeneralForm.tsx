@@ -10,6 +10,7 @@ import {
   NarrowedDefaults,
   NO_DEFAULT,
 } from "@/features/workspaces/WorkspaceBudgetDefaults"
+import { WorkspaceTraceContent } from "@/features/workspaces/WorkspaceTraceContent"
 import { useBudgets } from "@/shared/api/budgets"
 import { useDeploymentOperator } from "@/shared/api/organizations"
 import { useDeploymentProviderNames } from "@/shared/api/providers"
@@ -210,6 +211,9 @@ export function WorkspaceGeneralForm({
           />
         </section>
       ) : null}
+      <section className="flex flex-col gap-3 border-t border-border pt-6">
+        <WorkspaceTraceContent workspace={workspace} />
+      </section>
     </div>
   )
 }

@@ -4,7 +4,7 @@ A row gives a hold an identity, an age and a time to live (TTL).
 Release is idempotent, because only the first claim of an active row does the work.
 The sweep reclaims a leaked hold on its own.
 The sweep takes no row lock, and the conditional UPDATE in :func:`try_terminate` decides between two sweepers.
-A row never commits before the holds it records, so the sweep never releases an amount that nobody holds.
+A row is written after the holds it records, so the sweep never releases an amount that nobody holds.
 A hold whose row never landed is reclaimed by clamping its counter to the active rows.
 A claim and the release it authorizes commit in one transaction, so a terminal row never has an outstanding hold.
 """
@@ -382,10 +382,10 @@ async def reconcile_orphaned_holds(db: AsyncSession, *, quiet_sec: int, batch_si
     """Return holds that the counters carry and no active row records, returning how many counters moved.
 
     :func:`sweep_expired` reclaims through rows, so a hold whose row never
-    committed (the process died after the hold and before the row, or an older
-    gateway that wrote them apart) is invisible to it, and the period reset leaves
-    holds alone. Each counter is clamped down to the sum of its active rows; one
-    below that sum is left as it is.
+    committed (the process died after the hold and before the row, or the
+    scoped holds of a request whose row write failed) is invisible to it, and
+    the period reset leaves holds alone. Each counter is clamped down to the sum
+    of its active rows; one below that sum is left as it is.
 
     A counter is touched only when it has not been written for ``quiet_sec``, the
     reservation TTL. A request between its hold and its row has written that

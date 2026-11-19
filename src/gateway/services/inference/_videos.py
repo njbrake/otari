@@ -16,7 +16,7 @@ from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.inference_exceptions import VideoJobNotFoundError
 from gateway.log_config import logger
 from gateway.repositories.inference import VideoJobRepository
-from gateway.services.pricing import price_video
+from gateway.services.pricing import PriceFacts, charged_as_reported, price_video, reported_video_cost
 
 if TYPE_CHECKING:
     import uuid
@@ -24,6 +24,39 @@ if TYPE_CHECKING:
     from gateway.models.inference import VideoJobRecord
     from gateway.services.pricing import UsageCharge
     from gateway.services.pricing_service import ResolvedPricing
+
+
+def _price_length(record: VideoJobRecord, found: ResolvedPricing | None, seconds: int) -> UsageCharge | None:
+    """What ``seconds`` of the job cost at the rate ``found``, under the rules its request meets."""
+    if found is None or seconds < 0:
+        return None
+    facts = PriceFacts(
+        at=record.created_at,
+        resolution=record.resolution,
+        aspect_ratio=record.aspect_ratio,
+        duration=seconds,
+        input_video=record.input_video,
+        generate_audio=record.generate_audio,
+    )
+    return price_video(found.pricing, seconds, facts=facts)
+
+
+# How far, as a share of what the provider charged, a rate's price may sit from
+# it before the rate is taken to be stale or wrong.
+STRAY_CHARGE_MARGIN = Decimal("0.1")
+
+
+def _stray_charge(billed: Decimal, reported: float | None) -> Decimal | None:
+    """What the provider charged where ``billed`` sits further from it than the margin, else ``None``."""
+    charged = reported_video_cost(reported)
+    if charged is None or abs(billed - charged) <= charged * STRAY_CHARGE_MARGIN:
+        return None
+    return charged
+
+
+# The length a job is taken to be when nobody states one: the longest default a
+# served provider renders, so neither the reservation nor the bill is short.
+ESTIMATED_VIDEO_SECONDS = 8
 
 
 @dataclass(frozen=True)
@@ -122,8 +155,15 @@ class VideoJobService:
         workspace_id: uuid.UUID | None,
         seconds: int | None,
         counts_toward_budget: bool,
+        resolution: str | None,
+        aspect_ratio: str | None,
+        input_video: bool | None,
+        generate_audio: bool | None,
+        created_at: datetime,
     ) -> None:
-        """Keep the record of a job the provider accepted.
+        """Keep the record of a job the provider accepted, with what its price's rules may ask.
+
+        ``created_at`` is when the request started, the time the job is billed at.
 
         A write that fails is tried once more. One that fails again is logged
         with the job's id, so an operator can reconcile the job upstream, and
@@ -142,6 +182,11 @@ class VideoJobService:
                         workspace_id=workspace_id,
                         seconds=seconds,
                         counts_toward_budget=counts_toward_budget,
+                        resolution=resolution,
+                        aspect_ratio=aspect_ratio,
+                        input_video=input_video,
+                        generate_audio=generate_audio,
+                        created_at=created_at,
                     )
             except DATABASE_ERRORS as exc:
                 if attempt == 2:
@@ -168,15 +213,17 @@ class VideoJobService:
     async def remember_completed(self, record: VideoJobRecord, job: VideoJob) -> None:
         """Keep what a completed job reported, so a later read needs no provider that may have forgotten it.
 
-        The first output's address and media type are kept; inline data is not,
-        since a provider that returns it also keeps the job. The record then
-        answers every later read of the job and serves its content.
+        Its length, the provider's charge, and the first output's address and
+        media type are kept; inline data is not, since a provider that returns
+        it also keeps the job. The record then answers every later read of the
+        job and serves its content.
         """
         output = next((item for item in job.outputs if item.url is not None), None)
         async with self._uow:
             await self._jobs.remember_completed(
                 record.id,
                 seconds=job.seconds,
+                cost=reported_video_cost(job.cost),
                 output_url=None if output is None else output.url,
                 output_mime_type=None if output is None else output.mime_type,
                 completed_at=datetime.now(UTC),
@@ -198,6 +245,7 @@ class VideoJobService:
             completed_at=int(record.completed_at.timestamp()),
             seconds=record.completed_seconds,
             outputs=outputs,
+            cost=None if record.completed_cost is None else float(record.completed_cost),
         )
 
     async def settle_completed(
@@ -205,30 +253,37 @@ class VideoJobService:
         record: VideoJobRecord,
         *,
         reported_seconds: int | None,
+        reported_cost: float | None,
         endpoint: str,
         workspace_id: uuid.UUID,
         organization_id: uuid.UUID | None,
         deployment_paid: bool,
         charge_deployment: Callable[[Decimal | None], Awaitable[None]] | None = None,
     ) -> bool:
-        """Bill a completed job once, its length at the model's per-second rate, and tell whether this call did.
+        """Bill a completed job once and tell whether this call did.
 
-        The length is what the provider reports, else what the request asked
-        for. A job with no per-second rate now stays unclaimed, so a later read
-        bills it once a rate exists. One whose length nobody knows is claimed
-        with no cost, so it is not retried forever. ``charge_deployment`` is
-        given the cost before the row is written, where the deployment paid for
-        the job.
+        A job is priced at the model's per-second rate for the length the
+        provider reports, else the length the request asked for. Where nobody
+        states a length, it is billed what the provider charged for it, else
+        the length its reservation assumed at the per-second rate. A job the
+        rate has to price and no rate does stays unclaimed, so a later read
+        bills it once a rate exists. A rate's price far from what the provider
+        charged is warned of, since the rate is then likely stale or wrong.
+        ``charge_deployment`` is given the cost before the row is written,
+        where the deployment paid for the job.
         """
         if record.accounted_at is not None:
             return False
         seconds = reported_seconds if reported_seconds is not None else record.seconds
-        found = await self._rate(
-            record.provider, record.model, organization_id=organization_id, deployment_paid=deployment_paid
-        )
-        pricing = found.pricing if found is not None else None
-        charge = price_video(pricing, seconds) if seconds is not None and seconds >= 0 else None
-        if seconds is not None and charge is None:
+        # A charge the provider states prices only a job of no stated length, so no rate prices it and none is named.
+        found: ResolvedPricing | None = None
+        charge = charged_as_reported(reported_cost) if seconds is None else None
+        if charge is None:
+            found = await self._rate(
+                record.provider, record.model, organization_id=organization_id, deployment_paid=deployment_paid
+            )
+            charge = _price_length(record, found, ESTIMATED_VIDEO_SECONDS if seconds is None else seconds)
+        if charge is None:
             logger.warning(
                 "Video job %s on %s:%s completed with no per-second video price; it stays unbilled until one is set",
                 record.id,
@@ -236,6 +291,17 @@ class VideoJobService:
                 record.model,
             )
             return False
+        stray = None if found is None else _stray_charge(charge.cost, reported_cost)
+        if stray is not None:
+            logger.warning(
+                "Video job %s on %s:%s was billed %s at the stored rate, but the provider charged %s; "
+                "the rate may be stale or wrong",
+                record.id,
+                record.provider,
+                record.model,
+                charge.cost,
+                stray,
+            )
         usage = CompletedVideoUsage(
             video_id=record.id,
             workspace_id=workspace_id,

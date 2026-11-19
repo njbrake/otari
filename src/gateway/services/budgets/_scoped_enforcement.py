@@ -100,11 +100,6 @@ class ApplicableBudget:
     request_limit: int | None = None
 
     @property
-    def caps_counts(self) -> bool:
-        """Whether this ceiling caps tokens or requests as well as dollars."""
-        return self.token_limit is not None or self.request_limit is not None
-
-    @property
     def subject(self) -> str:
         """The scope's name in a refusal message."""
         return _SCOPE_SUBJECT.get(self.scope_type, "Budget")
@@ -224,6 +219,7 @@ async def roll_and_list_applicable(
     """Return ``ceilings`` as the budgets a request must pass, in order, after rolling any window that has ended."""
     now = datetime.now(UTC)
     if any(ceiling.period_end is not None and now >= ceiling.period_end for ceiling in ceilings):
+        await defer_commit_flush(db)
         await roll_ended_windows(ScopedBudgetRepository(db), ceilings, now)
         await db.commit()
     return tuple(to_applicable_budget(ceiling) for ceiling in ceilings)

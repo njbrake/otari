@@ -13,7 +13,6 @@ from gateway.api.deps import (
     ApiKeyServiceDep,
     BudgetServiceDep,
     CallerOrganization,
-    RoutingServiceDep,
     get_config,
     get_db,
     require_deployment_operator,
@@ -23,17 +22,16 @@ from gateway.api.routes.users import TOTAL_COUNT_HEADER
 from gateway.auth.models import hash_key, key_suffix
 from gateway.core.config import GatewayConfig
 from gateway.core.database import DATABASE_ERRORS
-from gateway.core.sql import MAX_FILTER_VALUES
+from gateway.core.sql import utc_iso
 from gateway.core.surface import Surface
-from gateway.models.api_keys import MAX_END_USER_BUDGETS, APIKey
+from gateway.models.api_keys import MAX_END_USER_BUDGETS, APIKey, DisabledReason
 from gateway.models.tenancy import Workspace
 from gateway.models.users import User
 from gateway.repositories.users_repository import get_or_create_default_user, owned_by_organization
 from gateway.schemas.api_keys import FederationRuleCreate, FederationRulePublic
-from gateway.schemas.budgets import EndUserPublic, EndUserPut, EndUserUpdate
-from gateway.schemas.routing import KeyRoutingPublic, KeyRoutingResponse
+from gateway.schemas.budgets import EndUserPublic, EndUserPut, EndUserUpdate, KeyEndUsersPublic
 from gateway.services.api_keys import (
-    KeyReach,
+    operator_enable_refusal,
     operator_max_end_users,
     operator_set_active,
     refuse_service_key_flag_change,
@@ -48,8 +46,8 @@ from gateway.services.model_access import (
     validate_allowed_tools,
 )
 from gateway.services.organizations import AccessLists
-from gateway.services.routing import FALLBACK_WINDOW, RoutingService
 from gateway.services.workspace_scope import organization_default_workspace_id
+from gateway.types.key_scope import DEFAULT_KEY_SCOPES, KeyScope, KeyScopeSet
 
 router = APIRouter(
     prefix="/keys",
@@ -60,38 +58,12 @@ router = APIRouter(
 SURFACE = Surface("keys")
 
 
-KEY_SEARCH_MAX_LENGTH = 200
-KEY_SEARCH_DESC = (
-    "Narrow to keys whose name, prefix or suffix contains this text, case-insensitively, or whose id is this text."
-)
-
-
-def key_search_condition(search: str | None) -> ColumnElement[bool] | None:
-    """Keys a picker's search term matches, or None when there is nothing to search for.
-
-    A substring of the name or of either half of the fingerprint, which is what a
-    key's label is built from, or the id itself, so a picker can name a key it was
-    handed by id. ``autoescape`` makes ``%`` and ``_`` literal. It only narrows: the
-    caller's tenant conditions stay on the statement beside it.
-    """
-    term = (search or "").strip()
-    if not term:
-        return None
-    return or_(
-        col(APIKey.id) == term,
-        col(APIKey.key_name).icontains(term, autoescape=True),
-        col(APIKey.key_prefix).icontains(term, autoescape=True),
-        col(APIKey.key_suffix).icontains(term, autoescape=True),
-    )
-
-
 async def _load_key_in_organization(
     db: AsyncSession,
     key_id: str,
     organization_id: uuid.UUID,
     *,
     owner_user_id: str | None = None,
-    condition: ColumnElement[bool] | None = None,
     or_organization_service_keys: bool = False,
 ) -> APIKey:
     """Load a key by id within one organization, or raise 404.
@@ -107,7 +79,6 @@ async def _load_key_in_organization(
     ``owner_user_id`` narrows the load to keys billed to that owner, for the
     member-scoped routes in ``organization_keys.py``: somebody else's key in the
     caller's own organization answers the same 404, for the same reason.
-    ``condition`` narrows it the same way by any other rule those routes apply.
     ``or_organization_service_keys`` also admits the organization's own service
     keys, for an owner or admin, who manages them whoever made them.
     """
@@ -122,8 +93,6 @@ async def _load_key_in_organization(
     if owner_user_id is not None:
         owned = col(APIKey.user_id) == owner_user_id
         statement = statement.where(or_(owned, _organization_service_key()) if or_organization_service_keys else owned)
-    if condition is not None:
-        statement = statement.where(condition)
     result = await db.execute(statement)
     key = result.scalar_one_or_none()
 
@@ -141,6 +110,18 @@ def _organization_service_key() -> ColumnElement[bool]:
     return and_(col(APIKey.is_service_key).is_(True), col(APIKey.self_service).is_(True))
 
 
+# The ``scopes`` field's description on every surface that writes a key.
+CREATE_SCOPES_DESCRIPTION = (
+    "The endpoint groups the key may reach. Omitted, the key gets 'inference:run', 'web:search', 'web:fetch', "
+    "'code:execute', 'mcp:read' and 'mcp:execute': it calls models and tools and lists MCP servers, and nothing "
+    "else. The end-users scopes are a service key's alone."
+)
+UPDATE_SCOPES_DESCRIPTION = (
+    "The endpoint groups the key may reach, replacing the ones it holds; omitted or null leaves them unchanged. "
+    "Takes effect on the key's next request. The end-users scopes are a service key's alone."
+)
+
+
 class CreateKeyRequest(BaseModel):
     """Request model for creating a new API key."""
 
@@ -156,6 +137,9 @@ class CreateKeyRequest(BaseModel):
         default=None,
         description="Tool allow-list for POST /api/v1/search and /api/v1/fetch: null = inherit the user's, "
         "[] = no tool, or search and fetch tool names ('*' for every tool). A model wildcard never grants a tool.",
+    )
+    scopes: list[KeyScope] = Field(
+        default_factory=lambda: list(DEFAULT_KEY_SCOPES), min_length=1, description=CREATE_SCOPES_DESCRIPTION
     )
     exclude_from_budget: bool = Field(
         default=False,
@@ -227,6 +211,7 @@ class CreateKeyResponse(BaseModel):
     is_active: bool
     allowed_models: list[str] | None
     allowed_tools: list[str] | None
+    scopes: list[KeyScope]
     exclude_from_budget: bool
     reject_user_mismatch: bool | None
     capture_agent_telemetry: bool | None
@@ -253,11 +238,16 @@ class KeyInfo(BaseModel):
     last_used_at: str | None
     expires_at: str | None
     is_active: bool
-    # Off because an operator, or a removal from the workspace or organization,
-    # switched it off; only an operator may switch it back on.
-    operator_disabled: bool = False
+    # The reason the owner cannot enable this key. Null for every other key,
+    # including one the owner disabled.
+    disabled_reason: DisabledReason | None
+    # Whether an operator can enable this key, which some reasons also block.
+    # True wherever there is no reason, since nothing then blocks enabling it.
+    operator_can_enable: bool
     allowed_models: list[str] | None
     allowed_tools: list[str] | None
+    # The endpoint groups the key may reach (``types/key_scope.py``).
+    scopes: list[KeyScope]
     exclude_from_budget: bool
     reject_user_mismatch: bool | None
     capture_agent_telemetry: bool | None
@@ -285,13 +275,15 @@ class KeyInfo(BaseModel):
             key_suffix=str(key.key_suffix) if key.key_suffix else None,
             key_name=str(key.key_name) if key.key_name else None,
             user_id=str(key.user_id) if key.user_id else None,
-            created_at=key.created_at.isoformat(),
-            last_used_at=key.last_used_at.isoformat() if key.last_used_at else None,
-            expires_at=key.expires_at.isoformat() if key.expires_at else None,
+            created_at=utc_iso(key.created_at),
+            last_used_at=utc_iso(key.last_used_at) if key.last_used_at else None,
+            expires_at=utc_iso(key.expires_at) if key.expires_at else None,
             is_active=bool(key.is_active),
-            operator_disabled=bool(key.operator_disabled),
+            disabled_reason=key.disabled_reason,
+            operator_can_enable=operator_enable_refusal(key) is None,
             allowed_models=list(key.allowed_models) if key.allowed_models is not None else None,
             allowed_tools=list(key.allowed_tools) if key.allowed_tools is not None else None,
+            scopes=list(key.scopes),
             exclude_from_budget=bool(key.exclude_from_budget),
             reject_user_mismatch=None if key.reject_user_mismatch is None else bool(key.reject_user_mismatch),
             capture_agent_telemetry=(
@@ -328,6 +320,8 @@ class UpdateKeyRequest(BaseModel):
     allowed_models: list[str] | None = None
     # Tri-state the same way: null = inherit the user's search tool access.
     allowed_tools: list[str] | None = None
+    # Not nullable on the key, so absent and null both leave it unchanged.
+    scopes: list[KeyScope] | None = Field(default=None, min_length=1, description=UPDATE_SCOPES_DESCRIPTION)
     is_service_key: bool | None = None
     # Tri-state via model_fields_set: absent = unchanged, null = end users this
     # key creates from now on are uncapped. End users already created keep theirs.
@@ -365,6 +359,7 @@ async def create_key(
     try:
         allowed_models = validate_allowed_models(config, request.allowed_models)
         allowed_tools = validate_allowed_tools(config, request.allowed_tools)
+        scopes = KeyScopeSet.checked(request.scopes, is_service_key=request.is_service_key)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     # Before anything is staged: the check runs in a Unit of Work block, and the
@@ -457,6 +452,7 @@ async def create_key(
         expires_at=request.expires_at,
         allowed_models=allowed_models,
         allowed_tools=allowed_tools,
+        scopes=scopes,
         exclude_from_budget=request.exclude_from_budget,
         reject_user_mismatch=request.reject_user_mismatch,
         capture_agent_telemetry=request.capture_agent_telemetry,
@@ -490,15 +486,12 @@ async def list_keys(
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     workspace_id: Annotated[uuid.UUID | None, Query(description="Only keys in this workspace.")] = None,
-    search: Annotated[str | None, Query(max_length=KEY_SEARCH_MAX_LENGTH, description=KEY_SEARCH_DESC)] = None,
 ) -> list[KeyInfo]:
-    """List the API keys in the caller's organization, oldest first.
+    """List the API keys in the caller's organization.
 
     Requires master key authentication. An unset ``workspace_id`` lists every key
     in that organization; naming a workspace in another one lists nothing rather
     than refusing, so the filter reports no more than the unfiltered read does.
-    ``search`` narrows within that scope, so a picker can ask for the matches
-    instead of filtering whatever page it fetched.
     """
     statement = (
         select(APIKey)
@@ -507,54 +500,10 @@ async def list_keys(
     )
     if workspace_id is not None:
         statement = statement.where(col(APIKey.workspace_id) == workspace_id)
-    if (matches := key_search_condition(search)) is not None:
-        statement = statement.where(matches)
-    # Ordered so a page, and a picker's top matches, are stable, with the id as a
-    # tiebreak for keys minted in the same instant.
-    statement = statement.order_by(col(APIKey.created_at), col(APIKey.id))
     result = await db.execute(statement.offset(skip).limit(limit))
     keys = result.scalars().all()
 
     return [KeyInfo.from_model(key) for key in keys]
-
-
-KEY_ROUTING_IDS_DESC = (
-    f"The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most {MAX_FILTER_VALUES}. "
-    "An id that names no key the caller may see is left out of the answer rather than refused."
-)
-
-KeyRoutingIds = Annotated[
-    list[str], Query(min_length=1, max_length=MAX_FILTER_VALUES, description=KEY_ROUTING_IDS_DESC)
-]
-
-
-async def key_routing_response(routing: RoutingService, keys: list[KeyReach], asked: list[str]) -> KeyRoutingResponse:
-    """The routing read for ``keys``, in the order ``asked`` named them."""
-    position = {key_id: index for index, key_id in reversed(list(enumerate(asked)))}
-    ordered = sorted(keys, key=lambda key: position[key.id])
-    return KeyRoutingResponse(
-        window_days=FALLBACK_WINDOW.days,
-        keys=[KeyRoutingPublic.model_validate(key) for key in await routing.key_routing(ordered)],
-    )
-
-
-@router.get("/routing")
-async def get_keys_routing(
-    api_key_id: KeyRoutingIds,
-    organization_id: CallerOrganization,
-    api_keys: ApiKeyServiceDep,
-    routing: RoutingServiceDep,
-) -> KeyRoutingResponse:
-    """What each key sent in the last 30 days, and whether a failure on each name has a backup.
-
-    For each key in the caller's organization among those named: the model names
-    its requests sent, most requested first, each judged as a request from the
-    key would resolve it now (a routing policy, an alias, a catalog ID narrowed
-    to the offerings the key may reach, or a pinned ``provider:model``), and the
-    routing policies it sent.
-    """
-    keys = await api_keys.reach(set(api_key_id), organization_id=organization_id)
-    return await key_routing_response(routing, keys, api_key_id)
 
 
 @router.get("/{key_id}")
@@ -617,6 +566,14 @@ async def update_key(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    try:
+        scopes = key.scopes.updated(
+            request.scopes,
+            was_service_key=key.is_service_key,
+            is_service_key=key.is_service_key if request.is_service_key is None else request.is_service_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     # Tri-state via model_fields_set, like the lists above: both columns
     # are nullable and the dashboard's edit form sends null to clear them
@@ -637,6 +594,7 @@ async def update_key(
         key.capture_agent_telemetry = request.capture_agent_telemetry
     key.allowed_models = access.models
     key.allowed_tools = access.tools
+    key.scopes = scopes
     if request.is_service_key is not None:
         key.is_service_key = request.is_service_key
     if "end_user_budget_id" in request.model_fields_set:
@@ -811,6 +769,18 @@ async def list_end_users(
     return await budgets.list_end_users(
         api_key=key, external_id=external_id, budget_id=budget_id, blocked=blocked, skip=skip, limit=limit
     )
+
+
+@router.get("/{key_id}/end-user-count")
+async def get_end_user_count(
+    key_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    organization_id: CallerOrganization,
+    budgets: BudgetServiceDep,
+) -> KeyEndUsersPublic:
+    """How many end users a service key's ``max_end_users`` counts, and the cap itself."""
+    key = await _load_key_in_organization(db, key_id, organization_id)
+    return await budgets.end_user_seats(api_key=key)
 
 
 @router.put(

@@ -12,6 +12,7 @@ import { OrganizationWebSearchKeysPage } from "@/features/organization/webSearch
 import { API_ROOT } from "@/shared/api/client"
 import { organizationContext } from "@/tests/fixtures"
 import { renderWithRouter } from "@/tests/router"
+import { getRowMenuItem, pressRowAction } from "@/tests/rowMenu"
 import { pickOption } from "@/tests/select"
 
 const KEYS = `${API_ROOT}/organizations/me/web-search-keys`
@@ -41,6 +42,7 @@ const SEARCH_CATALOG: SearchProviderInfo[] = [
     kind: "search",
     requires_api_key: true,
     requires_api_base: false,
+    reports_cost: false,
     default_api_base: "https://api.exa.ai",
     tier: "production",
     options: [
@@ -51,6 +53,7 @@ const SEARCH_CATALOG: SearchProviderInfo[] = [
         default: "auto",
         description: "How Exa searches.",
         operator_only: false,
+        cost_tier: false,
       },
     ],
   },
@@ -59,6 +62,7 @@ const SEARCH_CATALOG: SearchProviderInfo[] = [
     kind: "search",
     requires_api_key: true,
     requires_api_base: false,
+    reports_cost: false,
     default_api_base: "https://api.mojeek.com",
     tier: "production",
     options: [],
@@ -70,6 +74,7 @@ const SEARCH_CATALOG: SearchProviderInfo[] = [
     kind: "search",
     requires_api_key: false,
     requires_api_base: true,
+    reports_cost: false,
     default_api_base: "http://searxng:8080",
     tier: "production",
     options: [],
@@ -80,6 +85,7 @@ const SEARCH_CATALOG: SearchProviderInfo[] = [
     kind: "search",
     requires_api_key: false,
     requires_api_base: false,
+    reports_cost: false,
     tier: null,
     options: null,
   },
@@ -91,6 +97,7 @@ const FETCH_CATALOG: SearchProviderInfo[] = [
     kind: "fetch",
     requires_api_key: true,
     requires_api_base: false,
+    reports_cost: false,
     tier: "production",
     options: [],
     reports_final_url: false,
@@ -332,7 +339,7 @@ describe("OrganizationWebSearchKeysPage", () => {
     const requests = mockApi({ keys: [key({ options: { type: "auto" } })] })
     await renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Edit AAA" }))
+    await pressRowAction(user, "Edit AAA")
     const dialog = await screen.findByRole("dialog")
     await user.click(
       within(dialog).getByRole("button", { name: "More settings for exa" }),
@@ -364,7 +371,7 @@ describe("OrganizationWebSearchKeysPage", () => {
     mockApi({ keys: [key()], patchFails: true })
     await renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Edit AAA" }))
+    await pressRowAction(user, "Edit AAA")
     const dialog = await screen.findByRole("dialog")
     await user.clear(within(dialog).getByLabelText(/^Name/))
     await user.type(within(dialog).getByLabelText(/^Name/), "renamed")
@@ -385,7 +392,11 @@ describe("OrganizationWebSearchKeysPage", () => {
     expect(
       screen.getByRole("button", { name: "Add search provider" }),
     ).toBeDisabled()
-    expect(screen.getByRole("button", { name: "Edit AAA" })).toBeDisabled()
+    const user = userEvent.setup()
+    expect(await getRowMenuItem(user, /^Edit…/)).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    )
   })
 
   it("edits only the name and secret of a key on a provider the catalog does not list", async () => {
@@ -393,7 +404,7 @@ describe("OrganizationWebSearchKeysPage", () => {
     mockApi({ keys: [key({ provider: "tavily", name: "old" })] })
     await renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Edit old" }))
+    await pressRowAction(user, "Edit old")
     const dialog = await screen.findByRole("dialog")
 
     expect(
@@ -419,14 +430,8 @@ describe("OrganizationWebSearchKeysPage", () => {
     })
     await renderPage()
 
-    await user.click(
-      await screen.findByRole("button", {
-        name: "Set AAA as workspace default",
-      }),
-    )
-    await user.click(
-      screen.getByRole("button", { name: "Unset M as workspace default" }),
-    )
+    await pressRowAction(user, "Set AAA as workspace default")
+    await pressRowAction(user, "Unset M as workspace default")
 
     await waitFor(() =>
       expect(
@@ -462,8 +467,12 @@ describe("OrganizationWebSearchKeysPage", () => {
     })
     await renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Archive" }))
-    await user.click(screen.getByRole("button", { name: "Archive" }))
+    await pressRowAction(user, "Archive…")
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Archive",
+      }),
+    )
     await waitFor(() =>
       expect(
         writes(
@@ -475,7 +484,7 @@ describe("OrganizationWebSearchKeysPage", () => {
     )
 
     await user.click(screen.getByRole("checkbox", { name: /Show archived/ }))
-    await user.click(await screen.findByRole("button", { name: "Delete gone" }))
+    await pressRowAction(user, "Delete gone")
     await user.click(
       await screen.findByRole("button", { name: "Delete permanently" }),
     )

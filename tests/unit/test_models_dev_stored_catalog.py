@@ -110,6 +110,19 @@ def test_a_stored_catalog_this_gateway_cannot_read_is_refused(document: object) 
         read_catalog_document(document)
 
 
+def test_a_stored_catalog_keeps_the_conditions_it_does_not_know() -> None:
+    rule = {"when": {"tide": {"gt": 1}}, "factor": 2}
+    catalog = parse_catalog_v2(
+        {"p": {"models": {"m": {"cost": {"text": {"input": {"price": 1}}, "multipliers": [rule]}}}}}
+    )
+    assert catalog.issues.unknown_conditions == ("tide",)
+
+    document = _stored(catalog)
+
+    assert document["issues"] == {"models": 1, "unknown_conditions": ["tide"]}
+    assert read_catalog_document(document) == catalog
+
+
 def test_catalogs_read_apart_share_their_text() -> None:
     raw = {"p": {"id": "p", "models": {"m": {"id": "m", "name": "A model name", "family": "fam"}}}}
     stored = {"_meta": {"format": CATALOG_FORMAT}, **catalog_document(parse_catalog(raw))}

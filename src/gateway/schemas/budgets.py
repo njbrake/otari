@@ -582,56 +582,6 @@ class OrganizationScopedBudgetsPublic(BaseModel):
     count: int
 
 
-class WorkspaceSpendPublic(BaseModel):
-    """A workspace's own spend ceiling as any member of the workspace may read it.
-
-    Dollars only, and only the workspace-wide ceiling: no member's personal cap,
-    no other workspace's, and not the ceiling's name, which is an administrator's
-    label. ``spent`` is what the gate enforces against, settled
-    spend plus holds still in flight. ``max_budget`` is null when the ceiling's
-    budget caps only tokens or requests.
-    """
-
-    workspace_id: uuid.UUID
-    max_budget: float | None
-    spent: float | None = Field(
-        description=(
-            "USD counted against the cap: settled spend plus holds in flight. Null for a member who does not "
-            "manage the workspace when its managers keep its totals from members; `used_fraction` still says "
-            "how much of the cap is used."
-        )
-    )
-    used_fraction: float | None = Field(
-        description=(
-            "The share of `max_budget` used, 1.0 or more at or past it; null when the ceiling caps no dollars. "
-            "A zero cap with anything counted against it reads 1.0. Rounded to a whole percent where `spent` is null."
-        )
-    )
-    period_start: str | None
-    period_end: str | None
-
-    @classmethod
-    def from_ceiling(
-        cls,
-        workspace_id: uuid.UUID,
-        budget: Budget,
-        *,
-        spent: float | None,
-        used_fraction: float | None,
-        period_start: datetime | None,
-        period_end: datetime | None,
-    ) -> WorkspaceSpendPublic:
-        """Read a workspace ceiling's budget, with the spend, share and window the caller derived for now."""
-        return cls(
-            workspace_id=workspace_id,
-            max_budget=as_float(budget.max_budget),
-            spent=spent,
-            used_fraction=used_fraction,
-            period_start=period_start.isoformat() if period_start else None,
-            period_end=period_end.isoformat() if period_end else None,
-        )
-
-
 class WorkspaceMemberBudgetPolicyCreate(BaseModel):
     """Request body for creating a default."""
 
@@ -729,6 +679,19 @@ class KeyLimitPublic(BaseModel):
     remaining_requests: int | None = None
 
 
+class KeyEndUsersPublic(BaseModel):
+    """How many end users a service key has, against its ``max_end_users``."""
+
+    count: int = Field(
+        description="The live end users the cap counts: those on the budgets the key assigns, and those on none "
+        "when the key has a list and no default. A key that assigns no budget counts every live end user of its user"
+    )
+    max_end_users: int | None = Field(
+        description="The key's cap; null when it has none. A request naming a new end user is refused with "
+        "end_user_limit_reached once count reaches it"
+    )
+
+
 class KeyBudgetPublic(BaseModel):
     """What the calling key may still spend, and every cap that decides it."""
 
@@ -743,10 +706,14 @@ class KeyBudgetPublic(BaseModel):
     limits: list[KeyLimitPublic] = Field(
         description="The key's user's budget first, then each spend ceiling, the most specific first"
     )
+    end_users: KeyEndUsersPublic | None = Field(
+        default=None, description="A service key's end users against its cap; null for any other key"
+    )
 
 
 __all__ = [
     "KeyBudgetPublic",
+    "KeyEndUsersPublic",
     "KeyLimitPublic",
     "BUDGET_ID_PATTERN",
     "BudgetResetLogResponse",
@@ -775,5 +742,4 @@ __all__ = [
     "WorkspaceMemberBudgetPolicyCreate",
     "WorkspaceMemberBudgetPolicyPublic",
     "WorkspaceMemberBudgetPolicyUpdate",
-    "WorkspaceSpendPublic",
 ]

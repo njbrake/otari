@@ -13,8 +13,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import event
-from sqlalchemy.engine import URL, make_url
+from sqlalchemy import column, event, inspect, literal, select, table
+from sqlalchemy.engine import URL, Connection, make_url
 from sqlalchemy.exc import DataError, DisconnectionError, IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -27,8 +27,6 @@ _engine: AsyncEngine | None = None
 _SessionLocal: async_sessionmaker[AsyncSession] | None = None
 _log_engine: AsyncEngine | None = None
 _LogSessionLocal: async_sessionmaker[AsyncSession] | None = None
-_ingest_engine: AsyncEngine | None = None
-_IngestSessionLocal: async_sessionmaker[AsyncSession] | None = None
 
 # How long a SQLite connection waits for a held lock before raising
 # "database is locked", in milliseconds.
@@ -43,11 +41,6 @@ _ASYNC_TO_SYNC_DRIVER = {
     "postgresql+asyncpg": "postgresql+psycopg2",
     "postgresql": "postgresql+psycopg2",
 }
-
-
-def is_postgresql(database_url: str) -> bool:
-    """Whether ``database_url`` names a PostgreSQL database, whichever driver it spells."""
-    return make_url(database_url).get_backend_name() == "postgresql"
 
 
 def _to_async_url(database_url: str) -> tuple[str, dict[str, Any]]:
@@ -96,6 +89,49 @@ def to_sync_url(database_url: str) -> str:
     return url.set(drivername=sync_drivername).render_as_string(hide_password=False)
 
 
+def sqlite_database_file(database_url: str) -> Path | None:
+    """The file a SQLite ``database_url`` names, or ``None`` for any other database.
+
+    An in-memory database and a ``file:`` URI name no file a key could sit beside.
+    """
+    url: URL = make_url(database_url)
+    database = url.database
+    if (
+        not url.drivername.startswith("sqlite")
+        or not database
+        or database == ":memory:"
+        or database.startswith("file:")
+    ):
+        return None
+    return Path(database)
+
+
+async def holds_encrypted_secrets() -> bool:
+    """Whether any row holds a value sealed with the secret key, which is every ``encrypted_*`` column.
+
+    Read from the database's own schema rather than the models, so it answers for
+    the tables that exist, whichever revision they are at.
+    """
+    if _engine is None:
+        msg = "Database not initialized. Call init_db() first."
+        raise RuntimeError(msg)
+    async with _engine.connect() as connection:
+        return await connection.run_sync(_holds_encrypted_secrets)
+
+
+def _holds_encrypted_secrets(connection: Connection) -> bool:
+    inspector = inspect(connection)
+    for table_name in inspector.get_table_names():
+        for reflected in inspector.get_columns(table_name):
+            name = reflected["name"]
+            if not name.startswith("encrypted_"):
+                continue
+            sealed = select(literal(1)).select_from(table(table_name)).where(column(name).is_not(None)).limit(1)
+            if connection.execute(sealed).first() is not None:
+                return True
+    return False
+
+
 def _run_migrations(database_url: str) -> None:
     alembic_cfg = Config()
     alembic_dir = Path(__file__).resolve().parents[3] / "alembic"
@@ -129,6 +165,25 @@ def _configure_sqlite_pragmas(engine: AsyncEngine) -> None:
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
         cursor.close()
+
+
+def _begin_sqlite_transactions(engine: AsyncEngine) -> None:
+    """Begin a SQLite transaction before a savepoint that would otherwise open one.
+
+    The driver begins a transaction only before a write, so a savepoint opened
+    before any write is the outermost transaction: releasing it commits, and a
+    later rollback cannot undo it. Beginning first makes the savepoint nest, as it
+    does on PostgreSQL. Only that case changes: beginning every transaction at its
+    start instead would hold each session's reads in a transaction, and a write
+    after another session's commit would then fail at once as "database is
+    locked" rather than wait.
+    """
+
+    @event.listens_for(engine.sync_engine, "savepoint")
+    def _begin_before_savepoint(connection: Any, _name: str) -> None:  # noqa: ANN001, ANN202
+        """Begin unless a write already began the transaction."""
+        if not connection.connection.driver_connection.in_transaction:
+            connection.exec_driver_sql("BEGIN")
 
 
 # What a database call can raise once a client-side ``command_timeout`` is set.
@@ -458,16 +513,6 @@ def engine_kwargs(
         server_settings = dict(args.get("server_settings") or {})
         server_settings.setdefault("statement_timeout", str(config.db_statement_timeout_ms))
         args["server_settings"] = server_settings
-    if config.db_lock_timeout_ms > 0:
-        # A statement waiting on a lock another transaction holds is queued, not
-        # slow, and the timeouts above cannot tell the difference: they let it
-        # hold its pooled connection until one of them fires, with every request
-        # that needs a connection waiting behind it. Bounding the queueing part
-        # on its own makes a contended write fail in seconds, for a caller that
-        # can retry it, rather than an outage for everything sharing the pool.
-        server_settings = dict(args.get("server_settings") or {})
-        server_settings.setdefault("lock_timeout", str(config.db_lock_timeout_ms))
-        args["server_settings"] = server_settings
     return kwargs
 
 
@@ -475,7 +520,6 @@ def init_db(config: GatewayConfig) -> None:
     """Initialize async database engine and optionally run migrations."""
 
     global _engine, _SessionLocal, _log_engine, _LogSessionLocal  # noqa: PLW0603
-    global _ingest_engine, _IngestSessionLocal  # noqa: PLW0603
 
     database_url = config.database_url
     async_url, connect_args = _to_async_url(database_url)
@@ -494,6 +538,7 @@ def init_db(config: GatewayConfig) -> None:
 
     if is_sqlite:
         _configure_sqlite_pragmas(_engine)
+        _begin_sqlite_transactions(_engine)
         # No second engine on SQLite. It would gain nothing (``NullPool``
         # ignores ``db_log_pool_size``) and would cost something: a second set
         # of connections to the same file, contending for its single writer
@@ -503,8 +548,6 @@ def init_db(config: GatewayConfig) -> None:
         # most common path.
         _log_engine = None
         _LogSessionLocal = _SessionLocal
-        _ingest_engine = None
-        _IngestSessionLocal = _SessionLocal
     else:
         # Usage logging gets a pool of its own. It shares the request pool's
         # database, but not its contention: a saturated request pool used to
@@ -528,27 +571,6 @@ def init_db(config: GatewayConfig) -> None:
         _LogSessionLocal = async_sessionmaker(_log_engine, expire_on_commit=False)
         _pool_max_overflow[LOG_POOL] = 0
 
-        # Telemetry ingest gets a pool of its own for the opposite reason to the
-        # writer's: not to keep it from being starved, but to keep it from
-        # starving everything else. An import writes history somebody else
-        # already holds, so two exporters resending the same batch contend on
-        # the idempotency key, and a batch that waits behind another transaction
-        # holds its connection while it waits. On the request pool a burst of
-        # those is an outage for every door that needs a connection to answer,
-        # sign-in first. Capped and with no overflow: the cap is the isolation.
-        _ingest_engine = create_async_engine(
-            async_url,
-            **engine_kwargs(
-                config,
-                connect_args=connect_args,
-                is_sqlite=is_sqlite,
-                pool_size=config.db_ingest_pool_size,
-                max_overflow=0,
-            ),
-        )
-        _install_timeout_translation(_ingest_engine)
-        _IngestSessionLocal = async_sessionmaker(_ingest_engine, expire_on_commit=False)
-
     if config.auto_migrate:
         _run_migrations(database_url)
 
@@ -561,23 +583,6 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         raise RuntimeError(msg)
 
     async with _SessionLocal() as session:
-        yield session
-
-
-async def get_ingest_db() -> AsyncGenerator[AsyncSession, None]:
-    """Dependency for telemetry ingest, on a pool the rest of the API does not share.
-
-    Only the routes that import usage somebody else observed take this. What
-    they write is idempotent and the exporter that sent it will send it again,
-    so a refusal under contention costs nothing, while the same batch waiting on
-    the request pool costs a sign-in. On SQLite there is one pool and this is it.
-    """
-    factory = _IngestSessionLocal or _SessionLocal
-    if factory is None:
-        msg = "Database not initialized. Call init_db() first."
-        raise RuntimeError(msg)
-
-    async with factory() as session:
         yield session
 
 
@@ -613,15 +618,12 @@ def _take_engines() -> list[AsyncEngine]:
     """Forget the active engines and hand them to the caller to dispose."""
 
     global _engine, _SessionLocal, _log_engine, _LogSessionLocal  # noqa: PLW0603
-    global _ingest_engine, _IngestSessionLocal  # noqa: PLW0603
 
-    engines = [engine for engine in (_engine, _log_engine, _ingest_engine) if engine is not None]
+    engines = [engine for engine in (_engine, _log_engine) if engine is not None]
     _engine = None
     _SessionLocal = None
     _log_engine = None
     _LogSessionLocal = None
-    _ingest_engine = None
-    _IngestSessionLocal = None
     _pool_max_overflow.clear()
     return engines
 
@@ -666,7 +668,6 @@ __all__ = [
     "dispose_db",
     "engine_kwargs",
     "get_db",
-    "get_ingest_db",
     "init_db",
     "pool_stats",
     "release_session",

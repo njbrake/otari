@@ -8,9 +8,8 @@ from gateway.core.settings_view import OMITTED, SettingsGroup, Shown
 
 
 class TraceSettings(BaseModel):
-    # Off in this fork, whose dashboard has no Sessions page to read traces with.
     trace_capture_enabled: Annotated[bool, Shown(SettingsGroup.METERING)] = Field(
-        default=False,
+        default=True,
         description=(
             "Record an agent trace for every completion request: the request, each LLM call with its cost, "
             "routing attempts, guardrail checks, MCP connections and gateway-run tool calls. No prompt, output "

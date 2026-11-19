@@ -13,12 +13,14 @@ off for it, and any member can see which keys the workspace uses.
 """
 
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
+
+from fastapi import BackgroundTasks
 
 import any_fetch
 import any_search
@@ -56,6 +58,7 @@ from gateway.models.tools import (
     WebToolCredential,
     WebToolCredentialSource,
 )
+from gateway.ports.growth_signal_port import GrowthAction, GrowthSignalPort
 from gateway.repositories.tenancy import WorkspaceRepository
 from gateway.repositories.tools import (
     OrgWebSearchKeyRepository,
@@ -233,6 +236,12 @@ class WebSearchKeyService:
     # The organization's keys: owners and admins only
     # ------------------------------------------------------------------
 
+    async def forget_secrets(
+        self, organization_ids: Collection[uuid.UUID], workspace_ids: Collection[uuid.UUID]
+    ) -> None:
+        """Stage clearing the web search keys these organizations hold, for the caller's transaction."""
+        await self.keys.forget_secrets(organization_ids, workspace_ids)
+
     async def list_keys(self, *, user: User, include_archived: bool, skip: int, limit: int) -> OrgWebSearchKeysPublic:
         organization_id = await self._managed_organization(user)
         async with self.uow:
@@ -241,7 +250,18 @@ class WebSearchKeyService:
             )
         return OrgWebSearchKeysPublic(data=[_public(row) for row in rows], count=count)
 
-    async def create_key(self, *, user: User, request: OrgWebSearchKeyCreateRequest) -> OrgWebSearchKeyPublic:
+    async def create_key(
+        self,
+        *,
+        user: User,
+        request: OrgWebSearchKeyCreateRequest,
+        growth: GrowthSignalPort | None = None,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> OrgWebSearchKeyPublic:
+        """Add a key to the caller's organization.
+
+        With ``growth``, the key is reported as ``WEB_SEARCH_KEY_ADDED`` once it commits.
+        """
         organization_id = await self._managed_organization(user)
         kind = request.kind
         provider = _validated_provider(kind, request.provider)
@@ -264,6 +284,15 @@ class WebSearchKeyService:
                 )
         except WebSearchKeyConflict:
             raise WebSearchKeyAlreadyExistsError(provider, name, kind=kind) from None
+        if growth is not None and background_tasks is not None:
+            await growth.record_action(
+                background_tasks=background_tasks,
+                action=GrowthAction.WEB_SEARCH_KEY_ADDED,
+                user_id=user.id,
+                email=user.email,
+                organization_id=organization_id,
+                details={"provider": provider, "kind": "web_fetch" if kind == "fetch" else "web_search"},
+            )
         return _public(row)
 
     async def update_key(
@@ -514,8 +543,8 @@ def _key_providers(kind: ToolKind) -> tuple[str, ...]:
     """The providers a key of ``kind`` may name, sorted.
 
     The libraries' providers for the kind, other than the ones that exist only for
-    tests and, for fetch, ``builtin``; and, for search, ``tavily`` and ``brave``,
-    which run on the old search code.
+    tests and, for fetch, ``builtin``; and, for search, those of
+    :data:`WEB_SEARCH_PROVIDERS` any-search does not serve, which run on the old search code.
     """
     if kind == "fetch":
         served: tuple[str, ...] = supported_fetch_providers()
@@ -536,7 +565,7 @@ def _validated_provider(kind: ToolKind, provider: str) -> str:
 def _requirements(kind: ToolKind, provider: str) -> tuple[bool, bool, bool]:
     """Whether the old search code runs the provider, and whether a key on it needs an API key and an endpoint.
 
-    The old search code calls Tavily and Brave at their public endpoints, with no options of a key's.
+    The old search code calls its providers at their public endpoints, with no options of a key's.
     """
     if (
         kind == "search"

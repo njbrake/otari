@@ -13,9 +13,11 @@ import httpx
 import httpx2
 from anthropic import APIConnectionError as _AnthropicAPIConnectionError
 from anthropic import APITimeoutError as _AnthropicAPITimeoutError
+from any_llm.exceptions import AnyLLMError
 from openai import APIConnectionError as _OpenAIAPIConnectionError
 from openai import APITimeoutError as _OpenAIAPITimeoutError
 
+from gateway.core.database import DATABASE_ERRORS
 from gateway.core.retry_after import bounded_retry_after
 from gateway.services.provider_kwargs import missing_credential
 from gateway.services.tools import WebToolFailure
@@ -152,11 +154,9 @@ def upstream_exception_shape(exc: BaseException) -> tuple[UpstreamErrorKind | No
     ``"conn_err"``, or ``None``, and ``status_code`` is the HTTP status the
     exception carries, or ``None``. At most one of the two is set. ``kind`` is
     a ``Literal``, not a bare ``str``, so a typo at a ``kind == "..."``
-    comparison site is a mypy error instead of a silent no-op. Shared by
-    :func:`gateway.api.routes._attempts.classify_local_attempt_error` (labels
-    the walker's failures) and
-    :func:`gateway.api.routes._pipeline.classify_provider_error` (drives the
-    final client-facing status/detail), so the two stay in sync.
+    comparison site is a mypy error instead of a silent no-op. It is the one
+    reading of a failure's shape, so every caller that labels or maps a failure
+    agrees on it.
 
     Recognizes, in order, walking ``.original_exception`` when the current
     exception carries no signal of its own:
@@ -529,6 +529,24 @@ def is_upstream_stream_interrupted(exc: BaseException) -> bool:
             ),
         )
         for link in _causal_chain(exc)
+    )
+
+
+def is_provider_cut(exc: BaseException) -> bool:
+    """Whether a stream failed because the provider ended it, not because of a fault of the gateway's own.
+
+    A dropped or incomplete stream, a mid-stream timeout, and a failure the provider reports with an HTTP
+    status or through any-llm. An error that is none of these (a bug while formatting a chunk, a guardrail, a database
+    failure) is the gateway's own. So is a bare ``TimeoutError`` or a database error: a provider's timeout reaches
+    here wrapped by its HTTP client or SDK, while those two are what the gateway's own ``asyncio.timeout`` and its
+    connection pool raise, and the shape checks below would otherwise read them as the provider's.
+    """
+    if any(isinstance(link, DATABASE_ERRORS) for link in upstream_exception_chain(exc)):
+        return False
+    return (
+        is_upstream_stream_interrupted(exc)
+        or upstream_exception_shape(exc) != (None, None)
+        or any(isinstance(link, AnyLLMError) for link in upstream_exception_chain(exc))
     )
 
 

@@ -1,18 +1,26 @@
+import { Button, Drawer } from "@heroui/react"
 import { Link } from "@tanstack/react-router"
 import { useState } from "react"
 
 import type { CatalogModelDetail, CatalogOffering } from "@/client"
 import { CopyableValue, CopyField } from "@/design-system/actions/CopyField"
+import { DocsLink } from "@/design-system/navigation/DocsLink"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { Tab, TabRow } from "@/design-system/navigation/TabRow"
-import { Sheet } from "@/design-system/overlays/Sheet"
+import {
+  formatOfferingPrice,
+  formatPricedRate,
+  pricingUnitOf,
+} from "@/features/models/pricingUnit"
+import { API_ROOT } from "@/shared/api/client"
+import { docsSourceHref } from "@/shared/helpers/docs"
+import {
+  buildEndpointRequest,
+  type CatalogEndpoint,
+} from "@/shared/helpers/endpointSnippets"
 import { formatRate } from "@/shared/helpers/format"
 import { providerDisplayName } from "@/shared/helpers/providers"
-import {
-  buildCurlSnippet,
-  buildPythonSnippet,
-  resolveSnippetBaseUrl,
-} from "@/shared/helpers/requestSnippets"
+import { resolveSnippetBaseUrl } from "@/shared/helpers/requestSnippets"
 
 import { providerModelId } from "./modelKey"
 
@@ -23,8 +31,14 @@ import { providerModelId } from "./modelKey"
 
 const GATEWAY_PICKS = "__gateway__"
 
-function rate(value: number | null | undefined): string {
-  return value == null ? "unpriced" : formatRate(value)
+/** The price the gateway's pick is at, as the sentence naming it reads. */
+function cheapestPrice(offering: CatalogOffering): string {
+  const pricing = offering.pricing
+  if (pricing == null) return "no price"
+  const unit = pricingUnitOf(pricing.unit)
+  return unit === "token"
+    ? `${formatRate(pricing.input_price_per_million)} per 1M in`
+    : formatPricedRate(pricing.input_price_per_million, unit)
 }
 
 /** What a request sends for an offering: its short spelling where there is one. */
@@ -50,6 +64,9 @@ export function UseModelDrawer({
     model.selector ? GATEWAY_PICKS : (model.offerings[0]?.selector ?? ""),
   )
   const [language, setLanguage] = useState("curl")
+  // Keyed to its offering, so a refresh that moves the gateway's pick opens on
+  // the new offering's first route.
+  const [picked, setPicked] = useState({ offering: "", route: "" })
 
   const cheapest = model.offerings.find(
     (catalogModel) => catalogModel.selector === model.resolves_to,
@@ -58,7 +75,7 @@ export function UseModelDrawer({
   const sendAs = pinned ? selectorFor(pinned) : (model.selector ?? "")
   const offeringOptions = model.offerings.map((offering) => ({
     value: offering.selector,
-    label: `${providerDisplayName(offering.provider)} · ${providerModelId(offering.selector)} · ${rate(offering.pricing?.input_price_per_million)} in / ${rate(offering.pricing?.output_price_per_million)} out`,
+    label: `${providerDisplayName(offering.provider)} · ${providerModelId(offering.selector)} · ${formatOfferingPrice(offering.pricing)}`,
   }))
   const options = model.selector
     ? [
@@ -66,119 +83,224 @@ export function UseModelDrawer({
         ...offeringOptions,
       ]
     : offeringOptions
-  const input = {
+  // The routes of the offering that answers. Empty is "not known", so the
+  // request falls back to chat rather than to a guess from the model's kind.
+  const answering = (pinned ?? cheapest)?.selector ?? ""
+  const routes = (pinned ?? cheapest)?.endpoints ?? []
+  const route = picked.offering === answering ? picked.route : ""
+  const shownRoute: CatalogEndpoint =
+    routes.find((candidate) => candidate === route) ??
+    routes[0] ??
+    "/chat/completions"
+  const request = buildEndpointRequest(shownRoute, {
     baseUrl,
     apiKey: "$OTARI_API_KEY",
     model: sendAs,
-  }
+  })
 
   return (
-    <Sheet
-      isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      label="Use this model"
-      size="lg"
-      title={`Use ${model.name}`}
-      description={
-        <>
-          Send{" "}
-          <CopyableValue value={sendAs} label="model selector">
-            <code className="text-mono-caption wrap-anywhere">{sendAs}</code>
-          </CopyableValue>{" "}
-          as <code className="text-mono-caption">model</code>.
-        </>
-      }
-    >
-      <div className="flex flex-col gap-6 px-6 py-5">
-        <section className="flex flex-col gap-2">
-          <h3 className="text-title">1. Which provider answers</h3>
-          <p className="text-sm text-muted">
-            {model.selector ? (
-              <>
-                With the model id alone, the gateway sends the request to the
-                first offering in the catalog's order
-                {cheapest ? (
-                  <>
-                    , today{" "}
-                    <code className="text-mono-caption">
-                      {selectorFor(cheapest)}
-                    </code>{" "}
-                    at {rate(cheapest.pricing?.input_price_per_million)} per 1M
-                    in
-                  </>
+    <Drawer isOpen={isOpen} onOpenChange={onOpenChange}>
+      <Drawer.Trigger className="hidden">Open use this model</Drawer.Trigger>
+      <Drawer.Backdrop className="bg-backdrop/30">
+        {/* The content is the full-width lane the dialog slides in on; the
+            width belongs to the dialog, or the lane shrinks and the panel
+            lands at the left. */}
+        <Drawer.Content placement="right">
+          <Drawer.Dialog
+            aria-label="Use this model"
+            className="flex h-full w-[36rem] max-w-[85vw] flex-col"
+          >
+            <Drawer.Header className="border-b border-border px-6 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 flex-col gap-1">
+                  <Drawer.Heading className="text-heading">
+                    Use {model.name}
+                  </Drawer.Heading>
+                  {/* `CopyableValue` keeps the press off the drawer's drag
+                      handle, which is everything outside its body: a drag
+                      captures the pointer, which ends a text selection. */}
+                  <p className="text-sm text-muted">
+                    Send{" "}
+                    <CopyableValue value={sendAs} label="model selector">
+                      <code className="text-mono-caption wrap-anywhere">
+                        {sendAs}
+                      </code>
+                    </CopyableValue>{" "}
+                    as <code className="text-mono-caption">model</code>.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onPress={() => onOpenChange(false)}
+                >
+                  Close
+                </Button>
+              </div>
+            </Drawer.Header>
+            <Drawer.Body className="flex flex-col gap-6 overflow-y-auto px-6 py-5">
+              <section className="flex flex-col gap-2">
+                <h3 className="text-title">1. Which provider answers</h3>
+                <p className="text-sm text-muted">
+                  {model.selector ? (
+                    <>
+                      With the model id alone, the gateway sends the request to
+                      the first offering in the catalog's order
+                      {cheapest ? (
+                        <>
+                          , today{" "}
+                          <code className="text-mono-caption">
+                            {selectorFor(cheapest)}
+                          </code>{" "}
+                          at {cheapestPrice(cheapest)}
+                        </>
+                      ) : null}
+                      . Pick a provider to pin one instead and send its
+                      selector, which is the provider and this id:{" "}
+                      <code className="text-mono-caption">
+                        provider:{model.id}
+                      </code>
+                      .
+                    </>
+                  ) : (
+                    <>
+                      The gateway has not indexed this model yet, so a request
+                      names a provider's selector. Pick one.
+                    </>
+                  )}
+                </p>
+                <FilterSelect
+                  ariaLabel="Provider"
+                  value={choice}
+                  onChange={(next) => {
+                    setChoice(next)
+                    setPicked({ offering: "", route: "" })
+                  }}
+                  options={options}
+                />
+                <p className="text-caption">
+                  The response's{" "}
+                  <code className="text-mono-caption">model</code> is what you
+                  sent; pricing, budgets and usage follow the offering that
+                  answered.
+                </p>
+              </section>
+
+              <section className="flex flex-col gap-2">
+                <h3 className="text-title">2. Get an API key</h3>
+                <p className="text-sm text-muted">
+                  Create a key on{" "}
+                  <Link to="/keys" className="text-link hover:text-link-hover">
+                    API keys
+                  </Link>{" "}
+                  and set it as an environment variable.
+                </p>
+                <CopyField
+                  label="Environment"
+                  value="export OTARI_API_KEY=sk-…"
+                />
+              </section>
+
+              <section className="flex flex-col gap-2">
+                <h3 className="text-title">3. Make your first request</h3>
+                {routes.length > 1 ? (
+                  <FilterSelect
+                    ariaLabel="Route"
+                    value={shownRoute}
+                    onChange={(next) =>
+                      setPicked({ offering: answering, route: next })
+                    }
+                    options={routes.map((candidate) => ({
+                      value: candidate,
+                      label: `${API_ROOT}${candidate}`,
+                    }))}
+                  />
                 ) : null}
-                . Pick a provider to pin one instead and send its selector,
-                which is the provider and this id:{" "}
-                <code className="text-mono-caption">provider:{model.id}</code>.
-              </>
-            ) : (
-              <>
-                The gateway has not indexed this model yet, so a request names a
-                provider's selector. Pick one.
-              </>
-            )}
-          </p>
-          <FilterSelect
-            ariaLabel="Provider"
-            value={choice}
-            onChange={setChoice}
-            options={options}
-          />
-          <p className="text-caption">
-            The response's <code className="text-mono-caption">model</code> is
-            what you sent; pricing, budgets and usage follow the offering that
-            answered.
-          </p>
-        </section>
-
-        <section className="flex flex-col gap-2">
-          <h3 className="text-title">2. Get an API key</h3>
-          <p className="text-sm text-muted">
-            Create a key on{" "}
-            <Link to="/keys" className="text-link hover:text-link-hover">
-              API keys
-            </Link>{" "}
-            and set it as an environment variable.
-          </p>
-          <CopyField label="Environment" value="export OTARI_API_KEY=sk-…" />
-        </section>
-
-        <section className="flex flex-col gap-2">
-          <h3 className="text-title">3. Make your first request</h3>
-          {baseUrl === undefined ? (
-            <p className="text-sm text-muted">
-              This deployment has not published its gateway address, so there is
-              no request to copy yet.
-            </p>
-          ) : (
-            <>
-              <TabRow>
-                <Tab
-                  isActive={language === "curl"}
-                  onPress={() => setLanguage("curl")}
-                >
-                  cURL
-                </Tab>
-                <Tab
-                  isActive={language === "python"}
-                  onPress={() => setLanguage("python")}
-                >
-                  Python (OpenAI SDK)
-                </Tab>
-              </TabRow>
-              <CopyField
-                label={language === "curl" ? "cURL" : "Python"}
-                value={
-                  language === "curl"
-                    ? buildCurlSnippet(input)
-                    : buildPythonSnippet(input)
-                }
-                isMultiline
-              />
-            </>
-          )}
-        </section>
-      </div>
-    </Sheet>
+                <p className="text-sm text-muted">
+                  {routes.length === 0 ? (
+                    <>
+                      models.dev names no route for this offering, so this is
+                      the chat request, to{" "}
+                    </>
+                  ) : (
+                    <>Calls </>
+                  )}
+                  <code className="text-mono-caption">
+                    POST {API_ROOT}
+                    {shownRoute}
+                  </code>
+                  .
+                  {request?.upload ? (
+                    <>
+                      {" "}
+                      Replace{" "}
+                      <code className="text-mono-caption">
+                        {request.upload}
+                      </code>{" "}
+                      with the path to your own file.
+                    </>
+                  ) : null}
+                  {request?.voice ? (
+                    <>
+                      {" "}
+                      Voices differ by provider: if this one does not list{" "}
+                      <code className="text-mono-caption">{request.voice}</code>
+                      , use one it does.
+                    </>
+                  ) : null}
+                </p>
+                {request ? (
+                  <>
+                    <TabRow>
+                      <Tab
+                        isActive={language === "curl"}
+                        onPress={() => setLanguage("curl")}
+                      >
+                        cURL
+                      </Tab>
+                      <Tab
+                        isActive={language === "python"}
+                        onPress={() => setLanguage("python")}
+                      >
+                        Python
+                      </Tab>
+                    </TabRow>
+                    <CopyField
+                      label={language === "curl" ? "cURL" : "Python"}
+                      value={
+                        language === "curl" ? request.curl : request.python
+                      }
+                      isMultiline
+                    />
+                    {language === "python" ? (
+                      <p className="text-caption">
+                        Needs{" "}
+                        <code className="text-mono-caption">
+                          pip install {request.pythonPackage}
+                        </code>
+                        .
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-sm text-muted">
+                    This route takes a model from the gateway's{" "}
+                    <code className="text-mono-caption">
+                      decision_providers
+                    </code>
+                    , not this offering's selector.{" "}
+                    <DocsLink
+                      href={docsSourceHref("api-reference.md", "decisions")}
+                    >
+                      How to ask for a decision
+                    </DocsLink>
+                  </p>
+                )}
+              </section>
+            </Drawer.Body>
+          </Drawer.Dialog>
+        </Drawer.Content>
+      </Drawer.Backdrop>
+    </Drawer>
   )
 }

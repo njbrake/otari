@@ -50,7 +50,7 @@ export function Segmented({
     <div
       role="radiogroup"
       aria-label={label}
-      className={`max-w-full overflow-x-auto overscroll-x-contain border border-control-border ${
+      className={`max-w-full overflow-x-auto border border-control-border ${
         isFullWidth ? "flex w-full" : "inline-flex w-fit"
       }`}
     >
@@ -67,7 +67,7 @@ export function Segmented({
             // segments, however many there are.
             className={`flex min-h-11 items-center md:min-h-0 ${
               isFullWidth ? "flex-1 justify-center" : "shrink-0"
-            } cursor-pointer border-l border-control-border text-sm whitespace-nowrap transition-colors first:border-l-0 has-[:focus-visible]:otari-focus-ring motion-reduce:transition-none ${
+            } cursor-pointer border-l border-control-border text-sm whitespace-nowrap transition-colors first:border-l-0 has-[:focus-visible]:otari-focus-ring-inset motion-reduce:transition-none ${
               size === "md" ? "px-3.5 py-[0.4375rem]" : "px-3 py-[0.3125rem]"
             } ${size === "md" && selected ? "font-medium" : ""} ${
               selected

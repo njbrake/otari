@@ -61,12 +61,9 @@ export function usePolicyWrite(
     // A name is the key, so a rename travels as `rename_from` on the same
     // write rather than as a second policy.
     const rename = name !== row.name ? { rename_from: row.name } : {}
-    // A member's own policy is addressed by their identity on the tenant
-    // surface; without it the write would land a workspace-wide policy instead.
-    const member = row.user_id ? { member_id: row.user_id } : {}
     if (isTenantScoped)
       saveOrgPolicy.mutate(
-        { name, spec, workspace_id: workspaceId, ...rename, ...member },
+        { name, spec, workspace_id: workspaceId, ...rename },
         options,
       )
     else

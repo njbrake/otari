@@ -180,20 +180,6 @@ def all_alias_names(config: GatewayConfig) -> set[str]:
     return names
 
 
-def alias_names_in(config: GatewayConfig, workspace_id: uuid.UUID) -> set[str]:
-    """Every name that is an alias to somebody in one workspace, plus the configured ones.
-
-    What a write in that workspace can actually collide with or chain through,
-    since resolution never leaves the request's workspace. For a tenant's write,
-    where ``all_alias_names`` would also answer for every other organization on
-    the deployment, and a refusal would tell the caller a name is taken there.
-    """
-    names = set(config.aliases) | set(_cache.get(workspace_id, {}))
-    for scoped in _user_cache.get(workspace_id, {}).values():
-        names |= set(scoped)
-    return names
-
-
 async def run_alias_refresher(interval: float = ALIAS_CACHE_TTL_SECONDS) -> None:
     """Reload the alias cache forever, so other writers' aliases arrive.
 

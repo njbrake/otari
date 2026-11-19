@@ -1,22 +1,26 @@
 import uuid
-from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from datetime import datetime
 from typing import Any, NamedTuple
 
+from gateway.auth.models import hash_key, key_suffix
 from gateway.core.config import GatewayConfig
 from gateway.core.settings.api_keys import ApiKeyConfig, https_url_problem
 from gateway.core.settings.tools import ToolKind
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.api_keys_exceptions import (
+    AppKeyOwnerInactiveError,
     FederationIssuerInvalidError,
     FederationIssuerNotAllowedError,
     FederationRuleExistsError,
     FederationRuleLimitError,
     FederationRuleNotFoundError,
-    OperatorDisabledKeyError,
+    KeyEnableRefusedError,
 )
 from gateway.log_config import logger
 from gateway.models.api_keys import MAX_FEDERATION_RULES_PER_KEY, APIKey
+from gateway.models.tenancy import User
+from gateway.ports.api_key_format_port import ApiKeyFormatPort
 from gateway.repositories.api_keys import ApiKeyRepositories
 from gateway.schemas.api_keys import FederationRuleCreate, FederationRulePublic
 from gateway.services.api_keys._declared import apply_declared_key
@@ -33,21 +37,7 @@ from gateway.services.model_access import (
     validate_allowed_tools,
 )
 from gateway.services.organizations import AccessLists, UserAccess
-
-WorkspacesOfOrganization = Callable[[uuid.UUID], Awaitable[list[uuid.UUID]]]
-"""The ids of an organization's workspaces, read in the caller's Unit of Work block."""
-
-
-@dataclass(frozen=True)
-class KeyReach:
-    """A key's workspace, organization and owner, and the model allow-list its requests are held to."""
-
-    id: str
-    workspace_id: uuid.UUID
-    organization_id: uuid.UUID
-    user_id: str | None
-    allowlist: list[str] | None
-    """The key's own list, else its owner's; ``None`` is unrestricted, as in ``effective_allowlist``."""
+from gateway.types.key_scope import KeyScope, KeyScopeSet
 
 
 class KeySummary(NamedTuple):
@@ -67,55 +57,67 @@ class ApiKeyService:
     lists come from ``users``.
     """
 
-    def __init__(
-        self,
-        uow: UnitOfWork,
-        repositories: ApiKeyRepositories,
-        *,
-        users: UserAccess,
-        workspaces_of_organization: WorkspacesOfOrganization,
-    ) -> None:
+    def __init__(self, uow: UnitOfWork, repositories: ApiKeyRepositories, *, users: UserAccess) -> None:
         self._uow = uow
         self._keys = repositories.keys
         self._federation_rules = repositories.federation_rules
         self._users = users
-        self._workspaces_of_organization = workspaces_of_organization
+
+    async def revoke_in_workspaces(self, workspace_ids: Collection[uuid.UUID]) -> None:
+        """Revoke every key in these workspaces, so none of them can be enabled again."""
+        async with self._uow:
+            await self._keys.revoke_in_workspaces(workspace_ids)
 
     async def get_workspace_id_for_key(self, key_id: str) -> uuid.UUID | None:
         """Return the ID of the workspace that owns a key, or None when no key has that ID."""
         return await self._keys.get_workspace_id_for_key(key_id)
 
+    async def issue_app_key(
+        self,
+        *,
+        user: User,
+        workspace_id: uuid.UUID,
+        client_id: str,
+        app_name: str,
+        scopes: Iterable[KeyScope],
+        key_format: ApiKeyFormatPort,
+        expires_at: datetime | None = None,
+    ) -> tuple[str, str]:
+        """Mint a budget-enforced app credential inside the caller's authority transaction.
+
+        Returns:
+            The key and its ID.
+
+        Raises:
+            ValueError: ``scopes`` is empty or names one an app key may not hold.
+        """
+        held = KeyScopeSet.checked(scopes, is_service_key=False)
+        if not await self._users.ensure_app_key_owner(str(user.id), user.full_name or user.email or "OAuth app user"):
+            raise AppKeyOwnerInactiveError
+        key = key_format.mint()
+        key_id = str(uuid.uuid4())
+        await self._keys.issue_app_key(
+            key_id=key_id,
+            key_hash=hash_key(key),
+            prefix=key_format.fingerprint(key),
+            suffix=key_suffix(key),
+            name=f"{app_name} (OAuth)",
+            user_id=str(user.id),
+            workspace_id=workspace_id,
+            client_id=client_id,
+            scopes=held,
+            expires_at=expires_at,
+        )
+        return key, key_id
+
+    async def revoke_key_by_token(self, token: str) -> None:
+        """Permanently revoke the presented API key, preserving its usage history."""
+        async with self._uow:
+            await self._keys.revoke_by_hash(hash_key(token))
+
     async def get_key_ids_in_workspaces(self, workspace_ids: Sequence[uuid.UUID]) -> list[str]:
         """Return the IDs of the keys in these workspaces, in no particular order."""
         return await self._keys.get_key_ids_in_workspaces(workspace_ids)
-
-    async def reach(self, key_ids: Collection[str], *, organization_id: uuid.UUID) -> list[KeyReach]:
-        """The keys among ``key_ids`` in ``organization_id``, with their reach.
-
-        A key outside the organization is absent rather than refused, like a key
-        that does not exist. Three reads, whatever the number of keys.
-        """
-        async with self._uow:
-            workspace_ids = await self._workspaces_of_organization(organization_id)
-            placements = await self._keys.placements(key_ids, workspace_ids=workspace_ids)
-            owners = await self._users.lists_of(
-                {p.user_id for p in placements if p.allowed_models is None and p.user_id is not None}
-            )
-        reaches: list[KeyReach] = []
-        for placement in placements:
-            allowlist = placement.allowed_models
-            if allowlist is None and placement.user_id is not None and placement.user_id in owners:
-                allowlist = owners[placement.user_id].models
-            reaches.append(
-                KeyReach(
-                    id=placement.id,
-                    workspace_id=placement.workspace_id,
-                    organization_id=organization_id,
-                    user_id=placement.user_id,
-                    allowlist=allowlist,
-                )
-            )
-        return reaches
 
     async def key_names(
         self, key_ids: Collection[str], *, workspace_ids: Collection[uuid.UUID] | None
@@ -262,13 +264,13 @@ class ApiKeyService:
         than written over. A changed access list must fit the owner's own.
 
         Raises:
-            OperatorDisabledKeyError: the changes switch on a key an operator switched off.
+            KeyEnableRefusedError: the changes enable a key disabled for a reason the owner cannot clear.
             ValueError: a changed access list names something unknown, or grants more than the owner's.
         """
         async with self._uow:
             await self._keys.reload_locked(key)
-            if changes.get("is_active") is True and key.operator_disabled:
-                raise OperatorDisabledKeyError
+            if changes.get("is_active") is True and key.disabled_reason is not None:
+                raise KeyEnableRefusedError(key.disabled_reason)
             stored = AccessLists(key.allowed_models, key.allowed_tools)
             access = await self.check_access_lists(
                 config,
@@ -327,6 +329,22 @@ class ApiKeyService:
         """
         if api_key is None:
             return None
+        allowed, owner = await self._tool_access(config, api_key)
+        if is_tool_allowed(allowed, tool):
+            return None
+        # With no allowed_tools on either, the answer was read off the model lists, the deprecated way.
+        legacy_models: list[list[str]] = []
+        if api_key.allowed_tools is None and owner.tools is None:
+            legacy_models = [models for models in (api_key.allowed_models, owner.models) if models is not None]
+        return tool_not_allowed_detail(tool, f"{provider}:{tool}", legacy_models, kind=kind)
+
+    async def tool_allowlist(self, config: GatewayConfig, api_key: APIKey) -> list[str] | None:
+        """The search and fetch tools ``api_key`` may run, as :meth:`tool_refusal` decides; ``None`` for all."""
+        allowed, _owner = await self._tool_access(config, api_key)
+        return allowed
+
+    async def _tool_access(self, config: GatewayConfig, api_key: APIKey) -> tuple[list[str] | None, AccessLists]:
+        """The key's tool allow-list and its owner's lists, read only when the key has no ``allowed_tools``."""
         owner = AccessLists(None, None)
         if api_key.allowed_tools is None and api_key.user_id is not None:
             async with self._uow:
@@ -338,13 +356,7 @@ class ApiKeyService:
             user_tools=owner.tools,
             user_models=owner.models,
         )
-        if is_tool_allowed(allowed, tool):
-            return None
-        # With no allowed_tools on either, the answer was read off the model lists, the deprecated way.
-        legacy_models: list[list[str]] = []
-        if api_key.allowed_tools is None and owner.tools is None:
-            legacy_models = [models for models in (api_key.allowed_models, owner.models) if models is not None]
-        return tool_not_allowed_detail(tool, f"{provider}:{tool}", legacy_models, kind=kind)
+        return allowed, owner
 
     async def pin_before_user_grant(
         self, config: GatewayConfig, user_id: str, *, before: AccessLists, user_tools: list[str] | None

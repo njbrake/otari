@@ -1,13 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type {
-  MergeUserRequest,
-  MergeUserResult,
-  UpdateUserRequest,
-  User,
-} from "@/client"
+import type { UpdateUserRequest, User } from "@/client"
 import { apiFetch } from "@/shared/api/client"
 import { fetchAllRows } from "@/shared/api/paging"
-import { BUDGETS, KEYS, USAGE, USERS } from "@/shared/api/queryKeys"
+import { BUDGETS, USERS } from "@/shared/api/queryKeys"
 
 const fetchAllUsers = () => fetchAllRows<User>("/users")
 
@@ -39,33 +34,5 @@ export function useUpdateUser() {
         body: JSON.stringify(body),
       }),
     onSuccess: () => invalidateUserViews(queryClient),
-  })
-}
-
-export function useMergeUser() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({
-      targetId,
-      sourceId,
-    }: {
-      targetId: string
-      sourceId: string
-    }) =>
-      apiFetch<MergeUserResult>(
-        `/users/${encodeURIComponent(targetId)}/merge`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            source_user_id: sourceId,
-          } satisfies MergeUserRequest),
-        },
-      ),
-    onSuccess: () => {
-      invalidateUserViews(queryClient)
-      // The source's keys and usage now belong to the target.
-      void queryClient.invalidateQueries({ queryKey: [KEYS] })
-      void queryClient.invalidateQueries({ queryKey: [USAGE] })
-    },
   })
 }

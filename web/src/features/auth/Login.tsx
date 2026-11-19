@@ -22,6 +22,7 @@ import {
   signInWithPasskey,
   startOAuthSignIn,
 } from "@/shared/api/client"
+import { currentRoute } from "@/shared/helpers/appLocation"
 import {
   PasskeyCancelledError,
   supportsPasskeys,
@@ -47,11 +48,13 @@ import {
 } from "./oauthProviders"
 import { rememberOAuthState } from "./oauthRoundTrip"
 import { PublicAuthLink } from "./PublicAuthLayout"
+import { SsoEntry } from "./SsoEntry"
 import {
   forgetSignInAddress,
   readSignInAddress,
   rememberSignInAddress,
 } from "./signInAddress"
+import { forgetSignInNotice, readSignInNotice } from "./signInNotice"
 
 /** Whether the primary pointer is a mouse or a trackpad rather than a finger. */
 function hasFinePointer(): boolean {
@@ -240,6 +243,11 @@ function LabelRow({
  * configured: a provider nobody set up is absent rather than rendered disabled,
  * and a deployment that configured none carries no OAuth affordance at all.
  *
+ * A company-connection row sits last. Unlike a passkey or an OAuth provider,
+ * it carries no bootstrap flag: whether an address's organization has a
+ * connection is resolved per address, so the row is offered on every
+ * deployment.
+ *
  * Refusals render on the field label, and empty fields remain submittable so
  * validation can explain what to enter.
  */
@@ -301,8 +309,11 @@ export function Login() {
   const [isKeyVisible, setIsKeyVisible] = useState(false)
   // Handed over by the accept-invitation page after it set a first password.
   const [prefilledEmail] = useState(readSignInAddress)
+  // Why a link landed here instead of where it pointed (the setup page).
+  const [notice] = useState(readSignInNotice)
   useEffect(() => {
     forgetSignInAddress()
+    forgetSignInNotice()
   }, [])
   const [email, setEmail] = useState(prefilledEmail)
   const [password, setPassword] = useState("")
@@ -614,8 +625,8 @@ export function Login() {
         return
       }
       // The sign-in screen renders in place of whatever page was asked for,
-      // so this hash is the link the person followed.
-      rememberOAuthState(started.state, { returnHash: window.location.hash })
+      // so this route is the link the person followed.
+      rememberOAuthState(started.state, { returnRoute: currentRoute() })
       window.location.assign(started.authorizationUrl)
     } catch (caught) {
       recordEvent(TELEMETRY_EVENTS.LOGIN_FAILED, {
@@ -704,6 +715,12 @@ export function Login() {
               : "Sign in with your master key to browse models, set pricing, and manage settings."}
           </p>
         </div>
+
+        {notice ? (
+          <p role="status" className="text-center text-sm text-pretty">
+            {notice}
+          </p>
+        ) : null}
 
         <div className="flex flex-col">
           {oauthProviders.length > 0 ? (
@@ -825,7 +842,7 @@ export function Login() {
                       <div className="col-start-2 row-start-1 flex self-start">
                         <PublicAuthLink
                           isInline
-                          to="#/recover-password"
+                          to="/recover-password"
                           onPress={handOverAddress}
                         >
                           Forgot your password?
@@ -839,7 +856,7 @@ export function Login() {
                   </TextField>
                   {offersResendVerification ? (
                     <PublicAuthLink
-                      to="#/resend-verification"
+                      to="/resend-verification"
                       onPress={handOverAddress}
                     >
                       Send a new verification link
@@ -979,10 +996,20 @@ export function Login() {
               {usesPassword ? "Sign in with email" : "Sign in with master key"}
             </AuthMethodRow>
           )}
+          <div className="pt-3">
+            <SsoEntry
+              isDisabled={
+                isSubmitting ||
+                isSigningOut ||
+                isPasskeyPending ||
+                pendingProvider !== undefined
+              }
+            />
+          </div>
         </div>
         <div className="otari-auth-actions flex flex-wrap items-center justify-between gap-x-4 border-t border-border pt-2">
           {offersSignup ? (
-            <PublicAuthLink to="#/signup">
+            <PublicAuthLink to="/signup">
               {open_signup ? "Create an account" : "Set your password"}
             </PublicAuthLink>
           ) : null}

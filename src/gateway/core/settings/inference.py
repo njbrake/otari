@@ -31,6 +31,80 @@ def country_codes(values: Iterable[object]) -> list[str]:
     return codes
 
 
+# The zones a data location may name beside a country: the European Union, and
+# anywhere at all (an upstream that may process a request in any region).
+DATA_LOCATION_ZONES: frozenset[str] = frozenset({"EU", "GLOBAL"})
+
+
+def data_location(value: object) -> str:
+    """``value`` as a declared data location: an ISO 3166-1 alpha-2 code, ``EU`` or ``GLOBAL``.
+
+    Raises:
+        ValueError: ``value`` is neither a country code nor a zone.
+    """
+    code = str(value).strip().upper()
+    if code in DATA_LOCATION_ZONES or code in COUNTRY_CODES:
+        return code
+    # The value is left out: it may be anything pasted into the field, a credential included.
+    msg = "not a data location: give an ISO 3166-1 alpha-2 country code, EU or GLOBAL"
+    raise ValueError(msg)
+
+
+# The member states of the European Union, which the ``EU`` zone stands for.
+EU_COUNTRIES: frozenset[str] = frozenset(
+    "AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE".split()
+)
+
+
+def data_location_admitted(location: str | None, allowed: Iterable[str]) -> bool:
+    """Whether data kept at ``location`` is somewhere ``allowed`` names.
+
+    An undeclared location is admitted nowhere. ``EU`` in ``allowed`` admits
+    each member state as well as the zone itself; ``GLOBAL`` admits only an
+    upstream declared ``GLOBAL``, never a country.
+    """
+    if location is None:
+        return False
+    allowed = set(allowed)
+    return location in allowed or ("EU" in allowed and location in EU_COUNTRIES)
+
+
+def data_locations(values: Iterable[object]) -> list[str]:
+    """``values`` as data locations (see :func:`data_location`), in order and without repeats.
+
+    Raises:
+        ValueError: a value is no data location.
+    """
+    locations: list[str] = []
+    for value in values:
+        location = data_location(value)
+        if location not in locations:
+            locations.append(location)
+    return locations
+
+
+# Which models no open-weight plan covers; see ``is_closed_model`` in the inference domain.
+DEFAULT_CLOSED_MODEL_PROVIDERS: tuple[str, ...] = (
+    "anthropic",
+    "azureanthropic",
+    "vertexaianthropic",
+    "gemini",
+    "vertexai",
+    "xai",
+    "openai",
+    "azureopenai",
+)
+DEFAULT_CLOSED_MODEL_FAMILIES: tuple[str, ...] = (
+    "claude",
+    "gemini",
+    "grok",
+    "gpt-",
+    "chatgpt",
+    *(f"o{n}" for n in range(1, 10)),
+)
+DEFAULT_OPEN_MODEL_FAMILIES: tuple[str, ...] = ("gpt-oss", "gemma")
+
+
 class InferenceSettings(BaseModel):
     """How a completion request is sent and retried upstream, deduplicated, streamed and attributed to an end user.
 
@@ -95,6 +169,29 @@ class InferenceSettings(BaseModel):
             "Path to a MaxMind DB country file (GeoLite2 Country, DB-IP Lite Country) in which the "
             "client address is looked up. A replaced file is read again without a restart. When set, "
             "a country file stored from the Settings page is not read. Needs the geoip extra."
+        ),
+    )
+
+    closed_model_providers: Annotated[list[str], Shown(SettingsGroup.METERING)] = Field(
+        default_factory=lambda: list(DEFAULT_CLOSED_MODEL_PROVIDERS),
+        description=(
+            "Providers whose models are all closed, so no plan for open-weight models covers them, "
+            "unless the model is in closed_model_open_families. Every other model counts as open-weight."
+        ),
+    )
+    closed_model_families: Annotated[list[str], Shown(SettingsGroup.METERING)] = Field(
+        default_factory=lambda: list(DEFAULT_CLOSED_MODEL_FAMILIES),
+        description=(
+            "Model name prefixes that are closed on any provider, matched on the name after its last '/' "
+            "(so OpenRouter's anthropic/claude-sonnet-4 is a 'claude'). A prefix ending in '-' matches any "
+            "name it starts; any other matches a whole word ('o3' matches o3-mini, not o3x)."
+        ),
+    )
+    closed_model_open_families: Annotated[list[str], Shown(SettingsGroup.METERING)] = Field(
+        default_factory=lambda: list(DEFAULT_OPEN_MODEL_FAMILIES),
+        description=(
+            "Model name prefixes that are open-weight even on a closed provider or in a closed family, "
+            "such as OpenAI's gpt-oss and Google's Gemma."
         ),
     )
 

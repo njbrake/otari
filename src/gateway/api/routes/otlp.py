@@ -68,15 +68,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import ClientDisconnect
 
 from gateway.api.deps import (
-    IngestTraceContentDep,
     TelemetryStoragePortDep,
+    TraceServiceDep,
     get_config,
-    verify_ingest_key_or_master_key,
+    get_db,
+    verify_api_key_or_master_key,
     workspace_keeps_trace_content,
 )
+from gateway.api.key_scopes import key_scope
 from gateway.api.routes._helpers import retryable_on_database_outage
 from gateway.core.config import GatewayConfig
-from gateway.core.database import DATABASE_ERRORS, get_ingest_db
+from gateway.core.database import DATABASE_ERRORS, release_session
 from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
 from gateway.ports.telemetry_storage_port import TelemetryRecord
@@ -107,6 +109,7 @@ from gateway.services.traces import (
     HOOK_SCOPE,
     HOOK_USAGE_SOURCE,
     OtlpSpan,
+    TraceService,
     TraceWriter,
     cache_in_input,
     gate_usage_event_id,
@@ -114,6 +117,7 @@ from gateway.services.traces import (
     record_otlp_export,
     record_priced_requests,
 )
+from gateway.types.key_scope import KeyScope
 
 router = APIRouter(tags=["otel"])
 
@@ -496,14 +500,21 @@ def _point_value(point: Any) -> Any:
     return point.as_double if arm == "as_double" else point.as_int
 
 
-async def _content_generation(
-    traces: IngestTraceContentDep, config: GatewayConfig, workspace_id: uuid.UUID
-) -> int | None:
+async def _release_after_auth(db: AsyncSession) -> None:
+    """End the transaction the key lookup opened before reading the export.
+
+    Otherwise the connection sits idle in that transaction while the body uploads
+    and parses, so slow exporters alone could take the pool sign-in needs.
+    """
+    await release_session(db)
+
+
+async def _content_generation(traces: TraceService, config: GatewayConfig, workspace_id: uuid.UUID) -> int | None:
     """The workspace's content generation, or None where content is off or it cannot be read."""
     if not config.trace_content_enabled:
         return None
     try:
-        return await traces.generation(workspace_id)
+        return await traces.content_generation(workspace_id)
     except DATABASE_ERRORS:
         return None
 
@@ -577,13 +588,13 @@ def _otlp_response(content_type: str, response: Message) -> Response:
     return Response(content=response.SerializeToString(), media_type="application/x-protobuf")
 
 
-@router.post("/v1/traces")
+@router.post("/v1/traces", openapi_extra=key_scope(KeyScope.TELEMETRY_WRITE))
 async def receive_traces(
     request: Request,
-    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_ingest_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_ingest_db)],
+    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
-    traces: IngestTraceContentDep,
+    traces: TraceServiceDep,
 ) -> Response:
     """Ingest LLM usage from OTLP spans (GenAI semantic conventions)."""
     api_key = _require_import_key(auth_result[0])
@@ -593,6 +604,7 @@ async def receive_traces(
     admitted_at = datetime.now(UTC)
     writer: TraceWriter | None = getattr(request.app.state, "trace_writer", None)
     generation = await _content_generation(traces, config, api_key.workspace_id) if writer is not None else None
+    await _release_after_auth(db)
     content_type = _content_type(request)
     body = await _read_export(request)
     parsed = _parse(body, content_type, ExportTraceServiceRequest())
@@ -681,16 +693,17 @@ async def receive_traces(
     return _otlp_response(content_type, response)
 
 
-@router.post("/v1/logs")
+@router.post("/v1/logs", openapi_extra=key_scope(KeyScope.TELEMETRY_WRITE))
 async def receive_logs(
     request: Request,
-    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_ingest_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_ingest_db)],
+    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     storage: TelemetryStoragePortDep,
 ) -> Response:
     """Ingest LLM usage from OTLP log events (Claude Code, Codex, or GenAI logs)."""
     api_key = _require_import_key(auth_result[0])
+    await _release_after_auth(db)
     content_type = _content_type(request)
     body = await _read_export(request)
     parsed = _parse(body, content_type, ExportLogsServiceRequest())
@@ -744,11 +757,11 @@ async def receive_logs(
     return _otlp_response(content_type, response)
 
 
-@router.post("/v1/metrics")
+@router.post("/v1/metrics", openapi_extra=key_scope(KeyScope.TELEMETRY_WRITE))
 async def receive_metrics(
     request: Request,
-    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_ingest_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_ingest_db)],
+    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     storage: TelemetryStoragePortDep,
 ) -> Response:
@@ -768,6 +781,7 @@ async def receive_metrics(
     with it off, the export still succeeds and simply stores nothing.
     """
     api_key = _require_import_key(auth_result[0])
+    await _release_after_auth(db)
     content_type = _content_type(request)
     body = await _read_export(request)
     parsed = _parse(body, content_type, ExportMetricsServiceRequest())

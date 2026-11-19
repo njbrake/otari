@@ -35,11 +35,20 @@ async function horizontalOverflow(page: Page): Promise<number> {
 const PAGES = [
   {
     route: "/",
-    heading: "Overview",
-    // The month's spend chart, whose date labels are what could overhang it.
+    heading: "Home",
+    // The figures and the breakdown table are the widest rows on the page.
     ready: (page: Page) =>
       expect(
-        page.getByRole("heading", { name: /^Billed spend, / }),
+        page.getByRole("main").getByRole("heading", { name: "Home" }),
+      ).toBeVisible(),
+  },
+  {
+    route: "/sessions",
+    heading: "Sessions",
+    // The tab row and the chart are the widest rows on the page.
+    ready: (page: Page) =>
+      expect(
+        page.getByRole("navigation", { name: "Sessions views" }),
       ).toBeVisible(),
   },
   {
@@ -49,13 +58,15 @@ const PAGES = [
       expect(page.getByRole("textbox").first()).toBeVisible(),
   },
   {
-    route: "/activity",
-    heading: "Activity",
-    // A phone gets the request list as rows, ending in the button that loads more.
-    ready: (page: Page) =>
-      expect(
-        page.getByRole("button", { name: /^Load \d+ more$/ }),
-      ).toBeVisible(),
+    route: "/requests",
+    heading: "Sessions",
+    // A paginated table: the pager row is what could not wrap.
+    ready: async (page: Page) => {
+      await expect(table(page, "Activity log")).toBeVisible()
+      await expect(
+        page.getByRole("button", { name: /Last page/ }),
+      ).toBeVisible()
+    },
   },
   {
     route: "/admin/web-search",
@@ -88,4 +99,52 @@ test.describe("a phone-width page does not pan sideways", () => {
       ).toBeLessThanOrEqual(0)
     })
   }
+})
+
+test("a tap on a wrapped terms link opens it rather than ticking the box", async ({
+  page,
+  context,
+}) => {
+  // At this width the sentence wraps and puts the privacy link under the box's
+  // 44px bleed, which took the tap until the links sat above it. jsdom cannot
+  // hit-test, so this is the only place that can see it.
+  await page.route("**/v1/bootstrap", async (route) => {
+    const response = await route.fetch()
+    await route.fulfill({
+      response,
+      json: {
+        ...(await response.json()),
+        mail_ready: true,
+        open_signup: true,
+        terms_url: "https://example.com/terms",
+        privacy_url: "https://example.com/privacy",
+      },
+    })
+  })
+  await context.route("https://example.com/**", (route) =>
+    route.fulfill({ body: "" }),
+  )
+  await page.goto("/signup")
+  const box = page.getByRole("checkbox", {
+    name: "I accept the Terms of Service and the Privacy Policy",
+  })
+  await expect(box).toBeVisible()
+
+  for (const [name, url] of [
+    ["Terms of Service", "https://example.com/terms"],
+    ["Privacy Policy", "https://example.com/privacy"],
+  ] as const) {
+    const link = await page.getByRole("link", { name }).boundingBox()
+    if (!link) throw new Error(`${name} has no box`)
+    const opened = context.waitForEvent("page")
+    // The upper third of the line, where the bleed reaches.
+    await page.touchscreen.tap(
+      link.x + link.width / 2,
+      link.y + link.height * 0.3,
+    )
+    const tab = await opened
+    expect(tab.url()).toBe(url)
+    await tab.close()
+  }
+  await expect(box).not.toBeChecked()
 })

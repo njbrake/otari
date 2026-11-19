@@ -13,7 +13,7 @@ import {
   EntitlementProvider,
   useEntitlements,
 } from "@/shared/hooks/useEntitlements"
-import { bootstrap, organizationContext } from "@/tests/fixtures"
+import { bootstrap, organizationContext, SURFACES } from "@/tests/fixtures"
 import { renderWithRouter } from "@/tests/router"
 
 // Through `vi.hoisted`, because a `vi.mock` factory is hoisted above every
@@ -58,7 +58,7 @@ vi.mock("@/app/nav/overlayNavItems", async () => {
   return {
     OVERLAY_NAV_ITEMS: [
       {
-        sectionId: "access",
+        sectionId: "index",
         items: [
           {
             // Any real route the registry does not already declare: what is
@@ -228,17 +228,14 @@ describe("the shell's mount point", () => {
     // the surfaces before the page rendered, so a destination this deployment
     // does not host is answerable now and no entitlement query can change it.
     // Waiting on one would hold back a panel that is already correct.
-    // `/routing` is gated on the `routing` surface, which this bootstrap
-    // leaves out, so the base registry gates it off with no overlay
-    // contribution involved.
+    // `/workspaces` is gated on `workspaces`, which this bootstrap leaves out,
+    // so the base registry gates it off with no overlay contribution involved.
     resolved.value = { capabilities: [], isLoading: true }
     await renderShell(
-      <p>ROUTING</p>,
-      "/routing",
+      <p>WORKSPACES</p>,
+      "/workspaces",
       bootstrap({
-        surfaces: bootstrap().surfaces.filter(
-          (surface) => surface !== "routing",
-        ),
+        surfaces: SURFACES.filter((surface) => surface !== "workspaces"),
       }),
     )
 

@@ -1,52 +1,18 @@
-import {
-  keepPreviousData,
-  queryOptions,
-  useInfiniteQuery,
-  useMutation,
-  useQueries,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query"
+import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query"
 import type {
-  BreakdownDimension,
   InFlightResponse,
   SummaryDimension,
-  UsageActivityGroupBy,
-  UsageActivityGroups,
-  UsageBreakdownRankBy,
   UsageBucket,
   UsageCount,
-  UsageDeleteResult,
   UsageEntry,
   UsageFilters,
   UsageGroupBy,
   UsageGroupedSeries,
-  UsageGroupRow,
-  UsageLatency,
-  UsageMutationSelection,
-  UsageRankBy,
-  UsageRankOrder,
-  UsageSessionRow,
-  UsageSetPriceRequest,
-  UsageSetPriceResult,
-  UsageSortKey,
   UsageSummary,
-  UsageTools,
 } from "@/client"
-import {
-  ApiError,
-  apiFetch,
-  heavyReadSignal,
-  longRequestSignal,
-} from "@/shared/api/client"
+import { ApiError, apiFetch, heavyReadSignal } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
-import {
-  OVERVIEW,
-  USAGE,
-  workspaceMeta,
-  workspaceSpendKey,
-  workspaceVisibilityKey,
-} from "@/shared/api/queryKeys"
+import { NO_RETRY, USAGE, workspaceMeta } from "@/shared/api/queryKeys"
 import { isoAgo } from "@/shared/helpers/timeRange"
 
 // ---------- activity / request log ----------
@@ -75,6 +41,7 @@ function usageParams(filters: UsageFilters): URLSearchParams {
   if (filters.start_date) params.set("start_date", filters.start_date)
   if (filters.end_date) params.set("end_date", filters.end_date)
   if (filters.status) params.set("status", filters.status)
+  if (filters.status_code) params.set("status_code", filters.status_code)
   appendAll("model", filters.model)
   if (filters.endpoint) params.set("endpoint", filters.endpoint)
   if (filters.provider) params.set("provider", filters.provider)
@@ -84,34 +51,6 @@ function usageParams(filters: UsageFilters): URLSearchParams {
   if (filters.source_label) params.set("source_label", filters.source_label)
   if (filters.tool) params.set("tool", filters.tool)
   if (filters.priced !== undefined) params.set("priced", String(filters.priced))
-  if (filters.counts_toward_budget !== undefined) {
-    params.set("counts_toward_budget", String(filters.counts_toward_budget))
-  }
-  if (filters.include_absorbed !== undefined) {
-    params.set("include_absorbed", String(filters.include_absorbed))
-  }
-  if (filters.q) params.set("q", filters.q)
-  appendAll("requested_model", filters.requested_model)
-  appendAll("exclude_model", filters.exclude_model)
-  appendAll("exclude_user_id", filters.exclude_user_id)
-  appendAll("exclude_api_key_id", filters.exclude_api_key_id)
-  appendAll("exclude_source", filters.exclude_source)
-  appendAll("exclude_status", filters.exclude_status)
-  appendAll("policy_name", filters.policy_name)
-  appendAll("exclude_policy_name", filters.exclude_policy_name)
-  if (filters.routed !== undefined) params.set("routed", String(filters.routed))
-  appendAll("channel", filters.channel)
-  appendAll("exclude_channel", filters.exclude_channel)
-  appendAll("is_null", filters.is_null)
-  if (filters.tokens_gt !== undefined) {
-    params.set("tokens_gt", String(filters.tokens_gt))
-  }
-  if (filters.cost_gt !== undefined) {
-    params.set("cost_gt", String(filters.cost_gt))
-  }
-  if (filters.latency_ms_gt !== undefined) {
-    params.set("latency_ms_gt", String(filters.latency_ms_gt))
-  }
   return params
 }
 
@@ -120,8 +59,8 @@ function usageParams(filters: UsageFilters): URLSearchParams {
 //
 // `/usage` is deployment-wide and refuses anyone who does not operate the
 // deployment; `/organizations/me/usage` serves the same rows narrowed to the
-// caller's own organization, to the workspaces they belong to within it
-// (otari#837), and for a member or viewer to the requests billed to them. Both answer identical shapes, so every hook below differs only in
+// caller's own organization, and to the workspaces they belong to within it
+// (otari#837). Both answer identical shapes, so every hook below differs only in
 // the prefix it asks.
 //
 // Read off the organization context rather than `useDeploymentAdminAccess`,
@@ -142,12 +81,12 @@ function usageParams(filters: UsageFilters): URLSearchParams {
 // can never read each other's cached rows.
 //
 // `"organization"` pins the narrow surface regardless of who is asking. It
-// exists for the organization-wide Usage page (otari-ai#1963), whose question is
+// exists for the organization-wide reads (otari-ai#1963), whose question is
 // "this organization", so for an operator the caller-derived scope would answer
 // a different one: `/usage` reads every tenant on the deployment, and a page
 // titled with the organization would silently overstate it. A pinned base needs
 // no context answer to be known, so it is ready on first paint.
-type UsageScope = "caller" | "organization"
+export type UsageScope = "caller" | "organization"
 
 export function useUsageScope(scope: UsageScope = "caller"): {
   base: string
@@ -167,166 +106,10 @@ export function useUsageScope(scope: UsageScope = "caller"): {
  * What every usage aggregate the gateway runs a few at a time shares: no retry.
  * A busy refusal, a failed query or a read past its deadline would put the same
  * work back in the same queue, so a failed one waits for the page's refresh.
+ * Each also passes `heavyReadSignal`, so a read nothing on screen wants is
+ * abandoned and the gateway cancels it.
  */
-export const HEAVY_READ = { retry: false } as const
-
-/**
- * A usage scope, or a member's ask for a workspace's aggregates
- * (`workspace_totals=true`), which the organization surface's summary, latency,
- * series and groups take. The server grants it while the workspace shares its
- * totals with members, split by model, provider or status code and with no
- * filter naming a person, key or session; the list and the count have no such
- * ask, so a member never reads anyone else's rows.
- */
-export type TotalsScope = UsageScope | "workspace_totals"
-
-function useTotalsScope(scope: TotalsScope) {
-  const queryClient = useQueryClient()
-  const isWorkspaceTotals = scope === "workspace_totals"
-  const resolved = useUsageScope(isWorkspaceTotals ? "organization" : scope)
-  return {
-    ...resolved,
-    // In every key, so a member's own figures and the workspace's never share
-    // a cache entry.
-    keyBase: isWorkspaceTotals
-      ? `${resolved.base}?workspace_totals`
-      : resolved.base,
-    params: (filters: UsageFilters) => {
-      const params = usageParams(filters)
-      if (isWorkspaceTotals) params.set("workspace_totals", "true")
-      return params
-    },
-    /**
-     * Reads `path` under the scope's base. A refused ask for a workspace's
-     * totals says the setting the page was laid out from has moved, so the
-     * workspace's visibility is read again, with the overview that carries it.
-     */
-    read: async <T>(
-      path: string,
-      filters: UsageFilters,
-      signal: AbortSignal,
-    ): Promise<T> => {
-      try {
-        return await apiFetch<T>(`${resolved.base}${path}`, {
-          signal: heavyReadSignal(signal),
-        })
-      } catch (error) {
-        const workspaceId = filters.workspace_id
-        if (
-          isWorkspaceTotals &&
-          workspaceId &&
-          error instanceof ApiError &&
-          error.status === 403
-        ) {
-          // Several reads are refused at once; they share one read again.
-          const once = { cancelRefetch: false }
-          void queryClient.invalidateQueries(
-            { queryKey: workspaceVisibilityKey(workspaceId) },
-            once,
-          )
-          void queryClient.invalidateQueries(
-            { queryKey: [OVERVIEW, workspaceId] },
-            once,
-          )
-          // And the budget, whose dollars the same setting withholds.
-          void queryClient.invalidateQueries(
-            { queryKey: workspaceSpendKey(workspaceId) },
-            once,
-          )
-        }
-        throw error
-      }
-    },
-  }
-}
-
-/**
- * A usage read's error as a page reports it. A refused ask for a workspace's
- * totals is left out: it is the setting having moved, not a failure, and the
- * re-read it sets off drops the page to the member's own view.
- */
-export function pickReportedError(
-  error: Error | null,
-  usageScope: TotalsScope,
-): Error | null {
-  const isRefusedTotals =
-    usageScope === "workspace_totals" &&
-    error instanceof ApiError &&
-    error.status === 403
-  return isRefusedTotals ? null : error
-}
-
-export interface UsageSort {
-  key: UsageSortKey
-  order: "asc" | "desc"
-}
-
-/** The server's own order, so a caller that does not sort sends nothing. */
-export const NEWEST_FIRST: UsageSort = { key: "timestamp", order: "desc" }
-
-export function isSameSort(a: UsageSort, b: UsageSort): boolean {
-  return a.key === b.key && a.order === b.order
-}
-
-/**
- * The filters without `include_absorbed`, which only the list and its count
- * read: a summary, a grouping or a bulk selection counts earlier failed
- * attempts separately either way.
- */
-export function withoutListOnly(
-  filters: UsageFilters,
-): Omit<UsageFilters, "include_absorbed"> {
-  const { include_absorbed: _listOnly, ...rest } = filters
-  return rest
-}
-
-// The log is a snapshot an operator reads, not a feed. On a busy gateway rows
-// arrive faster than anyone can inspect them, so a page that refetched on its
-// own reshuffled the table out from under whoever was reading it. It refetches
-// only when asked: a mount, the refresh button, or a change of filters, window,
-// or page (all of which are in the key). Nothing here opts back into the
-// provider's refetch-on-focus default, which is already off (`provider.tsx`).
-// `useLiveUsageCount` is how the page still says that newer rows exist.
-const LOG_STALE_MS = 10_000
-
-/** One read of log rows: `limit` of them after the first `skip`, in `sort` order. */
-function fetchUsageRows(
-  base: string,
-  filters: UsageFilters,
-  { skip, limit, sort }: { skip: number; limit: number; sort: UsageSort },
-): Promise<UsageEntry[]> {
-  const params = usageParams(filters)
-  params.set("skip", String(skip))
-  params.set("limit", String(limit))
-  if (!isSameSort(sort, NEWEST_FIRST)) {
-    params.set("sort", sort.key)
-    params.set("order", sort.order)
-  }
-  return apiFetch<UsageEntry[]>(`${base}?${params.toString()}`)
-}
-
-// One page of the log. Every reader of a page goes through this, so a key
-// has one fetcher: a grouped log's preview of a group and the same filter's
-// first page share an entry and must agree on what it holds.
-function usagePageQuery(
-  base: string,
-  filters: UsageFilters,
-  page: number,
-  pageSize: number,
-  sort: UsageSort,
-) {
-  return queryOptions({
-    queryKey: [USAGE, "list", base, filters, page, pageSize, sort],
-    meta: workspaceMeta(filters.workspace_id),
-    queryFn: () =>
-      fetchUsageRows(base, filters, {
-        skip: page * pageSize,
-        limit: pageSize,
-        sort,
-      }),
-    staleTime: LOG_STALE_MS,
-  })
-}
+const HEAVY_READ = NO_RETRY
 
 // `placeholderData: keepPreviousData` keeps the current page on screen while the
 // next loads, so paging does not flash empty.
@@ -334,102 +117,51 @@ export function useUsageLogs(
   filters: UsageFilters,
   page: number,
   pageSize: number,
-  {
-    sort = NEWEST_FIRST,
-    enabled = true,
-    usageScope = "caller",
-  }: { sort?: UsageSort; enabled?: boolean; usageScope?: UsageScope } = {},
+  enabled = true,
 ) {
-  const scope = useUsageScope(usageScope)
+  const scope = useUsageScope()
   return useQuery({
-    ...usagePageQuery(scope.base, filters, page, pageSize, sort),
+    queryKey: [USAGE, "list", scope.base, filters, page, pageSize],
+    meta: workspaceMeta(filters.workspace_id),
+    queryFn: () => {
+      const params = usageParams(filters)
+      params.set("skip", String(page * pageSize))
+      params.set("limit", String(pageSize))
+      return apiFetch<UsageEntry[]>(`${scope.base}?${params.toString()}`)
+    },
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
+    // The log is a snapshot an operator reads, not a feed. On a busy gateway rows
+    // arrive faster than anyone can inspect them, so a page that refetched on its
+    // own reshuffled the table out from under whoever was reading it. It refetches
+    // only when asked: a mount, the refresh button, or a change of filters, window,
+    // or page (all of which are in the key). Nothing here opts back into the
+    // provider's refetch-on-focus default, which is already off (`provider.tsx`).
+    // `useLiveUsageCount` is how the page still says that newer rows exist.
+    staleTime: 10_000,
   })
-}
-
-// The log read a batch at a time and kept, for a list that grows as it is
-// scrolled rather than paging: each batch asks only for the rows after the last,
-// and the next is offered while a batch came back full and the rows stay under
-// `maxRows`.
-export function useUsageBatches(
-  filters: UsageFilters,
-  batch: number,
-  maxRows: number,
-  {
-    sort = NEWEST_FIRST,
-    enabled = true,
-  }: { sort?: UsageSort; enabled?: boolean } = {},
-) {
-  const scope = useUsageScope()
-  return useInfiniteQuery({
-    queryKey: [USAGE, "batches", scope.base, filters, batch, sort],
-    meta: workspaceMeta(filters.workspace_id),
-    queryFn: ({ pageParam }) =>
-      fetchUsageRows(scope.base, filters, {
-        skip: pageParam,
-        limit: batch,
-        sort,
-      }),
-    initialPageParam: 0,
-    getNextPageParam: (last, _pages, skip) =>
-      last.length === batch && skip + batch < maxRows
-        ? skip + batch
-        : undefined,
-    enabled: enabled && scope.isReady,
-    // A snapshot, as the paged log is.
-    staleTime: LOG_STALE_MS,
-  })
-}
-
-// One row by its own id, for a link that opens a request: the row it names is
-// usually not on the page the link lands on. Read only while `id` is set.
-export function useUsageRow(id: string | undefined) {
-  const scope = useUsageScope()
-  return useQuery({
-    queryKey: [USAGE, "row", scope.base, id],
-    queryFn: async () => {
-      const params = new URLSearchParams({ id: id as string })
-      const [row] = await apiFetch<UsageEntry[]>(
-        `${scope.base}?${params.toString()}`,
-      )
-      return row ?? null
-    },
-    enabled: id !== undefined && scope.isReady,
-    staleTime: 30_000,
-  })
-}
-
-// The count's query for the list it sits beside. Only the sort's column
-// matters: any but time bounds the window as the list's does, whichever way.
-function countParams(filters: UsageFilters, sortKey: UsageSortKey) {
-  const params = usageParams(filters)
-  if (sortKey !== NEWEST_FIRST.key) params.set("sort", sortKey)
-  return params.toString()
 }
 
 // Total rows matching the same filters, for the paginator's "N of M". A separate
-// request so /v1/usage stays a bare array; run alongside the list, in its order.
+// request so /v1/usage stays a bare array; run alongside the list.
 //
 // Deliberately as frozen as the log it counts (see `useUsageLogs`): the total
 // describes the page on screen, so a total that moved on its own would disagree
 // with the rows the operator can actually page through.
-export function useUsageCount(
-  filters: UsageFilters,
-  enabled = true,
-  sort: UsageSort = NEWEST_FIRST,
-) {
+export function useUsageCount(filters: UsageFilters) {
   const scope = useUsageScope()
   return useQuery({
-    queryKey: [USAGE, "count", scope.base, filters, sort.key],
+    queryKey: [USAGE, "count", scope.base, filters],
     meta: workspaceMeta(filters.workspace_id),
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiFetch<UsageCount>(
-        `${scope.base}/count?${countParams(filters, sort.key)}`,
+        `${scope.base}/count?${usageParams(filters).toString()}`,
+        { signal: heavyReadSignal(signal) },
       ),
-    enabled: enabled && scope.isReady,
+    enabled: scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 10_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -447,18 +179,15 @@ const NEW_ROW_POLL_MS = 15_000
 // other is deliberately ahead of it), and two observers of one query key cannot
 // disagree about how fresh their data is. The duplicate `COUNT(*)` at mount is
 // one indexed count, which is what makes polling it affordable in the first place.
-export function useLiveUsageCount(
-  filters: UsageFilters,
-  enabled = true,
-  sort: UsageSort = NEWEST_FIRST,
-) {
+export function useLiveUsageCount(filters: UsageFilters, enabled = true) {
   const scope = useUsageScope()
   return useQuery({
-    queryKey: [USAGE, "count", "live", scope.base, filters, sort.key],
+    queryKey: [USAGE, "count", "live", scope.base, filters],
     meta: workspaceMeta(filters.workspace_id),
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiFetch<UsageCount>(
-        `${scope.base}/count?${countParams(filters, sort.key)}`,
+        `${scope.base}/count?${usageParams(filters).toString()}`,
+        { signal: heavyReadSignal(signal) },
       ),
     enabled: enabled && scope.isReady,
     refetchInterval: NEW_ROW_POLL_MS,
@@ -521,7 +250,7 @@ export function useFailureCount(windowSeconds: number, enabled = true) {
   const scope = useUsageScope()
   return useQuery({
     queryKey: [USAGE, "count", "failures", scope.base, windowSeconds],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const filters: UsageFilters = {
         status: "error",
         source: "gateway",
@@ -529,6 +258,7 @@ export function useFailureCount(windowSeconds: number, enabled = true) {
       }
       return apiFetch<UsageCount>(
         `${scope.base}/count?${usageParams(filters).toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
@@ -567,6 +297,7 @@ export function useUnpricedUsage(
       workspaceId,
       windowSeconds,
     ],
+    meta: workspaceMeta(workspaceId),
     queryFn: ({ signal }) => {
       const params = usageParams({
         workspace_id: workspaceId || undefined,
@@ -620,53 +351,13 @@ export function useRequestGroups(groupIds: readonly string[]) {
   })
 }
 
-// Delete imported usage rows by selection (ids or by_filter). Only rows the server
-// treats as imported are removed, which is provenance as well as budget participation
-// (see `UsageEntry.bulk_editable`); every usage view is invalidated so the list, count,
-// and analytics refresh.
-//
-// Given the long deadline, not apiFetch's default: a by_filter delete is one
-// unbounded DELETE server-side, so its duration tracks the number of matched
-// rows. Timing out here would report failure for a delete that committed anyway.
-export function useDeleteUsage() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (body: UsageMutationSelection) =>
-      apiFetch<UsageDeleteResult>("/usage", {
-        method: "DELETE",
-        body: JSON.stringify(body),
-        signal: longRequestSignal(),
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: [USAGE] })
-    },
-  })
-}
-
-// Set the cost of imported usage rows from manual per-1M rates. Long deadline
-// for the same reason as the delete: the server reprices every matched row.
-export function useSetUsagePrice() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (body: UsageSetPriceRequest) =>
-      apiFetch<UsageSetPriceResult>("/usage/set-price", {
-        method: "POST",
-        body: JSON.stringify(body),
-        signal: longRequestSignal(),
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: [USAGE] })
-    },
-  })
-}
-
 // ---------- usage analytics summary ----------
 
 // Pass this as `dimensions` to read only `totals` / `series`. Named rather than a
 // bare `[]` at each call site so it is clear the omission is deliberate.
 export const NO_BREAKDOWNS: SummaryDimension[] = []
 
-// Aggregated spend/tokens/requests for the Usage page. Shares the activity
+// Aggregated spend/tokens/requests over a window. Shares the activity
 // filter serialization and adds the time-series bucket. `enabled` lets a caller
 // skip the request (e.g. the previous-period query when the range is unbounded,
 // so there is nothing to compare against). staleTime is longer than the live
@@ -683,20 +374,21 @@ export function useUsageSummary(
   bucket: UsageBucket,
   dimensions?: SummaryDimension[],
   enabled = true,
-  usageScope: TotalsScope = "caller",
+  usageScope: UsageScope = "caller",
 ) {
-  const scope = useTotalsScope(usageScope)
+  const scope = useUsageScope(usageScope)
   return useQuery({
     queryKey: [
       USAGE,
       "summary",
-      scope.keyBase,
+      scope.base,
       filters,
       bucket,
       dimensions ?? "all",
     ],
+    meta: workspaceMeta(filters.workspace_id),
     queryFn: ({ signal }) => {
-      const params = scope.params(filters)
+      const params = usageParams(filters)
       params.set("bucket", bucket)
       // A repeated query param has no empty-list form, so an empty selection goes
       // on the wire as the server's `none` sentinel.
@@ -706,44 +398,6 @@ export function useUsageSummary(
           params.append("dimensions", dimension)
         })
       }
-      return scope.read<UsageSummary>(
-        `/summary?${params.toString()}`,
-        filters,
-        signal,
-      )
-    },
-    enabled: enabled && scope.isReady,
-    placeholderData: keepPreviousData,
-    staleTime: 30_000,
-    ...HEAVY_READ,
-  })
-}
-
-// The Activity page's totals line and chart: the series and the totals, and
-// no breakdowns. The totals line's p95 is `useUsageLatency`'s, read apart so
-// these figures are not held behind its sort. `include_absorbed` is the list's
-// and count's alone, so it is not sent: the totals count earlier failed
-// attempts separately either way.
-export function useActivityTotals(
-  filters: UsageFilters,
-  bucket: UsageBucket,
-  { enabled = true }: { enabled?: boolean } = {},
-) {
-  const scope = useUsageScope()
-  const summaryFilters = withoutListOnly(filters)
-  return useQuery({
-    queryKey: [
-      USAGE,
-      "summary",
-      "activity",
-      scope.base,
-      summaryFilters,
-      bucket,
-    ],
-    queryFn: ({ signal }) => {
-      const params = usageParams(summaryFilters)
-      params.set("bucket", bucket)
-      params.append("dimensions", "none")
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
         { signal: heavyReadSignal(signal) },
@@ -751,256 +405,207 @@ export function useActivityTotals(
     },
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
-    staleTime: 10_000,
+    staleTime: 30_000,
     ...HEAVY_READ,
   })
 }
 
-// The first rows of each of several filtered sets, for the groups a grouped
-// log has open: each the first page of that filter's list, newest first.
-export function useUsagePreviews(
-  filterSets: readonly UsageFilters[],
-  limit: number,
+// A per-group time series for the stacked analytics chart (top groups by spend
+// plus an "other" fold). Only fetched while a group-by dimension is active, so
+// the ungrouped view costs nothing extra. Caching mirrors useUsageSummary.
+export function useUsageGroupedSeries(
+  filters: UsageFilters,
+  bucket: UsageBucket,
+  groupBy: UsageGroupBy | null,
+  enabled = true,
+  usageScope: UsageScope = "caller",
 ) {
-  const scope = useUsageScope()
+  const scope = useUsageScope(usageScope)
+  return useQuery({
+    queryKey: [USAGE, "series", scope.base, filters, bucket, groupBy],
+    meta: workspaceMeta(filters.workspace_id),
+    queryFn: ({ signal }) => {
+      const params = usageParams(filters)
+      params.set("bucket", bucket)
+      params.set("group_by", groupBy as string)
+      return apiFetch<UsageGroupedSeries>(
+        `${scope.base}/series?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
+      )
+    },
+    enabled: enabled && groupBy !== null && scope.isReady,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    // A 404 among the failures is version skew (a gateway older than this
+    // dashboard), and the page falls back to the ungrouped view with a notice.
+    ...HEAVY_READ,
+  })
+}
+
+/**
+ * Requests the gateway refused since `start`, by person, or only `userId`'s
+ * when one is named. The gateway records its own refusals with the status it
+ * answered, and 403 is the one it gives an over-budget or blocked caller and a
+ * model outside a key's allow-list.
+ */
+export function useRefusalsSince(
+  start: string,
+  workspaceId?: string,
+  isEnabled = true,
+  userId?: string,
+) {
+  const scope = useUsageScope("organization")
+  return useQuery({
+    queryKey: [
+      USAGE,
+      "refusals",
+      scope.base,
+      start,
+      workspaceId ?? "",
+      userId ?? "",
+    ],
+    queryFn: ({ signal }) =>
+      apiFetch<UsageSummary>(
+        `${scope.base}/summary?${new URLSearchParams({
+          start_date: start,
+          status_code: "403",
+          bucket: "day",
+          dimensions: "user",
+          ...(workspaceId ? { workspace_id: workspaceId } : {}),
+          ...(userId ? { user_id: userId } : {}),
+        })}`,
+        { signal: heavyReadSignal(signal) },
+      ),
+    enabled: scope.isReady && isEnabled,
+    staleTime: 30_000,
+    ...HEAVY_READ,
+  })
+}
+
+/**
+ * Each workspace's spend since `start`, by model, up to `end` where the window
+ * has one. The summary has no workspace breakdown, so this asks once per
+ * workspace: a handful, read in parallel.
+ */
+export function useWorkspaceSpendSummaries(
+  workspaceIds: readonly string[],
+  start: string,
+  isEnabled: boolean,
+  end = "",
+) {
+  const scope = useUsageScope("organization")
   return useQueries({
-    queries: filterSets.map((filters) => ({
-      ...usagePageQuery(scope.base, filters, 0, limit, NEWEST_FIRST),
-      enabled: scope.isReady,
+    queries: workspaceIds.map((workspaceId) => ({
+      queryKey: [
+        USAGE,
+        "workspace-spend",
+        scope.base,
+        workspaceId,
+        start,
+        end,
+        "model",
+      ],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        apiFetch<UsageSummary>(
+          `${scope.base}/summary?${new URLSearchParams({
+            workspace_id: workspaceId,
+            start_date: start,
+            ...(end ? { end_date: end } : {}),
+            bucket: "day",
+            dimensions: "model",
+          })}`,
+          { signal: heavyReadSignal(signal) },
+        ),
+      enabled: isEnabled && scope.isReady,
+      staleTime: 30_000,
+      ...HEAVY_READ,
     })),
   })
 }
 
-// The endpoint's own ceiling. A grouping past it says how many groups there
-// were, and the page offers to narrow rather than paging groups.
-export const ACTIVITY_GROUP_LIMIT = 200
-
-// How a column menu asks for its values: busiest first, narrowed by what the
-// menu's search box holds. The grouped log leaves both off, most recent first.
-export type GroupsQuery = { search?: string; order?: "recent" | "requests" }
-
-// The log collapsed to one row per key, session, model, member, policy or alias,
-// with each group's totals: the grouped log, and the values a column menu lists.
-// The previous result stands in only for the same grouping, since another
-// grouping's keys would be read as this one's: model names listed as members.
-export function useActivityGroups(
-  filters: UsageFilters,
-  groupBy: UsageActivityGroupBy,
-  {
-    enabled = true,
-    search = "",
-    order = "recent",
-  }: GroupsQuery & { enabled?: boolean } = {},
+/**
+ * Requests the gateway refused with a 403 since `start` (up to `end`, where
+ * one is given), newest first, for the people, keys or workspace named, or the
+ * whole organization when none is. The usage log does not say which limit
+ * refused a request.
+ */
+export function useRefusedUsage(
+  subject: {
+    userIds?: readonly string[]
+    apiKeyIds?: readonly string[]
+    workspaceId?: string
+  },
+  start: string,
+  limit: number,
+  isEnabled: boolean,
+  end = "",
 ) {
-  const scope = useUsageScope()
-  const groupFilters = withoutListOnly(filters)
+  const scope = useUsageScope("organization")
   return useQuery({
-    // The grouping ends the key, which is what the placeholder below compares.
-    queryKey: [
-      USAGE,
-      "activity-groups",
-      scope.base,
-      groupFilters,
-      search,
-      order,
-      groupBy,
-    ],
-    queryFn: ({ signal }) => {
-      const params = usageParams(groupFilters)
-      params.set("group_by", groupBy)
-      params.set("limit", String(ACTIVITY_GROUP_LIMIT))
-      if (search) params.set("search", search)
-      if (order !== "recent") params.set("order", order)
-      return apiFetch<UsageActivityGroups>(
-        `${scope.base}/groups?${params.toString()}`,
-        { signal: heavyReadSignal(signal) },
-      )
+    queryKey: [USAGE, "refused", scope.base, subject, start, end, limit],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        start_date: start,
+        ...(end ? { end_date: end } : {}),
+        status_code: "403",
+        limit: String(limit),
+      })
+      for (const id of subject.userIds ?? []) params.append("user_id", id)
+      for (const id of subject.apiKeyIds ?? []) params.append("api_key_id", id)
+      if (subject.workspaceId) params.set("workspace_id", subject.workspaceId)
+      return apiFetch<UsageEntry[]>(`${scope.base}?${params}`)
     },
-    enabled: enabled && scope.isReady,
-    placeholderData: (previous, previousQuery) =>
-      previousQuery?.queryKey.at(-1) === groupBy ? previous : undefined,
-    staleTime: 10_000,
-    ...HEAVY_READ,
+    enabled: scope.isReady && isEnabled,
+    staleTime: 30_000,
   })
 }
-
-// ---------- the Usage page's breakdowns ----------
 
 /**
- * One breakdown row, billed = `cost - imported_cost`. A session row also
- * carries its span, and what most of its rows came from when the summary asked
- * for `session_details`.
+ * One spend-by-model summary since `start` (up to `end`, where the window has
+ * one) per value of `param` (a person, a key or a provider), in parallel. A
+ * null value asks nothing, so a caller passes only the rows it shows and can
+ * ask about.
  */
-export type UsageBreakdownRow = UsageGroupRow &
-  Partial<
-    Pick<UsageSessionRow, "first_at" | "last_at" | "source" | "api_key_name">
-  >
-
-// The Usage page's one summary: the totals and series, and the breakdown on
-// screen (with a session's origin, for the session breakdown), ranked and
-// ordered by the table's sort. No other dimension, since each one is a GROUP BY
-// over the window. The per-group p95 and the tools are `useUsageLatency`'s and
-// `useUsageTools`', read apart because they are the slow passes.
-export function useUsageBreakdown(
-  filters: UsageFilters,
-  bucket: UsageBucket,
-  dimension: BreakdownDimension,
-  rank: { by: UsageBreakdownRankBy; order: UsageRankOrder },
+export function useModelSummariesBy(
+  param: "user_id" | "api_key_id" | "provider",
+  values: readonly (string | null)[],
+  start: string,
   {
-    enabled = true,
-    usageScope = "caller",
-  }: { enabled?: boolean; usageScope?: TotalsScope } = {},
+    workspaceId,
+    userId,
+    end = "",
+  }: { workspaceId: string; userId?: string; end?: string },
 ) {
-  const scope = useTotalsScope(usageScope)
-  return useQuery({
-    queryKey: [
-      USAGE,
-      "summary",
-      "breakdown",
-      scope.keyBase,
-      filters,
-      bucket,
-      rank.by,
-      rank.order,
-      dimension,
-    ],
-    queryFn: async ({ signal }) => {
-      const params = scope.params(filters)
-      params.set("bucket", bucket)
-      params.append("dimensions", dimension)
-      params.set("rank_by", rank.by)
-      params.set("rank_order", rank.order)
-      if (dimension === "source_label") params.set("session_details", "true")
-      const summary = await scope.read<UsageSummary>(
-        `/summary?${params.toString()}`,
-        filters,
-        signal,
-      )
-      return { dimension, summary }
-    },
-    enabled: enabled && scope.isReady,
-    // The previous result stands in while the next loads, tagged with the
-    // breakdown it answers: its totals hold, and its rows are listed only
-    // under that breakdown, never read as another's. A new sort keeps the
-    // last order's rows on screen until the server's arrive.
-    placeholderData: keepPreviousData,
-    staleTime: 30_000,
-    ...HEAVY_READ,
-  })
-}
-
-// The 95th-percentile latency over the window, or with `groupBy` that of each
-// group the breakdown ranked by `rank` lists. Its own request because it sorts
-// the window's latencies, the slowest part of a summary, so the figures beside
-// it need not wait. Tagged with what it answers, like the breakdown, so a
-// previous grouping's values are never matched to this one's rows.
-export function useUsageLatency(
-  filters: UsageFilters,
-  {
-    groupBy,
-    rank,
-    enabled = true,
-    usageScope = "caller",
-  }: {
-    groupBy?: BreakdownDimension
-    rank?: { by: UsageBreakdownRankBy; order: UsageRankOrder }
-    enabled?: boolean
-    usageScope?: TotalsScope
-  } = {},
-) {
-  const scope = useTotalsScope(usageScope)
-  const latencyFilters = withoutListOnly(filters)
-  return useQuery({
-    queryKey: [
-      USAGE,
-      "latency",
-      scope.keyBase,
-      latencyFilters,
-      groupBy ?? null,
-      rank?.by ?? null,
-      rank?.order ?? null,
-    ],
-    queryFn: ({ signal }) => {
-      const params = scope.params(latencyFilters)
-      if (groupBy) params.set("group_by", groupBy)
-      if (rank) {
-        params.set("rank_by", rank.by)
-        params.set("rank_order", rank.order)
-      }
-      return scope.read<UsageLatency>(
-        `/latency?${params.toString()}`,
-        latencyFilters,
-        signal,
-      )
-    },
-    enabled: enabled && scope.isReady,
-    placeholderData: keepPreviousData,
-    staleTime: 30_000,
-    ...HEAVY_READ,
-  })
-}
-
-// The gateway-run tools the Usage page lists under its breakdown. Its own
-// request because each tool reads its meters off every row in the window.
-export function useUsageTools(
-  filters: UsageFilters,
-  { enabled = true, usageScope = "caller" as UsageScope } = {},
-) {
-  const scope = useUsageScope(usageScope)
-  return useQuery({
-    queryKey: [USAGE, "tools", scope.base, filters],
-    meta: workspaceMeta(filters.workspace_id),
-    queryFn: ({ signal }) =>
-      apiFetch<UsageTools>(
-        `${scope.base}/tools?${usageParams(filters).toString()}`,
-        { signal: heavyReadSignal(signal) },
-      ),
-    enabled: enabled && scope.isReady,
-    placeholderData: keepPreviousData,
-    staleTime: 30_000,
-    ...HEAVY_READ,
-  })
-}
-
-// A per-group time series for a stacked chart: the top groups, ranked by
-// `rankBy`, plus an "other" fold. Caching mirrors useUsageSummary.
-export function useUsageGroupedSeries(
-  filters: UsageFilters,
-  bucket: UsageBucket,
-  groupBy: UsageGroupBy,
-  rankBy: UsageRankBy,
-  enabled = true,
-  usageScope: TotalsScope = "caller",
-) {
-  const scope = useTotalsScope(usageScope)
-  return useQuery({
-    // The grouping ends the key, which is what the placeholder compares.
-    queryKey: [
-      USAGE,
-      "series",
-      scope.keyBase,
-      filters,
-      bucket,
-      rankBy,
-      groupBy,
-    ],
-    queryFn: ({ signal }) => {
-      const params = scope.params(filters)
-      params.set("bucket", bucket)
-      params.set("group_by", groupBy)
-      params.set("rank_by", rankBy)
-      return scope.read<UsageGroupedSeries>(
-        `/series?${params.toString()}`,
-        filters,
-        signal,
-      )
-    },
-    enabled: enabled && scope.isReady,
-    // Same guard as the breakdown's: one grouping's series never stands in for
-    // another's.
-    placeholderData: (previous, previousQuery) =>
-      previousQuery?.queryKey.at(-1) === groupBy ? previous : undefined,
-    staleTime: 30_000,
-    ...HEAVY_READ,
+  const scope = useUsageScope("organization")
+  return useQueries({
+    queries: values.map((value) => ({
+      queryKey: [
+        USAGE,
+        "model-summary",
+        scope.base,
+        param,
+        value,
+        start,
+        end,
+        workspaceId,
+        userId ?? null,
+      ],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        apiFetch<UsageSummary>(
+          `${scope.base}/summary?${new URLSearchParams({
+            start_date: start,
+            ...(end ? { end_date: end } : {}),
+            bucket: "day",
+            dimensions: "model",
+            [param]: value ?? "",
+            ...(workspaceId ? { workspace_id: workspaceId } : {}),
+            ...(userId ? { user_id: userId } : {}),
+          })}`,
+          { signal: heavyReadSignal(signal) },
+        ),
+      enabled: scope.isReady && value !== null,
+      staleTime: 30_000,
+      ...HEAVY_READ,
+    })),
   })
 }

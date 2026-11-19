@@ -50,15 +50,22 @@ class OrgProviderKeyUnknownProviderError(TenancyValidationError):
 
 
 class OrgProviderKeyUnsafeApiBaseError(TenancyValidationError):
-    """An ``api_base`` that resolves to an internal address, gated off.
+    """An ``api_base`` that does not reach public addresses alone, or that its provider cannot be pinned to.
 
-    Wraps ``services.url_safety.UnsafeURLError`` as a tenancy error so the
-    route stays thin; the message is that function's own, which already
-    carries no more than the host it refused.
+    The message names no more than the host it refused.
     """
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
+
+
+class OrgProviderKeyClientArgsRefusedError(TenancyValidationError):
+    """``client_args`` naming something a provider key may not set."""
+
+    def __init__(self, provider: str, refused: list[str], allowed: list[str]) -> None:
+        super().__init__(
+            f"A {provider} key cannot set client_args {', '.join(refused)}; it may set {', '.join(allowed)}"
+        )
 
 
 class OrgProviderKeyCredentialRequiredError(TenancyValidationError):
@@ -287,6 +294,13 @@ class HostedModelNotFoundError(TenancyNotFoundError):
         super().__init__(f"Hosted model {model_id} not found")
 
 
+class HostedVendorNotFoundError(TenancyNotFoundError):
+    """A vendor none of a hosted provider's offered models is made by."""
+
+    def __init__(self, provider: str, vendor: str) -> None:
+        super().__init__(f"Hosted provider '{provider}' offers no model by '{vendor}'")
+
+
 class HostedProviderAlreadyExistsError(TenancyConflictError):
     def __init__(self, name: str) -> None:
         super().__init__(f"A hosted provider named '{name}' is already configured")
@@ -339,16 +353,6 @@ class HostedProviderInvalidNameError(TenancyValidationError):
         super().__init__(f"The hosted provider name '{name}' {problem}")
 
 
-class HostedProviderSessionAffinityUnsupportedError(TenancyValidationError):
-    """``session_affinity`` on a provider whose SDK client cannot carry the header."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            "session_affinity is supported only for provider_type openai or anthropic "
-            "(including their -compatible forms)."
-        )
-
-
 class HostedProviderKeyRequiredError(TenancyValidationError):
     """The base was repointed at another origin without the key being entered again.
 
@@ -365,6 +369,45 @@ class HostedProviderKeyRequiredError(TenancyValidationError):
 class HostedProviderNotFoundError(TenancyNotFoundError):
     def __init__(self, provider: str) -> None:
         super().__init__(f"Hosted provider '{provider}' not found")
+
+
+class HostedProviderRegionNotFoundError(TenancyNotFoundError):
+    def __init__(self, provider: str, slug: str) -> None:
+        super().__init__(f"Hosted provider '{provider}' has no region '{slug}'")
+
+
+class HostedProviderRegionAlreadyExistsError(TenancyConflictError):
+    def __init__(self, provider: str, slug: str) -> None:
+        super().__init__(f"Hosted provider '{provider}' already has a region '{slug}'")
+
+
+class HostedProviderInvalidRegionSlugError(TenancyValidationError):
+    """A slug a region cannot take, because a selector could not pin it."""
+
+    def __init__(self, slug: str, problem: str) -> None:
+        super().__init__(f"The region id '{slug}' {problem}")
+
+
+class HostedProviderRegionKeyRequiredError(TenancyValidationError):
+    """Moving the provider's endpoint would send a region a key meant for another endpoint.
+
+    A region with a key of its own that follows the provider's endpoint would
+    carry it to the new one, and a region on an endpoint of its own using the
+    provider's key would be sent the key for the new one.
+    """
+
+    def __init__(self, slug: str) -> None:
+        super().__init__(
+            f"Region '{slug}' would be sent a key for an endpoint it was not entered for; give the region its own "
+            "endpoint and key before moving the provider's endpoint"
+        )
+
+
+class HostedProviderLastRegionError(TenancyValidationError):
+    """A change would leave a provider with regions but none switched on."""
+
+    def __init__(self) -> None:
+        super().__init__("A provider with regions keeps at least one switched on; switch the provider off instead")
 
 
 class DeploymentProviderNotFoundError(TenancyNotFoundError):
@@ -438,16 +481,23 @@ __all__ = [
     "HostedProviderAlreadyExistsError",
     "HostedProviderApiBaseMaskedError",
     "HostedProviderApiKeyMissingError",
+    "HostedProviderInvalidRegionSlugError",
+    "HostedProviderLastRegionError",
+    "HostedProviderRegionKeyRequiredError",
     "HostedProviderNotFoundError",
+    "HostedProviderRegionAlreadyExistsError",
+    "HostedProviderRegionNotFoundError",
     "HostedProviderClientArgsUnreadableError",
     "HostedProviderInvalidNameError",
     "HostedProviderKeyRequiredError",
     "HostedProviderUnknownOrganizationError",
     "HostedProviderUnknownProviderError",
     "HostedProviderUnsafeApiBaseError",
+    "HostedVendorNotFoundError",
     "OrgDefaultProviderKeyConflictError",
     "OrgProviderKeyAlreadyExistsError",
     "OrgProviderKeyArchivedError",
+    "OrgProviderKeyClientArgsRefusedError",
     "OrgProviderKeyDisabledForWorkspaceError",
     "OrgProviderKeyNameRequiredError",
     "OrgProviderKeyNotArchivedError",
@@ -468,3 +518,12 @@ __all__ = [
     "WorkspaceHostedProviderNotFoundError",
     "WorkspaceProviderKeyOverrideConflictError",
 ]
+
+
+class PlatformUnreachableError(TenancyError):
+    """otari.ai did not give a usable answer when asked to start a connection."""
+
+    status_code = 503
+
+    def __init__(self) -> None:
+        super().__init__("otari.ai gave no usable answer to a connect request")

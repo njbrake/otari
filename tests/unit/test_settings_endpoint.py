@@ -129,11 +129,24 @@ def test_settings_defaults(tmp_path: Path) -> None:
 
 def test_settings_reports_secret_key_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OTARI_SECRET_KEY", raising=False)
+    # As on PostgreSQL, where no key file is kept.
+    monkeypatch.setattr("gateway.main.sqlite_database_file", lambda _url: None)
     with _client(tmp_path) as client:
         response = client.get(f"{API_ROOT}/settings", headers=AUTH)
 
     assert response.status_code == 200
     assert response.json()["secret_key_configured"] is False
+
+
+def test_settings_reports_the_key_a_sqlite_deployment_generated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OTARI_SECRET_KEY", raising=False)
+    with _client(tmp_path) as client:
+        response = client.get(f"{API_ROOT}/settings", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.json()["secret_key_configured"] is True
 
 
 def test_settings_reports_secret_key_configured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -192,6 +205,7 @@ def test_settings_includes_full_config_view(tmp_path: Path) -> None:
         "database_url",
         "db_pool_size",
         "cors_allow_origins",
+        "cors_inference_origins",
         "budget_strategy",
         "rate_limit_rpm",
     )
@@ -211,7 +225,6 @@ def test_settings_includes_full_config_view(tmp_path: Path) -> None:
         "model_discovery_timeout_seconds",
         "models_dev_metadata",
         "models_dev_cache_ttl_seconds",
-        "file_understanding_enabled",
         "vision_strategy",
         "vision_describe_model",
         "vision_describe_max_tokens",
@@ -221,10 +234,11 @@ def test_settings_includes_full_config_view(tmp_path: Path) -> None:
 
     # The outbound network-safety gates stay read-only on purpose.
     for name in (
-        "mcp_allow_private_hosts",
+        "mcp_private_hosts",
         "web_search_allow_private_hosts",
         "web_retrieval_trust_env_proxy",
         "provider_allow_private_hosts",
+        "oidc_allow_private_hosts",
         "sandbox_url",
         "guardrails_url",
     ):
@@ -542,3 +556,24 @@ def test_patch_rejects_negative_cache_ttl(tmp_path: Path) -> None:
             json={"model_cache_ttl_seconds": -1},
         )
     assert response.status_code == 422
+
+
+def test_the_mcp_private_hosts_list_cannot_be_written_through_the_settings_api(tmp_path: Path) -> None:
+    """An operator lists hosts in the environment or the config file; no route a session reaches widens it."""
+    from gateway.services.runtime_settings_service import SETTABLE_KEYS
+    from gateway.services.tool_settings_service import TOOL_SETTABLE_KEYS
+
+    config = GatewayConfig(
+        database_url=f"sqlite:///{tmp_path / 'settings-private-hosts.db'}",
+        master_key="sk-test-master",
+        mcp_private_hosts="mcp.internal:8000",
+    )
+    with TestClient(create_app(config)) as client:
+        patched = client.patch(f"{API_ROOT}/settings", headers=AUTH, json={"mcp_private_hosts": "localhost"})
+        tools = client.patch(f"{API_ROOT}/tool-settings", headers=AUTH, json={"mcp_private_hosts": "localhost"})
+
+    assert patched.status_code == 200
+    assert tools.status_code in {200, 422}
+    assert config.mcp_private_hosts == "mcp.internal:8000"
+    assert "mcp_private_hosts" not in SETTABLE_KEYS
+    assert "mcp_private_hosts" not in TOOL_SETTABLE_KEYS

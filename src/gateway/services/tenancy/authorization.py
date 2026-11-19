@@ -6,13 +6,14 @@ Every check reads only active organization and workspace membership.
 """
 
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.exceptions.organizations_exceptions import NotAuthorizedError, WorkspaceNotFoundError
 from gateway.models.tenancy import MANAGEMENT_ROLES, Organization, User, Workspace
-from gateway.repositories.tenancy import WorkspaceMemberRepository, WorkspaceRepository
+from gateway.repositories.tenancy import UserRepository, WorkspaceMemberRepository, WorkspaceRepository
 from gateway.services.tenancy.organization_service import OrganizationService
 
 
@@ -81,10 +82,11 @@ async def has_workspace_management_access(
 ) -> bool:
     """Whether the caller is an organization owner/admin, or an owner/admin of this workspace.
 
-    The predicate form is for a caller that decides what to allow rather than
-    refusing: the first-request setup guide, which tells a member who may see the
-    workspace without managing it "not for you", and ``WorkspaceService.manages``.
-    Everything else wants :func:`require_workspace_management_access`.
+    The predicate form exists for the one caller that has to *report* the answer
+    rather than act on it: the first-request setup guide tells the dashboard
+    whether to offer itself, so a member who may see the workspace without
+    managing it is told "not for you" instead of being refused. Everything else
+    wants :func:`require_workspace_management_access`.
     """
     organization_membership = await organizations.members.get_active_by_organization_and_user(
         workspace.organization_id,
@@ -122,17 +124,35 @@ class WorkspaceAccess:
             self._db, user=user, workspace_id=workspace_id, organizations=self._organizations
         )
 
-    async def manages(self, *, user: User, workspace: Workspace) -> bool:
-        """See :func:`has_workspace_management_access`."""
-        return await has_workspace_management_access(
-            self._db, user=user, workspace=workspace, organizations=self._organizations
-        )
-
     async def require_workspace_management_access(self, *, user: User, workspace: Workspace) -> None:
         """See :func:`require_workspace_management_access`."""
         await require_workspace_management_access(
             self._db, user=user, workspace=workspace, organizations=self._organizations
         )
+
+    async def has_workspace_management_access(self, *, user: User, workspace: Workspace) -> bool:
+        """See :func:`has_workspace_management_access`."""
+        return await has_workspace_management_access(
+            self._db, user=user, workspace=workspace, organizations=self._organizations
+        )
+
+    async def lock_workspace(self, workspace_id: uuid.UUID) -> None:
+        """Take the workspace's row lock, so what is read and written against it runs as if serialized."""
+        await WorkspaceRepository(self._db).lock(workspace_id)
+
+    async def workspace_managers(self, workspace: Workspace) -> list[User]:
+        """The active accounts that may manage a workspace: its own owners and admins, then its organization's."""
+        user_ids = await WorkspaceMemberRepository(self._db).active_user_ids_with_roles(workspace.id, MANAGEMENT_ROLES)
+        user_ids += await self._organizations.members.active_user_ids_with_roles(
+            workspace.organization_id, MANAGEMENT_ROLES
+        )
+        ordered = list(dict.fromkeys(user_ids))
+        accounts = {account.id: account for account in await self.people(ordered)}
+        return [accounts[user_id] for user_id in ordered if user_id in accounts and accounts[user_id].is_active]
+
+    async def people(self, user_ids: Collection[uuid.UUID]) -> list[User]:
+        """The accounts these ids name."""
+        return await UserRepository(self._db).get_by_ids(user_ids)
 
 
 @dataclass(frozen=True)
@@ -197,34 +217,11 @@ async def resolve_visible_workspace_scope(
     return VisibleWorkspaceScope(organization=organization, workspace_ids=workspace_ids)
 
 
-async def resolve_managed_workspace_ids(
-    db: AsyncSession,
-    *,
-    user: User,
-    scope: VisibleWorkspaceScope,
-) -> list[uuid.UUID] | None:
-    """The workspaces in ``scope`` this caller manages: the set form of :func:`has_workspace_management_access`.
-
-    ``None`` means every workspace, for an organization owner or admin, which is
-    also what makes a scope see every workspace. Anyone else manages the
-    workspaces they actively hold an owner or admin membership in, read in one
-    query rather than one check per workspace.
-    """
-    if scope.sees_every_workspace:
-        return None
-    return await WorkspaceMemberRepository(db).get_workspace_ids_for_user(
-        user_id=user.id,
-        organization_id=scope.organization.id,
-        roles=MANAGEMENT_ROLES,
-    )
-
-
 __all__ = [
     "VisibleWorkspaceScope",
     "WorkspaceAccess",
     "has_workspace_management_access",
     "require_workspace_management_access",
-    "resolve_managed_workspace_ids",
     "resolve_visible_workspace",
     "resolve_visible_workspace_scope",
     "resolve_workspace_in_organization",

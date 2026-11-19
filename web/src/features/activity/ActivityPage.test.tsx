@@ -1,603 +1,2222 @@
-import { useRouter } from "@tanstack/react-router"
 import { act, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import type { InFlightRequest, InFlightResponse } from "@/client"
 import { ActivityPage } from "@/features/activity/ActivityPage"
 import { API_ROOT } from "@/shared/api/client"
 import {
-  CALLER_IDENTITY,
+  countCalls,
   entry,
-  group,
-  lastList,
+  jsonResponse,
   listCalls,
-  listCarries,
   mockApi,
+  operatorContext,
   renderPage,
-  rowOf,
-  WORKSPACE_ID,
 } from "@/tests/activity"
 import { organizationMember } from "@/tests/fixtures"
-
-// The log itself: its rows, the totals over them, a request opened in full, grouping, and what each kind of reader is shown.
-
-afterEach(() => {
-  vi.restoreAllMocks()
-})
+import { pickOption, selectTrigger } from "@/tests/select"
 
 describe("ActivityPage", () => {
-  describe("rows", () => {
-    it("shows a request's time, model, tokens, cost, latency and outcome", async () => {
-      mockApi({
-        rows: [
-          entry({
-            total_tokens: 1500,
-            latency_ms: 842,
-            cost: 0.0123,
-            status_code: 200,
-          }),
-        ],
-      })
-      renderPage(<ActivityPage />)
-
-      const row = await rowOf("gpt-4o")
-      expect(within(row).getByText("1.5k")).toBeInTheDocument()
-      expect(within(row).getByText("$0.0123")).toBeInTheDocument()
-      expect(within(row).getByText("842 ms")).toBeInTheDocument()
-      expect(within(row).getByText("200")).toBeInTheDocument()
-      expect(within(row).getByText("ci-runner")).toBeInTheDocument()
-    })
-
-    it("reads an imported row as subscription usage nothing billed", async () => {
-      mockApi({
-        rows: [
-          entry({
-            model: "claude-opus-5-5",
-            source: "claude_code",
-            counts_toward_budget: false,
-            cost: 0.42,
-          }),
-        ],
-      })
-      renderPage(<ActivityPage />)
-
-      const row = await rowOf("claude-opus-5-5")
-      expect(within(row).getByText("Claude Code")).toBeInTheDocument()
-      expect(within(row).getByText("Subscription")).toBeInTheDocument()
-      expect(within(row).getByText("not billed")).toBeInTheDocument()
-    })
-
-    it("marks an unpriced request, and a failure by its code and reason", async () => {
-      mockApi({
-        rows: [
-          entry({ id: "a", model: "unpriced-model", cost: null }),
-          entry({
-            id: "b",
-            model: "failing-model",
-            status: "error",
-            status_code: 429,
-            cost: null,
-          }),
-        ],
-      })
-      renderPage(<ActivityPage />)
-
-      expect(
-        within(await rowOf("unpriced-model")).getByText("unpriced"),
-      ).toBeInTheDocument()
-      const failed = await rowOf("failing-model")
-      expect(within(failed).getByText("429")).toBeInTheDocument()
-      expect(within(failed).getByText("Rate limited")).toBeInTheDocument()
-    })
-
-    it("says which alias the caller sent", async () => {
-      mockApi({
-        rows: [
-          entry({
-            model: "claude-haiku-4-5",
-            provider: "anthropic",
-            requested_model: "fast",
-          }),
-        ],
-      })
-      renderPage(<ActivityPage />)
-      expect(
-        within(await rowOf("claude-haiku-4-5")).getByText("requested as fast"),
-      ).toBeInTheDocument()
-    })
-
-    it("filters to the tools a request ran from its badge", async () => {
-      const user = userEvent.setup()
-      const { calls } = mockApi({
-        rows: [
-          entry({
-            billing_meters: {
-              tools: { web_search: { billed: 2, errors: 0, unit_rate: 0.01 } },
-            },
-          }),
-        ],
-      })
-      renderPage(<ActivityPage />)
-
-      const row = await rowOf("gpt-4o")
-      await user.click(
-        within(row).getByRole("button", {
-          name: "Filter to requests using web search",
-        }),
-      )
-      await listCarries(calls, "tool", "web_search")
-    })
-
-    it("leaves Enter on a control inside a row to that control", async () => {
-      const user = userEvent.setup()
-      const { calls } = mockApi({
-        rows: [
-          entry({
-            billing_meters: {
-              tools: { web_search: { billed: 2, errors: 0, unit_rate: 0.01 } },
-            },
-          }),
-        ],
-      })
-      renderPage(<ActivityPage />)
-
-      const row = await rowOf("gpt-4o")
-      within(row)
-        .getByRole("button", { name: "Filter to requests using web search" })
-        .focus()
-      await user.keyboard("{Enter}")
-      await listCarries(calls, "tool", "web_search")
-      expect(
-        screen.queryByRole("complementary", { name: "Request details" }),
-      ).not.toBeInTheDocument()
-
-      ;(await rowOf("gpt-4o")).focus()
-      await user.keyboard("{Enter}")
-      expect(
-        await screen.findByRole("complementary", { name: "Request details" }),
-      ).toBeInTheDocument()
-    })
-
-    it("lists each routed request once, and its earlier attempts under it on request", async () => {
-      const user = userEvent.setup()
-      const served = entry({
-        id: "served",
-        model: "claude-sonnet-5",
-        request_group_id: "g1",
-        policy_name: "opus-fallback",
-        attempt_position: 2,
-        attempt_count: 2,
-        absorbed_attempts: 1,
-      })
-      const absorbed = entry({
-        id: "absorbed",
-        model: "claude-opus-5-5",
-        request_group_id: "g1",
-        policy_name: "opus-fallback",
-        attempt_position: 1,
-        attempt_count: 2,
-        status: "absorbed",
-        status_code: 529,
-      })
-      const { calls } = mockApi({ rows: [served, absorbed] })
-      renderPage(<ActivityPage />)
-
-      await rowOf("claude-sonnet-5")
-      expect(lastList(calls).get("include_absorbed")).toBe("false")
-      expect(
-        within(await rowOf("claude-sonnet-5")).getByText("1 recovered"),
-      ).toBeInTheDocument()
-
-      await user.click(screen.getByRole("button", { name: "Filter Status" }))
-      await user.click(
-        screen.getByRole("menuitemcheckbox", {
-          name: "Show recovered attempts as rows",
-        }),
-      )
-      await listCarries(calls, "include_absorbed", "true")
-      // Nested under the row that served, and marked as the attempt it was.
-      const rows = screen.getAllByRole("row")
-      const servedIndex = rows.findIndex((row) =>
-        within(row).queryByText("claude-sonnet-5"),
-      )
-      expect(
-        within(rows[servedIndex + 1]).getByText("attempt 1"),
-      ).toBeInTheDocument()
-    })
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
-  describe("totals", () => {
-    it("adds up what the rows below billed, what subscriptions covered, and what went unpriced", async () => {
-      const user = userEvent.setup()
-      const { calls } = mockApi({
-        rows: [entry()],
-        totals: {
-          request_count: 115,
-          error_count: 3,
-          absorbed_count: 6,
-          cost: 26.98,
-          imported_cost: 25.79,
-          unpriced_requests: 11,
-          p95_latency_ms: 1200,
-        },
-      })
-      renderPage(<ActivityPage />)
-      expect(await screen.findByText("115 requests")).toBeInTheDocument()
-      expect(screen.getByText("3 failed")).toBeInTheDocument()
-      expect(screen.getByText("6 recovered")).toBeInTheDocument()
-      expect(screen.getByText("$1.19 billed")).toBeInTheDocument()
-      expect(screen.getByText("$25.79 subscription")).toBeInTheDocument()
-      expect(screen.getByText("P95 1.20 s")).toBeInTheDocument()
-      expect(calls.some((call) => call.url.includes("/usage/latency"))).toBe(
-        true,
-      )
-
-      await user.click(screen.getByRole("button", { name: "11 unpriced" }))
-      await listCarries(calls, "priced", "false")
-      expect(lastList(calls).get("status")).toBe("success")
+  it("renders a request row with humanized latency, tokens, and status", async () => {
+    mockApi({
+      rows: [entry({ total_tokens: 1500, latency_ms: 842, cost: 0.0123 })],
     })
+    renderPage(<ActivityPage />)
 
-    it("drops the last window's p95 until the new one arrives", async () => {
-      const user = userEvent.setup()
-      let release = () => {}
-      const held = new Promise<void>((resolve) => {
-        release = resolve
-      })
-      const shown = {
-        request_count: 115,
-        unpriced_requests: 11,
-        p95_latency_ms: 1200,
-      }
-      mockApi({
-        rows: [entry()],
-        totals: shown,
-        hold: (_, params) =>
-          params.get("priced") === "false" ? held : Promise.resolve(),
-      })
-      renderPage(<ActivityPage />)
-      expect(await screen.findByText("P95 1.20 s")).toBeInTheDocument()
-
-      shown.p95_latency_ms = 2000
-      await user.click(screen.getByRole("button", { name: "11 unpriced" }))
-      await waitFor(() =>
-        expect(screen.queryByText("P95 1.20 s")).not.toBeInTheDocument(),
-      )
-      expect(
-        await screen.findByText("115 filtered requests"),
-      ).toBeInTheDocument()
-      // The figure waits as a skeleton beside its label.
-      expect(screen.getByText("P95")).toBeInTheDocument()
-      release()
-      expect(await screen.findByText("P95 2.00 s")).toBeInTheDocument()
-    })
+    const row = (await screen.findByText("gpt-4o")).closest("tr")!
+    expect(within(row).getByText("1,200")).toBeInTheDocument()
+    expect(within(row).getByText("300")).toBeInTheDocument()
+    expect(within(row).getByText("842 ms")).toBeInTheDocument()
+    expect(within(row).getByText("$0.0123")).toBeInTheDocument()
+    // Status is a dot plus an uppercase word now, not a pill.
+    expect(within(row).getByText("Success")).toBeInTheDocument()
   })
 
-  describe("the request panel", () => {
-    it("opens a row beside the log, steps through the list, and closes on Escape", async () => {
-      const user = userEvent.setup()
-      mockApi({
-        rows: [
-          entry({ id: "a", model: "first-model" }),
-          entry({ id: "b", model: "second-model" }),
-        ],
-      })
-      renderPage(<ActivityPage />)
-
-      await user.click(await rowOf("first-model"))
-      const panel = await screen.findByRole("complementary", {
-        name: "Request details",
-      })
-      expect(within(panel).getByText("1 / 2")).toBeInTheDocument()
-
-      await user.keyboard("{ArrowDown}")
-      await waitFor(() =>
-        expect(
-          within(
-            screen.getByRole("complementary", { name: "Request details" }),
-          ).getByRole("heading", { level: 2 }),
-        ).toHaveTextContent("second-model"),
-      )
-
-      await user.keyboard("{Escape}")
-      await waitFor(() =>
-        expect(
-          screen.queryByRole("complementary", { name: "Request details" }),
-        ).not.toBeInTheDocument(),
-      )
+  it("shows a skipped candidate's status as Skipped, not Absorbed", async () => {
+    mockApi({
+      rows: [
+        entry({
+          model: "gpt-4o-mini",
+          status: "absorbed",
+          status_code: 429,
+          error_message:
+            "Skipped: Rate limit 'flash-cap' exceeded: 2 requests per minute",
+        }),
+      ],
     })
+    renderPage(<ActivityPage />)
 
-    it("closes on the back gesture and steps back on close, never leaving the log", async () => {
-      const user = userEvent.setup()
-      mockApi({
-        rows: [
-          entry({ id: "a", model: "first-model" }),
-          entry({ id: "b", model: "second-model" }),
-        ],
-      })
-      const held: { router?: ReturnType<typeof useRouter> } = {}
-      function RouterProbe() {
-        held.router = useRouter()
-        return null
+    const row = (await screen.findByText("gpt-4o-mini")).closest("tr")!
+    expect(within(row).getByText("Skipped")).toBeInTheDocument()
+    expect(within(row).queryByText("Absorbed")).not.toBeInTheDocument()
+  })
+
+  it("shows the api key column, and an em-dash for master-key rows", async () => {
+    mockApi({
+      rows: [
+        entry({ id: "g", model: "gateway-model", api_key_id: "key-1" }),
+        entry({ id: "x", model: "imported-model", api_key_id: null }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const importedRow = (await screen.findByText("imported-model")).closest(
+      "tr",
+    )!
+    expect(within(importedRow).getByText("—")).toBeInTheDocument()
+  })
+
+  it("sends the api key filter to the API", async () => {
+    const { calls } = mockApi({ rows: [entry({ api_key_id: "key-1" })] })
+    renderPage(<ActivityPage />, "/activity?api_key_id=key-1")
+
+    await screen.findByText("gpt-4o")
+    expect(
+      listCalls(calls).some((url) => url.includes("api_key_id=key-1")),
+    ).toBe(true)
+  })
+
+  it("asks the summary endpoint only for the breakdowns it reads", async () => {
+    // Two summary reads back this page: the source picker (by_source) and the
+    // timeline histogram (series, plus by_tool so the Tool filter knows whether this
+    // window has any gateway-run tool calls to offer). Each breakdown is a separate
+    // GROUP BY over the window server-side, so neither may request the full set.
+    // The model, user and key pickers are the Overview's and read nothing here.
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />)
+
+    await screen.findByText("gpt-4o")
+    const summaryCalls = calls
+      .filter((c) => c.url.includes(`${API_ROOT}/usage/summary`))
+      .map((c) => c.url)
+    expect(summaryCalls.length).toBeGreaterThan(0)
+    expect(summaryCalls.some((url) => url.includes("dimensions=source"))).toBe(
+      true,
+    )
+    expect(
+      summaryCalls.some((url) => /dimensions=(model|user)/.test(url)),
+    ).toBe(false)
+    expect(summaryCalls.some((url) => url.includes("dimensions=tool"))).toBe(
+      true,
+    )
+    // No caller here reads a session/provider/user breakdown.
+    expect(
+      summaryCalls.some((url) => url.includes("dimensions=source_label")),
+    ).toBe(false)
+    expect(summaryCalls.every((url) => url.includes("dimensions="))).toBe(true)
+  })
+
+  it("honors a source drill-down and shows it as a clearable chip", async () => {
+    // The pricing alarm links here scoped to gateway traffic. The param has no
+    // select of its own, so if the page ignored it the banner's count and this
+    // list would disagree, and the scoping would be invisible.
+    const { calls } = mockApi({ rows: [entry({ status: "error" })] })
+    renderPage(
+      <ActivityPage />,
+      "/activity?status=error&range=1h&source=gateway",
+    )
+
+    await screen.findByText("gpt-4o")
+    expect(listCalls(calls).some((url) => url.includes("source=gateway"))).toBe(
+      true,
+    )
+
+    const user = userEvent.setup()
+    const chip = screen.getByRole("button", { name: "Remove Source filter" })
+    await user.click(chip)
+    await waitFor(() =>
+      expect(listCalls(calls).at(-1)).not.toContain("source="),
+    )
+  })
+
+  it("honors a session drill-down and shows it as a clearable chip", async () => {
+    // The Usage session breakdown links here scoped to one source_label.
+    // Without the filter the log would silently show every session's requests.
+    const { calls } = mockApi({
+      rows: [entry({ source: "claude_code", source_label: "sess-1" })],
+    })
+    renderPage(<ActivityPage />, "/activity?source_label=sess-1")
+
+    await screen.findByText("gpt-4o")
+    expect(
+      listCalls(calls).some((url) => url.includes("source_label=sess-1")),
+    ).toBe(true)
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: /Session/ }))
+    await waitFor(() =>
+      expect(listCalls(calls).at(-1)).not.toContain("source_label="),
+    )
+  })
+
+  it("leaves the heading to the Overview when embedded", async () => {
+    mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage embedded />, "/requests")
+
+    await screen.findByText("gpt-4o")
+    expect(screen.queryByRole("heading", { name: "Activity" })).toBeNull()
+  })
+
+  it("honors endpoint and provider drill-downs", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(
+      <ActivityPage />,
+      "/activity?endpoint=%2Fv1%2Fmessages&provider=anthropic",
+    )
+
+    await screen.findByText("gpt-4o")
+    const urls = listCalls(calls)
+    expect(urls.some((url) => url.includes("endpoint=%2Fv1%2Fmessages"))).toBe(
+      true,
+    )
+    expect(urls.some((url) => url.includes("provider=anthropic"))).toBe(true)
+  })
+
+  it("renders latency over a second as seconds and null latency as an em-dash", async () => {
+    mockApi({
+      rows: [
+        entry({ id: "a", model: "slow-model", latency_ms: 1420 }),
+        entry({ id: "b", model: "batch-model", latency_ms: null }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const slow = (await screen.findByText("slow-model")).closest("tr")!
+    expect(within(slow).getByText("1.42 s")).toBeInTheDocument()
+    const batch = screen.getByText("batch-model").closest("tr")!
+    expect(within(batch).getByText("—")).toBeInTheDocument()
+  })
+
+  it("opens an error row's detail and shows the diagnostic with its status code", async () => {
+    const user = userEvent.setup()
+    mockApi({
+      rows: [
+        entry({
+          status: "error",
+          error_message: "provider exploded: quota exceeded",
+          status_code: 502,
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const row = (await screen.findByText("gpt-4o")).closest("tr")!
+    expect(within(row).getByText("Error")).toBeInTheDocument()
+
+    await user.click(row)
+    // The stored error text (already redacted by the gateway) is shown as is,
+    // with the classifying HTTP status alongside the "Error" heading.
+    expect(
+      screen.getByText("provider exploded: quota exceeded"),
+    ).toBeInTheDocument()
+    expect(screen.getByText("Error (502)")).toBeInTheDocument()
+  })
+
+  it("omits the status code from the error heading when none was recorded", async () => {
+    const user = userEvent.setup()
+    mockApi({
+      rows: [
+        entry({
+          status: "error",
+          error_message: "stream completed without usage data",
+          status_code: null,
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const row = (await screen.findByText("gpt-4o")).closest("tr")!
+    await user.click(row)
+    expect(
+      screen.getByText("stream completed without usage data"),
+    ).toBeInTheDocument()
+    // Bare heading, no "(code)" suffix. Scoped to the overline, which is the
+    // heading's own class: a plain span now also matches the status filter's
+    // <option>Error</option> and the row's own status word, which reads "Error"
+    // rather than "ERROR" since it took a label map.
+    expect(
+      screen.getByText("Error", { selector: "span.text-overline" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Error \(/)).not.toBeInTheDocument()
+  })
+
+  it("copies a request id out of the detail panel", async () => {
+    // The id an operator pastes into a log search or a support thread, where a
+    // mistyped character makes it useless.
+    const user = userEvent.setup()
+    mockApi({ rows: [entry({ id: "3ba12b77-8841-42a5-b776-a0a1aacb347f" })] })
+    renderPage(<ActivityPage />)
+
+    await user.click((await screen.findByText("gpt-4o")).closest("tr")!)
+    await user.click(screen.getByRole("button", { name: "Copy request id" }))
+
+    expect(await navigator.clipboard.readText()).toBe(
+      "3ba12b77-8841-42a5-b776-a0a1aacb347f",
+    )
+  })
+
+  it("shows the provider-reported compute time in the detail panel", async () => {
+    // provider_latency_ms is a diagnostic alongside Total time (otari#337); this
+    // asserts the row's value actually reaches the "Provider time" field rather
+    // than only being present in the fixture shape.
+    const user = userEvent.setup()
+    mockApi({
+      rows: [entry({ provider: "groq", provider_latency_ms: 156 })],
+    })
+    renderPage(<ActivityPage />)
+
+    await user.click((await screen.findByText("gpt-4o")).closest("tr")!)
+
+    const label = screen.getByText("Provider time", {
+      selector: "span.text-overline",
+    })
+    expect(label.parentElement?.textContent).toContain("156 ms")
+  })
+
+  it("reads the status filter the Overview puts in the URL", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />, "/activity?status=error")
+
+    await screen.findByText("gpt-4o")
+
+    await waitFor(() =>
+      expect(listCalls(calls).at(-1)).toContain("status=error"),
+    )
+  })
+
+  it("sends the priced filter to the API", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    const user = userEvent.setup()
+    renderPage(<ActivityPage />)
+
+    await screen.findByText("gpt-4o")
+    await pickOption(user, "Priced?", "Unpriced")
+
+    await waitFor(() =>
+      expect(listCalls(calls).at(-1)).toContain("priced=false"),
+    )
+  })
+
+  it("offers the sources seen in the window and sends the picked one to the API", async () => {
+    const { calls } = mockApi({
+      rows: [
+        entry(),
+        entry({
+          id: "imp",
+          model: "claude-sonnet-4",
+          source: "claude_code",
+          counts_toward_budget: false,
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<ActivityPage />)
+    await screen.findByText("gpt-4o")
+
+    // Options come from the log itself (the summary's provenance breakdown), with
+    // friendly labels for the sources the page knows about.
+    await user.click(selectTrigger("Source"))
+    await screen.findByRole("option", { name: "Claude Code" })
+    expect(screen.getByRole("option", { name: "Gateway" })).toBeInTheDocument()
+
+    await user.click(screen.getByRole("option", { name: "Claude Code" }))
+    await waitFor(() =>
+      expect(listCalls(calls).at(-1)).toContain("source=claude_code"),
+    )
+  })
+
+  it("keeps a drill-down source listed even when the window holds none of its rows", async () => {
+    // The select must show the filter that is actually applied, or the operator
+    // sees a chip they cannot find in the picker.
+    mockApi({ rows: [entry({ source: "gateway" })] })
+    renderPage(<ActivityPage />, "/activity?source=codex")
+    await screen.findByText("gpt-4o")
+
+    const select = selectTrigger("Source")
+    expect(select).toHaveTextContent("Codex")
+    await userEvent.setup().click(select)
+    expect(
+      await screen.findByRole("option", { name: "Codex" }),
+    ).toBeInTheDocument()
+  })
+
+  it("surfaces a timeline summary failure instead of an empty strip", async () => {
+    // If the series query fails, "No activity in this range" would misread as a
+    // quiet gateway; the error banner must carry the failure.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith(`${API_ROOT}/organizations/me`)) return operatorContext()
+      if (url.includes(`${API_ROOT}/usage/summary`)) {
+        return jsonResponse({ detail: "summary exploded" }, 500)
       }
-      renderPage(
-        <>
-          <ActivityPage />
-          <RouterProbe />
-        </>,
-        "/activity?status=error",
-        ["/keys"],
-      )
-      const panel = () =>
-        screen.queryByRole("complementary", { name: "Request details" })
-      const location = () => held.router?.state.location
-
-      // The browser's back, as a phone's gesture sends it.
-      await user.click(await rowOf("first-model"))
-      expect(await screen.findByRole("heading", { name: "first-model" }))
-      await act(async () => held.router?.history.back())
-      await waitFor(() => expect(panel()).not.toBeInTheDocument())
-      expect(location()?.href).toBe("/activity?status=error")
-
-      // The panel's own close, after stepping to the next request, leaves no
-      // entry behind it: going back from the log leaves the page.
-      await user.click(await rowOf("first-model"))
-      await screen.findByRole("heading", { name: "first-model" })
-      await user.keyboard("{ArrowDown}")
-      await screen.findByRole("heading", { name: "second-model" })
-      await user.keyboard("{Escape}")
-      await waitFor(() => expect(panel()).not.toBeInTheDocument())
-      expect(location()?.href).toBe("/activity?status=error")
-      await act(async () => held.router?.history.back())
-      await waitFor(() => expect(location()?.pathname).toBe("/keys"))
+      if (url.includes(`${API_ROOT}/usage/count`))
+        return jsonResponse({ total: 1 })
+      if (url.includes(`${API_ROOT}/usage/in-flight`))
+        return jsonResponse({ requests: [], total: 0 })
+      if (url.includes(`${API_ROOT}/usage`)) return jsonResponse([entry()])
+      return jsonResponse([])
     })
+    renderPage(<ActivityPage />)
+    await screen.findByText("gpt-4o")
 
-    it("opens a linked request that is not on the page", async () => {
-      const { calls } = mockApi({
-        rows: [entry({ id: "a" })],
-        otherRows: [entry({ id: "elsewhere", model: "linked-model" })],
-      })
-      renderPage(<ActivityPage />, "/activity?request=elsewhere")
+    expect(await screen.findByText(/summary exploded/)).toBeInTheDocument()
+  })
 
+  it("hides the source picker while only one source exists", async () => {
+    // Most gateways only ever see their own traffic; a provenance select with a
+    // single option is noise, so it only appears once a second source shows up.
+    mockApi({ rows: [entry(), entry({ id: "b" })] })
+    renderPage(<ActivityPage />)
+    await screen.findAllByText("gpt-4o")
+
+    await waitFor(() =>
       expect(
-        await screen.findByRole("heading", { name: "linked-model" }),
-      ).toBeInTheDocument()
-      expect(listCalls(calls).some((url) => url.includes("id=elsewhere"))).toBe(
-        true,
-      )
+        screen.queryByRole("button", { name: /Source$/ }),
+      ).not.toBeInTheDocument(),
+    )
+  })
+
+  it("shows a row's input and output apart, with the cache share on the input", async () => {
+    // A cached agent request: the total is ~98% cache read, so the total alone
+    // makes every row look alike.
+    mockApi({
+      rows: [
+        entry({
+          prompt_tokens: 100_000,
+          completion_tokens: 500,
+          total_tokens: 100_500,
+          cache_read_tokens: 98_000,
+          cache_write_tokens: 1_500,
+          billing_meters: {
+            total_input_tokens: 100_000,
+            fresh_input_tokens: 500,
+            cache_read_tokens: 98_000,
+            cache_write_tokens: 1_500,
+            cache_write_1h_tokens: 0,
+            completion_tokens: 500,
+          },
+        }),
+      ],
     })
+    renderPage(<ActivityPage />)
 
-    it("says so when a linked request cannot be read, and lets it go", async () => {
-      const user = userEvent.setup()
-      mockApi({ rows: [entry({ id: "a" })] })
-      renderPage(<ActivityPage />, "/activity?request=gone-request")
+    const row = (await screen.findByText("gpt-4o")).closest("tr")!
+    expect(within(row).getByText("100,000")).toHaveAttribute(
+      "title",
+      "Fresh input 500, cache read 98,000, cache write 1,500",
+    )
+    expect(within(row).getByText("500")).toBeInTheDocument()
+  })
 
-      const notice = await screen.findByText(/is not in the log/)
-      await user.click(within(notice).getByRole("button", { name: "Close" }))
-      expect(screen.queryByText(/is not in the log/)).not.toBeInTheDocument()
+  it("explains the row's billed tokens in the detail panel when they exceed the raw total", async () => {
+    // An additive-convention row reports its cache buckets outside the prompt, so
+    // the billed tokens the row shows are far above the stored `total_tokens`.
+    // Both are spelled out, or the two numbers look like a bug.
+    const user = userEvent.setup()
+    mockApi({
+      rows: [
+        entry({
+          prompt_tokens: 1_000,
+          completion_tokens: 200,
+          total_tokens: 1_200,
+          cache_read_tokens: 98_000,
+          cache_write_tokens: 1_500,
+          billing_meters: {
+            total_input_tokens: 100_500,
+            fresh_input_tokens: 1_000,
+            cache_read_tokens: 98_000,
+            cache_write_tokens: 1_500,
+            cache_write_1h_tokens: 0,
+            completion_tokens: 200,
+          },
+        }),
+      ],
     })
+    renderPage(<ActivityPage />)
 
-    it("narrows the log to the open request's model and closes", async () => {
-      const user = userEvent.setup()
-      const { calls } = mockApi({ rows: [entry()] })
-      renderPage(<ActivityPage />)
+    const row = (await screen.findByText("gpt-4o")).closest("tr")!
+    await user.click(row)
 
-      await user.click(await rowOf("gpt-4o"))
-      const panel = await screen.findByRole("complementary", {
-        name: "Request details",
-      })
-      await user.click(within(panel).getByRole("button", { name: "Model" }))
-      await waitFor(() =>
-        expect(lastList(calls).getAll("model")).toEqual(["gpt-4o"]),
-      )
+    const field = (label: string): string =>
+      screen.getByText(label).parentElement!.textContent ?? ""
+    expect(field("Total tokens")).toContain("1,200")
+    expect(field("Billed tokens")).toContain("100,700")
+    // Which is what the row's Input and Output add up to.
+    expect(within(row).getByText("100,500")).toBeInTheDocument()
+    expect(within(row).getByText("200")).toBeInTheDocument()
+  })
+
+  it("splits an unmetered row from its raw columns, and shows no count without usage", async () => {
+    // An unpriced row carries no billing meters, so the composition falls back to
+    // the raw columns (cache read counted inside the prompt).
+    mockApi({
+      rows: [
+        entry({
+          id: "unpriced",
+          model: "unpriced-model",
+          prompt_tokens: 1_000,
+          completion_tokens: 200,
+          total_tokens: 1_200,
+          cache_read_tokens: 400,
+          billing_meters: null,
+          cost: null,
+        }),
+        entry({
+          id: "failed",
+          model: "failed-model",
+          status: "error",
+          prompt_tokens: null,
+          completion_tokens: null,
+          total_tokens: null,
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const unpriced = (await screen.findByText("unpriced-model")).closest("tr")!
+    expect(within(unpriced).getByText("1,000")).toHaveAttribute(
+      "title",
+      "Fresh input 600, cache read 400",
+    )
+    expect(within(unpriced).getByText("200")).toBeInTheDocument()
+
+    // A request that failed before the provider reported usage has no count to
+    // show, so both cells are an em-dash rather than a zero.
+    const failed = screen.getByText("failed-model").closest("tr")!
+    const headers = screen
+      .getAllByRole("columnheader")
+      .map((header) => header.textContent)
+    for (const column of ["Input", "Output"]) {
+      expect(failed.cells[headers.indexOf(column)]).toHaveTextContent("—")
+    }
+  })
+
+  it("opens a bookmarked deep page on that page", async () => {
+    // The URL is the source of truth for `page`, but the mount effect used to
+    // re-anchor the rolling window a few milliseconds later, which changed the
+    // filter set and reset the page: every shared `?page=3` link opened on page 1.
+    const { calls } = mockApi({
+      rows: Array.from({ length: 50 }, (_, i) => entry({ id: `r${i}` })),
+      total: 500,
+    })
+    renderPage(<ActivityPage />, "/activity?page=2")
+
+    await screen.findAllByText("gpt-4o")
+    expect(await screen.findByText("101–150 of 500")).toBeInTheDocument()
+    expect(listCalls(calls).every((url) => url.includes("skip=100"))).toBe(true)
+  })
+
+  it("keeps the current page when refreshing", async () => {
+    // Refresh used to re-anchor the rolling window, which changed the filter set,
+    // which reset the page: pressing it on page 3 dropped you back to page 1.
+    const { calls } = mockApi({
+      rows: Array.from({ length: 50 }, (_, i) => entry({ id: `r${i}` })),
+      total: 500,
+    })
+    const user = userEvent.setup()
+    renderPage(<ActivityPage />, "/activity?page=2")
+    await screen.findAllByText("gpt-4o")
+    expect(await screen.findByText("101–150 of 500")).toBeInTheDocument()
+
+    const before = listCalls(calls).length
+    const sourceSummaryBefore = calls.filter(
+      (call) =>
+        call.url.includes(`${API_ROOT}/usage/summary`) &&
+        call.url.includes("dimensions=source"),
+    ).length
+    const button = screen.getByRole("button", { name: "Refresh" })
+    await waitFor(() => expect(button).toBeEnabled())
+    await user.click(button)
+
+    // The list is refetched, and every fetch stays on the third page's offset.
+    await waitFor(() => expect(listCalls(calls).length).toBeGreaterThan(before))
+    await waitFor(() =>
       expect(
-        screen.queryByRole("complementary", { name: "Request details" }),
-      ).not.toBeInTheDocument()
-    })
-
-    it("sets a model's price from a request that carried none", async () => {
-      const user = userEvent.setup()
-      const { calls } = mockApi({
-        rows: [entry({ cost: null, provider: "fireworks", model: "deepseek" })],
-      })
-      renderPage(<ActivityPage />)
-
-      await user.click(await rowOf("deepseek"))
-      await user.click(
-        await screen.findByRole("button", { name: "Set model price…" }),
-      )
-      const dialog = await screen.findByRole("dialog", {
-        name: "Set model price",
-      })
-      expect(
-        within(dialog).getByDisplayValue("fireworks:deepseek"),
-      ).toBeInTheDocument()
-      await user.type(within(dialog).getByLabelText(/Input/), "1")
-      await user.type(within(dialog).getByLabelText(/Output/), "2")
-      await user.click(
-        within(dialog).getByRole("button", { name: "Set price" }),
-      )
-
-      await waitFor(() => {
-        const write = calls.find(
+        calls.filter(
           (call) =>
-            call.url.includes(`${API_ROOT}/pricing`) && call.method !== "GET",
-        )
-        expect(JSON.parse(write?.body ?? "{}")).toMatchObject({
-          model_key: "fireworks:deepseek",
-          input_price_per_million: 1,
-          output_price_per_million: 2,
+            call.url.includes(`${API_ROOT}/usage/summary`) &&
+            call.url.includes("dimensions=source"),
+        ).length,
+      ).toBeGreaterThan(sourceSummaryBefore),
+    )
+    expect(listCalls(calls).every((url) => url.includes("skip=100"))).toBe(true)
+    expect(screen.getByText("101–150 of 500")).toBeInTheDocument()
+  })
+
+  it("re-anchors a rolling window when its preset is re-picked", async () => {
+    // Refresh no longer moves the window, so re-selecting the active preset is the
+    // gesture that advances a rolling range to "now".
+    const { calls } = mockApi({ rows: [entry()] })
+    const user = userEvent.setup()
+    renderPage(<ActivityPage />)
+    await screen.findByText("gpt-4o")
+
+    const startOf = (url: string): string | null =>
+      new URL(url, "http://x").searchParams.get("start_date")
+    const before = startOf(listCalls(calls).at(-1)!)
+    expect(before).not.toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "24h" }))
+
+    await waitFor(() =>
+      expect(startOf(listCalls(calls).at(-1)!)).not.toBe(before),
+    )
+  })
+
+  it("distinguishes filtered-empty from never-used", async () => {
+    const user = userEvent.setup()
+    mockApi({ rows: [], total: 0 })
+    renderPage(<ActivityPage />)
+
+    // The default 24h preset is not itself a filter, so an
+    // empty result on a brand-new gateway reads as "never used", not "filtered".
+    expect(
+      await screen.findByText("No requests recorded yet."),
+    ).toBeInTheDocument()
+
+    // The unbounded "All" applies no window either, so it stays "never used"
+    // rather than flipping to filtered-empty.
+    await user.click(screen.getByRole("button", { name: "All" }))
+    expect(
+      await screen.findByText("No requests recorded yet."),
+    ).toBeInTheDocument()
+
+    // Narrowing to a bounded non-default preset is a real time filter, so an empty
+    // result then reads as filtered-to-empty.
+    await user.click(screen.getByRole("button", { name: "7d" }))
+    expect(
+      await screen.findByText("No requests match these filters."),
+    ).toBeInTheDocument()
+  })
+
+  it("keeps Next reachable when the count request fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith(`${API_ROOT}/organizations/me`)) return operatorContext()
+      if (url.includes(`${API_ROOT}/usage/count`)) {
+        return jsonResponse({ detail: "boom" }, 500)
+      }
+      if (url.includes(`${API_ROOT}/usage/summary`)) {
+        return jsonResponse({
+          by_model: [],
+          by_user: [],
+          by_api_key: [],
+          series: [],
         })
+      }
+      if (url.includes(`${API_ROOT}/usage/in-flight`)) {
+        return jsonResponse({ requests: [], total: 0 })
+      }
+      if (url.includes(`${API_ROOT}/usage`)) {
+        return jsonResponse(
+          Array.from({ length: 50 }, (_, i) => entry({ id: `r${i}` })),
+        )
+      }
+      return jsonResponse([])
+    })
+    renderPage(<ActivityPage />)
+
+    await screen.findAllByText("gpt-4o")
+    expect(screen.getByRole("button", { name: "Next page" })).toBeEnabled()
+    expect(screen.getByText("1–50")).toBeInTheDocument()
+    expect(screen.queryByText("0 of 0")).not.toBeInTheDocument()
+  })
+
+  it("seeds filters from the drill-down query string", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(
+      <ActivityPage />,
+      "/activity?model=gpt-4o&user_id=alice&status=error",
+    )
+
+    // Waits on the request, not on "gpt-4o": that string is the model chip's own
+    // label and paints from the URL before any row arrives, so finding it says
+    // nothing about whether the list has been asked for yet.
+    await waitFor(() => expect(listCalls(calls)).not.toHaveLength(0))
+    const latest = listCalls(calls).at(-1)!
+    expect(latest).toContain("model=gpt-4o")
+    expect(latest).toContain("user_id=alice")
+    expect(latest).toContain("status=error")
+  })
+
+  it("seeds a multi-value filter from a drill-down and keeps every value", async () => {
+    // The analytics page drills with repeated params. Reading only the first would
+    // silently show a narrower slice than the chart the operator clicked.
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(
+      <ActivityPage />,
+      "/activity?user_id=alice&user_id=bob&model=gpt-4o",
+    )
+
+    // See the case above on why this waits on the call rather than on the label.
+    await waitFor(() => expect(listCalls(calls)).not.toHaveLength(0))
+    const latest = listCalls(calls).at(-1)!
+    expect(latest).toContain("user_id=alice")
+    expect(latest).toContain("user_id=bob")
+  })
+
+  it("snaps URL-supplied page sizes to the nearest offered option", async () => {
+    // An old size=500 bookmark must not resurrect second-long selection
+    // clicks, and a hand-edited size=-5 must not reach the API as a bad limit.
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />, "/activity?size=500")
+
+    await screen.findByText("gpt-4o")
+    expect(listCalls(calls).at(-1)).toContain("limit=100")
+
+    const { calls: negativeCalls } = mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />, "/activity?size=-5")
+    await waitFor(() =>
+      expect(listCalls(negativeCalls).length).toBeGreaterThan(0),
+    )
+    expect(listCalls(negativeCalls).at(-1)).toContain("limit=25")
+  })
+
+  it("shows the paginator range and total", async () => {
+    mockApi({
+      rows: Array.from({ length: 50 }, (_, i) => entry({ id: `r${i}` })),
+      total: 120,
+    })
+    renderPage(<ActivityPage />)
+
+    expect(await screen.findByText("1–50 of 120")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Next page" })).toBeEnabled()
+  })
+
+  it("offers no row selection, even to an operator over imported rows", async () => {
+    mockApi({
+      rows: [entry({ counts_toward_budget: false, source: "claude_code" })],
+      deploymentOperator: true,
+    })
+    renderPage(<ActivityPage />)
+
+    await screen.findByText("gpt-4o")
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("toolbar", { name: "Bulk actions" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("prices the model from a request that carried no cost", async () => {
+    const user = userEvent.setup()
+    // A row stores the instance and the bare model separately, so the pricing
+    // key has to be rebuilt from both: the model alone is prefix-less and the
+    // dialog would (rightly) refuse it.
+    const { calls } = mockApi({
+      rows: [
+        entry({
+          id: "free",
+          model: "mistral-small",
+          provider: "vllm",
+          cost: null,
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const row = (await screen.findByText("mistral-small")).closest("tr")!
+    await user.click(row)
+    await user.click(screen.getByRole("button", { name: "Price this model" }))
+
+    const dialog = await screen.findByRole("dialog")
+    expect(
+      within(dialog).getByRole("combobox", { name: "Model key" }),
+    ).toHaveValue("vllm:mistral-small")
+    await user.type(within(dialog).getByLabelText("Input $ / 1M"), "0.2")
+    await user.type(within(dialog).getByLabelText("Output $ / 1M"), "0.6")
+    // Trigger and submit say the same string, so this is scoped to the dialog.
+    await user.click(
+      within(dialog).getByRole("button", { name: "Price this model" }),
+    )
+
+    await waitFor(() => {
+      const call = calls.find(
+        (c) => c.url.includes(`${API_ROOT}/pricing`) && c.method === "POST",
+      )
+      expect(call).toBeTruthy()
+      expect(JSON.parse(call!.body!)).toMatchObject({
+        model_key: "vllm:mistral-small",
+        input_price_per_million: 0.2,
+        output_price_per_million: 0.6,
+      })
+    })
+    // Setting the model's price must not rewrite what logged rows were billed.
+    expect(
+      calls.some((c) => c.url.includes(`${API_ROOT}/usage/set-price`)),
+    ).toBe(false)
+  })
+
+  it("prices a rerank model per request, entered per thousand", async () => {
+    const user = userEvent.setup()
+    const { calls } = mockApi({
+      rows: [
+        entry({
+          id: "search",
+          model: "rerank-v3.5",
+          provider: "cohere",
+          endpoint: "/v1/rerank",
+          cost: null,
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const row = (await screen.findByText("rerank-v3.5")).closest("tr")!
+    await user.click(row)
+    await user.click(screen.getByRole("button", { name: "Price this model" }))
+
+    const dialog = await screen.findByRole("dialog")
+    // Opened in the unit the endpoint bills in, with no token fields to fill.
+    expect(
+      within(dialog).getByRole("radio", { name: "Requests" }),
+    ).toBeChecked()
+    expect(within(dialog).queryByLabelText("Output $ / 1M")).toBeNull()
+    await user.type(
+      within(dialog).getByLabelText("Price per 1,000 requests"),
+      "2",
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Price this model" }),
+    )
+
+    await waitFor(() => {
+      const call = calls.find(
+        (c) => c.url.includes(`${API_ROOT}/pricing`) && c.method === "POST",
+      )
+      expect(call).toBeTruthy()
+      expect(JSON.parse(call!.body!)).toMatchObject({
+        model_key: "cohere:rerank-v3.5",
+        input_price_per_million: 2000,
+        output_price_per_million: 0,
+        unit: "request",
       })
     })
   })
 
-  describe("grouping", () => {
-    it("collapses the log into groups that open in place and become a list of their own", async () => {
-      const user = userEvent.setup()
-      const { calls } = mockApi({
-        rows: [entry()],
-        groups: [group({ key: "key-1", label: "ci-runner", requests: 12 })],
-      })
-      renderPage(<ActivityPage />, "/activity?group=source")
+  it("does not offer model pricing on a request that was costed", async () => {
+    const user = userEvent.setup()
+    mockApi({
+      rows: [
+        entry({ id: "paid", model: "gpt-4o", provider: "openai", cost: 0.5 }),
+      ],
+    })
+    renderPage(<ActivityPage />)
 
-      const groupRow = await screen.findByRole("row", { name: /ci-runner/ })
-      expect(within(groupRow).getByText("12 requests")).toBeInTheDocument()
+    const row = (await screen.findByText("gpt-4o")).closest("tr")!
+    await user.click(row)
+
+    expect(
+      screen.getByRole("complementary", { name: "Request detail" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Price this model" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("treats a $0 cost as priced, not as a model needing a price", async () => {
+    // cost=0 is a real price (a model priced at zero), which is why the backend
+    // marks a row unpriced on cost IS NULL rather than on falsiness.
+    const user = userEvent.setup()
+    mockApi({
+      rows: [
+        entry({
+          id: "free-model",
+          model: "mistral-small",
+          provider: "vllm",
+          cost: 0,
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const row = (await screen.findByText("mistral-small")).closest("tr")!
+    await user.click(row)
+
+    expect(
+      screen.getByRole("complementary", { name: "Request detail" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Price this model" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("prices a selector that never resolved from the row's model alone", async () => {
+    // A selector the gateway could not resolve is logged with no provider and
+    // the raw selector as the model, so it is already the key to price.
+    const user = userEvent.setup()
+    mockApi({
+      rows: [
+        entry({
+          id: "unresolved",
+          model: "vllm:mistral-small",
+          provider: null,
+          cost: null,
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const row = (await screen.findByText("vllm:mistral-small")).closest("tr")!
+    await user.click(row)
+    await user.click(screen.getByRole("button", { name: "Price this model" }))
+
+    const dialog = await screen.findByRole("dialog")
+    expect(
+      within(dialog).getByRole("combobox", { name: "Model key" }),
+    ).toHaveValue("vllm:mistral-small")
+  })
+
+  it("keeps its own filter pickers behind a 'More filters' toggle", async () => {
+    mockApi({ rows: [entry()] })
+    const user = userEvent.setup()
+    renderPage(<ActivityPage />)
+    await screen.findByText("gpt-4o")
+
+    // Named apart from the Overview's own "Add filter" toggle above it. The picker row
+    // is collapsed until the operator opts to add a filter. jsdom
+    // does not apply Tailwind's `.hidden`, so assert on the toggled class rather
+    // than computed visibility.
+    const toggle = screen.getByRole("button", { name: "More filters" })
+    const region = document.getElementById(
+      toggle.getAttribute("aria-controls")!,
+    )!
+    expect(toggle).toHaveAttribute("aria-expanded", "false")
+    // classList, not className: `toContain` on the string is a substring match,
+    // so "hidden" would also be satisfied by `overflow-hidden` and "flex" by
+    // `flex-wrap` alone. Both are one edit away from being true here.
+    expect([...region.classList]).toContain("hidden")
+
+    await user.click(toggle)
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true")
+    expect([...region.classList]).toContain("flex")
+    expect([...region.classList]).not.toContain("hidden")
+  })
+
+  it("shows its own filters as removable chips and clears one on ✕", async () => {
+    const user = userEvent.setup()
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />, "/activity?priced=false&endpoint=/v1/messages")
+    await screen.findByText("gpt-4o")
+
+    // The model, user, key and status chips are the Overview's, and the time range is
+    // not a chip.
+    expect(
+      screen.getByRole("button", { name: "Remove Priced filter" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Remove Endpoint filter" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /Remove (Model|Status) filter/ }),
+    ).not.toBeInTheDocument()
+
+    // Removing the endpoint chip drops just that filter from the query.
+    await user.click(
+      screen.getByRole("button", { name: "Remove Endpoint filter" }),
+    )
+    await waitFor(() =>
+      expect(
+        listCalls(calls).some(
+          (url) => url.includes("priced=false") && !url.includes("endpoint="),
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it("queries an unbounded window for the truthful 'All' preset", async () => {
+    const user = userEvent.setup()
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />)
+    await screen.findByText("gpt-4o")
+
+    await user.click(screen.getByRole("button", { name: "All" }))
+
+    // Activity's list endpoint applies no default lookback, so "All" really omits
+    // the start bound rather than silently scoping to a recent window.
+    await waitFor(() =>
+      expect(listCalls(calls).some((url) => !url.includes("start_date"))).toBe(
+        true,
+      ),
+    )
+
+    // The histogram, however, sends an explicit start bound: without one the
+    // summary endpoint would apply a hidden 30-day default, so the bars would show
+    // a rolling month while the caption reads "All time". The list stays all-time.
+    expect(
+      calls.some(
+        (c) =>
+          c.url.includes(`${API_ROOT}/usage/summary`) &&
+          c.url.includes("start_date="),
+      ),
+    ).toBe(true)
+  })
+
+  it("rewrites an unrecognized range to the one it actually applied", async () => {
+    mockApi({ rows: [entry()] })
+    // `90d` is a Usage preset and not an Activity one, so a URL copied between
+    // the two pages arrives with a range this page cannot honor. It falls back
+    // to the default window either way; the point here is that the address bar
+    // stops claiming ninety days over a list showing one, which the preset row
+    // reads back: no tab is pressed while the bogus key stands.
+    renderPage(<ActivityPage />, "/activity?range=90d")
+    await screen.findByText("gpt-4o")
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "24h" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    )
+  })
+
+  it("leaves an unrecognized range alone when explicit bounds are set", async () => {
+    mockApi({ rows: [entry()] })
+    // A drill-down carries its own window, so the range is not being read and
+    // is not lying about anything. Rewriting it here would fight the bounds.
+    renderPage(
+      <ActivityPage />,
+      "/activity?range=90d&start_date=2026-08-01T00:00:00.000Z",
+    )
+    await screen.findByText("gpt-4o")
+
+    expect(
+      screen.queryByRole("button", { name: "24h", pressed: true }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("gives the histogram an explicit start for the custom-range sentinel", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    // `?range=custom` has no rolling window of its own, so without an explicit
+    // extent the summary would fall back to the server's hidden 30-day default.
+    renderPage(<ActivityPage />, "/activity?range=custom")
+    await screen.findByText("gpt-4o")
+
+    await waitFor(() =>
       expect(
         calls.some(
-          (call) =>
-            call.url.includes("/usage/groups") &&
-            call.url.includes("group_by=api_key"),
+          (c) =>
+            c.url.includes(`${API_ROOT}/usage/summary`) &&
+            c.url.includes("start_date="),
         ),
-      ).toBe(true)
-
-      await user.click(groupRow)
-      await waitFor(() =>
-        expect(
-          listCalls(calls).some(
-            (url) =>
-              url.includes("api_key_id=key-1") && url.includes("limit=8"),
-          ),
-        ).toBe(true),
-      )
-      await user.click(
-        await screen.findByRole("button", {
-          name: "Show all 12 as a filtered list",
-        }),
-      )
-      await waitFor(() =>
-        expect(lastList(calls).getAll("api_key_id")).toEqual(["key-1"]),
-      )
-    })
-
-    it("pauses grouping while sorted by anything but time", async () => {
-      mockApi({ rows: [entry()] })
-      renderPage(<ActivityPage />, "/activity?group=model&sort=cost")
-      expect(
-        await screen.findByText(/Grouping pauses while sorted by cost/),
-      ).toBeInTheDocument()
-      await rowOf("gpt-4o")
-    })
+      ).toBe(true),
+    )
   })
 
-  describe("who is reading", () => {
-    it("reads a member's own requests from the organization route, with nothing of the operator's", async () => {
-      const { calls } = mockApi({ rows: [entry()], viewer: "member" })
-      renderPage(<ActivityPage />)
-      await rowOf("gpt-4o")
+  it("frames a drill-down window that reaches outside the preset extent", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    // A Usage-page drill-down: explicit multi-week bounds while `range` stays the
+    // 24h default. The timeline must frame the drilled window (daily buckets over
+    // its bounds), not the unrelated 24h extent.
+    renderPage(
+      <ActivityPage />,
+      "/activity?start_date=2020-07-01T00:00:00.000Z&end_date=2020-07-15T00:00:00.000Z",
+    )
+    await screen.findByText("gpt-4o")
 
-      expect(listCalls(calls).at(-1)).toContain("/organizations/me/usage")
-      expect(screen.getByText("Your requests")).toBeInTheDocument()
+    await waitFor(() =>
       expect(
-        screen.queryByRole("columnheader", { name: /Member/ }),
-      ).not.toBeInTheDocument()
-      expect(calls.some((call) => call.url.includes("/in-flight"))).toBe(false)
+        calls.some(
+          (c) =>
+            c.url.includes(`${API_ROOT}/usage/summary`) &&
+            c.url.includes("bucket=day") &&
+            c.url.includes("start_date=2020-07-01") &&
+            c.url.includes("end_date=2020-07-15"),
+        ),
+      ).toBe(true),
+    )
+    // The caption reflects the drilled window (end shown inclusively). Assert on
+    // day numbers and the UTC marker, not a month abbreviation, since the caption
+    // formats with the runtime locale ("Jul" would fail outside en-US).
+    const caption = (screen.getByText(/Showing/).textContent ?? "").replace(
+      /\s+/g,
+      " ",
+    )
+    expect(caption).toMatch(/\b1\b/)
+    expect(caption).toMatch(/\b14\b/)
+    expect(caption).toContain("UTC")
+  })
+
+  it("buckets the timeline histogram by the active preset's extent", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />) // default 24h
+    await screen.findByText("gpt-4o")
+
+    // The 24h extent buckets hourly, so the timeline's context summary is fetched
+    // with bucket=hour (distinct from the day-bucketed model-suggestion summary).
+    await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: /imported rows/ }),
-      ).not.toBeInTheDocument()
+        calls.some(
+          (c) =>
+            c.url.includes(`${API_ROOT}/usage/summary`) &&
+            c.url.includes("bucket=hour"),
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it("frames the active preset when the two initial windows are read a millisecond apart", async () => {
+    // `win` and `extentWin` each derive a rolling start from their own clock read,
+    // and `extentWin` is initialized second, so its start is the later of the two
+    // whenever the render straddles a millisecond. That is not a drill-down, and
+    // must not be read as one: doing so framed the window instead of the preset,
+    // dropping the preset highlight and bucketing a 24h extent by day. A monotonic
+    // clock makes the tick certain instead of leaving it to machine load, which is
+    // what made the assertion above flake on CI while passing locally.
+    let now = Date.parse("2026-08-11T12:00:00.000Z")
+    vi.spyOn(Date, "now").mockImplementation(() => ++now)
+
+    const { calls } = mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />) // default 24h
+    await screen.findByText("gpt-4o")
+
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.url.includes(`${API_ROOT}/usage/summary`) &&
+            c.url.includes("bucket=hour"),
+        ),
+      ).toBe(true),
+    )
+    // The visible half of the same bug: the preset row still marks 24h active
+    // rather than falling back to the custom sentinel, which marks nothing. The
+    // presets are tabs now, so the assertion is on the state a tab reports
+    // rather than on a button variant class.
+    expect(screen.getByRole("button", { name: "24h" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    )
+  })
+
+  it("names the model that served an absorbed attempt, from the rows already on the page", async () => {
+    // The question a failed-over row raises is "so what served it". The serving
+    // attempt is a sibling row sharing the request group, and it is normally on the
+    // same page (the rows are written milliseconds apart), so no lookup is needed.
+    const { calls } = mockApi({
+      rows: [
+        entry({
+          id: "served",
+          model: "gpt-4o",
+          provider: "openai",
+          status: "success",
+          policy_name: "fast",
+          selection_reason: "on_failure",
+          attempt_position: 2,
+          attempt_count: 2,
+          request_group_id: "grp-1",
+        }),
+        entry({
+          id: "absorbed",
+          model: "deepseek",
+          provider: "fireworks",
+          status: "absorbed",
+          status_code: 404,
+          cost: null,
+          policy_name: "fast",
+          selection_reason: "default",
+          attempt_position: 1,
+          attempt_count: 2,
+          request_group_id: "grp-1",
+        }),
+      ],
     })
+    renderPage(<ActivityPage />)
 
-    it("lets a manager narrow the workspace to their own requests", async () => {
-      const user = userEvent.setup()
-      const { calls } = mockApi({
-        rows: [entry()],
-        viewer: "manager",
-        members: [
-          organizationMember({
-            user_id: CALLER_IDENTITY,
-            attribution_user_id: "me-attr",
-          }),
-        ],
-      })
-      renderPage(<ActivityPage />)
-      await rowOf("gpt-4o")
-      expect(
-        screen.getByRole("columnheader", { name: /Member/ }),
-      ).toBeInTheDocument()
+    expect(
+      await screen.findByText("attempt 1 of 2 failed, served by openai:gpt-4o"),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("served on attempt 2 of 2 (a fallback candidate)"),
+    ).toBeInTheDocument()
+    // The serving row was already listed, so nothing was looked up for it.
+    expect(
+      listCalls(calls).some((url) => url.includes("request_group_id=")),
+    ).toBe(false)
+  })
 
-      await user.click(screen.getByRole("radio", { name: "You" }))
-      await waitFor(() =>
-        expect(lastList(calls).getAll("user_id")).toEqual(["me-attr"]),
-      )
-      expect(
-        screen.queryByRole("columnheader", { name: /Member/ }),
-      ).not.toBeInTheDocument()
+  it("looks the serving model up when the outcome row is not on the page", async () => {
+    // Filtering to `absorbed` (how an operator investigates fallovers) hides every
+    // outcome row by construction, so the answer has to be fetched.
+    const { calls } = mockApi({
+      rows: [
+        entry({
+          id: "absorbed",
+          model: "deepseek",
+          provider: "fireworks",
+          status: "absorbed",
+          policy_name: "fast",
+          attempt_position: 1,
+          attempt_count: 2,
+          request_group_id: "grp-1",
+        }),
+      ],
+      groupRows: [
+        entry({
+          id: "served",
+          model: "gpt-4o",
+          provider: "openai",
+          status: "success",
+          attempt_position: 2,
+          attempt_count: 2,
+          request_group_id: "grp-1",
+        }),
+      ],
     })
+    renderPage(<ActivityPage />, "/activity?status=absorbed")
 
-    it("reads a workspace admin who is an organization member as a manager of that workspace, as the server does", async () => {
-      const user = userEvent.setup()
-      const { calls } = mockApi({
-        rows: [entry()],
-        viewer: "workspaceAdmin",
-        members: [
-          organizationMember({
-            user_id: CALLER_IDENTITY,
-            attribution_user_id: "me-attr",
-          }),
-        ],
-      })
-      renderPage(<ActivityPage />)
-      await rowOf("gpt-4o")
-      expect(lastList(calls).get("workspace_id")).toBe(WORKSPACE_ID)
-      expect(
-        screen.getByRole("columnheader", { name: /Member/ }),
-      ).toBeInTheDocument()
+    expect(
+      await screen.findByText("attempt 1 of 2 failed, served by openai:gpt-4o"),
+    ).toBeInTheDocument()
+    expect(
+      listCalls(calls).some((url) => url.includes("request_group_id=grp-1")),
+    ).toBe(true)
+  })
 
-      await user.click(screen.getByRole("radio", { name: "You" }))
-      await waitFor(() =>
-        expect(lastList(calls).getAll("user_id")).toEqual(["me-attr"]),
-      )
+  it("does not imply a fallback ran when the walk stopped early", async () => {
+    // A non-retryable failure, a tool-loop lock-in, or a gateway-side refusal stops
+    // the walk on the candidate it happened on, so the later candidates were never
+    // called. "attempt 1 of 2" alone read as though the second one had been tried.
+    mockApi({
+      rows: [
+        entry({
+          status: "error",
+          status_code: 400,
+          policy_name: "fast",
+          selection_reason: "default",
+          attempt_position: 1,
+          attempt_count: 2,
+          request_group_id: "grp-1",
+        }),
+      ],
     })
+    renderPage(<ActivityPage />)
 
-    it("marks a budget that has run over", async () => {
+    expect(
+      await screen.findByText(
+        "attempt 1 of 2 failed, no further candidate tried",
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("does not claim the untried candidates failed when the walk stopped mid-plan", async () => {
+    // Attempt 1 was absorbed, attempt 2 stopped the walk on a non-retryable 400, so
+    // candidates 3 and 4 were never called. The absorbed row must not say "and so
+    // did the rest" while its sibling says "no further candidate tried".
+    mockApi({
+      rows: [
+        entry({
+          id: "absorbed",
+          model: "deepseek",
+          provider: "fireworks",
+          status: "absorbed",
+          status_code: 429,
+          cost: null,
+          policy_name: "fast",
+          selection_reason: "default",
+          attempt_position: 1,
+          attempt_count: 4,
+          request_group_id: "grp-1",
+        }),
+        entry({
+          id: "stopped",
+          status: "error",
+          status_code: 400,
+          cost: null,
+          policy_name: "fast",
+          selection_reason: "on_failure",
+          attempt_position: 2,
+          attempt_count: 4,
+          request_group_id: "grp-1",
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    expect(
+      await screen.findByText(
+        "attempt 1 of 4 failed, and the request ended in an error",
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("attempt 2 of 4 failed, no further candidate tried"),
+    ).toBeInTheDocument()
+  })
+
+  it("spells out the selection reason alone for a single-candidate policy", async () => {
+    mockApi({
+      rows: [
+        entry({
+          policy_name: "solo",
+          attempt_position: 1,
+          attempt_count: 1,
+          selection_reason: "default",
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    expect(
+      await screen.findByText("the policy's default target"),
+    ).toBeInTheDocument()
+  })
+
+  it("humanizes a condition-matched selection reason", async () => {
+    mockApi({
+      rows: [
+        entry({
+          policy_name: "tiered",
+          attempt_position: 1,
+          attempt_count: 1,
+          selection_reason: "condition:user_id,budget_remaining",
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    expect(
+      await screen.findByText("matched on user_id, budget_remaining"),
+    ).toBeInTheDocument()
+  })
+
+  it("shows the whole plan in the request detail, marking the attempt that served", async () => {
+    mockApi({
+      rows: [
+        entry({
+          id: "absorbed",
+          model: "deepseek",
+          provider: "fireworks",
+          status: "absorbed",
+          status_code: 404,
+          cost: null,
+          latency_ms: 264,
+          error_message: "no pricing is configured for it",
+          policy_name: "fast",
+          selection_reason: "default",
+          attempt_position: 1,
+          attempt_count: 2,
+          request_group_id: "grp-1",
+        }),
+      ],
+      groupRows: [
+        entry({
+          id: "absorbed",
+          model: "deepseek",
+          provider: "fireworks",
+          status: "absorbed",
+          status_code: 404,
+          cost: null,
+          latency_ms: 264,
+          policy_name: "fast",
+          selection_reason: "default",
+          attempt_position: 1,
+          attempt_count: 2,
+          request_group_id: "grp-1",
+        }),
+        entry({
+          id: "served",
+          model: "gpt-4o",
+          provider: "openai",
+          status: "success",
+          cost: 0.0031,
+          latency_ms: 1200,
+          policy_name: "fast",
+          selection_reason: "on_failure",
+          attempt_position: 2,
+          attempt_count: 2,
+          request_group_id: "grp-1",
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    await userEvent.click(await screen.findByText("deepseek"))
+    expect(
+      await screen.findByText("Served by attempt 2 of 2: openai:gpt-4o"),
+    ).toBeInTheDocument()
+    const plan = screen.getByRole("table", { name: /routing plan/i })
+    expect(within(plan).getByText("failed 404, fell back")).toBeInTheDocument()
+    expect(within(plan).getByText("served the request")).toBeInTheDocument()
+    expect(within(plan).getByText("this row")).toBeInTheDocument()
+    expect(within(plan).getByText("$0.0031")).toBeInTheDocument()
+  })
+})
+
+describe("ActivityPage gateway-run tools", () => {
+  it("marks a row that ran tools and keeps its token counts", async () => {
+    // A row can carry tool meters while its tokens were never metered (an unpriced
+    // model still owes for the searches it ran). Keying the token split off the
+    // presence of `billing_meters` rather than each key made the counts vanish here.
+    mockApi({
+      rows: [
+        entry({
+          prompt_tokens: 1200,
+          completion_tokens: 300,
+          total_tokens: 1500,
+          billing_meters: {
+            tools: { web_search: { billed: 3, errors: 1, unit_rate: 0.01 } },
+          },
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    const row = (await screen.findByText("gpt-4o")).closest("tr")!
+    // 3 billed + 1 failed = 4 calls, and the detail is on the accessible name.
+    const pill = within(row).getByLabelText(/Gateway tools/)
+    expect(pill).toHaveTextContent("4 tools")
+    expect(pill).toHaveAccessibleName("Gateway tools: web search ×3, 1 failed")
+    // The counts still come from the raw columns.
+    expect(within(row).getByText("1,200")).toBeInTheDocument()
+    expect(within(row).getByText("300")).toBeInTheDocument()
+  })
+
+  it("reads each charge line by the rate it carries, and neither by the other", async () => {
+    // Three shapes reach this renderer: a per-million line, a per-call line, and
+    // a line from an older gateway that matches neither. The third is the one
+    // worth pinning: rendered through either rate format it would print an
+    // undefined rate, so it shows the cost it did record and nothing more.
+    mockApi({
+      rows: [
+        entry({
+          cost: 0.09,
+          pricing_breakdown: [
+            {
+              meter: "web_search_calls",
+              units: 3,
+              unit_rate: 0.01,
+              cost: 0.03,
+            },
+            { meter: "input", units: 20_000, rate_per_million: 3, cost: 0.06 },
+            { meter: "mystery", units: 5, cost: 0.5 },
+          ],
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    await userEvent.click(await screen.findByText("gpt-4o"))
+    await screen.findByText("Billed meters")
+    // Per-million for the token line, per-call for the tool line.
+    expect(screen.getByText(/20,000 at \$3\.00 \/ 1M/)).toBeInTheDocument()
+    expect(screen.getByText(/3 at \$0\.01 each/)).toBeInTheDocument()
+    // The legacy line shows the cost it recorded, with no rate invented for it.
+    expect(screen.getByText("$0.50")).toBeInTheDocument()
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument()
+  })
+
+  it.each([
+    {
+      id: "a non-numeric rate",
+      line: { meter: "odd", units: "many", unit_rate: "flat", cost: 1 },
+    },
+    // Copilot's case on #606: the discriminator is present and the field it
+    // implies is missing outright, so a guard keyed on the key alone narrows it
+    // and the renderer quotes a rate over no units at all.
+    {
+      id: "no units at all",
+      line: { meter: "legacy", unit_rate: "flat", cost: 1 },
+    },
+  ])(
+    "does not read a legacy line's rate just because the key is there: $id",
+    async ({ line }) => {
+      // The guard checks the shape it promises rather than the discriminator, so
+      // both fall to the untyped branch instead of rendering "NaN each".
+      mockApi({ rows: [entry({ cost: 1, pricing_breakdown: [line] })] })
+      renderPage(<ActivityPage />)
+
+      await userEvent.click(await screen.findByText("gpt-4o"))
+      const rendered = (await screen.findByText(String(line.meter))).closest(
+        "div",
+      )!
+      expect(within(rendered).queryByText(/each|NaN/)).not.toBeInTheDocument()
+    },
+  )
+
+  it("shows tool counts and cost in the request detail", async () => {
+    mockApi({
+      rows: [
+        entry({
+          cost: 0.05,
+          billing_meters: {
+            tools: { web_search: { billed: 3, errors: 0, unit_rate: 0.01 } },
+          },
+          pricing_breakdown: [
+            {
+              meter: "web_search_calls",
+              units: 3,
+              unit_rate: 0.01,
+              cost: 0.03,
+            },
+          ],
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    await userEvent.click(await screen.findByText("gpt-4o"))
+    expect(await screen.findByText("Tools")).toBeInTheDocument()
+    expect(screen.getByText("web search ×3")).toBeInTheDocument()
+    // Per-call charge lines read "N at $X each", not the token form "$X / 1M".
+    expect(screen.getByText(/3 at \$0\.01 each, \$0\.03/)).toBeInTheDocument()
+  })
+
+  it.each([
+    {
+      name: "failed Fetch only",
+      tools: { web_fetch: { billed: 0, errors: 1 } },
+      expectedCost: "$0.00",
+    },
+    {
+      name: "failed Fetch and priced Search",
+      tools: {
+        web_fetch: { billed: 0, errors: 1 },
+        web_search: { billed: 1, errors: 0, unit_rate: 0.01 },
+      },
+      expectedCost: "$0.01",
+    },
+  ])(
+    "shows the billed tool cost for $name",
+    async ({ tools, expectedCost }) => {
+      mockApi({ rows: [entry({ billing_meters: { tools } })] })
+      renderPage(<ActivityPage />)
+
+      await userEvent.click(await screen.findByText("gpt-4o"))
+      const costField = (await screen.findByText("Tool cost")).closest("div")!
+      expect(within(costField).getByText(expectedCost)).toBeInTheDocument()
+      expect(screen.getByText(/web fetch, 1 failed/)).toBeInTheDocument()
+      expect(screen.queryByText("unpriced")).not.toBeInTheDocument()
+    },
+  )
+
+  it("does not hide an unpriced successful tool beside a priced tool", async () => {
+    mockApi({
+      rows: [
+        entry({
+          billing_meters: {
+            tools: {
+              web_fetch: { billed: 1, errors: 0 },
+              web_search: { billed: 1, errors: 0, unit_rate: 0.01 },
+            },
+          },
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    await userEvent.click(await screen.findByText("gpt-4o"))
+    expect(await screen.findByText("unpriced")).toBeInTheDocument()
+  })
+
+  it("labels an unpriced tool instead of reporting it as free", async () => {
+    // A tool with no rate records units at cost 0. Rendering that as "$0.0000"
+    // would read as "this is free" when it means "nobody set a price".
+    mockApi({
+      rows: [
+        entry({
+          billing_meters: { tools: { web_search: { billed: 2, errors: 0 } } },
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />)
+
+    await userEvent.click(await screen.findByText("gpt-4o"))
+    expect(await screen.findByText("Tool cost")).toBeInTheDocument()
+    expect(screen.getByText("unpriced")).toBeInTheDocument()
+  })
+})
+
+describe("ActivityPage table-scan avoidance", () => {
+  it("never reads the whole users or api_keys table", async () => {
+    // Both listings are fetched by paging every row (see fetchAllUsers /
+    // fetchAllKeys), so a deployment with many users or keys paid a sequential
+    // multi-megabyte load on every visit here, just to name filter options and
+    // label a page of rows. Both now come off the summary breakdown and the
+    // usage row itself. This asserts the request is gone, not merely smaller.
+    const { calls } = mockApi({
+      rows: [entry({ api_key_id: "key-1", api_key_name: "ci-bot" })],
+    })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    await screen.findByText("gpt-4o")
+    const requested = calls.map((c) => c.url)
+    expect(requested.some((url) => url.includes(`${API_ROOT}/users`))).toBe(
+      false,
+    )
+    expect(requested.some((url) => url.includes(`${API_ROOT}/keys`))).toBe(
+      false,
+    )
+  })
+
+  it("labels an API key column from the row, not a client-side lookup", async () => {
+    const { calls } = mockApi({
+      rows: [entry({ api_key_id: "key-1", api_key_name: "ci-bot" })],
+    })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    expect(await screen.findByText("ci-bot")).toBeInTheDocument()
+    expect(
+      calls.map((c) => c.url).some((url) => url.includes(`${API_ROOT}/keys`)),
+    ).toBe(false)
+  })
+
+  it.each([null, ""])(
+    "falls back to a short id when the key name is %j",
+    async (name) => {
+      // The label is null whenever the key was deleted or never named, and the
+      // API accepts an empty name, so the column must not render an empty cell
+      // for a row that does have a key.
       mockApi({
-        rows: [entry()],
-        viewer: "member",
-        spend: {
-          workspace_id: WORKSPACE_ID,
-          max_budget: 500,
-          spent: 612,
-          used_fraction: 1.224,
-          period_start: "2026-09-01T00:00:00Z",
-          period_end: "2026-10-01T00:00:00Z",
-        },
+        rows: [entry({ api_key_id: "abcdef123456", api_key_name: name })],
       })
-      renderPage(<ActivityPage />)
-      expect(await screen.findByText("$612.00 / $500")).toHaveClass(
-        "text-danger",
+      renderPage(<ActivityPage />, "/activity?range=24h")
+
+      // Shortened in the cell, whole on hover.
+      expect(await screen.findByText("abcdef12…")).toHaveAttribute(
+        "title",
+        "abcdef123456",
       )
+    },
+  )
+})
+
+describe("ActivityPage user naming", () => {
+  it("names the user from the row's alias rather than showing the billing id", async () => {
+    mockApi({
+      rows: [
+        entry({
+          user_id: "81e24d08-7d1e-4287-a074-54aa57d9debc",
+          user_alias: "Alice Example",
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    expect(await screen.findByText("Alice Example")).toBeInTheDocument()
+    expect(
+      screen.queryByText("81e24d08-7d1e-4287-a074-54aa57d9debc"),
+    ).not.toBeInTheDocument()
+  })
+
+  it("prefers the organization roster to the alias the row carries", async () => {
+    mockApi({
+      rows: [
+        entry({
+          user_id: "81e24d08-7d1e-4287-a074-54aa57d9debc",
+          user_alias: "svc-alice",
+        }),
+      ],
+      members: [
+        organizationMember({
+          attribution_user_id: "81e24d08-7d1e-4287-a074-54aa57d9debc",
+          full_name: "Alice Example",
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    expect(await screen.findByText("Alice Example")).toBeInTheDocument()
+    expect(screen.queryByText("svc-alice")).not.toBeInTheDocument()
+  })
+
+  it("leaves an id an operator chose as its own name", async () => {
+    // `ci-bot` is both the id and the alias, so naming it must not print it
+    // twice or replace it with a shortened form.
+    mockApi({
+      rows: [entry({ user_id: "ci-bot", user_alias: "ci-bot" })],
+    })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    expect(await screen.findByText("ci-bot")).toBeInTheDocument()
+  })
+
+  it("keeps the raw id copyable in the request panel", async () => {
+    const user = userEvent.setup()
+    mockApi({
+      rows: [
+        entry({
+          user_id: "81e24d08-7d1e-4287-a074-54aa57d9debc",
+          user_alias: "Alice Example",
+        }),
+      ],
+    })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    const row = (await screen.findByText("gpt-4o")).closest("tr")!
+    await user.click(row)
+
+    // The one place an operator goes for the raw id, so naming the person must
+    // not take it away: the copy control still yields the id.
+    const detail = screen.getByRole("complementary", { name: "Request detail" })
+    expect(within(detail).getByText("Alice Example")).toBeInTheDocument()
+    await user.click(
+      within(detail).getByRole("button", { name: "Copy user id" }),
+    )
+    expect(await navigator.clipboard.readText()).toBe(
+      "81e24d08-7d1e-4287-a074-54aa57d9debc",
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Requests in flight, and the frozen log (issue #526)
+// ---------------------------------------------------------------------------
+
+function inFlightRequest(
+  overrides: Partial<InFlightRequest> = {},
+): InFlightRequest {
+  return {
+    id: "live-1",
+    endpoint: "/v1/chat/completions",
+    model: "ollama:qwen3",
+    provider: "ollama",
+    user_id: "alice",
+    api_key_id: "key-1",
+    policy_name: null,
+    started_at: new Date().toISOString(),
+    elapsed_ms: 12_000,
+    ...overrides,
+  }
+}
+
+// The live control, found by role: its label is assembled from the count and the
+// word "in flight" as separate text nodes, so no single text node carries it.
+function liveControl(): HTMLElement | null {
+  return screen.queryByRole("button", { name: /in flight/ })
+}
+
+describe("ActivityPage live traffic", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("reports what is running as a count beside refresh, not as rows in the log", async () => {
+    // The reason the count exists: a usage row is only written once a request
+    // settles, so on a slow backend the log stays empty for a whole 30s call and
+    // reads as "nothing is happening".
+    //
+    // The reason it is not a row: the poll behind it runs every two seconds, and
+    // rows that re-derived themselves on that timer reordered the top of the table
+    // continuously on any gateway with real traffic.
+    mockApi({
+      rows: [entry()],
+      inFlight: { requests: [inFlightRequest()], total: 1 },
+    })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    await waitFor(() => expect(liveControl()).toBeInTheDocument())
+    expect(liveControl()).toHaveAccessibleName(/1 in flight/)
+
+    // One body row, the settled one. The live request is not among them.
+    const bodyRows = screen.getAllByRole("row").slice(1)
+    expect(bodyRows).toHaveLength(1)
+    expect(within(bodyRows[0]).getByText("gpt-4o")).toBeInTheDocument()
+    expect(screen.queryByText("ollama:qwen3")).not.toBeInTheDocument()
+  })
+
+  it("lists the running requests, with the wait so far, when the count is opened", async () => {
+    const user = userEvent.setup()
+    mockApi({
+      rows: [],
+      inFlight: {
+        requests: [
+          inFlightRequest({ policy_name: "cheap-first", elapsed_ms: 95_000 }),
+        ],
+        total: 1,
+      },
+    })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    await waitFor(() => expect(liveControl()).toBeInTheDocument())
+    await user.click(liveControl()!)
+
+    const panel = await screen.findByRole("dialog")
+    expect(within(panel).getByText("ollama:qwen3")).toBeInTheDocument()
+    expect(within(panel).getByText(/alice/)).toBeInTheDocument()
+    expect(within(panel).getByText(/cheap-first/)).toBeInTheDocument()
+    // Seeded from the server's own measurement, so the wait does not depend on the
+    // browser clock agreeing with the gateway's, and long enough to read in minutes
+    // because a stuck local model is the case this exists for.
+    expect(within(panel).getByText(/^1m 35s$/)).toBeInTheDocument()
+  })
+
+  it("says how many running requests the response left out", async () => {
+    // The endpoint caps what it serializes, so the count and the list can differ;
+    // reading the list length as the total would under-report live traffic.
+    const user = userEvent.setup()
+    mockApi({ rows: [], inFlight: { requests: [inFlightRequest()], total: 7 } })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    await waitFor(() =>
+      expect(liveControl()).toHaveAccessibleName(/7 in flight/),
+    )
+    await user.click(liveControl()!)
+
+    const panel = await screen.findByRole("dialog")
+    expect(
+      within(panel).getByText(
+        /6 further requests are in flight beyond the 1 listed/,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("keeps an opened list open when the last request lands", async () => {
+    // Otherwise the list an operator opened to watch a slow request is torn out
+    // from under them at the moment it finishes, which is the moment they were
+    // waiting for. It stays, reading "0 in flight", until they close it.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      let live: InFlightResponse = { requests: [inFlightRequest()], total: 1 }
+      mockApi({ rows: [], inFlight: () => live })
+      renderPage(<ActivityPage />, "/activity?range=24h")
+
+      await waitFor(() => expect(liveControl()).toBeInTheDocument())
+      // Held as a node: react-aria marks the rest of the page `aria-hidden` while
+      // the popover is open, so the trigger is unreachable by role until it closes.
+      const control = liveControl()!
+      await user.click(control)
+      const panel = await screen.findByRole("dialog")
+      expect(within(panel).getByText("ollama:qwen3")).toBeInTheDocument()
+
+      live = { requests: [], total: 0 }
+      await vi.advanceTimersByTimeAsync(3_000)
+
+      await waitFor(() => expect(control).toHaveTextContent(/0 in flight/))
+      expect(screen.getByRole("dialog")).toBeInTheDocument()
+      expect(screen.getByText(/Nothing running right now/)).toBeInTheDocument()
+
+      // Closed by the operator, and only then does the control go.
+      await user.keyboard("{Escape}")
+      await waitFor(() => expect(liveControl()).not.toBeInTheDocument())
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("shows no live control while the gateway is idle", async () => {
+    mockApi({ rows: [entry()], inFlight: { requests: [], total: 0 } })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    await screen.findByText("gpt-4o")
+    expect(liveControl()).not.toBeInTheDocument()
+  })
+
+  it("drops the live control when the in-flight poll starts failing", async () => {
+    // TanStack keeps the last successful payload after a failed refetch, so without
+    // an explicit error arm the count would sit there with its waits climbing
+    // against a frozen anchor, claiming work is running that may have landed
+    // minutes ago. That is the state the hook already refuses to cache across
+    // mounts, so it must not be reachable this way either.
+    let failing = false
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith(`${API_ROOT}/organizations/me`)) return operatorContext()
+      if (url.includes(`${API_ROOT}/usage/in-flight`)) {
+        return failing
+          ? jsonResponse({ detail: "gateway restarting" }, 503)
+          : jsonResponse({ requests: [inFlightRequest()], total: 1 })
+      }
+      if (url.includes(`${API_ROOT}/usage/count`))
+        return jsonResponse({ total: 0 })
+      if (url.includes(`${API_ROOT}/usage/summary`)) {
+        return jsonResponse({
+          by_model: [],
+          by_user: [],
+          by_api_key: [],
+          by_source: [],
+          series: [],
+        })
+      }
+      return jsonResponse([])
+    })
+
+    // The wait is jumped rather than slept through. `useInFlightRequests`
+    // declares its own `retry` (three attempts, since a 503 is a gateway
+    // restarting and worth re-asking), which overrides the harness's
+    // `retry: false`, so reaching the error arm costs the 2s poll plus
+    // TanStack's 1s/2s/4s backoffs. On real timers that was 9.1s, a third of
+    // this whole suite's wall clock in one case, and the 20s and 30s ceilings
+    // above were sized to survive it.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      renderPage(<ActivityPage />, "/activity?range=24h")
+      await waitFor(() => expect(liveControl()).toBeInTheDocument())
+
+      failing = true
+      // Past the poll and all three backoffs. `...Async` rather than the
+      // synchronous form because each attempt is a fetch: the awaits between
+      // timers are what let those promises settle and schedule the next one.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000 + 1_000 + 2_000 + 4_000 + 500)
+      })
+      expect(liveControl()).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("reports live traffic gateway-wide, whatever the table is filtered to", async () => {
+    // The endpoint takes no filters (a request in progress has no status, cost, or
+    // token count to filter on), so the count is not narrowed to the current view
+    // and the request itself must stay bare. A status filter that empties the table
+    // therefore leaves the live count alone rather than hiding it.
+    const { calls } = mockApi({
+      rows: [],
+      inFlight: { requests: [inFlightRequest()], total: 1 },
+    })
+    renderPage(<ActivityPage />, "/activity?range=7d&status=error&model=gpt-4o")
+
+    await screen.findByText("No requests match these filters.")
+    await waitFor(() => expect(liveControl()).toBeInTheDocument())
+
+    const requested = calls
+      .map((c) => c.url)
+      .filter((url) => url.includes(`${API_ROOT}/usage/in-flight`))
+    expect(requested.length).toBeGreaterThan(0)
+    for (const url of requested) {
+      expect(url).toBe(`${API_ROOT}/usage/in-flight`)
+    }
+  })
+
+  it("leaves the paginator counting settled rows only", async () => {
+    // The live request is not part of any page's slice, so folding it into "N of M"
+    // would make the count disagree with the log the operator can page through.
+    mockApi({
+      rows: [entry()],
+      total: 1,
+      inFlight: { requests: [inFlightRequest()], total: 1 },
+    })
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    await waitFor(() => expect(liveControl()).toBeInTheDocument())
+    expect(screen.getByText(/1\s*[–-]\s*1 of 1/)).toBeInTheDocument()
+  })
+
+  it("does not re-read the log when a tracked request settles", async () => {
+    // The freeze, and the whole point of it: on a busy gateway requests settle
+    // continuously, and re-reading the log on each one reshuffled the table every
+    // few seconds under whoever was trying to read it. The settled request appears
+    // at the next refresh instead.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let live: InFlightResponse = { requests: [inFlightRequest()], total: 1 }
+      const { calls } = mockApi({ rows: [entry()], inFlight: () => live })
+      renderPage(<ActivityPage />, "/activity?range=24h")
+
+      await waitFor(() => expect(liveControl()).toBeInTheDocument())
+      const before = listCalls(calls).length
+
+      // The request settles: the next poll no longer carries it.
+      live = { requests: [], total: 0 }
+      await vi.advanceTimersByTimeAsync(3_000)
+      await waitFor(() => expect(liveControl()).not.toBeInTheDocument())
+
+      // Several further polls, so this is not just a question of timing.
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(listCalls(calls).length).toBe(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("leaves an open request alone while it polls for in-flight requests", async () => {
+    // Regression: the poll runs every 2s and its result used to re-derive the
+    // table's rows, so an open request flashed and slid open again every couple
+    // of seconds. The poll no longer touches the rows array at all.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const { calls } = mockApi({
+        rows: [entry({ id: "settled-1" })],
+        inFlight: { requests: [inFlightRequest()], total: 1 },
+      })
+      renderPage(<ActivityPage />, "/activity?range=24h")
+
+      const row = (await screen.findByText("gpt-4o")).closest("tr")!
+      await user.click(row)
+      const panel = screen.getByRole("complementary", {
+        name: "Request detail",
+      })
+
+      const polls = () =>
+        calls.filter((c) => c.url.includes(`${API_ROOT}/usage/in-flight`))
+          .length
+      const before = polls()
+      await vi.advanceTimersByTimeAsync(5_000)
+      await waitFor(() => expect(polls()).toBeGreaterThan(before + 1))
+
+      // Same node, still open: the panel was never torn down and rebuilt.
       expect(
-        screen.getByRole("progressbar", { name: /Workspace budget used/ }),
-      ).toHaveAttribute("aria-valuetext", expect.stringContaining("over"))
-    })
+        screen.getByRole("complementary", { name: "Request detail" }),
+      ).toBe(panel)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 
-    it("shows the workspace's budget to every member, and nothing when it has none", async () => {
-      mockApi({
-        rows: [entry()],
-        viewer: "member",
-        spend: {
-          workspace_id: WORKSPACE_ID,
-          max_budget: 500,
-          spent: 21.4,
-          used_fraction: 0.0428,
-          period_start: "2026-09-01T00:00:00Z",
-          period_end: "2026-10-01T00:00:00Z",
-        },
-      })
-      renderPage(<ActivityPage />)
-      expect(await screen.findByText("$21.40 / $500")).toBeInTheDocument()
-      expect(screen.getByText("Workspace budget, Sep")).toBeInTheDocument()
-    })
+  it("offers newer rows as a badge, and loads them only when it is pressed", async () => {
+    // The freeze's other half: a page that never moves must still be able to say it
+    // has fallen behind, or a quiet gateway and a flooded one look identical.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      let serverTotal = 4
+      const { calls } = mockApi({ rows: [entry()], total: () => serverTotal })
+      renderPage(<ActivityPage />, "/activity?range=24h")
 
-    it("leaves the budget out when the workspace has no ceiling", async () => {
-      const { calls } = mockApi({ rows: [entry()], spend: null })
-      renderPage(<ActivityPage />)
-      await rowOf("gpt-4o")
-      // Asked and answered, so the absence below is the answer rather than a
-      // read still on its way.
+      await screen.findByText("gpt-4o")
+      expect(
+        screen.queryByRole("button", { name: /new/ }),
+      ).not.toBeInTheDocument()
+
+      // 87 requests land while the operator reads the page.
+      serverTotal = 91
+      const listsBefore = listCalls(calls).length
+      await vi.advanceTimersByTimeAsync(16_000)
+      const badge = await screen.findByRole("button", { name: /87 new/ })
+
+      // Nothing was re-read to discover that: the log is still the one on screen.
+      expect(listCalls(calls).length).toBe(listsBefore)
+
+      await user.click(badge)
       await waitFor(() =>
-        expect(calls.some((call) => call.url.includes("/budget"))).toBe(true),
+        expect(listCalls(calls).length).toBeGreaterThan(listsBefore),
       )
-      expect(screen.queryByText(/Workspace budget/)).not.toBeInTheDocument()
+      // Loaded: the pinned count has caught up, so there is nothing left to offer.
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: /new/ }),
+        ).not.toBeInTheDocument(),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("re-reads the total when the operator pages, so newer rows do not strand the old ones", async () => {
+    // The total is not in the count's key, so a frozen page would keep whichever
+    // value it loaded with. `TablePagination` derives `isLast` from the total
+    // whenever it has one, so an understated total disables Next short of the real
+    // end and leaves the oldest rows unreachable. On main the settle-refetch hid
+    // this by re-reading the count on any traffic; nothing does now except this.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      let serverTotal = 100
+      mockApi({ rows: [entry()], total: () => serverTotal })
+      renderPage(<ActivityPage />, "/activity?range=24h&size=50")
+
+      await screen.findByText("gpt-4o")
+      await waitFor(() =>
+        expect(screen.getByText(/of 100/)).toBeInTheDocument(),
+      )
+
+      // Twenty land, taking the log to three pages of fifty.
+      serverTotal = 120
+      await user.click(screen.getByRole("button", { name: /next page/i }))
+
+      await waitFor(() =>
+        expect(screen.getByText(/of 120/)).toBeInTheDocument(),
+      )
+      // The third page is reachable, so the oldest twenty are not stranded behind a
+      // boundary computed from a total that has moved on.
+      expect(screen.getByRole("button", { name: /next page/i })).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("says so when it cannot tell whether newer rows exist", async () => {
+    // A badge that is simply absent reads as "nothing has landed". On a table that
+    // no longer moves by itself, that makes a flooded gateway look like an idle one.
+    let countAsks = 0
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith(`${API_ROOT}/organizations/me`)) return operatorContext()
+      // The pinned count and the polled one share a URL, so fail every count after
+      // the first: the page keeps a total and loses any way to tell if it is current.
+      if (url.includes(`${API_ROOT}/usage/count`)) {
+        countAsks += 1
+        return countAsks === 1
+          ? jsonResponse({ total: 1 })
+          : jsonResponse({ detail: "nope" }, 500)
+      }
+      if (url.includes(`${API_ROOT}/usage/in-flight`))
+        return jsonResponse({ requests: [], total: 0 })
+      if (url.includes(`${API_ROOT}/usage/summary`)) {
+        return jsonResponse({
+          by_model: [],
+          by_user: [],
+          by_api_key: [],
+          by_source: [],
+          series: [],
+        })
+      }
+      return jsonResponse([entry()])
     })
+
+    renderPage(<ActivityPage />, "/activity?range=24h")
+
+    await screen.findByText("gpt-4o")
+    await waitFor(() =>
+      expect(screen.getByText("Newer rows unknown")).toBeInTheDocument(),
+    )
+    // Still no false badge, and the log itself is not reported as broken.
+    expect(
+      screen.queryByRole("button", { name: /new · load/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("does not poll for newer rows on a page that cannot show them", async () => {
+    // Newer rows land at the top of page 1, so on page 3 a badge offering to load
+    // them would be a promise the refresh does not keep.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { calls } = mockApi({ rows: [entry()], total: 500 })
+      renderPage(<ActivityPage />, "/activity?range=24h&page=2")
+
+      await screen.findByText("gpt-4o")
+      const before = countCalls(calls).length
+      await vi.advanceTimersByTimeAsync(40_000)
+
+      expect(countCalls(calls).length).toBe(before)
+      expect(
+        screen.queryByRole("button", { name: /new/ }),
+      ).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("drops the badge when the operator pages past the rows it offers", async () => {
+    // `page` is not part of the live count's key, so paging forward disables the
+    // poll but leaves its last payload in the cache. Read unguarded, that keeps
+    // the badge on screen for pages where pressing it loads the current page and
+    // the newer rows stay at the top of page 1, out of sight.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      let serverTotal = 100
+      mockApi({ rows: [entry()], total: () => serverTotal })
+      renderPage(<ActivityPage />, "/activity?range=24h")
+
+      await screen.findByText("gpt-4o")
+      serverTotal = 120
+      await vi.advanceTimersByTimeAsync(16_000)
+      await screen.findByRole("button", { name: /20 new/ })
+
+      await user.click(screen.getByRole("button", { name: "Next page" }))
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: /new/ }),
+        ).not.toBeInTheDocument(),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("does not poll for newer rows in a window that has already ended", async () => {
+    // A window bounded in the past can gain no rows, so the poll would be pure cost.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { calls } = mockApi({ rows: [entry()], total: 1 })
+      renderPage(
+        <ActivityPage />,
+        "/activity?start_date=2026-01-01T00:00:00Z&end_date=2026-01-02T00:00:00Z",
+      )
+
+      await screen.findByText("gpt-4o")
+      const before = countCalls(calls).length
+      await vi.advanceTimersByTimeAsync(40_000)
+
+      expect(countCalls(calls).length).toBe(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe("ActivityPage for a tenant who does not operate the deployment", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("reads the organization-scoped routes rather than the deployment-wide ones", async () => {
+    const { calls } = mockApi({ rows: [entry()], deploymentOperator: false })
+    renderPage(<ActivityPage />)
+
+    await screen.findByText("gpt-4o")
+    const reads = calls.filter(
+      (c) => c.method === "GET" && c.url.includes("/usage"),
+    )
+    expect(reads).not.toHaveLength(0)
+    // Every one of them, not merely one: a scope applied to the list and
+    // forgotten on the count or the summary would put another tenant's totals
+    // beside this tenant's rows (otari#837).
+    for (const call of reads) {
+      expect(call.url).toContain(`${API_ROOT}/organizations/me/usage`)
+    }
+  })
+
+  it("does not poll the in-flight strip, which stays deployment-wide", async () => {
+    // Its registry entries carry no workspace, so there is nothing in them to
+    // scope. Polling it would be a 403 every few seconds.
+    const { calls } = mockApi({ rows: [entry()], deploymentOperator: false })
+    renderPage(<ActivityPage />)
+
+    await screen.findByText("gpt-4o")
+    expect(calls.some((c) => c.url.includes("/usage/in-flight"))).toBe(false)
+  })
+})
+
+describe("ActivityPage when the organization context fails", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("still asks for usage, and reports the refusal rather than painting an empty log", async () => {
+    // The usage hooks wait on `GET /api/v1/organizations/me` to learn which surface
+    // this caller may read. An errored context must not read as "keep waiting":
+    // that issues no request at all, and the page then states, with no banner,
+    // that a gateway serving traffic has none (otari#837).
+    const calls: string[] = []
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.endsWith(`${API_ROOT}/organizations/me`)) {
+        return jsonResponse({ detail: "Internal server error" }, 500)
+      }
+      if (url.includes("/usage/in-flight")) {
+        return jsonResponse({ requests: [], total: 0 })
+      }
+      if (url.includes("/usage")) {
+        return jsonResponse({ detail: "context is gone" }, 403)
+      }
+      return jsonResponse([])
+    })
+    renderPage(<ActivityPage />)
+
+    // Takes the deployment-wide surface, as every operator gate does on a
+    // failed read (otari#876): an operator keeps their log, and the server
+    // refuses anyone else, so nothing crosses a tenant.
+    await waitFor(() =>
+      expect(calls.some((url) => url.startsWith(`${API_ROOT}/usage`))).toBe(
+        true,
+      ),
+    )
+    expect(
+      calls.some((url) => url.includes(`${API_ROOT}/organizations/me/usage`)),
+    ).toBe(false)
+    // And the refusal reaches the caller instead of an empty table.
+    expect(await screen.findByText(/context is gone/)).toBeInTheDocument()
   })
 })

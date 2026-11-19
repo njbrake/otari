@@ -35,13 +35,6 @@ const served = entry({
   cost: 0.02,
 })
 
-/** The plan's one-line summary, which sets its target in mono. */
-async function summary(text: string) {
-  return screen.findByText(
-    (_, element) => element?.tagName === "P" && element.textContent === text,
-  )
-}
-
 function planTable() {
   return screen.getByRole("table", {
     name: "Routing plan for cheap-first",
@@ -50,52 +43,46 @@ function planTable() {
 
 describe("RoutingPlan", () => {
   it("reassembles the whole plan from the group, in attempt order", async () => {
-    mockApi({ otherRows: [served, failed] })
+    mockApi({ groupRows: [served, failed] })
     renderPage(<RoutingPlan entry={failed} />)
     await flushRouter()
 
     expect(
-      await summary(
-        "Served on attempt 2 of 2: openai:gpt-4o, after 1 failed attempt",
-      ),
+      await screen.findByText("Served by attempt 2 of 2: openai:gpt-4o"),
     ).toBeInTheDocument()
     const rows = within(planTable()).getAllByRole("row").slice(1)
     expect(
       rows.map((row) => within(row).getAllByRole("cell")[0].textContent),
     ).toEqual(["1", "2"])
-    expect(within(rows[0]).getByText("429 failed")).toBeInTheDocument()
-    expect(within(rows[0]).getByText("fell back")).toBeInTheDocument()
-    expect(within(rows[1]).getByText("served")).toBeInTheDocument()
+    expect(
+      within(rows[0]).getByText("failed 429, fell back"),
+    ).toBeInTheDocument()
+    expect(within(rows[1]).getByText("served the request")).toBeInTheDocument()
   })
 
   it("marks which attempt the open row is", async () => {
-    mockApi({ otherRows: [served, failed] })
+    mockApi({ groupRows: [served, failed] })
     renderPage(<RoutingPlan entry={failed} />)
     await flushRouter()
 
     // Await the assembled plan, not the table: the fallback table renders the
     // single row it was handed while the group lookup is still in flight.
-    await summary(
-      "Served on attempt 2 of 2: openai:gpt-4o, after 1 failed attempt",
-    )
+    await screen.findByText("Served by attempt 2 of 2: openai:gpt-4o")
     const rows = within(planTable()).getAllByRole("row").slice(1)
     expect(within(rows[0]).getByText("this row")).toBeInTheDocument()
     expect(within(rows[1]).queryByText("this row")).not.toBeInTheDocument()
   })
 
-  it("quotes each failed attempt's error under the plan", async () => {
-    mockApi({
-      otherRows: [
-        served,
-        { ...failed, error_message: "rate_limit_error: slow down" },
-      ],
-    })
-    renderPage(<RoutingPlan entry={served} />)
+  it("cuts a long target short, with the whole of it in the title", async () => {
+    const target =
+      "ft:gpt-4o-mini-2024-07-18:northwind-industries:customer-support-v12:9f8e7d6c"
+    mockApi({ groupRows: [{ ...served, model: target }, failed] })
+    renderPage(<RoutingPlan entry={failed} />)
     await flushRouter()
 
-    expect(
-      await screen.findByText("Attempt 1: rate_limit_error: slow down"),
-    ).toBeInTheDocument()
+    await screen.findByText(`Served by attempt 2 of 2: openai:${target}`)
+    const cell = within(planTable()).getByTitle(`openai:${target}`)
+    expect(cell).toHaveClass("truncate")
   })
 
   it("says the request ended in an error when no candidate served", async () => {
@@ -105,7 +92,7 @@ describe("RoutingPlan", () => {
       status: "error",
       status_code: 500,
     })
-    mockApi({ otherRows: [failed, terminal] })
+    mockApi({ groupRows: [failed, terminal] })
     renderPage(<RoutingPlan entry={failed} />)
     await flushRouter()
 
@@ -115,7 +102,7 @@ describe("RoutingPlan", () => {
   })
 
   it("narrates the row itself rather than flashing empty while the lookup runs", async () => {
-    mockApi({ otherRows: [] })
+    mockApi({ groupRows: [] })
     renderPage(<RoutingPlan entry={failed} />)
     await flushRouter()
 

@@ -9,6 +9,7 @@ import type {
   CreateWorkspaceRequest,
   SetWorkspaceHostedProviderRequest,
   SetWorkspaceProviderKeyOverrideRequest,
+  SetWorkspaceProviderPolicyRequest,
   UpdateWorkspaceBudgetDefaultRequest,
   UpdateWorkspaceRequest,
   Workspace,
@@ -18,20 +19,17 @@ import type {
   WorkspaceMemberRole,
   WorkspaceProviderKeyOverride,
   WorkspaceProviderPolicy,
-  WorkspaceVisibility,
-  WorkspaceVisibilityUpdate,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
 import { fetchAllPaged } from "@/shared/api/paging"
 import {
+  AUTOMATIC_FALLBACKS,
   CATALOG,
   MODELS,
   ORGANIZATIONS,
-  OVERVIEW,
   TRACES,
   WORKSPACES,
   workspaceMeta,
-  workspaceVisibilityKey,
 } from "@/shared/api/queryKeys"
 
 export function useWorkspaces(enabled = true) {
@@ -43,10 +41,9 @@ export function useWorkspaces(enabled = true) {
   })
 }
 
-// One workspace's row, for a page about that workspace alone, or for naming a
-// workspace a link points at, without walking every page of the list to find
-// it. Nested under the workspaces key, so the writes that invalidate the list
-// refresh it too. No id (null, or "" from a URL) reads nothing.
+// One workspace's row, for a page about that workspace alone, which would
+// otherwise walk every page of the list to find it. Nested under the workspaces
+// key, so the writes that invalidate the list refresh it too.
 export function useWorkspace(workspaceId: string | null, enabled = true) {
   return useQuery({
     queryKey: [WORKSPACES, workspaceId],
@@ -55,25 +52,8 @@ export function useWorkspace(workspaceId: string | null, enabled = true) {
       apiFetch<Workspace>(
         `/workspaces/${encodeURIComponent(workspaceId as string)}`,
       ),
-    enabled: enabled && workspaceId !== null && workspaceId !== "",
+    enabled: enabled && workspaceId !== null,
     staleTime: 60_000,
-  })
-}
-
-/**
- * Each workspace among `ids`, read one by one under the same keys as
- * `useWorkspace`, for naming the few a page holds (a filter chip) without
- * reading every workspace. One the caller may not read is absent.
- */
-export function useWorkspacesById(ids: readonly string[]) {
-  return useQueries({
-    queries: ids.map((id) => ({
-      queryKey: [WORKSPACES, id],
-      queryFn: () =>
-        apiFetch<Workspace>(`/workspaces/${encodeURIComponent(id)}`),
-      staleTime: 60_000,
-    })),
-    combine: (results) => results.flatMap((result) => result.data ?? []),
   })
 }
 
@@ -90,85 +70,6 @@ export function useWorkspaceMembers(workspaceId: string | null) {
     enabled: workspaceId !== null,
     staleTime: 60_000,
   })
-}
-
-/**
- * What a workspace shows members who do not manage it, the one answer every
- * page reads it from. Any member may read it, because a member's pages are laid
- * out from it. The overview's answer carries it too and seeds this entry, so a
- * page that reads the overview passes `enabled: false` and asks no second time.
- * Keyed by workspace, so an answer is only ever about the workspace it names.
- */
-export function useWorkspaceVisibility(
-  workspaceId: string,
-  { enabled = true }: { enabled?: boolean } = {},
-) {
-  return useQuery({
-    queryKey: workspaceVisibilityKey(workspaceId),
-    meta: workspaceMeta(workspaceId),
-    queryFn: () =>
-      apiFetch<WorkspaceVisibility>(
-        `/workspaces/${encodeURIComponent(workspaceId)}/visibility`,
-      ),
-    enabled: enabled && workspaceId !== "",
-    staleTime: 60_000,
-  })
-}
-
-/**
- * Change it, optimistically: a switch has to move when it is pressed. Only the
- * fields in the change are sent, and merged over the answer on screen. The
- * saved answer replaces it; a refused write puts the previous answer back and
- * reads the setting again, since the refusal may mean it moved.
- */
-export function useSetWorkspaceVisibility(workspaceId: string) {
-  const queryClient = useQueryClient()
-  const queryKey = workspaceVisibilityKey(workspaceId)
-  return useMutation({
-    mutationFn: (change: WorkspaceVisibilityUpdate) =>
-      apiFetch<WorkspaceVisibility>(
-        `/workspaces/${encodeURIComponent(workspaceId)}/visibility`,
-        { method: "PATCH", body: JSON.stringify(change) },
-      ),
-    onMutate: async (change) => {
-      // The overview's answer seeds this entry too, so one in flight could
-      // land over the optimistic value.
-      await Promise.all([
-        queryClient.cancelQueries({ queryKey }),
-        queryClient.cancelQueries({ queryKey: [OVERVIEW, workspaceId] }),
-      ])
-      const previous = queryClient.getQueryData<WorkspaceVisibility>(queryKey)
-      if (previous !== undefined) {
-        queryClient.setQueryData<WorkspaceVisibility>(queryKey, {
-          ...previous,
-          ...pickDefinedFields(change),
-        })
-      }
-      return { previous }
-    },
-    onError: (_error, _change, context) => {
-      if (context?.previous !== undefined) {
-        queryClient.setQueryData(queryKey, context.previous)
-      }
-      void queryClient.invalidateQueries({ queryKey })
-    },
-    onSuccess: (data) => {
-      queryClient.setQueryData(queryKey, data)
-    },
-    onSettled: () => {
-      // The workspace's overview carries the setting beside its figures.
-      void queryClient.invalidateQueries({ queryKey: [OVERVIEW, workspaceId] })
-    },
-  })
-}
-
-/** The fields a change sets: a field it leaves null or out keeps its value. */
-function pickDefinedFields(
-  change: WorkspaceVisibilityUpdate,
-): Partial<WorkspaceVisibility> {
-  return Object.fromEntries(
-    Object.entries(change).filter(([, value]) => value != null),
-  )
 }
 
 export function useCreateWorkspace() {
@@ -491,6 +392,7 @@ function invalidateWorkspaceProviderKeys(
   })
   void queryClient.invalidateQueries({ queryKey: [MODELS] })
   void queryClient.invalidateQueries({ queryKey: [CATALOG] })
+  void queryClient.invalidateQueries({ queryKey: [AUTOMATIC_FALLBACKS] })
 }
 
 export function useSetWorkspaceProviderKeyOverride() {
@@ -612,6 +514,7 @@ function invalidateWorkspaceHostedProviders(
   })
   void queryClient.invalidateQueries({ queryKey: [MODELS] })
   void queryClient.invalidateQueries({ queryKey: [CATALOG] })
+  void queryClient.invalidateQueries({ queryKey: [AUTOMATIC_FALLBACKS] })
 }
 
 /** What the workspace requires of every provider serving it. */
@@ -628,32 +531,51 @@ export function useWorkspaceProviderPolicy(workspaceId: string | null) {
   })
 }
 
-/** Require zero data retention of every provider serving the workspace, or stop requiring it. */
+/**
+ * Set what the workspace requires of every provider serving it: zero data
+ * retention, and the data locations a hosted provider must declare. Either
+ * left out keeps what is stored, so one control never writes the other's
+ * value back. For the list, null accepts any location and an empty list none.
+ */
 export function useSetWorkspaceProviderPolicy() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({
       workspaceId,
       requireZeroDataRetention,
+      allowedDataLocations,
     }: {
       workspaceId: string
-      requireZeroDataRetention: boolean
+      requireZeroDataRetention?: boolean
+      allowedDataLocations?: string[] | null
     }) =>
       apiFetch<WorkspaceProviderPolicy>(
         `/workspaces/${encodeURIComponent(workspaceId)}/provider-policy`,
         {
           method: "PUT",
           body: JSON.stringify({
-            require_zero_data_retention: requireZeroDataRetention,
-          }),
+            ...(requireZeroDataRetention === undefined
+              ? {}
+              : { require_zero_data_retention: requireZeroDataRetention }),
+            ...(allowedDataLocations === undefined
+              ? {}
+              : { allowed_data_locations: allowedDataLocations }),
+          } satisfies SetWorkspaceProviderPolicyRequest),
         },
       ),
-    onSuccess: (_data, { workspaceId }) => {
+    onSuccess: (policy, { workspaceId }) => {
+      // The answer is the stored policy, so the page shows it at once rather
+      // than offering an edit built on the one before it.
+      queryClient.setQueryData(
+        [WORKSPACES, workspaceId, "provider-policy"],
+        policy,
+      )
       void queryClient.invalidateQueries({
         queryKey: [WORKSPACES, workspaceId, "provider-policy"],
       })
       void queryClient.invalidateQueries({ queryKey: [MODELS] })
       void queryClient.invalidateQueries({ queryKey: [CATALOG] })
+      void queryClient.invalidateQueries({ queryKey: [AUTOMATIC_FALLBACKS] })
     },
   })
 }

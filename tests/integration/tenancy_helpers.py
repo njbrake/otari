@@ -23,9 +23,8 @@ from gateway.repositories.tenancy import (
     WorkspaceRepository,
 )
 from gateway.services.budgets import BudgetMembershipListener, BudgetService
-from gateway.services.organizations import InvitationMailLimit, WorkspaceVisibilityService
+from gateway.services.organizations import InvitationMailLimit
 from gateway.services.tenancy.authorization import WorkspaceAccess
-from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.membership_listener import MembershipListener
 from gateway.services.tenancy.organization_service import InvitationClaimSettings, OrganizationService
 
@@ -37,13 +36,19 @@ class MembershipWrites(TypedDict):
     membership_listener: MembershipListener
 
 
+def membership_listener_on(uow: UnitOfWork) -> MembershipListener:
+    """Build the budget listener on ``uow``.
+
+    The budget half alone, not the whole composition the request path builds, so a test using this
+    exercises members' ceilings and not their keys, traces or MCP grants.
+    """
+    return BudgetMembershipListener(BudgetRepositories.on(uow))
+
+
 def membership_writes(db: AsyncSession) -> MembershipWrites:
-    """Build a Unit of Work over ``db`` and the listener on it, as a standalone deployment's request path does."""
+    """Build a Unit of Work over ``db`` and the budget listener on it, for a service that writes membership."""
     uow = UnitOfWork(db)
-    return {
-        "uow": uow,
-        "membership_listener": BudgetMembershipListener(BudgetRepositories.on(uow)),
-    }
+    return {"uow": uow, "membership_listener": membership_listener_on(uow)}
 
 
 # A deployment that publishes no terms, for an accept that does not exercise them.
@@ -63,6 +68,27 @@ class _NoBlockedAddresses:
 NO_BLOCKED_ADDRESSES = _NoBlockedAddresses()
 
 
+async def no_sso_enforcement(_organization: Organization) -> bool:
+    """A ``blocked`` predicate that refuses nothing, for a test that is not about SSO enforcement."""
+    return False
+
+
+class _NoSsoEnforcement:
+    """An ``SsoEnforcement`` that refuses no membership, for a test that is not about it."""
+
+    async def refuses_every_membership(self, *, user: User) -> bool:
+        return False
+
+    async def blocks_membership(self, *, user: User, organization: Organization) -> bool:
+        return False
+
+    async def revoke_refused_sessions(self, *, organization: Organization) -> None:
+        return None
+
+
+NO_SSO_ENFORCEMENT = _NoSsoEnforcement()
+
+
 def claim_writes(db: AsyncSession) -> dict[str, Any]:
     """Build the Unit of Work and the organization service a claim writes through, as the claim routes do."""
     writes = membership_writes(db)
@@ -79,32 +105,8 @@ def budget_service(db: AsyncSession) -> BudgetService:
         organizations,
         get_api_key_service(uow),
         WorkspaceAccess(db, organizations),
-        visibility_service(db, uow),
         users=get_user_access(uow),
     )
-
-
-def visibility_service(db: AsyncSession, uow: UnitOfWork | None = None) -> WorkspaceVisibilityService:
-    """Build the workspace-visibility service over ``db``, as ``get_workspace_visibility_service`` does."""
-    uow = uow or UnitOfWork(db)
-    organizations = OrganizationService(db, membership_listener=None)
-    return WorkspaceVisibilityService(
-        uow, WorkspaceRepository(uow), WorkspaceAccess(db, organizations), DeploymentUserService(db)
-    )
-
-
-async def hide_totals(db: AsyncSession, workspace: Workspace) -> None:
-    """Stop the workspace sharing its totals with members, as a manager's change would."""
-    workspace.members_see_workspace_totals = False
-    db.add(workspace)
-    await db.commit()
-
-
-async def share_totals(db: AsyncSession, workspace: Workspace) -> None:
-    """Share the workspace's totals with members, as a manager's change would."""
-    workspace.members_see_workspace_totals = True
-    db.add(workspace)
-    await db.commit()
 
 
 async def create_organization(db: AsyncSession, *, slug: str) -> Organization:

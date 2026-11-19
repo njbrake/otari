@@ -338,40 +338,6 @@ def test_usage_summary_groups_by_a_tag(
     assert by_tag == {None: 8.0, "summarize": 4.0, "chat": 3.0}
 
 
-def test_a_tag_row_splits_its_spend_and_counts_its_failures_and_cache_reads(
-    client: TestClient, master_key_header: dict[str, str], db_session: Session
-) -> None:
-    _seed(db_session, {"purpose": "chat"}, 1.0)
-    db_session.add(
-        UsageLog(
-            id=str(uuid.uuid4()),
-            workspace_id=seed_workspace_id(db_session),
-            timestamp=datetime.now(UTC),
-            model="gpt-4",
-            endpoint="/v1/chat/completions",
-            source="claude_code",
-            prompt_tokens=100,
-            completion_tokens=5,
-            total_tokens=105,
-            cache_read_tokens=40,
-            cost=2.0,
-            status="error",
-            tags={"purpose": "chat"},
-        )
-    )
-    db_session.commit()
-
-    response = client.get(
-        f"{API_ROOT}/usage/summary",
-        params={"group_by_tag": "purpose", "dimensions": "none"},
-        headers=master_key_header,
-    )
-
-    assert response.status_code == 200, response.text
-    chat = next(row for row in response.json()["by_tag"] if row["key"] == "chat")
-    assert (chat["imported_cost"], chat["error_count"], chat["cache_read_tokens"]) == (2.0, 1, 40)
-
-
 def test_usage_summary_without_group_by_tag_has_an_empty_breakdown(
     client: TestClient, master_key_header: dict[str, str], db_session: Session
 ) -> None:

@@ -1,6 +1,6 @@
 import { useState } from "react"
 
-import type { TestHostedProviderRequest } from "@/client"
+import type { HostedProvider, TestHostedProviderRequest } from "@/client"
 import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { Field } from "@/design-system/forms/Field"
@@ -31,11 +31,10 @@ import {
 } from "@/shared/api/hostedProviders"
 import { useProviderDetail } from "@/shared/api/providers"
 
+import { DataLocationField } from "./DataLocationField"
+import { PolicyUrlFields } from "./PolicyUrlFields"
+import { policyUrlError, policyUrlValue } from "./policyUrls"
 import { ServesUnlistedModelsField } from "./ServesUnlistedModelsField"
-import {
-  SessionAffinityField,
-  supportsSessionAffinity,
-} from "./SessionAffinityField"
 import { SupportedCountriesField } from "./SupportedCountriesField"
 import { parseCountries } from "./supportedCountries"
 
@@ -60,9 +59,11 @@ interface ProviderDraft {
   credentials: CredentialFieldValues
   clientArgs: string
   servesUnlistedModels: boolean
-  sessionAffinity: boolean
   supportedCountries: string
+  dataLocation: string
   zeroDataRetention: boolean
+  termsUrl: string
+  privacyUrl: string
 }
 
 const EMPTY_DRAFT: ProviderDraft = {
@@ -73,18 +74,23 @@ const EMPTY_DRAFT: ProviderDraft = {
   credentials: {},
   clientArgs: "",
   servesUnlistedModels: false,
-  sessionAffinity: false,
   supportedCountries: "",
+  dataLocation: "",
   zeroDataRetention: false,
+  termsUrl: "",
+  privacyUrl: "",
 }
 
 export function AddHostedProviderForm({
   isOpen,
   onClose,
+  onCreated,
   configuredProviders = [],
 }: {
   isOpen: boolean
   onClose: () => void
+  /** Told the stored provider once the create lands, after the dialog closes. */
+  onCreated?: (provider: HostedProvider) => void
   /** The names config.yml defines, which a stored one would override. */
   configuredProviders?: string[]
 }) {
@@ -97,9 +103,6 @@ export function AddHostedProviderForm({
   const apiBase = draft.apiBase.trim()
   const needsKey = (selected?.requires_api_key ?? true) && apiBase === ""
   const nameHasDelimiter = /[:/]/.test(name)
-  // Sent only where the implementation can carry it, so switching to one that
-  // cannot never submits a setting the gateway refuses.
-  const offersAffinity = supportsSessionAffinity(draft.provider.trim())
   const effectiveName = name || draft.provider.trim()
 
   const spec = credentialSpecFor(draft.provider)
@@ -116,6 +119,8 @@ export function AddHostedProviderForm({
     (!needsKey || draft.apiKey !== "") &&
     parsedClientArgs.ok &&
     countries.ok &&
+    policyUrlError(draft.termsUrl) === undefined &&
+    policyUrlError(draft.privacyUrl) === undefined &&
     Object.keys(credentialErrors).length === 0
 
   // One body for the save and the test, so the test tries what would be saved.
@@ -152,11 +157,21 @@ export function AddHostedProviderForm({
         ...(countries.value === null
           ? {}
           : { supported_countries: countries.value }),
-        ...(offersAffinity && draft.sessionAffinity
-          ? { session_affinity: true }
-          : {}),
+        ...(draft.dataLocation ? { data_location: draft.dataLocation } : {}),
+        // Left out when blank, which the API stores as no link.
+        ...(policyUrlValue(draft.termsUrl) === null
+          ? {}
+          : { terms_url: policyUrlValue(draft.termsUrl) }),
+        ...(policyUrlValue(draft.privacyUrl) === null
+          ? {}
+          : { privacy_url: policyUrlValue(draft.privacyUrl) }),
       },
-      { onSuccess: onClose },
+      {
+        onSuccess: (created) => {
+          onClose()
+          onCreated?.(created)
+        },
+      },
     )
   }
 
@@ -240,26 +255,28 @@ export function AddHostedProviderForm({
           setDraft({ ...draft, servesUnlistedModels })
         }
       />
-      {offersAffinity ? (
-        <SessionAffinityField
-          isSelected={draft.sessionAffinity}
-          onChange={(sessionAffinity) =>
-            setDraft({ ...draft, sessionAffinity })
-          }
-        />
-      ) : null}
       <ZeroDataRetentionField
         isSelected={draft.zeroDataRetention}
         onChange={(zeroDataRetention) =>
           setDraft({ ...draft, zeroDataRetention })
         }
       />
+      <DataLocationField
+        value={draft.dataLocation}
+        onChange={(dataLocation) => setDraft({ ...draft, dataLocation })}
+      />
       <SupportedCountriesField
         value={draft.supportedCountries}
         parsed={countries}
         onChange={(supportedCountries) =>
-          setDraft({ ...draft, supportedCountries })
+          setDraft((current) => ({ ...current, supportedCountries }))
         }
+      />
+      <PolicyUrlFields
+        termsUrl={draft.termsUrl}
+        privacyUrl={draft.privacyUrl}
+        onTermsUrlChange={(termsUrl) => setDraft({ ...draft, termsUrl })}
+        onPrivacyUrlChange={(privacyUrl) => setDraft({ ...draft, privacyUrl })}
       />
       <ProviderCredentialFields
         provider={draft.provider}

@@ -207,6 +207,10 @@ def _no_background_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("gateway.main.run_discovery_refresher", _noop)
     monkeypatch.setattr("gateway.main.run_catalog_refresher", _noop)
     monkeypatch.setattr("gateway.api.routes.health_checks.run_health_check_worker", _noop)
+    monkeypatch.setattr("gateway.services.mcp_catalog.McpCatalogService.poll", _noop)
+    monkeypatch.setattr("gateway.services.update_check.UpdateCheckService.poll", _noop)
+    monkeypatch.setattr("gateway.services.organizations.InvitationDelivery.poll", _noop)
+    monkeypatch.setattr("gateway.services.organizations.ExpiredInvitationCleanup.poll", _noop)
 
 
 @pytest.fixture(autouse=True)
@@ -249,6 +253,19 @@ def _reset_default_workspace() -> None:
     from gateway.services.workspace_scope import reset_key_workspace_cache
 
     reset_key_workspace_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_guardrail_verdicts() -> None:
+    """Drop the guardrail verdicts a worker keeps before each test.
+
+    A verdict is kept by the check and the text it answered, and tests ask the
+    same check about the same text with a different fake verdict each, so one
+    test's answer would otherwise be the next one's.
+    """
+    from gateway.services.guardrails import clear_verdict_cache
+
+    clear_verdict_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -346,6 +363,18 @@ def _start_new_sqlite_databases_migrated(monkeypatch: pytest.MonkeyPatch, _migra
         run_migrations(database_url)
 
     monkeypatch.setattr(database, "_run_migrations", run_migrations_from_template)
+
+
+@pytest.fixture(autouse=True)
+def _no_relocated_claude_config_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide a ``CLAUDE_CONFIG_DIR`` the developer's own shell exports.
+
+    NOTE: The variable moves Claude Code's settings and session history off the
+    home directory, so a fake home does not hide them and a test asserting the
+    default location would read the developer's real files. A test that wants
+    the variable set does so itself.
+    """
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
 
 @pytest.fixture

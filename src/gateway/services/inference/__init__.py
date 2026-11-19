@@ -1,5 +1,8 @@
 """The inference domain: idempotent completion requests, structured decisions and dialect bridges."""
 
+from gateway.services.inference._audio_length import audio_seconds
+from gateway.services.inference._batch_line_errors import BatchLineError
+from gateway.services.inference._batch_results import BatchResultsService
 from gateway.services.inference._client_country import (
     CountryDatabaseError,
     client_country,
@@ -24,8 +27,14 @@ from gateway.services.inference._decisions import (
 )
 from gateway.services.inference._deployment_funding import (
     DeploymentCharge,
+    WorkspaceFunding,
+    actor_user_id_for,
     admit_deployment_paid,
+    billed_model,
+    configure_closed_models,
+    deferred_charge,
     describe_port_error,
+    organization_slot_key,
 )
 from gateway.services.inference._idempotency import (
     Admission,
@@ -55,7 +64,6 @@ from gateway.services.inference._passthrough_usage import (
     IMAGES_BILLING,
     MODERATION_BILLING,
     RERANK_BILLING,
-    TRANSCRIPTION_BILLING,
     VIDEO_BILLING,
     PassthroughBilling,
     ReportedUsage,
@@ -68,9 +76,11 @@ from gateway.services.inference._passthrough_usage import (
     rerank_usage,
     speech_billing,
     speech_usage,
+    transcription_billing,
     transcription_usage,
     video_usage,
 )
+from gateway.services.inference._provider_errors import ProviderErrorMapping, UpstreamFailure
 from gateway.services.inference._responses_bridge import (
     REASONING_ITEM_ID_PREFIX,
     aresponses_via_chat_completions,
@@ -82,14 +92,19 @@ from gateway.services.inference._responses_bridge import (
 from gateway.services.inference._responses_input import strip_gateway_minted_items
 from gateway.services.inference._stream_cost import is_chat_stream_cost_carrier
 from gateway.services.inference._sweeper import run_idempotency_sweeper
+from gateway.services.inference._unavailable_models import (
+    ProviderRefusalListener,
+    UnavailableModel,
+    UnavailableModelReporter,
+)
 from gateway.services.inference._upstream_errors import (
     EMPTY_COMPLETION_DETAIL,
     EmptyCompletionError,
     UpstreamErrorKind,
     is_empty_completion,
-    is_model_unavailable_error,
     is_provider_billing_error,
     is_provider_credential_rejection,
+    is_provider_cut,
     is_retry_futile,
     is_upstream_connect_failure,
     is_upstream_request_fault,
@@ -113,12 +128,24 @@ from gateway.services.inference._upstream_user import (
     upstream_user_identifier,
     with_upstream_user,
 )
-from gateway.services.inference._videos import CompletedVideoUsage, VideoJobService, VideoRateLookup
+from gateway.services.inference._videos import (
+    ESTIMATED_VIDEO_SECONDS,
+    CompletedVideoUsage,
+    VideoJobService,
+    VideoRateLookup,
+)
 
 __all__ = [
     "CONVERSATION_CACHE_KEY_FIELD",
     "CompletedVideoUsage",
+    "ESTIMATED_VIDEO_SECONDS",
+    "WorkspaceFunding",
     "admit_deployment_paid",
+    "actor_user_id_for",
+    "billed_model",
+    "configure_closed_models",
+    "deferred_charge",
+    "organization_slot_key",
     "describe_port_error",
     "EMBEDDINGS_BILLING",
     "IMAGES_BILLING",
@@ -127,10 +154,14 @@ __all__ = [
     "REASONING_SIGNATURE_PREFIX",
     "UPSTREAM_USER_FIELD",
     "RERANK_BILLING",
-    "TRANSCRIPTION_BILLING",
     "VIDEO_BILLING",
+    "ProviderRefusalListener",
+    "UnavailableModel",
+    "UnavailableModelReporter",
     "PassthroughBilling",
     "Admission",
+    "BatchLineError",
+    "BatchResultsService",
     "BlockedCaller",
     "Claimed",
     "CountryDatabaseError",
@@ -141,13 +172,16 @@ __all__ = [
     "InferenceService",
     "InvalidKey",
     "KeyReused",
+    "ProviderErrorMapping",
     "Replay",
     "ReportedUsage",
     "StillInFlight",
     "UnknownDecisionProviderError",
     "UnidentifiedEndUserError",
     "UnknownCaller",
+    "UpstreamFailure",
     "aresponses_via_chat_completions",
+    "audio_seconds",
     "bind_upstream_user",
     "call_messages",
     "call_responses",
@@ -186,6 +220,7 @@ __all__ = [
     "strip_gateway_minted_items",
     "upstream_user_identifier",
     "usage_unreported",
+    "transcription_billing",
     "transcription_usage",
     "video_usage",
     "uses_chat_completions_bridge",
@@ -195,9 +230,9 @@ __all__ = [
     "EmptyCompletionError",
     "UpstreamErrorKind",
     "is_empty_completion",
-    "is_model_unavailable_error",
     "is_provider_billing_error",
     "is_provider_credential_rejection",
+    "is_provider_cut",
     "is_retry_futile",
     "is_upstream_connect_failure",
     "is_upstream_request_fault",

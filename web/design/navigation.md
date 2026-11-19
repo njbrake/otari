@@ -8,7 +8,7 @@ Does the choice change what the page shows, as a sibling surface?
 Is it a closed set of alternatives to one value?
  └── Segmented         (24h / 7d / 30d / 90d)
 Does it narrow a list that is already on screen?
- └── FilterSelect / FilterMultiComboBox, then a DismissChip per applied filter
+ └── FilterChips + FilterSelect / FilterMultiComboBox
 Does it change route?
  └── A rail row, from the nav registry. Never a Tab.
 ```
@@ -20,18 +20,33 @@ Tab: { isActive, onPress, children }
 TabRow: { children }
 Segmented: { label, value, size?: "sm" | "md", onChange: (next: string) => void,
   options: { value, label }[] }
+FilterChips: { chips: FilterChip[], children, onClearAll?, start?, end? }
+FilterChip: { key, label, value, clearLabel?, onClear: () => void }
 DismissChip: { value, onDismiss, label?, dismissLabel? }
 ```
 
-A `DismissChip` splits the dimension (`label`, "Provider") from the current value
+`FilterChips` goes **inside** `Toolbar`, and it renders the selects (`children`) and
+the chips they produce together, so a page places one component and not two. `start`
+and `end` are slots on the control row for things that are not filters: a search
+field at the start, a `RefreshButton` at the end.
+
+`onClearAll` is the caller's to pass or omit; the component does not count for you.
+Omit it below two chips.
+
+A `FilterChip` splits the dimension (`label`, "Provider") from the current value
 (`value`, "OpenAI") so the chip can print them at two weights, and its handler is
-`onDismiss`, not `onRemove`.
+`onClear`, not `onRemove`. `FilterChips`'s `children` are the selects themselves: it
+renders the controls and the chips together, so a page does not place both.
 
 ## TabRow
 
 No track and no underline: the selected fill (`surface-subtle`) is the whole
 signal. Deliberately not `role="tablist"`, because these do not promise the
 roving-focus contract a tablist implies; they are buttons in a row.
+
+A row that runs past its column scrolls rather than wraps, and fades out on the
+edge that has more beyond it, so a tab cut at the screen's edge reads as more to
+reach rather than as a rendering fault.
 
 ## Segmented
 
@@ -60,11 +75,11 @@ Both sizes keep 44px label targets on mobile.
 <TabRow>{ranges.map((r) => <Tab key={r} isActive={r === range} onPress={…}>{r}</Tab>)}</TabRow>
 ```
 
-## Applied filters
+## FilterChips
 
-One `DismissChip` per applied filter, in a row the page owns. Each is removable and
-states its own dimension (`Provider: OpenAI`), so a reader can tell why a list is
-short without opening a menu. A "Clear all" belongs beside them once there are two.
+Each chip is removable and states its own dimension (`Provider: OpenAI`), so a
+reader can tell why a list is short without opening a menu. `onClearAll` appears
+once there are two. `DismissChip` is the single chip on its own.
 
 ## The rail
 
@@ -86,6 +101,15 @@ and labels in a tooltip. The states are the same values; only the label goes.
 
 Never hand-write a nav row. `rowStyles.ts` owns the classes and
 `rowStyles.test.ts` asserts them; a page adds a route to the registry instead.
+
+The selected row is announced as current (`aria-current="page"`), on a detail
+page too. A destination with no row of its own selects the row that stands for
+it: Routing selects Rules, the workspace roster People (`railPathForPath`).
+
+The workspace rail opens with its one action, **Create API key**, a primary
+button above the rows for anyone who may create a key; collapsed, it is a "+"
+named by a tooltip. Its foot carries the team budget for an organization owner
+or admin once a limit exists: spent, of how much, and a meter.
 
 ## Section headings in the rail
 

@@ -1,5 +1,6 @@
 """The hosted name index keeps a write this worker made while a refresh was reading."""
 
+import uuid
 from collections.abc import Iterator
 from typing import Any
 
@@ -10,11 +11,12 @@ from gateway.services.providers import _hosted_name_index as index
 
 
 class _Row:
-    def __init__(self, name: str, provider: str, *, session_affinity: bool = False) -> None:
+    def __init__(self, name: str, provider: str) -> None:
+        self.id = uuid.uuid4()
         self.name = name
         self.provider = provider
-        self.session_affinity = session_affinity
         self.zero_data_retention = False
+        self.data_location = None
 
 
 class _Uow:
@@ -25,8 +27,17 @@ class _Uow:
         return None
 
 
+class _NoRegions:
+    def __init__(self, _uow: object) -> None:
+        pass
+
+    async def list_for_providers(self, _ids: object) -> dict[uuid.UUID, list[object]]:
+        return {}
+
+
 @pytest.fixture(autouse=True)
-def _clean_index() -> Iterator[None]:
+def _clean_index(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(index, "HostedProviderRegionRepository", _NoRegions)
     index.reset_hosted_name_index()
     yield
     index.reset_hosted_name_index()
@@ -81,19 +92,3 @@ async def test_a_refresh_after_the_write_reads_it_from_the_rows(monkeypatch: pyt
     await index.refresh_hosted_name_index(_Uow(), GatewayConfig())  # type: ignore[arg-type]
 
     assert index.hosted_implementation("openai-eu") is None
-
-
-@pytest.mark.asyncio
-async def test_session_affinity_is_read_from_the_rows_and_a_newer_write_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    rows = [_Row("baseten", "openai", session_affinity=True), _Row("plain", "openai")]
-    monkeypatch.setattr(
-        index,
-        "HostedProviderRepository",
-        _repository_reading(rows, lambda: index.remember_session_affinity("plain", True)),
-    )
-
-    await index.refresh_hosted_name_index(_Uow(), GatewayConfig())  # type: ignore[arg-type]
-
-    assert index.hosted_session_affinity("baseten") is True
-    # Written while the read was in flight, so the stale row does not undo it.
-    assert index.hosted_session_affinity("plain") is True

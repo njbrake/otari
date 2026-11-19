@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 
 from sqlalchemy import (
@@ -20,6 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from gateway.models.base import Base, UtcDateTime
+from gateway.models.money import UsdCost
 
 
 class BatchRecord(Base):
@@ -63,6 +65,11 @@ class BatchRecord(Base):
         Uuid, ForeignKey("workspace.id", ondelete="SET NULL"), index=True
     )
     model: Mapped[str] = mapped_column()
+    # Where the hosted provider or region the batch was submitted to declared it
+    # keeps data, as declared at submission; its result usage rows record this,
+    # not a later declaration. NULL for a batch not served by the deployment,
+    # one served where nothing was declared, and one submitted before this column.
+    data_location: Mapped[str | None] = mapped_column(String(16), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     # NULL until the first completed results retrieval accounts the batch; the
     # atomic NULL -> now transition is the idempotency gate for billing/logging.
@@ -99,15 +106,23 @@ class VideoJobRecord(Base):
     )
     # The length the request asked for, which prices the job when the provider reports none.
     seconds: Mapped[int | None] = mapped_column(Integer)
+    # What the request asked for that a price's rules may name; the job is billed
+    # when it completes, after the request is gone. ``None`` where it did not say.
+    resolution: Mapped[str | None] = mapped_column(String(64))
+    aspect_ratio: Mapped[str | None] = mapped_column(String(64))
+    input_video: Mapped[bool | None] = mapped_column(Boolean)
+    generate_audio: Mapped[bool | None] = mapped_column(Boolean)
     # Whether the job's cost folds into the owner's spend: false for a key exempt
     # from budgets, decided when the job starts, so a key revoked since cannot change it.
     counts_toward_budget: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     accounted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # What a completed job reported, kept because a provider that renders inside
-    # the start call has no job to look up later: its length, and where its video is.
+    # the start call has no job to look up later: its length, what the provider
+    # charged for it, and where its video is.
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_seconds: Mapped[int | None] = mapped_column(Integer)
+    completed_cost: Mapped[Decimal | None] = mapped_column(UsdCost())
     output_url: Mapped[str | None] = mapped_column(Text)
     output_mime_type: Mapped[str | None] = mapped_column(String(255))
 

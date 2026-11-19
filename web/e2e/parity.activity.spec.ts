@@ -1,9 +1,16 @@
-import { expect, type Locator, type Page, test } from "@playwright/test"
+import { expect, type Page, test } from "@playwright/test"
 
-import { filterChip, gotoRoute, login, table, tableRows } from "./helpers"
+import {
+  addFilterValue,
+  filterChip,
+  gotoRoute,
+  login,
+  pickOption,
+  tableRows,
+} from "./helpers"
 import { COUNTS, PARITY, UNPRICED_MODEL_KEY } from "./parity-data"
 
-// The bulk-action test destroys the rows it selects, so the flows run in order.
+// One worker against one gateway either way (see web/playwright.config.ts).
 test.describe.configure({ mode: "serial" })
 
 const rows = (page: Page) => tableRows(page, "Activity log")
@@ -17,56 +24,30 @@ const SCOPED = `/activity?source=${PARITY.source}`
 // Every fixture row, which is one page at the default size. Asserted with
 // `toHaveCount` rather than read with `count()`: the log is fetched after the
 // route resolves, so a bare read races the first paint and sees an empty table.
-const ALL = COUNTS.priced + COUNTS.unpriced + COUNTS.errors + COUNTS.scratch
+const ALL = COUNTS.priced + COUNTS.unpriced + COUNTS.errors
 
-// The request's details open beside the log, as a named region.
+// A request opens in a panel beside the log, named for what it holds.
 const detailPanel = (page: Page) =>
-  page.getByRole("complementary", { name: "Request details" })
+  page.getByRole("complementary", { name: "Request detail" })
 
-// Open a row's details by pressing its model, the row's header.
+// Open a row in the panel by pressing its row header (the Model cell).
 async function openDetail(
   page: Page,
   row: ReturnType<typeof rows>,
 ): Promise<void> {
   // Wait for the table to settle before pressing. A press delivered while the
   // filtered query is still in flight is discarded by the re-render, and the
-  // details never open: measured at one failure in 27 on the old inline detail,
-  // and the same race applies to a row that opens a panel. `rows()` alone is not
-  // enough, because Playwright's own actionability check passes on a row that
-  // is about to be replaced.
+  // detail never opens: measured at one failure in 27 here, and three in five
+  // with the activity request artificially delayed by 1.2s. These two waits took
+  // that to zero in 17 under the same forced delay. `rows()` alone is not enough,
+  // because Playwright's own actionability check passes on a row that is about to
+  // be replaced.
   await expect(rows(page)).not.toHaveCount(0)
   await expect(row).toBeVisible()
   await row.getByRole("rowheader").click()
   await expect(detailPanel(page)).toBeVisible()
-}
-
-// A column's filter menu, opened from the funnel in its header.
-async function openColumnFilter(page: Page, column: string): Promise<Locator> {
-  await page.getByRole("button", { name: `Filter ${column}` }).click()
-  const menu = page.getByRole("dialog", { name: `Filter ${column}` })
-  await expect(menu).toBeVisible()
-  return menu
-}
-
-// Pick a value in a column's menu by its label, the way a reader does, then
-// put the menu away so the page is not left aria-hidden behind it.
-async function pickValue(
-  page: Page,
-  column: string,
-  value: string,
-): Promise<void> {
-  const menu = await openColumnFilter(page, column)
-  await menu.getByText(value, { exact: true }).click()
-  await page.keyboard.press("Escape")
-  await expect(menu).toBeHidden()
-}
-
-// A window, picked by its label in the segmented control.
-async function pickWindow(page: Page, label: string): Promise<void> {
-  await page
-    .getByRole("radiogroup", { name: "Window" })
-    .getByText(label, { exact: true })
-    .click()
+  // The open request is in the URL, so it is linkable and Back closes it.
+  await expect(page).toHaveURL(/[?&]request=/)
 }
 
 test.describe("activity log", () => {
@@ -77,17 +58,21 @@ test.describe("activity log", () => {
     await gotoRoute(page, SCOPED)
     await expect(rows(page)).toHaveCount(ALL)
 
-    await pickValue(page, "Status", "Failed")
+    await pickOption(page, "Status", "Error")
 
     // The chip is the page's own statement that the filter is applied, so it is
     // asserted alongside the rows rather than instead of them.
-    await expect(filterChip(page, "Status", "Failed")).toBeVisible()
+    await expect(filterChip(page, "Status", "Error")).toBeVisible()
     await expect(rows(page)).toHaveCount(COUNTS.errors)
+    for (const row of await rows(page).all()) {
+      await expect(row).toContainText("Error")
+    }
 
     // Clearing from the chip must restore the full log, not merely blank the
-    // menu: the chip's ✕ is the one control that names the filter it removes.
-    await filterChip(page, "Status", "Failed").getByRole("button").click()
-    await expect(filterChip(page, "Status", "Failed")).toBeHidden()
+    // select: the chip's ✕ is the only affordance on a narrow viewport, where the
+    // picker row is collapsed.
+    await filterChip(page, "Status", "Error").getByRole("button").click()
+    await expect(filterChip(page, "Status", "Error")).toBeHidden()
     await expect(rows(page)).toHaveCount(ALL)
   })
 
@@ -97,7 +82,7 @@ test.describe("activity log", () => {
     await login(page)
 
     await gotoRoute(page, `${SCOPED}&priced=true`)
-    await expect(filterChip(page, "Cost", "priced")).toBeVisible()
+    await expect(filterChip(page, "Priced", "Priced")).toBeVisible()
     await expect(rows(page)).toHaveCount(COUNTS.priced)
     // Only the priced model carries a pricing row, so the partition is by model.
     for (const row of await rows(page).all()) {
@@ -105,9 +90,7 @@ test.describe("activity log", () => {
     }
 
     await gotoRoute(page, `${SCOPED}&priced=false`)
-    await expect(rows(page)).toHaveCount(
-      COUNTS.unpriced + COUNTS.errors + COUNTS.scratch,
-    )
+    await expect(rows(page)).toHaveCount(COUNTS.unpriced + COUNTS.errors)
     // The two halves have to reconcile: a row counted in neither (or in both)
     // would mean "priced" and cost IS NULL had drifted apart.
     for (const row of await rows(page).all()) {
@@ -115,33 +98,41 @@ test.describe("activity log", () => {
     }
   })
 
-  test("model and member filters compose, and Clear all drops them together", async ({
+  test("model and user filters compose, and Clear all drops the shared ones together", async ({
     page,
   }) => {
     await login(page)
     await gotoRoute(page, SCOPED)
 
-    await pickValue(page, "Model", PARITY.models.unpriced.model)
+    await addFilterValue(page, "Model", PARITY.models.unpriced.model)
     await expect(
       filterChip(page, "Model", PARITY.models.unpriced.model),
     ).toBeVisible()
     // The unpriced model carries both the succeeding and the failing rows.
     await expect(rows(page)).toHaveCount(COUNTS.unpriced + COUNTS.errors)
 
-    // Filters intersect rather than replace: this member owns those same rows,
-    // so adding them must not change the count.
-    await pickValue(page, "Member", PARITY.users.light)
+    // Filters intersect rather than replace: this user owns those same rows, so
+    // adding them must not change the count, while a user who owns none empties it.
+    await addFilterValue(page, "User", PARITY.users.light)
+    await expect(rows(page)).toHaveCount(COUNTS.unpriced + COUNTS.errors)
+    await addFilterValue(page, "User", PARITY.users.heavy)
     await expect(rows(page)).toHaveCount(COUNTS.unpriced + COUNTS.errors)
 
-    // Clear all drops every filter in one press, the source scoping included, so
-    // the log widens past the fixture rather than back to it. The control removes
-    // itself once there is nothing left to clear, which is the tightest statement
-    // that no filter survived.
+    // Clear all drops the shared filters (model, user, key, status) in one press.
+    // The control removes itself once there is nothing left to clear, which is
+    // the tightest statement that none survived. The source scoping is the log's
+    // own filter, so it stays until its chip is cleared.
     await page.getByRole("button", { name: "Clear all" }).click()
     await expect(page.getByRole("button", { name: "Clear all" })).toBeHidden()
     await expect(
       filterChip(page, "Model", PARITY.models.unpriced.model),
     ).toBeHidden()
+    await expect(filterChip(page, "Source", PARITY.source)).toBeVisible()
+    await expect(rows(page)).toHaveCount(ALL)
+
+    // Clearing the source as well widens the log past the fixture rather than
+    // back to it.
+    await filterChip(page, "Source", PARITY.source).getByRole("button").click()
     await expect(filterChip(page, "Source", PARITY.source)).toBeHidden()
     await expect
       .poll(() => rows(page).count())
@@ -192,52 +183,61 @@ test.describe("activity log", () => {
     // nothing at all. The lower bound holds because the densest set puts its
     // newest row ~39 minutes back, which leaves the run twenty-odd minutes of
     // headroom against a job that takes two.
-    await pickWindow(page, "1h")
+    await pickOption(page, "Time range", "1h")
     await expect.poll(() => rows(page).count()).toBeGreaterThan(0)
     await expect.poll(() => rows(page).count()).toBeLessThan(ALL)
 
     // "All" is unbounded rather than a wider preset, so every fixture row is back.
-    await pickWindow(page, "All")
+    await pickOption(page, "Time range", "All")
     await expect(rows(page)).toHaveCount(ALL)
   })
 
-  test("a request's details name what the row cannot fit", async ({ page }) => {
+  test("a request's detail names what the row cannot fit", async ({ page }) => {
     await login(page)
     await gotoRoute(page, `${SCOPED}&model=${PARITY.models.priced.model}`)
-
-    // The token column splits its total into the composition it was billed on,
-    // which is the whole reason the cell draws a bar and not just a number.
-    // Asserted before the details open, which narrow the table to four lanes.
-    await expect(
-      rows(page)
-        .first()
-        .getByRole("img", { name: /Token composition:.*Cache read/ }),
-    ).toBeVisible()
-
     await openDetail(page, rows(page).first())
+
     const detail = detailPanel(page)
-    // The provenance a row does not have room for. The endpoint is "external"
-    // for an imported row, which is how an operator tells it from gateway
-    // traffic.
+    // The provenance a row does not have room for. Endpoint is "external" for an
+    // imported row, which is how an operator tells it from gateway traffic.
     await expect(detail.getByText("external", { exact: true })).toBeVisible()
     await expect(detail.getByText(PARITY.source, { exact: true })).toBeVisible()
     await expect(
       detail.getByText(PARITY.sessions.heavy, { exact: true }),
     ).toBeVisible()
-    await expect(detail).toContainText(PARITY.users.heavy)
+    await expect(
+      detail.getByText(PARITY.users.heavy, { exact: true }),
+    ).toBeVisible()
 
-    // A priced row carries billing meters, so its composition is real.
-    await expect(detail.getByText("Cache read", { exact: true })).toBeVisible()
-    await expect(detail).not.toContainText("carries no cost")
+    // A priced row carries billing meters, so its billed-token figure is real
+    // rather than the em-dash an unmetered row shows.
+    await expect(detail.getByText("Billed tokens")).toBeVisible()
+    await expect(detail.getByText("Cost", { exact: true })).toBeVisible()
+    await expect(detail).not.toContainText("This request carries no cost.")
 
-    await detail.getByRole("button", { name: "Close (Esc)" }).click()
-    await expect(detailPanel(page)).toBeHidden()
+    // Input counts the cache it was billed on and names that share in its title.
+    await expect(
+      rows(page)
+        .first()
+        .getByTitle(/cache read/),
+    ).toBeVisible()
+
+    await detailPanel(page).getByRole("button", { name: "Close" }).click()
+    await expect(detailPanel(page)).toHaveCount(0)
+    await expect(page).not.toHaveURL(/[?&]request=/)
   })
 
-  // The price button this panel offers is not pressed here, for the reason the
-  // inline detail's was not: a press of it failed once on CI with the dialog
-  // never opening, and would not reproduce in about forty attempts. What stays
-  // is the part that never flaked.
+  // The "Price this model" button this detail offers is deliberately not pressed
+  // here. Doing so failed once on CI, with the dialog never opening, and would not
+  // reproduce afterwards in about forty attempts (the test alone, whole-suite
+  // runs, and Chromium CPU throttling to 20x). Four explanations were tested and
+  // ruled out: the reveal animation does not move the button, clipping during the
+  // reveal does not swallow the press, a slow main thread does not reproduce it,
+  // and the table's click delegation passes buttons straight through. Rather than
+  // keep an unexplained failure in a gate that is meant to be trusted, the press
+  // is out and what stays is the part that never flaked. Worth knowing before
+  // anyone restores it: the cause was never established, so an intermittent
+  // "nothing happens" on that button may be real and would now go unseen here.
   test("an uncosted request says so, and names the key to price it", async ({
     page,
   }) => {
@@ -246,42 +246,13 @@ test.describe("activity log", () => {
     await openDetail(page, rows(page).first())
 
     const detail = detailPanel(page)
-    await expect(detail).toContainText("carries no cost")
+    await expect(detail).toContainText("This request carries no cost.")
     // The offer names the pricing key the row bills against, which is
     // `provider:model` and not the bare model the row displays: a price stored
     // under the bare name would never be read.
-    await expect(detail.getByText(UNPRICED_MODEL_KEY).first()).toBeVisible()
+    await expect(detail.getByText(UNPRICED_MODEL_KEY)).toBeVisible()
     await expect(
-      detail.getByRole("button", { name: "Set model price…" }),
+      detail.getByRole("button", { name: "Price this model" }),
     ).toBeVisible()
-  })
-
-  test("deletes every imported row the filters match", async ({ page }) => {
-    await login(page)
-    // A dedicated model, so consuming these rows cannot make an earlier
-    // assertion unreproducible.
-    await gotoRoute(page, `${SCOPED}&model=${PARITY.models.scratch.model}`)
-    await expect(rows(page)).toHaveCount(COUNTS.scratch)
-
-    // The action reaches the filter rather than picked rows, and counts the
-    // imported rows it will touch.
-    await page
-      .getByRole("button", {
-        name: `Manage ${COUNTS.scratch} imported rows`,
-      })
-      .click()
-    await page.getByRole("menuitem", { name: "Delete imported rows…" }).click()
-    const confirm = page.getByRole("alertdialog")
-    await expect(confirm).toContainText(
-      `Delete ${COUNTS.scratch} imported rows?`,
-    )
-    await confirm.getByRole("button", { name: "Delete rows" }).click()
-
-    await expect(table(page, "Activity log")).toContainText(
-      "No requests match these filters.",
-    )
-    await expect(table(page, "Activity log")).not.toContainText(
-      PARITY.models.scratch.model,
-    )
   })
 })

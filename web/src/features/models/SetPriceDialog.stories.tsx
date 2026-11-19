@@ -66,7 +66,7 @@ export const WithInitialModelKey: Story = {
 export const CustomCopy: Story = {
   args: {
     title: "Price this model",
-    description: () =>
+    description:
       "Set what this model costs. Requests from now on are costed at these rates.",
   },
 }

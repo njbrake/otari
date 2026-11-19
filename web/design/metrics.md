@@ -21,8 +21,8 @@ Is it a part-to-whole with ordered segments?
 ## KpiStrip and KpiCell
 
 ```ts
-KpiStrip: { empty: boolean, columns?: 3 | 4 | 5, children }
-KpiCell: { label: string, value: string, severity?: Severity, subline?: ReactNode,
+KpiStrip: { empty: boolean, children }
+KpiCell: { label: string, value: string, severity?: Severity, subline?: string,
   delta?: ReactNode, graphic?: ReactNode }
 Severity: { status: "ok" | "warn" | "alert", word: string }
 ```
@@ -41,16 +41,10 @@ A cell may carry `severity`, `delta` and `subline` at once: the meta line drops 
 subline first, because its facts also live in the breakdown table below while a delta
 lives nowhere else.
 
-**`columns` is the number of cells.** The grid lays exactly that many tracks
-(three stack on a phone and sit on one row from `sm`; four and five wrap 2 / 3 and
-then one row), so a strip never ends on an empty track. Overview leads with four or
-five; Usage leads with three, each saying more (a split with its legend), which is
-why the graphic row is at least a sparkline's height rather than exactly it.
-
-The vertical rules belong to the strip, not the cell, and stand only between two cells
-on the same row: a cell rules itself off from the one before it, and the first cell of
-each row at each breakpoint draws nothing. A rule on every cell but the last left one
-at the end of each wrapped row.
+**Five cells.** The strip's grid is a fixed 2 / 3 / 5 columns by breakpoint, so four
+cells leave one empty track on a wide viewport and three leave two. Both call sites
+in the product pass five. If a page has fewer than five things worth leading with,
+it does not want this band.
 
 A cell has four rows and **always four**, in this order:
 
@@ -58,8 +52,7 @@ A cell has four rows and **always four**, in this order:
 2. `value`: `text-mono-figure`, weight 400, tabular.
 3. The meta line: `severity`, then `delta`, then `subline`, most-judged to least.
    One line, never two, and only the subline truncates.
-4. `graphic`: a `Sparkline`, or a small split with its legend. Reserved even when
-   absent, and as tall as the tallest in the row.
+4. `graphic`: a `Sparkline`. Reserved even when absent.
 
 The reserved rows are the whole point: an absent sparkline must not make one cell
 shorter than the four beside it.

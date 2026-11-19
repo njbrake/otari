@@ -206,27 +206,6 @@ export const WithRowDetail: Story = {
 }
 
 /**
- * `isRowInert` marks the rows a row action has nothing to open for, a total or
- * a fold of the rest: no pointer cursor, and activating one reports nothing.
- * Here the first row is inert; click the others.
- */
-export const InertRows: Story = {
-  render: (args) => {
-    const [opened, setOpened] = useState<string>()
-    return (
-      <div className="flex flex-col gap-2">
-        <DataTable
-          {...args}
-          onRowAction={setOpened}
-          isRowInert={(row) => row === args.rows[0]}
-        />
-        <p className="text-caption">Opened: {opened ?? "nothing yet"}</p>
-      </div>
-    )
-  },
-}
-
-/**
  * `mobileLayout="cards"` swaps the grid for one card per row on a phone-width
  * viewport: the row-header column is the title, an `actions` column sits beside
  * it, and the rest are label and value pairs. Narrow the canvas to see it.

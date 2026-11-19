@@ -1,17 +1,17 @@
 import uuid
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import NamedTuple, Never
 
-from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy import String, and_, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
 
-from gateway.core.unit_of_work import UnitOfWork
+from gateway.core.unit_of_work import UnitOfWork, session_for
 from gateway.models.api_keys import SERVICE_KEY_OWNER_ID_PREFIX, APIKey
 from gateway.models.tenancy import OrganizationMember, Workspace
 from gateway.models.usage import UsageLog
@@ -119,18 +119,6 @@ async def get_or_create_attribution_user(db: AsyncSession, *, user_id: str, alia
         return await _revive(winner)
 
 
-async def get_or_create_live_attribution_user(db: AsyncSession, *, user_id: str, alias: str | None) -> User | None:
-    """:func:`get_or_create_attribution_user`, except that a soft-deleted row answers None rather than being revived.
-
-    For a write that needs an owner row but must not restore one an operator
-    revoked through ``DELETE /api/v1/users``.
-    """
-    existing = (await db.execute(select(User).where(User.user_id == user_id))).scalar_one_or_none()
-    if existing is not None:
-        return None if existing.deleted_at is not None else existing
-    return await get_or_create_attribution_user(db, user_id=user_id, alias=alias)
-
-
 async def live_attribution_user_ids(db: AsyncSession, user_ids: Sequence[str]) -> set[str]:
     """Return which of ``user_ids`` name a usable request-plane owner.
 
@@ -144,7 +132,7 @@ async def live_attribution_user_ids(db: AsyncSession, user_ids: Sequence[str]) -
     return set(rows.scalars().all())
 
 
-async def lock_live_users(db: AsyncSession, user_ids: Sequence[str]) -> set[str]:
+async def lock_live_users(db: AsyncSession | UnitOfWork, user_ids: Sequence[str]) -> set[str]:
     """Lock the request-plane rows of ``user_ids`` until the caller commits, and return which are not deleted.
 
     What serializes a user's deletion against anything granting that user access: each takes this lock first, so
@@ -152,7 +140,8 @@ async def lock_live_users(db: AsyncSession, user_ids: Sequence[str]) -> set[str]
     """
     if not user_ids:
         return set()
-    rows = await db.execute(
+    session = session_for(db) if isinstance(db, UnitOfWork) else db
+    rows = await session.execute(
         select(User.user_id, User.deleted_at)
         .where(User.user_id.in_(list(user_ids)))
         .order_by(User.user_id)
@@ -368,10 +357,52 @@ class AccessLists(NamedTuple):
 
 
 class UserAccessRepository(BaseRepository[User, Never, Never]):
-    """Read users' model and search tool access lists, and their display names."""
+    """Read users' model and search tool access lists and display names, and erase users."""
 
     def __init__(self, uow: UnitOfWork) -> None:
         super().__init__(uow, User)
+
+    async def ensure_app_key_owner(self, user_id: str, alias: str) -> bool:
+        """Provision without revival and hold the owner through key issuance.
+
+        Deletion locks the same row before sweeping its keys. A competing creator
+        may win the insert, so read and lock its current state after the savepoint.
+        """
+        statement = (
+            select(User).where(User.user_id == user_id).with_for_update().execution_options(populate_existing=True)
+        )
+        owner = (await self.db.execute(statement)).scalar_one_or_none()
+        if owner is None:
+            try:
+                async with self.db.begin_nested():
+                    self.db.add(User(user_id=user_id, alias=alias))
+            except IntegrityError:
+                pass
+            owner = (await self.db.execute(statement)).scalar_one()
+        return owner.deleted_at is None and not owner.blocked
+
+    async def lock_with_end_users(self, user_id: str) -> list[str]:
+        """Lock ``user_id``'s row and its end users' rows, and return the ids of those that exist."""
+        statement = (
+            select(User.user_id)
+            .where(or_(User.user_id == user_id, User.parent_user_id == user_id))
+            .order_by(User.user_id)
+            .with_for_update()
+        )
+        return list((await self.db.execute(statement)).scalars().all())
+
+    async def add_tombstone(self) -> str:
+        """Stage a new deleted user with no name, for rows kept after the users they belonged to are gone."""
+        tombstone = User(user_id=str(uuid.uuid4()), alias=None, deleted_at=datetime.now(UTC))
+        self.db.add(tombstone)
+        await self.db.flush()
+        return tombstone.user_id
+
+    async def remove_all(self, user_ids: Collection[str]) -> None:
+        """Stage the deletion of these users, which takes their keys and the other rows that cascade with them."""
+        if not user_ids:
+            return
+        await self.db.execute(delete(User).where(User.user_id.in_(list(user_ids))))
 
     async def access_lists(self, user_id: str) -> AccessLists | None:
         """A user's access lists, or ``None`` when there is no such user."""
@@ -379,17 +410,6 @@ class UserAccessRepository(BaseRepository[User, Never, Never]):
             await self.db.execute(select(User.allowed_models, User.allowed_tools).where(User.user_id == user_id))
         ).one_or_none()
         return None if row is None else AccessLists(*row)
-
-    async def access_lists_of(self, user_ids: Collection[str]) -> dict[str, AccessLists]:
-        """These users' access lists, by user id; an id with no user is absent."""
-        if not user_ids:
-            return {}
-        rows = (
-            await self.db.execute(
-                select(User.user_id, User.allowed_models, User.allowed_tools).where(User.user_id.in_(sorted(user_ids)))
-            )
-        ).all()
-        return {user_id: AccessLists(models, tools) for user_id, models, tools in rows}
 
     async def live_access_lists(self) -> dict[str, AccessLists]:
         """Every live user's access lists, by user id."""

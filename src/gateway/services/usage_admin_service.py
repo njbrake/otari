@@ -21,7 +21,7 @@ neither operation can desync a budget, matching the boundary the ingest path est
 import uuid
 from collections.abc import Collection
 from datetime import datetime
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import ColumnElement, Select, delete, select
@@ -31,19 +31,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.database import describe_database_error
 from gateway.core.metered_pricing import BillableUsage, billable_usage, price_billable_usage
-from gateway.core.sql import match_any
-from gateway.core.usage_filters import (
-    MAX_SEARCH_LENGTH,
-    CappedValues,
-    UsageRefinements,
-    UsageSort,
-    entity_conditions,
-    list_window,
-    refinement_conditions,
-)
+from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
 from gateway.log_config import logger
 from gateway.models.pricing import ModelPricing
 from gateway.models.usage import SERVED_HERE_SLUG, UsageLog
+from gateway.schemas.usage_and_telemetry import TOOL_METER_NAMESPACE
 
 # Cap on an explicit id list. Page selections drive the id path and the largest
 # rows-per-page the UI offers is 500; 1000 leaves headroom without letting a single
@@ -53,8 +45,14 @@ _MAX_IDS = 1000
 # variables in one IN() (999), mirroring the ingest path.
 _REPRICE_CHUNK = 500
 
+# A repeatable entity filter's values, bounded the way the read endpoints bound
+# theirs (see MAX_FILTER_VALUES). The bound is annotated on the list itself rather
+# than on the ``str | list[str]`` field: on the union it would also cap a single
+# value's character length, rejecting a long provider-qualified model name.
+_CappedValues = Annotated[list[str], Field(max_length=MAX_FILTER_VALUES)]
 
-class UsageSelection(UsageRefinements):
+
+class UsageSelection(BaseModel):
     """Which imported usage rows an operation targets.
 
     Exactly one of two modes: a non-empty ``ids`` list (the current UI selection) or
@@ -73,9 +71,9 @@ class UsageSelection(UsageRefinements):
     # the read endpoints' ceiling for the mirror of that reason: a value set /count
     # rejects (422) but a delete accepted would run destructively over rows no count
     # could have been shown for.
-    model: str | CappedValues | None = None
-    user_id: str | CappedValues | None = None
-    api_key_id: str | CappedValues | None = None
+    model: str | _CappedValues | None = None
+    user_id: str | _CappedValues | None = None
+    api_key_id: str | _CappedValues | None = None
     status: str | None = None
     endpoint: str | None = None
     provider: str | None = None
@@ -84,8 +82,7 @@ class UsageSelection(UsageRefinements):
     source_label: str | None = None
     start_date: datetime | None = None
     end_date: datetime | None = None
-    # None: any; otherwise the read endpoints' ``priced`` filter (see
-    # ``core.usage_filters.needs_pricing_condition``).
+    # None: any; True: only rows with a cost; False: only rows with no cost yet.
     priced: bool | None = None
     # Gateway-run tool usage, forwarded so a bulk op driven from a tool-filtered
     # Activity view targets exactly the rows the operator was shown. In practice it
@@ -97,16 +94,6 @@ class UsageSelection(UsageRefinements):
     # filter is: an operator who filtered the table to one workspace and then
     # chose "all N matching" must not delete another workspace's rows.
     workspace_id: uuid.UUID | None = None
-    # Mirrors of the read filters of the same name. Both are NULL on an imported
-    # row, the only kind this selection reaches, so either narrows it to nothing;
-    # forwarded for the invariant, as ``tool`` is. The reads' row-id ``id`` filter
-    # has no counterpart here: ``ids`` is the other mode, not a narrowing of this one.
-    request_id: str | CappedValues | None = None
-    requested_model: str | CappedValues | None = None
-    q: str | None = Field(default=None, max_length=MAX_SEARCH_LENGTH)
-    # The order the count beside this selection was read in. It changes no row's
-    # match, only the window: any order but time bounds it as the count does.
-    sort: UsageSort = "timestamp"
 
     @model_validator(mode="after")
     def _require_exactly_one_mode(self) -> "UsageSelection":
@@ -152,19 +139,6 @@ class UsageSetPriceResult(BaseModel):
     unchanged: int = 0
 
 
-def usage_in(workspaces: Select[uuid.UUID]) -> ColumnElement[bool]:
-    """Match the usage rows of these workspaces: the scope of the operator's usage reads."""
-    return UsageLog.workspace_id.in_(workspaces)
-
-
-def _bounded[S: UsageSelection](selection: S) -> S:
-    """A selection by filter, read over the window its count was taken over."""
-    if selection.ids:
-        return selection
-    start_date, end_date = list_window(selection.start_date, selection.end_date, q=selection.q, sort=selection.sort)
-    return selection.model_copy(update={"start_date": start_date, "end_date": end_date})
-
-
 def _selection_conditions(
     selection: UsageSelection, *, workspace_ids: Collection[uuid.UUID] | Select[uuid.UUID]
 ) -> list[ColumnElement[bool]]:
@@ -195,12 +169,46 @@ def _selection_conditions(
     if selection.ids:
         conditions.append(UsageLog.id.in_(selection.ids))
         return conditions
-    # The filters the read endpoints share, built by the same function, so the "N
-    # matching" an operator confirms from /v1/usage/count is the set this reaches.
-    conditions.extend(entity_conditions(selection, start_date=selection.start_date, end_date=selection.end_date))
-    if selection.request_id is not None and selection.request_id != []:
-        conditions.append(match_any(UsageLog.request_id, selection.request_id))
-    conditions.extend(refinement_conditions(selection))
+    if selection.workspace_id is not None:
+        conditions.append(UsageLog.workspace_id == selection.workspace_id)
+    if selection.source is not None:
+        conditions.append(UsageLog.source == selection.source)
+    # An empty list is no filter at all, the same reading the count endpoint applies.
+    # That agreement is the point: the "N matching" an operator confirms comes from
+    # /v1/usage/count over this same filter set, so a dimension the two endpoints
+    # scoped differently would delete a different number of rows than the dialog
+    # promised. (The dashboard sends the field absent, never empty.)
+    if selection.model is not None and selection.model != []:
+        conditions.append(match_any(UsageLog.model, selection.model))
+    if selection.user_id is not None and selection.user_id != []:
+        conditions.append(match_any(UsageLog.user_id, selection.user_id))
+    if selection.api_key_id is not None and selection.api_key_id != []:
+        conditions.append(match_any(UsageLog.api_key_id, selection.api_key_id))
+    if selection.status is not None:
+        conditions.append(UsageLog.status == selection.status)
+    if selection.endpoint is not None:
+        conditions.append(UsageLog.endpoint == selection.endpoint)
+    if selection.provider is not None:
+        conditions.append(UsageLog.provider == selection.provider)
+    if selection.source_label is not None:
+        conditions.append(UsageLog.source_label == selection.source_label)
+    if selection.start_date is not None:
+        conditions.append(UsageLog.timestamp >= utc_bound(selection.start_date))
+    if selection.end_date is not None:
+        conditions.append(UsageLog.timestamp < utc_bound(selection.end_date))
+    if selection.priced is True:
+        conditions.append(UsageLog.cost.is_not(None))
+    elif selection.priced is False:
+        conditions.append(UsageLog.cost.is_(None))
+    if selection.tool is not None:
+        namespace = UsageLog.billing_meters[TOOL_METER_NAMESPACE]
+        conditions.append(
+            # See the usage log repository's _tool_used_expr: the text coercion is what makes a
+            # missing key compare as SQL NULL rather than JSON null.
+            namespace.as_string().is_not(None)
+            if selection.tool == "any"
+            else namespace[selection.tool]["billed"].as_integer().is_not(None)
+        )
     return conditions
 
 
@@ -213,7 +221,7 @@ async def delete_usage(
     ledger is untouched. Nothing references ``usage_logs``, so a plain bulk delete
     leaves no orphans.
     """
-    conditions = _selection_conditions(_bounded(request), workspace_ids=workspace_ids)
+    conditions = _selection_conditions(request, workspace_ids=workspace_ids)
     try:
         result = cast("CursorResult[Any]", await db.execute(delete(UsageLog).where(*conditions)))
         await db.commit()
@@ -306,7 +314,7 @@ async def set_usage_price(
     rows sit behind the cursor and are never revisited, even when a ``priced=False``
     filter would no longer match them.
     """
-    conditions = _selection_conditions(_bounded(request), workspace_ids=workspace_ids)
+    conditions = _selection_conditions(request, workspace_ids=workspace_ids)
     result = UsageSetPriceResult()
 
     try:

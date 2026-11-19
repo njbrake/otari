@@ -206,20 +206,6 @@ def all_policy_names(config: GatewayConfig) -> set[str]:
     return names
 
 
-def policy_names_in(config: GatewayConfig, workspace_id: uuid.UUID) -> set[str]:
-    """Every name that is a policy to somebody in one workspace, plus the configured ones.
-
-    The policy counterpart of ``alias_service.alias_names_in``, for a tenant's
-    write, which must not learn another organization's names from a refusal.
-    """
-    if not config.routing.enabled:
-        return set()
-    names = set(config.routing.policies) | set(_cache.get(workspace_id, {}))
-    for scoped in _user_cache.get(workspace_id, {}).values():
-        names |= set(scoped)
-    return names
-
-
 async def run_policy_refresher(interval: float = POLICY_CACHE_TTL_SECONDS) -> None:
     """Reload the policy cache forever, so other writers' policies arrive.
 

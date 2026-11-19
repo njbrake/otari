@@ -15,8 +15,7 @@ and synchronous, and a backend's asynchronous work happens in the request
 pipeline, which passes the resulting order in as a value.
 
 ``RoutingService`` reads what routing gives an organization's callers: the
-automatic fallbacks a catalog ID gets with no policy, and the traffic that used them,
-and for each API key the names it sent and whether a failure on each has a backup.
+automatic fallbacks a catalog ID gets with no policy, and the traffic that used them.
 
 ``recommend.py`` answers a different question: which model a coding agent's
 subagent should start on. That is put to a decision model, not compiled from
@@ -43,11 +42,8 @@ from gateway.services.routing._service import (
     FALLBACK_WINDOW,
     AutomaticFallback,
     FallbackOffering,
-    KeyRequests,
-    NameTraffic,
     PinnedTraffic,
     RoutingService,
-    StepOutcome,
 )
 from gateway.services.routing.backends import (
     PRIORITY_BACKEND,
@@ -100,8 +96,6 @@ __all__ = [
     "CompiledPlan",
     "DroppedCandidate",
     "FallbackOffering",
-    "KeyRequests",
-    "NameTraffic",
     "NoEligibleCandidatesError",
     "PinnedTraffic",
     "RecommenderPrice",
@@ -110,7 +104,6 @@ __all__ = [
     "RoutingContext",
     "RoutingDecision",
     "RoutingService",
-    "StepOutcome",
     "RoutingSignal",
     "StoredRecommender",
     "UnreadableRecommendationError",

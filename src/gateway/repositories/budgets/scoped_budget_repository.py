@@ -219,17 +219,6 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             .execution_options(synchronize_session=False)
         )
 
-    async def for_scope(
-        self, scope_type: ScopeType, scope_id: str, provider_key_id: str | None
-    ) -> tuple[ScopedBudget, Budget] | None:
-        """Return the ceiling capping this scope for this provider, with the budget it names, or None."""
-        result = await self.db.execute(
-            select(ScopedBudget, Budget)
-            .join(Budget, Budget.budget_id == ScopedBudget.budget_id)
-            .where(_scope_match(scope_type, scope_id, provider_key_id))
-        )
-        return result.tuples().first()
-
     async def get_usage(self, scoped_budget_id: str) -> CeilingUsage | None:
         """Return this ceiling's cap, recorded use, holds and window end, or None when it no longer exists."""
         row = (
@@ -520,7 +509,7 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             )
             .with_for_update()
         )
-        row = result.tuples().one_or_none()
+        row = result.one_or_none()
         return None if row is None else (row[0], row[1], row[2])
 
     async def member_ceiling(self, member_id: uuid.UUID, provider_key_id: str | None) -> ScopedBudget | None:

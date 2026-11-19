@@ -1,21 +1,20 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react"
+import { screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { PolicySpec } from "@/client"
 import { PolicyDetailPage } from "@/features/routing/PolicyDetailPage"
 import { API_ROOT } from "@/shared/api/client"
-import { organizationContext, organizationMember } from "@/tests/fixtures"
 import {
-  ADMIN_WORKSPACE,
   adminContext,
   CHAIN,
+  EXPLAINED,
   mockApi,
   policy,
   policyWrites,
   renderInWorkspace,
   renderPage,
-  SPILL_OVER,
+  UNKNOWN_ROUTER,
   WEIGHTED,
 } from "@/tests/routing"
 
@@ -24,6 +23,13 @@ afterEach(() => {
 })
 
 type TestUser = ReturnType<typeof userEvent.setup>
+
+const PRIORITY: PolicySpec = {
+  select: [
+    { router: "priority", candidates: ["openai:gpt-5-nano", "openai:gpt-5"] },
+    { default: "openai:gpt-5" },
+  ],
+}
 
 /** Every section a policy can combine, at once. */
 const COMBINED: PolicySpec = {
@@ -40,43 +46,19 @@ const COMBINED: PolicySpec = {
   guardrails: [{ profile: "pii", mode: "monitor", on_unavailable: "monitor" }],
 }
 
-const MOVED = [
-  { path: "/routing/$name", element: <p>Moved</p> },
-  { path: "/routing", element: <p>Back on the list</p> },
-]
-
 function renderPolicy(name: string, url = `/routing/${name}`) {
-  return renderPage(<PolicyDetailPage name={name} />, url, MOVED)
+  return renderPage(<PolicyDetailPage name={name} />, url, [
+    { path: "/routing/$name", element: <p>Moved</p> },
+  ])
 }
 
-/** The main selection, for queries inside it. */
-async function mainSelection() {
-  return within(await screen.findByRole("region", { name: "Main selection" }))
+/** The section named `title`, for queries inside it. */
+async function section(title: string) {
+  return within(await screen.findByRole("region", { name: title }))
 }
 
-/** Open a folded section by its label. */
-async function unfold(user: TestUser, label: string) {
-  await user.click(
-    await screen.findByRole("button", { name: new RegExp(`^${label}`) }),
-  )
-}
-
-/** The models of a list, as each row reads. */
-function listed(label: string) {
-  return within(screen.getByRole("list", { name: label }))
-    .getAllByRole("listitem")
-    .map((item) => item.textContent ?? "")
-}
-
-async function save(user: TestUser) {
-  await user.click(screen.getByRole("button", { name: "Save" }))
-}
-
-async function pick(user: TestUser, field: RegExp, selector: string) {
-  const box = screen.getByRole("combobox", { name: field })
-  await user.clear(box)
-  await user.type(box, selector)
-  await user.keyboard("{Escape}")
+async function save(user: TestUser, label: string) {
+  await user.click(screen.getByRole("button", { name: label }))
 }
 
 function lastWrite(calls: { url: string; method: string; body: unknown }[]) {
@@ -86,32 +68,63 @@ function lastWrite(calls: { url: string; method: string; body: unknown }[]) {
 }
 
 describe("PolicyDetailPage", () => {
-  it("shows the plan in the order it is tried, with nothing to save yet", async () => {
+  it("opens a policy naming an unknown router read-only", async () => {
+    const { calls } = mockApi([
+      policy("smart", UNKNOWN_ROUTER, { is_dynamic: true }),
+    ])
+    renderPolicy("smart")
+
+    expect(
+      await screen.findByText(/Uses options this page cannot show yet/),
+    ).toBeInTheDocument()
+    const spec = await section("Stored spec")
+    expect(spec.getByText(/"cheapest"/)).toBeInTheDocument()
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /^Save / }),
+    ).not.toBeInTheDocument()
+    expect(policyWrites(calls)).toHaveLength(0)
+  })
+
+  it("shows every section of a policy and where its requests go", async () => {
     mockApi([policy("fast", CHAIN)])
     renderPolicy("fast")
 
     expect(
       await screen.findByRole("heading", { level: 1, name: "fast" }),
     ).toBeInTheDocument()
-    expect(await mainSelection()).toBeTruthy()
-    const [main, backup] = listed("Tried in order")
-    expect(main).toMatch(/MAIN.*gpt-5-mini OpenAI/)
-    expect(backup).toMatch(/BACKUP 1.*claude-haiku-4-5 Anthropic/)
-    expect(screen.getByText("Everyone in this workspace")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Routing" })).toHaveAttribute(
+    expect(
+      screen.queryByRole("radio", { name: "Smart router" }),
+    ).not.toBeInTheDocument()
+    for (const title of [
+      "Name",
+      "Main selection",
+      "Fallback chain",
+      "Budget tier-down",
+      "Guardrails",
+    ]) {
+      expect(screen.getByRole("heading", { name: title })).toBeInTheDocument()
+    }
+    expect(
+      screen.getByRole("region", { name: "Where requests go" }),
+    ).toHaveTextContent(/Requests to fast go to .*If that fails/)
+    expect(screen.getByRole("link", { name: "← Routing" })).toHaveAttribute(
       "href",
       "/routing",
     )
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
-    expect(screen.getByRole("button", { name: "Discard" })).toBeDisabled()
+    // Nothing to save until something changes.
     expect(
-      screen.getByText(
-        /missing or rejected provider key, or a request it refuses as invalid/,
+      screen.getByRole("button", { name: "Save fallback chain" }),
+    ).toBeDisabled()
+    // The same rule the create form states, in the same words.
+    expect(
+      within(screen.getByRole("region", { name: "Fallback chain" })).getByText(
+        /missing or rejected provider key, or a request it refuses as invalid\. Not once the answer has started streaming/,
       ),
     ).toBeInTheDocument()
   })
 
-  it("saves a change to one section with every other written back as stored", async () => {
+  it("opens a policy combining every section and saves one without touching the rest", async () => {
     const { calls } = mockApi([policy("mixed", COMBINED)])
     const user = userEvent.setup()
     renderPolicy("mixed")
@@ -121,16 +134,14 @@ describe("PolicyDetailPage", () => {
       "70",
       "30",
     ])
-    await unfold(user, "Budget tier-down")
     expect(
       screen.getByRole("textbox", { name: /budget used at least/i }),
     ).toHaveValue("80")
-    await unfold(user, "Guardrails")
     expect(screen.getByRole("textbox", { name: /profile/i })).toHaveValue("pii")
 
-    // An existing policy may keep no backup at all.
+    // Unlike a new fallback, an existing policy may keep no backup at all.
     await user.click(screen.getByRole("button", { name: "Remove backup 1" }))
-    await save(user)
+    await save(user, "Save fallback chain")
 
     const { on_failure, ...rest } = COMBINED
     expect(on_failure).toHaveLength(1)
@@ -138,198 +149,29 @@ describe("PolicyDetailPage", () => {
     expect(lastWrite(calls).name).toBe("mixed")
   })
 
-  it("saves changes to several sections in one write", async () => {
+  it("renames a policy, sending rename_from, and follows it to its new address", async () => {
     const { calls } = mockApi([policy("fast", CHAIN)])
     const user = userEvent.setup()
     renderPolicy("fast")
 
-    await user.click(
-      await screen.findByRole("button", { name: "Remove backup 1" }),
-    )
-    await unfold(user, "Budget tier-down")
-    await user.click(screen.getByRole("button", { name: "Add a tier" }))
-    await pick(user, /^use instead$/i, "openai:gpt-5-nano")
-    await save(user)
-
-    expect(policyWrites(calls)).toHaveLength(1)
-    expect(lastWrite(calls).spec).toEqual({
-      select: [
-        { when: { budget_used_pct: { gte: 80 } }, target: "openai:gpt-5-nano" },
-        { default: "openai:gpt-5-mini" },
-      ],
-    })
-  })
-
-  it("makes a backup the main model by moving it up", async () => {
-    const { calls } = mockApi([policy("fast", CHAIN)])
-    const user = userEvent.setup()
-    renderPolicy("fast")
-
-    await user.click(
-      await screen.findByRole("button", { name: "Move backup 1 up" }),
-    )
-    expect(listed("Tried in order")[0]).toMatch(/MAIN.*claude-haiku-4-5/)
-    // The main model has no row above it to move to.
-    expect(
-      screen.getByRole("button", { name: "Move the main model up" }),
-    ).toBeDisabled()
-    await save(user)
-
-    expect(lastWrite(calls).spec).toEqual({
-      select: [{ default: "anthropic:claude-haiku-4-5" }],
-      on_failure: ["openai:gpt-5-mini"],
-    })
-  })
-
-  it("reorders by dragging a row's handle onto another row", async () => {
-    const { calls } = mockApi([policy("fast", CHAIN)])
-    const user = userEvent.setup()
-    renderPolicy("fast")
-
-    await screen.findByRole("list", { name: "Tried in order" })
-    const [mainRow, backupRow] = within(
-      screen.getByRole("list", { name: "Tried in order" }),
-    ).getAllByRole("listitem")
-    const handle = backupRow.querySelector("[data-model-drag]")!
-    fireEvent.dragStart(handle)
-    fireEvent.dragOver(mainRow)
-    fireEvent.drop(mainRow)
-
-    expect(listed("Tried in order")[0]).toMatch(/MAIN.*claude-haiku-4-5/)
-    await save(user)
-    expect(lastWrite(calls).spec).toEqual({
-      select: [{ default: "anthropic:claude-haiku-4-5" }],
-      on_failure: ["openai:gpt-5-mini"],
-    })
-  })
-
-  it("keeps the pool's default on its model when another is dragged past it", async () => {
-    const { calls } = mockApi([
-      policy("smart", {
-        select: [
-          {
-            router: "priority",
-            candidates: [
-              "openai:gpt-5-nano",
-              "openai:gpt-5",
-              "anthropic:claude-sonnet-4-5",
-            ],
-          },
-          { default: "openai:gpt-5" },
-        ],
-      }),
-    ])
-    const user = userEvent.setup()
-    renderPolicy("smart")
-
-    await screen.findByRole("list", { name: "Pool" })
-    const rows = within(
-      screen.getByRole("list", { name: "Pool" }),
-    ).getAllByRole("listitem")
-    fireEvent.dragStart(rows[0].querySelector("[data-model-drag]")!)
-    fireEvent.dragOver(rows[2])
-    fireEvent.drop(rows[2])
-
-    expect(listed("Pool")[0]).toMatch(/DEFAULT.*gpt-5 OpenAI/)
-    await save(user)
-    expect(lastWrite(calls).spec).toEqual({
-      select: [
-        {
-          router: "priority",
-          candidates: [
-            "openai:gpt-5",
-            "anthropic:claude-sonnet-4-5",
-            "openai:gpt-5-nano",
-          ],
-        },
-        { default: "openai:gpt-5" },
-      ],
-    })
-  })
-
-  it("shows what each model did in 30 days, by the model rather than the row", async () => {
-    mockApi([policy("fast", CHAIN)], null, [], {
-      traffic: [
-        {
-          workspace_id: "11111111-1111-1111-1111-111111111111",
-          name: "fast",
-          user_id: null,
-          requests: 10,
-          sent_by: [],
-          steps: [
-            { position: 1, served: 7, failed: 3 },
-            { position: 2, served: 3, failed: 0 },
-          ],
-        },
-      ],
-    })
-    const user = userEvent.setup()
-    renderPolicy("fast")
-
-    expect(await screen.findByText("3 failed over (30d)")).toBeInTheDocument()
-    expect(screen.getByText("Served 3 (30d)")).toBeInTheDocument()
-    expect(
-      screen.getByText(/In use: 10 requests in 30 days/),
-    ).toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: "Move backup 1 up" }))
-    // Still the backup's numbers, on the row it moved to.
-    expect(listed("Tried in order")[0]).toMatch(/Served 3 \(30d\)/)
-
-    await user.click(screen.getByRole("button", { name: "Add a backup" }))
-    await pick(user, /^backup 2$/i, "openai:gpt-5")
-    expect(screen.getByText("New, no history")).toBeInTheDocument()
-  })
-
-  it("says when nothing sends the name yet", async () => {
-    mockApi([policy("fast", CHAIN)])
-    renderPolicy("fast")
-
-    expect(
-      await screen.findByText(
-        'Not used yet: nothing has sent "fast" in 30 days.',
-      ),
-    ).toBeInTheDocument()
-  })
-
-  it("discards every unsaved change at once", async () => {
-    const { calls } = mockApi([policy("fast", CHAIN)])
-    const user = userEvent.setup()
-    renderPolicy("fast")
-
-    await user.click(
-      await screen.findByRole("button", { name: "Remove backup 1" }),
-    )
-    expect(listed("Tried in order")).toHaveLength(1)
-    await user.click(screen.getByRole("button", { name: "Discard" }))
-
-    expect(listed("Tried in order")).toHaveLength(2)
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
-    expect(policyWrites(calls)).toHaveLength(0)
-  })
-
-  it("renames a policy with the rest of the save, and follows it to its new address", async () => {
-    const { calls } = mockApi([policy("fast", CHAIN)])
-    const user = userEvent.setup()
-    renderPolicy("fast")
-
-    await user.click(await screen.findByRole("button", { name: "Rename" }))
-    const name = screen.getByRole("textbox", { name: /^name$/i })
+    const name = await screen.findByRole("textbox", { name: /^name$/i })
     await user.clear(name)
     await user.type(name, "speedy")
+    // The consequence sits next to the field, before anything is saved.
     expect(
       screen.getByText(/Callers have to send the new name/),
     ).toBeInTheDocument()
-    await save(user)
+    await save(user, "Rename")
 
     const body = lastWrite(calls) as { name: string; rename_from?: string }
     expect(body.name).toBe("speedy")
     expect(body.rename_from).toBe("fast")
+    // The rest of the policy rides on the same write.
     expect(lastWrite(calls).spec).toEqual(CHAIN)
     expect(await screen.findByText("Moved")).toBeInTheDocument()
   })
 
-  it("omits rename_from when the name stays", async () => {
+  it("omits rename_from when a section is saved under the same name", async () => {
     const { calls } = mockApi([policy("fast", CHAIN)])
     const user = userEvent.setup()
     renderPolicy("fast")
@@ -337,7 +179,7 @@ describe("PolicyDetailPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "Remove backup 1" }),
     )
-    await save(user)
+    await save(user, "Save fallback chain")
 
     const body = lastWrite(calls) as { rename_from?: string; spec: PolicySpec }
     expect(body.rename_from).toBeUndefined()
@@ -349,13 +191,12 @@ describe("PolicyDetailPage", () => {
     const user = userEvent.setup()
     renderPolicy("fast")
 
-    await user.click(await screen.findByRole("button", { name: "Rename" }))
-    const name = screen.getByRole("textbox", { name: /^name$/i })
+    const name = await screen.findByRole("textbox", { name: /^name$/i })
     await user.clear(name)
     await user.type(name, "openai:gpt-5")
 
-    expect(screen.getAllByText(/cannot contain/).length).toBeGreaterThan(0)
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
+    expect(screen.getByText(/cannot contain/)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Rename" })).toBeDisabled()
     expect(policyWrites(calls)).toHaveLength(0)
   })
 
@@ -367,9 +208,15 @@ describe("PolicyDetailPage", () => {
     await user.click(
       await screen.findByRole("radio", { name: "Split traffic" }),
     )
-    expect(listed("Pool")[0]).toMatch(/DEFAULT.*gpt-5-mini/)
-    await pick(user, /^pool model 2$/i, "anthropic:claude-sonnet-4-5")
-    await save(user)
+    expect(screen.getByRole("combobox", { name: /model 1/i })).toHaveValue(
+      "openai:gpt-5-mini",
+    )
+    await user.type(
+      screen.getByRole("combobox", { name: /model 2/i }),
+      "anthropic:claude-sonnet-4-5",
+    )
+    await user.keyboard("{Escape}")
+    await save(user, "Save main selection")
 
     expect(lastWrite(calls).spec).toEqual({
       select: [
@@ -383,56 +230,60 @@ describe("PolicyDetailPage", () => {
         },
         { default: "openai:gpt-5-mini" },
       ],
-      // The backup carries over as the pool's backup.
+      // The chain is another section's, written back as stored.
       on_failure: ["anthropic:claude-haiku-4-5"],
     })
   })
 
-  it("goes back to one model, the pool's default", async () => {
-    const { calls } = mockApi([
-      policy("smart", SPILL_OVER, { is_dynamic: true }),
-    ])
+  it("goes back to one model, the one the pool had marked", async () => {
+    const { calls } = mockApi([policy("spill", PRIORITY, { is_dynamic: true })])
     const user = userEvent.setup()
-    renderPolicy("smart")
+    renderPolicy("spill")
 
     await user.click(await screen.findByRole("radio", { name: "One model" }))
-    await save(user)
+    await save(user, "Save main selection")
 
     expect(lastWrite(calls).spec).toEqual({
       select: [{ default: "openai:gpt-5" }],
     })
   })
 
-  it("puts the fallthrough in the pool, marked as its default", async () => {
+  it("puts the fallthrough in the pool rather than asking for it twice", async () => {
+    // A stored spec that omitted its default from `candidates` still shows
+    // it, because the gateway appends it.
     mockApi([
-      policy("smart", {
+      policy("spill", {
         select: [
           { router: "priority", candidates: ["openai:gpt-5-nano"] },
           { default: "openai:gpt-5" },
         ],
       }),
     ])
-    renderPolicy("smart")
+    renderPolicy("spill")
 
-    await mainSelection()
-    await screen.findByRole("list", { name: "Pool" })
-    const [first, second] = listed("Pool")
-    expect(first).toMatch(/MODEL.*gpt-5-nano/)
-    expect(second).toMatch(/DEFAULT.*gpt-5 OpenAI/)
-    expect(screen.queryByRole("list", { name: "Tried in order" })).toBeNull()
+    expect(
+      await screen.findByRole("combobox", { name: /model 1/i }),
+    ).toHaveValue("openai:gpt-5-nano")
+    expect(screen.getByRole("combobox", { name: /model 2/i })).toHaveValue(
+      "openai:gpt-5",
+    )
+    expect(
+      screen.getAllByRole("radio", { name: /serves on opt-out/i })[1],
+    ).toBeChecked()
+    expect(
+      screen.queryByRole("combobox", { name: /^main model$/i }),
+    ).not.toBeInTheDocument()
   })
 
-  it("making another model the default changes the saved default, not the pool", async () => {
-    const { calls } = mockApi([
-      policy("smart", SPILL_OVER, { is_dynamic: true }),
-    ])
+  it("marking a different model changes the saved default, not the pool", async () => {
+    const { calls } = mockApi([policy("spill", PRIORITY, { is_dynamic: true })])
     const user = userEvent.setup()
-    renderPolicy("smart")
+    renderPolicy("spill")
 
     await user.click(
-      await screen.findByRole("button", { name: "Make default" }),
+      (await screen.findAllByRole("radio", { name: /serves on opt-out/i }))[0],
     )
-    await save(user)
+    await save(user, "Save main selection")
 
     expect(lastWrite(calls).spec.select).toEqual([
       { router: "priority", candidates: ["openai:gpt-5-nano", "openai:gpt-5"] },
@@ -440,26 +291,27 @@ describe("PolicyDetailPage", () => {
     ])
   })
 
-  it("adds a backup to a learned policy and keeps its pool", async () => {
-    const { calls } = mockApi([
-      policy("smart", SPILL_OVER, { is_dynamic: true }),
-    ])
+  it("keeps a priority policy's pool when another section is saved", async () => {
+    const { calls } = mockApi([policy("spill", PRIORITY, { is_dynamic: true })])
     const user = userEvent.setup()
-    renderPolicy("smart")
+    renderPolicy("spill")
 
-    await user.click(
-      await screen.findByRole("button", { name: "Add a backup" }),
+    const chain = await section("Fallback chain")
+    await user.click(chain.getByRole("button", { name: "Add a backup" }))
+    await user.type(
+      screen.getByRole("combobox", { name: /^backup 1$/i }),
+      "anthropic:claude-haiku-4-5",
     )
-    await pick(user, /^backup 1$/i, "anthropic:claude-haiku-4-5")
-    await save(user)
+    await user.keyboard("{Escape}")
+    await save(user, "Save fallback chain")
 
     expect(lastWrite(calls).spec).toEqual({
-      ...SPILL_OVER,
+      ...PRIORITY,
       on_failure: ["anthropic:claude-haiku-4-5"],
     })
   })
 
-  it("orders a spill-over policy's models, and says what fills one", async () => {
+  it("orders a spill-over policy's models", async () => {
     mockApi([
       policy(
         "spill",
@@ -478,14 +330,12 @@ describe("PolicyDetailPage", () => {
     renderPolicy("spill")
 
     expect(
-      await screen.findByRole("radio", { name: "Spill over" }),
-    ).toBeChecked()
+      await screen.findByText("Send each request to the first with room"),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("radio", { name: "Spill over" })).toBeChecked()
     expect(
-      screen.getByRole("button", { name: "Move pool model 1 up" }),
+      screen.getByRole("button", { name: "Move model 1 up" }),
     ).toBeDisabled()
-    expect(
-      screen.getByRole("link", { name: "Settings, Rate limit rules" }),
-    ).toHaveAttribute("href", "/settings")
   })
 
   it("drains a model from a split without removing it", async () => {
@@ -499,9 +349,9 @@ describe("PolicyDetailPage", () => {
     await user.clear(shares[1])
     await user.type(shares[1], "0")
     expect(
-      screen.getByText("No traffic; still tried if another fails"),
+      screen.getByText(/No weighted traffic; still tried if another fails/),
     ).toBeInTheDocument()
-    await save(user)
+    await save(user, "Save main selection")
 
     expect(lastWrite(calls).spec.select[0]).toEqual({
       router: "weighted",
@@ -518,7 +368,9 @@ describe("PolicyDetailPage", () => {
     renderPolicy("balanced")
 
     const shares = await screen.findAllByRole("textbox", { name: /share/i })
-    const saveButton = screen.getByRole("button", { name: "Save" })
+    const saveButton = screen.getByRole("button", {
+      name: "Save main selection",
+    })
     await user.clear(shares[0])
     await user.type(shares[0], "Infinity")
     expect(
@@ -542,6 +394,7 @@ describe("PolicyDetailPage", () => {
   })
 
   it("saves a loosely spelled backend back under its normal name", async () => {
+    // The gateway resolves a backend on `name.strip().lower()`.
     const loose: PolicySpec = {
       select: [
         { ...WEIGHTED.select[0], router: " Weighted " },
@@ -555,9 +408,14 @@ describe("PolicyDetailPage", () => {
     expect(
       await screen.findByRole("radio", { name: "Split traffic" }),
     ).toBeChecked()
-    await user.click(screen.getByRole("button", { name: "Add a backup" }))
-    await pick(user, /^backup 1$/i, "openai:gpt-5-mini")
-    await save(user)
+    const chain = await section("Fallback chain")
+    await user.click(chain.getByRole("button", { name: "Add a backup" }))
+    await user.type(
+      screen.getByRole("combobox", { name: /^backup 1$/i }),
+      "openai:gpt-5-mini",
+    )
+    await user.keyboard("{Escape}")
+    await save(user, "Save fallback chain")
 
     expect(lastWrite(calls).spec.select[0]).toEqual(WEIGHTED.select[0])
   })
@@ -578,12 +436,14 @@ describe("PolicyDetailPage", () => {
     expect(
       screen.getByText(/at least one model a share above zero/i),
     ).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
+    expect(
+      screen.getByRole("button", { name: "Save main selection" }),
+    ).toBeDisabled()
 
-    await user.click(
-      screen.getByRole("button", { name: "Change pool model 2" }),
-    )
-    await pick(user, /^pool model 2$/i, "openai:gpt-5")
+    const second = screen.getByRole("combobox", { name: /model 2/i })
+    await user.clear(second)
+    await user.type(second, "openai:gpt-5")
+    await user.keyboard("{Escape}")
     expect(screen.getByText(/name each model once/i)).toBeInTheDocument()
     expect(policyWrites(calls)).toHaveLength(0)
   })
@@ -593,7 +453,7 @@ describe("PolicyDetailPage", () => {
     const user = userEvent.setup()
     renderPolicy("balanced")
 
-    await user.click(await screen.findByRole("button", { name: "Add to pool" }))
+    await user.click(await screen.findByRole("button", { name: "Add a model" }))
     expect(screen.getAllByRole("textbox", { name: /share/i })[2]).toHaveValue(
       "0",
     )
@@ -618,35 +478,42 @@ describe("PolicyDetailPage", () => {
     ])
     renderPolicy("wide")
 
+    const chain = await section("Fallback chain")
+    expect(chain.getByRole("button", { name: "Add a backup" })).toBeDisabled()
+    const main = await section("Main selection")
+    expect(main.getByRole("button", { name: "Add a model" })).toBeDisabled()
     expect(
-      await screen.findByRole("button", { name: "Add a backup" }),
-    ).toBeDisabled()
-    expect(screen.getByRole("button", { name: "Add to pool" })).toBeDisabled()
-    expect(
-      screen.getAllByText(/tries at most 5 models, counting the backups/)
-        .length,
-    ).toBeGreaterThan(0)
+      main.getByText(/dispatches at most 5 models, counting the backups/),
+    ).toBeInTheDocument()
   })
 
-  it("adds a budget tier and refuses one that could never fire", async () => {
+  it("adds a budget tier-down and refuses one that could never fire", async () => {
     const { calls } = mockApi([policy("fast", CHAIN)])
     const user = userEvent.setup()
     renderPolicy("fast")
 
-    await unfold(user, "Budget tier-down")
-    await user.click(screen.getByRole("button", { name: "Add a tier" }))
-    await pick(user, /^use instead$/i, "openai:gpt-5-nano")
+    await user.click(
+      await screen.findByRole("button", { name: "Add a tier-down" }),
+    )
+    await user.type(
+      screen.getByRole("combobox", { name: /^use instead$/i }),
+      "openai:gpt-5-nano",
+    )
+    await user.keyboard("{Escape}")
     const threshold = screen.getByRole("textbox", {
       name: /budget used at least/i,
     })
     await user.clear(threshold)
     await user.type(threshold, "100")
     expect(screen.getByText("Must be under 100.")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
+    const saveButton = screen.getByRole("button", {
+      name: "Save budget tier-down",
+    })
+    expect(saveButton).toBeDisabled()
 
     await user.clear(threshold)
     await user.type(threshold, "90")
-    await save(user)
+    await user.click(saveButton)
     expect(lastWrite(calls).spec).toEqual({
       select: [
         { when: { budget_used_pct: { gte: 90 } }, target: "openai:gpt-5-nano" },
@@ -656,51 +523,23 @@ describe("PolicyDetailPage", () => {
     })
   })
 
-  it("saves several budget tiers highest first, so each one can fire", async () => {
-    const { calls } = mockApi([policy("fast", CHAIN)])
-    const user = userEvent.setup()
-    renderPolicy("fast")
-
-    await unfold(user, "Budget tier-down")
-    await user.click(screen.getByRole("button", { name: "Add a tier" }))
-    await user.click(screen.getByRole("button", { name: "Add another tier" }))
-    const [low, high] = screen.getAllByRole("combobox", {
-      name: /^use instead$/i,
-    })
-    await user.type(low, "openai:gpt-5-nano")
-    await user.keyboard("{Escape}")
-    await user.type(high, "anthropic:claude-haiku-4-5")
-    await user.keyboard("{Escape}")
-    expect(
-      screen.getAllByRole("textbox", { name: /budget used at least/i }),
-    ).toHaveLength(2)
-    await save(user)
-
-    expect(lastWrite(calls).spec.select).toEqual([
-      {
-        when: { budget_used_pct: { gte: 85 } },
-        target: "anthropic:claude-haiku-4-5",
-      },
-      { when: { budget_used_pct: { gte: 80 } }, target: "openai:gpt-5-nano" },
-      { default: "openai:gpt-5-mini" },
-    ])
-  })
-
   it("adds a guardrail, warning when it makes the service a hard dependency", async () => {
     const { calls } = mockApi([policy("fast", CHAIN)])
     const user = userEvent.setup()
     renderPolicy("fast")
 
-    await unfold(user, "Guardrails")
+    const guardrails = await section("Guardrails")
     expect(
-      screen.getByRole("link", { name: "Guardrails page" }),
+      guardrails.getByRole("link", { name: "Guardrails page" }),
     ).toHaveAttribute("href", "/tools/guardrails")
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Add a guardrail" }),
+        guardrails.getByRole("button", { name: "Add a guardrail" }),
       ).toBeEnabled(),
     )
-    await user.click(screen.getByRole("button", { name: "Add a guardrail" }))
+    await user.click(
+      guardrails.getByRole("button", { name: "Add a guardrail" }),
+    )
     expect(
       screen.getByText(/rejects every request through this policy/),
     ).toBeInTheDocument()
@@ -708,7 +547,7 @@ describe("PolicyDetailPage", () => {
       screen.getByRole("textbox", { name: /profile/i }),
       "prompt-injection",
     )
-    await save(user)
+    await save(user, "Save guardrails")
 
     expect(lastWrite(calls).spec.guardrails).toEqual([
       { profile: "prompt-injection", mode: "block", on_unavailable: "block" },
@@ -717,64 +556,32 @@ describe("PolicyDetailPage", () => {
 
   it("disables adding a guardrail when no guardrails service is configured", async () => {
     mockApi([policy("fast", CHAIN)], null)
-    const user = userEvent.setup()
     renderPolicy("fast")
 
-    await unfold(user, "Guardrails")
+    const guardrails = await section("Guardrails")
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Add a guardrail" }),
+        guardrails.getByRole("button", { name: "Add a guardrail" }),
       ).toBeDisabled(),
     )
     expect(
-      screen.getByText(/No guardrails service is configured/),
+      guardrails.getByText(/No guardrails service is configured/),
     ).toBeInTheDocument()
-  })
-
-  it("shows the policy as live JSON, unsaved changes included", async () => {
-    mockApi([policy("fast", CHAIN)])
-    const user = userEvent.setup()
-    renderPolicy("fast")
-
-    await unfold(user, "As JSON")
-    expect(screen.getByText(/"on_failure"/)).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Remove backup 1" }))
-    expect(screen.queryByText(/"on_failure"/)).toBeNull()
     expect(
-      screen.getByRole("button", {
-        name: /^As JSON.*Includes unsaved changes/,
-      }),
-    ).toBeInTheDocument()
-  })
-
-  it("deletes the policy after confirming, and goes back to the list", async () => {
-    const { calls } = mockApi([policy("fast", CHAIN)])
-    const user = userEvent.setup()
-    renderPolicy("fast")
-
-    await user.click(
-      await screen.findByRole("button", { name: "Delete policy" }),
-    )
-    await user.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: "Delete policy",
-      }),
-    )
-
-    expect(await screen.findByText("Back on the list")).toBeInTheDocument()
-    expect(calls.some((call) => call.method === "DELETE")).toBe(true)
+      guardrails.getByRole("link", { name: "Guardrails page" }),
+    ).toHaveAttribute("href", "/tools/guardrails")
   })
 
   it("opens the user's own row when the address names one", async () => {
     mockApi([
       policy("cheap", CHAIN),
-      policy("cheap", SPILL_OVER, { user_id: "u-bob" }),
+      policy("cheap", PRIORITY, { user_id: "u-bob" }),
     ])
     renderPolicy("cheap", "/routing/cheap?user=u-bob")
 
-    await screen.findByRole("list", { name: "Pool" })
-    expect(listed("Pool")[0]).toMatch(/gpt-5-nano/)
-    expect(screen.getByText("u-bob")).toBeInTheDocument()
+    expect(
+      await screen.findByRole("combobox", { name: /model 1/i }),
+    ).toHaveValue("openai:gpt-5-nano")
   })
 
   it("says so when the policy is not there", async () => {
@@ -800,20 +607,18 @@ describe("PolicyDetailPage for an alias", () => {
     renderPolicy("legacy")
 
     expect(
-      await screen.findByText(/go to that model as written, with no backup/),
+      await screen.findByText(/An alias name is its key/),
     ).toBeInTheDocument()
-    expect(screen.getByText("ALIAS")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Delete alias" })).toBeVisible()
-    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Add a backup" })).toBeNull()
-    expect(screen.queryByRole("radio", { name: "Split traffic" })).toBeNull()
-    // The operator surface has no one-step swap, so it says how instead.
     expect(
-      screen.queryByRole("button", { name: "Turn into a policy" }),
-    ).toBeNull()
+      screen.queryByRole("textbox", { name: /^name$/i }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText(/An alias holds one target/)).toBeInTheDocument()
     expect(
-      screen.getByText(/delete it and create a policy with the same name/),
-    ).toBeInTheDocument()
+      screen.queryByRole("heading", { name: "Fallback chain" }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("radio", { name: "Split traffic" }),
+    ).not.toBeInTheDocument()
   })
 
   it("writes an alias edit back to the alias's own workspace", async () => {
@@ -837,9 +642,11 @@ describe("PolicyDetailPage for an alias", () => {
       "/routing/elsewhere-alias",
     )
 
-    await screen.findByRole("combobox", { name: /^points to/i })
-    await pick(user, /^points to/i, "openai:gpt-5-mini")
-    await save(user)
+    const main = await screen.findByRole("combobox", { name: /^main model$/i })
+    await user.clear(main)
+    await user.type(main, "openai:gpt-5-mini")
+    await user.keyboard("{Escape}")
+    await save(user, "Save main selection")
 
     const written = calls.find(
       (call) =>
@@ -852,47 +659,6 @@ describe("PolicyDetailPage for an alias", () => {
       workspace_id: OTHER_WORKSPACE,
     })
   })
-
-  it("turns an alias into a policy of the same name in one write", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: adminContext(),
-      memberPolicies: [],
-      memberAliases: [
-        {
-          name: "fast",
-          target: "openai:gpt-5",
-          source: "stored",
-          user_id: null,
-          workspace_id: ADMIN_WORKSPACE,
-        },
-      ],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<PolicyDetailPage name="fast" />, "/routing/fast")
-
-    await user.click(
-      await screen.findByRole("button", { name: "Turn into a policy" }),
-    )
-    expect(listed("Tried in order")[0]).toMatch(/MAIN.*gpt-5 OpenAI/)
-    await user.click(screen.getByRole("button", { name: "Add a backup" }))
-    await pick(user, /^backup 1$/i, "anthropic:claude-haiku-4-5")
-    await save(user)
-
-    const written = calls.find(
-      (call) =>
-        call.method === "POST" &&
-        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
-    )
-    expect(written?.body).toEqual({
-      name: "fast",
-      spec: {
-        select: [{ default: "openai:gpt-5" }],
-        on_failure: ["anthropic:claude-haiku-4-5"],
-      },
-      workspace_id: ADMIN_WORKSPACE,
-      replaces_alias: true,
-    })
-  })
 })
 
 describe("PolicyDetailPage read-only", () => {
@@ -901,15 +667,17 @@ describe("PolicyDetailPage read-only", () => {
     renderPolicy("auto")
 
     expect(
-      await screen.findByText(/Set in the deployment's config.yml/),
+      await screen.findByText(/Set in config.yml, so it is read-only here/),
     ).toBeInTheDocument()
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
-    expect(screen.queryByRole("button", { name: /^Move/ })).toBeNull()
-    expect(screen.queryByRole("textbox")).toBeNull()
-    expect(screen.getByText("Deployment")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /^Save/ })).toBeNull()
+    // The one field is the test's simulated budget, which writes nothing.
+    const test = await section("Test")
+    expect(screen.getAllByRole("textbox")).toEqual([
+      test.getByRole("textbox", { name: /Budget used/ }),
+    ])
     expect(
-      screen.getAllByText("80% → gpt-5-nano · OpenAI").length,
-    ).toBeGreaterThan(0)
+      screen.getByText(/From 80% of budget: gpt-5-nano · OpenAI/),
+    ).toBeInTheDocument()
   })
 
   it("shows a policy it cannot edit without loss, with its spec in full", async () => {
@@ -926,159 +694,106 @@ describe("PolicyDetailPage read-only", () => {
     expect(
       await screen.findByText(/Uses options this page cannot show yet/),
     ).toBeInTheDocument()
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
+    expect(screen.queryByRole("button", { name: /^Save/ })).toBeNull()
     expect(screen.getByText(/"key_id": "k-1"/)).toBeInTheDocument()
   })
 })
 
-describe("PolicyDetailPage for a member", () => {
-  const MEMBER_ID = "33333333-3333-3333-3333-333333333333"
-  const member = () =>
-    organizationContext({
-      deployment_operator: false,
-      role: "member",
-      workspace_memberships: [
-        { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "member" },
-      ],
-    })
+describe("PolicyDetailPage test section", () => {
+  it("shows what the stored spec compiles to, and what it left out", async () => {
+    const { calls } = mockApi()
+    renderPolicy("fast")
 
-  it("shows a shared policy read-only, with the way to make their own", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: member(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-      ],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<PolicyDetailPage name="fast" />, "/routing/fast", MOVED)
-
-    const copyButton = await screen.findByRole("button", {
-      name: "Make my own version",
-    })
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Delete policy" })).toBeNull()
-    expect(screen.queryByRole("button", { name: /^Move/ })).toBeNull()
-    await user.click(copyButton)
-    // The page follows to the copy, which is theirs to edit.
+    const test = await section("Test")
+    expect(await test.findByText(/gpt-5-mini · OpenAI/)).toBeInTheDocument()
+    expect(test.getByText(/main model/)).toBeInTheDocument()
     expect(
-      await screen.findByRole("heading", {
-        level: 1,
-        name: "Your version of fast",
-      }),
+      test.getByText(/is not in allowed_models for this caller/),
     ).toBeInTheDocument()
-    expect(calls.find((call) => call.url.endsWith("/copy"))?.body).toEqual({
-      name: "fast",
-      workspace_id: ADMIN_WORKSPACE,
-    })
+    const sent = calls.find((call) =>
+      call.url.endsWith(`${API_ROOT}/routing/policies/explain`),
+    )
+    expect(sent?.body).toMatchObject({ name: "fast", spec: CHAIN })
+    expect(policyWrites(calls)).toEqual([])
   })
 
-  it("edits their own version and removes it, handing requests back", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: member(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-        policy("fast", CHAIN, {
-          workspace_id: ADMIN_WORKSPACE,
-          user_id: MEMBER_ID,
-        }),
-      ],
-    })
+  it("sends a config.yml policy by name and compiles again for a simulated budget", async () => {
     const user = userEvent.setup()
+    const { calls } = mockApi()
+    renderPolicy("auto")
+
+    const test = await section("Test")
+    await test.findByText(/gpt-5-mini · OpenAI/)
+    const explains = () =>
+      calls.filter((call) => call.url.endsWith("/routing/policies/explain"))
+    expect(explains()[0].body).not.toHaveProperty("spec")
+
+    const budget = test.getByRole("textbox", { name: /Budget used/ })
+    // Blank after trimming is no budget at all, so past the debounce nothing
+    // compiles again, rather than once more at 0%.
+    const before = explains().length
+    await user.type(budget, "  ")
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(explains()).toHaveLength(before)
+
+    // A budget that is not a number hides the plan rather than leaving the
+    // last one under the field as if it answered it.
+    await user.clear(budget)
+    await user.type(budget, "abc")
+    await waitFor(() =>
+      expect(test.queryByRole("list", { name: "Tried in order" })).toBeNull(),
+    )
+
+    await user.clear(budget)
+    await user.type(budget, "85")
+    // Until the new value compiles, the last plan is marked as not current.
+    expect(
+      test.getByRole("list", { name: "Tried in order" }).parentElement,
+    ).toHaveAttribute("aria-busy", "true")
+    await waitFor(() =>
+      expect(explains().at(-1)?.body).toMatchObject({
+        name: "auto",
+        budget_used_pct: 85,
+      }),
+    )
+  })
+
+  it("says so when no model is left", async () => {
+    mockApi(undefined, undefined, [], {
+      explain: { ...EXPLAINED, candidates: [], selection_reason: "none" },
+    })
+    renderPolicy("fast")
+
+    const test = await section("Test")
+    expect(
+      await test.findByText("No model can serve this policy."),
+    ).toBeInTheDocument()
+  })
+
+  it("asks the tenant surface, in the selected workspace", async () => {
+    const { calls } = mockApi([], undefined, [], {
+      context: adminContext(),
+      memberPolicies: [policy("tenant-fast", CHAIN)],
+    })
     renderInWorkspace(
-      <PolicyDetailPage name="fast" />,
-      `/routing/fast?user=${MEMBER_ID}`,
-      MOVED,
+      <PolicyDetailPage name="tenant-fast" />,
+      "/routing/tenant-fast",
     )
 
-    expect(
-      await screen.findByRole("heading", {
-        level: 1,
-        name: "Your version of fast",
-      }),
-    ).toBeInTheDocument()
-    expect(screen.getByText("Just you")).toBeInTheDocument()
-    // A version keeps the shared name.
-    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull()
-
-    await user.click(screen.getByRole("button", { name: "Remove my version" }))
-    await user.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: "Remove my version",
-      }),
+    await (await section("Test")).findByText(/gpt-5-mini · OpenAI/)
+    const sent = calls.find((call) =>
+      call.url.endsWith(
+        `${API_ROOT}/organizations/me/routing-policies/explain`,
+      ),
     )
-    const deleted = calls.find((call) => call.method === "DELETE")
-    expect(deleted?.url).toContain(`member_id=${MEMBER_ID}`)
-    // Back on the shared policy their requests now use.
-    expect(
-      await screen.findByRole("heading", { level: 1, name: "fast" }),
-    ).toBeInTheDocument()
+    expect(sent?.body).toMatchObject({
+      name: "tenant-fast",
+      workspace_id: expect.any(String),
+    })
   })
 })
 
 describe("PolicyDetailPage for an organization admin", () => {
-  it("sends named members to another model ahead of the budget tiers", async () => {
-    const SAM = "77777777-7777-7777-7777-777777777777"
-    const { calls } = mockApi([], null, [], {
-      context: adminContext(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-      ],
-      members: [
-        organizationMember({
-          user_id: SAM,
-          attribution_user_id: SAM,
-          full_name: "Sam Rivera",
-        }),
-      ],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<PolicyDetailPage name="fast" />, "/routing/fast")
-
-    await unfold(user, "Rules")
-    await user.click(screen.getByRole("button", { name: "Add a rule" }))
-    // Saving waits for both halves of the rule.
-    expect(
-      screen.getByText(/at least one member and a model/),
-    ).toBeInTheDocument()
-    await user.click(screen.getByRole("combobox", { name: /^members/i }))
-    await user.click(await screen.findByRole("option", { name: /Sam Rivera/ }))
-    await user.keyboard("{Escape}")
-    await pick(user, /^use$/i, "openai:gpt-5")
-    expect(
-      screen.getByRole("button", { name: /^Rules.*Sam Rivera → gpt-5/ }),
-    ).toBeInTheDocument()
-    await save(user)
-
-    const written = calls.find(
-      (call) =>
-        call.method === "POST" &&
-        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
-    )
-    expect((written?.body as { spec?: PolicySpec })?.spec?.select).toEqual([
-      { when: { user_id: [SAM] }, target: "openai:gpt-5" },
-      { default: "openai:gpt-5-mini" },
-    ])
-  })
-
-  it("keeps rules from a member reading the policy", async () => {
-    mockApi([], null, [], {
-      context: organizationContext({
-        deployment_operator: false,
-        role: "member",
-        workspace_memberships: [
-          { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "member" },
-        ],
-      }),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-      ],
-    })
-    renderInWorkspace(<PolicyDetailPage name="fast" />, "/routing/fast")
-
-    await screen.findByRole("heading", { level: 1, name: "fast" })
-    expect(screen.queryByRole("button", { name: /^Rules/ })).toBeNull()
-  })
-
   it("writes an admin's edit back to the row's own workspace", async () => {
     const OTHER_WORKSPACE = "55555555-5555-5555-5555-555555555555"
     const { calls } = mockApi([], null, [], {
@@ -1096,7 +811,7 @@ describe("PolicyDetailPage for an organization admin", () => {
     await user.click(
       await screen.findByRole("button", { name: "Remove backup 1" }),
     )
-    await save(user)
+    await save(user, "Save fallback chain")
 
     const written = calls.find(
       (call) =>
@@ -1104,34 +819,5 @@ describe("PolicyDetailPage for an organization admin", () => {
         call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
     )
     expect(written?.body).toMatchObject({ workspace_id: OTHER_WORKSPACE })
-  })
-
-  it("writes an edit to a member's own policy as theirs, not the shared one", async () => {
-    const MEMBER = "88888888-8888-8888-8888-888888888888"
-    const { calls } = mockApi([], null, [], {
-      context: adminContext(),
-      memberPolicies: [policy("theirs", CHAIN, { user_id: MEMBER })],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(
-      <PolicyDetailPage name="theirs" />,
-      `/routing/theirs?user=${MEMBER}`,
-    )
-
-    await user.click(
-      await screen.findByRole("button", { name: "Remove backup 1" }),
-    )
-    await save(user)
-
-    const written = calls.find(
-      (call) =>
-        call.method === "POST" &&
-        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
-    )
-    expect(written?.body).toMatchObject({
-      name: "theirs",
-      workspace_id: ADMIN_WORKSPACE,
-      member_id: MEMBER,
-    })
   })
 })

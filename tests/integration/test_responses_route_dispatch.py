@@ -46,7 +46,7 @@ def _response(*, output: list[Any] | None = None, status: str = "completed") -> 
         tools=[],
         usage=ResponseUsage(
             input_tokens=5,
-            input_tokens_details=InputTokensDetails(cached_tokens=0),
+            input_tokens_details=InputTokensDetails(cached_tokens=0, cache_write_tokens=0),
             output_tokens=2,
             output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
             total_tokens=7,
@@ -130,9 +130,9 @@ def test_bare_string_input_not_corrupted_by_normalization(
 ) -> None:
     """A bare-string ``input`` must reach the provider verbatim.
 
-    The default config enables file understanding; the normalizer used to iterate
-    ``input`` as a sequence, rewriting a plain string into a list of one-character
-    items. Regression guard: the string survives unchanged.
+    The normalizer used to iterate ``input`` as a sequence, rewriting a plain
+    string into a list of one-character items. Regression guard: the string
+    survives unchanged.
     """
     captured: dict[str, Any] = {}
 
@@ -385,7 +385,7 @@ def test_mcp_servers_dispatches_through_responses_tool_loop(
             json={
                 "model": _MODEL,
                 "input": "hi",
-                "mcp_servers": [{"name": "test", "url": "http://127.0.0.1:9999/mcp"}],
+                "mcp_servers": [{"name": "test", "url": "http://93.184.216.34/mcp"}],
             },
             headers=api_key_header,
         )
@@ -465,8 +465,10 @@ def test_managed_web_tool_dispatches_through_the_gateways_web_backend(
 
     with (
         patch("gateway.api.routes.responses.responses_tool_loop", new=fake_loop),
-        patch("gateway.api.routes._pipeline.build_web_search_backends", return_value=[opened(search_backend)]),
-        patch("gateway.api.routes._pipeline._build_web_retrieval_backend", return_value=opened(fetch_backend)),
+        patch(
+            "gateway.api.routes._pipeline.build_web_search_backends",
+            new=lambda _config, search, **_kwargs: [opened(search_backend if search is not None else fetch_backend)],
+        ),
     ):
         resp = client.post(
             f"{API_ROOT}/responses",
@@ -479,7 +481,7 @@ def test_managed_web_tool_dispatches_through_the_gateways_web_backend(
         )
 
     assert resp.status_code == 200, resp.text
-    # The search runs on its instance's backend, and a fetch alone on the shared one.
+    # The search runs on its instance's backend, and a fetch alone on the fetch backend.
     served = search_backend if tool_type == "otari_web_search" else fetch_backend
     assert pool_seen == [served]
 
@@ -900,7 +902,7 @@ def test_stream_mcp_servers_dispatches_through_tool_loop_stream(
                 "model": _MODEL,
                 "input": "hi",
                 "stream": True,
-                "mcp_servers": [{"name": "test", "url": "http://127.0.0.1:9999/mcp"}],
+                "mcp_servers": [{"name": "test", "url": "http://93.184.216.34/mcp"}],
             },
             headers=api_key_header,
         )
@@ -945,7 +947,7 @@ def test_stream_mcp_pool_close_failure_does_not_cut_off_the_stream(
                 "model": _MODEL,
                 "input": "hi",
                 "stream": True,
-                "mcp_servers": [{"name": "test", "url": "http://127.0.0.1:9999/mcp"}],
+                "mcp_servers": [{"name": "test", "url": "http://93.184.216.34/mcp"}],
             },
             headers=api_key_header,
         )

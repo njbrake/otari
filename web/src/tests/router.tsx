@@ -4,6 +4,7 @@ import {
   createRoute,
   createRouter,
   RouterProvider,
+  useLocation,
 } from "@tanstack/react-router"
 import { act, render } from "@testing-library/react"
 import type { ReactElement, ReactNode } from "react"
@@ -17,8 +18,6 @@ import {
 export interface TestRouterOptions {
   /** Where the router starts, query string included. */
   url?: string
-  /** History entries behind `url`, so a test can see where going back lands. */
-  previous?: string[]
   /** Extra destinations, so a test can observe where a navigation landed. */
   routes?: { path: string; element: ReactNode }[]
   /**
@@ -40,16 +39,13 @@ export interface TestRouterOptions {
  * The router is built once per `withRouter()` call, so each test gets its own
  * history and a re-render never resets the location mid-test.
  *
- * Memory history, where the app runs on hash history, so a `Link` renders
- * `/activity?status=error` here and `/#/activity?status=error` in the browser.
- * That is deliberate: hash history in jsdom would share one global
- * `window.location` across tests and make them order-dependent. It does mean an
- * href assertion below pins the path and query but not the shipped hash prefix,
- * so the hash form is asserted in `web/e2e` instead.
+ * Memory history, where the app runs on browser history: browser history in
+ * jsdom would share one global `window.location` across tests and make them
+ * order-dependent. A `Link` renders the same `/activity?status=error` either
+ * way at the root base; a build under another base is asserted in `web/e2e`.
  */
 export function withRouter({
   url = "/",
-  previous = [],
   routes = [],
   shell,
 }: TestRouterOptions = {}) {
@@ -86,10 +82,7 @@ export function withRouter({
 
   const router = createRouter({
     routeTree: rootRoute.addChildren([subject, ...probes, rest]),
-    history: createMemoryHistory({
-      initialEntries: [...previous, url],
-      initialIndex: previous.length,
-    }),
+    history: createMemoryHistory({ initialEntries: [url] }),
     // The same search codec the app runs on, so a test URL is read (and
     // rewritten) exactly as the browser would read it.
     parseSearch,
@@ -122,4 +115,18 @@ export async function renderWithRouter(
   const result = render(ui, { wrapper: withRouter(options) })
   await flushRouter()
   return result
+}
+
+/**
+ * A route body that prints where the app navigated to, for a test that follows
+ * a link onto a route it does not render (`getByTestId("location")`).
+ */
+export function LocationProbe() {
+  const location = useLocation()
+  return (
+    <div data-testid="location">
+      {location.pathname}
+      {location.searchStr}
+    </div>
+  )
 }

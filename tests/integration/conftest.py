@@ -8,7 +8,6 @@ import time
 from collections.abc import AsyncGenerator, Callable, Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -21,7 +20,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, inspect, text
+from sqlalchemy import Engine, MetaData, create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -36,20 +35,34 @@ if "gateway" in sys.modules:
 
 from gateway.api.deps import (
     build_hosted_provider_service,
+    build_unavailable_model_reporter,
     get_membership_listener,
     set_config,
 )
 from gateway.container import build_container
 from gateway.core.config import API_KEY_HEADER, API_ROOT, GatewayConfig
-from gateway.core.unit_of_work import UnitOfWork
 from gateway.db import get_db
 from gateway.main import create_app, install_rate_limits
 from gateway.rate_limit import RateLimiter
-from gateway.repositories.usage import UsageRollupRepository
 from gateway.services.budgets import reserve_budget
+from gateway.services.providers import new_platform_connect_rate_limiter
 from gateway.services.tools import WebSearchBackend
+from gateway.types.key_scope import END_USER_SCOPES, KeyScope, KeyScopeSet
 
 MODEL_NAME = "gemini:gemini-2.5-flash"
+# Every scope a key that is not a service key may hold, for a test of something other than scopes.
+ALL_KEY_SCOPES_HELD = KeyScopeSet.checked((s for s in KeyScope if s not in END_USER_SCOPES), is_service_key=False)
+# The same scopes as a request body names them.
+ALL_KEY_SCOPES = ALL_KEY_SCOPES_HELD.stored
+# Every scope, which only a service key may hold.
+ALL_SERVICE_KEY_SCOPES = [scope.value for scope in KeyScope]
+
+
+def all_scopes(settings: dict[str, Any]) -> list[str]:
+    """Every scope a key created with ``settings`` may hold."""
+    return ALL_SERVICE_KEY_SCOPES if settings.get("is_service_key") else ALL_KEY_SCOPES
+
+
 # The ``fake`` search instance ``serve_search_on_fake`` serves the in-loop search on, and the fetch instance it may
 # enrich its hits through.
 FAKE_SEARCH = "fake-search"
@@ -107,13 +120,16 @@ def _reset_engine(database_url: str) -> Engine:
 
 
 def _build_reset_plan(database_url: str) -> _ResetPlan:
-    """Record the schema's tables, and whatever the migrations seeded into them."""
+    """Record the schema's tables, in an order safe to reinsert, and whatever the migrations seeded."""
     with _reset_engine(database_url).connect() as conn:
-        # Parents before children, so the seeds go back in an order their foreign
-        # keys accept. ``get_table_names`` follows the catalog's physical order,
-        # which an ``ALTER TABLE`` can reshuffle.
-        sorted_names = inspect(conn).get_sorted_table_and_fkc_names()
-        tables = [name for name, _ in sorted_names if name is not None and name != "alembic_version"]
+        metadata = MetaData()
+        metadata.reflect(conn)
+        # A seeded row in a child table can reference a seeded row in a parent table, so
+        # reinsertion needs that same order. Table-name order gives no such guarantee.
+        # NOTE: ``organization`` and ``user`` reference each other, so no foreign-key order exists
+        # for that pair and SQLAlchemy warns and orders them by name, which seeds them in the
+        # direction they need.
+        tables = [table.name for table in metadata.sorted_tables if table.name != "alembic_version"]
         seeds = tuple(
             (table, rows)
             for table in tables
@@ -169,27 +185,6 @@ def _to_async_url(database_url: str) -> str:
     if database_url.startswith("sqlite:///") and not database_url.startswith("sqlite+aiosqlite"):
         return database_url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
     return database_url
-
-
-def refresh_usage_rollups(database_url: str) -> int:
-    """Rebuild every marked hour's usage rollups, as the background refresher would, and return how many."""
-
-    async def main() -> int:
-        engine = create_async_engine(_to_async_url(database_url))
-        built = 0
-        try:
-            async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-                uow = UnitOfWork(session)
-                while True:
-                    async with uow:
-                        done = await UsageRollupRepository(uow).refresh(24, now=datetime.now(UTC))
-                    built += done
-                    if not done:
-                        return built
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(main())
 
 
 def build_async_session_override(
@@ -263,6 +258,22 @@ def clean_database(postgres_url: str) -> None:
     """
     _run_alembic_migrations(postgres_url)
     reset_database(postgres_url)
+
+
+@pytest.fixture
+def public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve every hostname to a public address, so a tenant's ``api_base`` passes the address check without DNS.
+
+    An address literal is never resolved, so a test naming a private one still sees it refused.
+    """
+    import ipaddress
+
+    from gateway.services.web_retrieval_network import SystemAddressResolver
+
+    async def resolve(self: SystemAddressResolver, host: str, port: int) -> tuple[ipaddress.IPv4Address, ...]:
+        return (ipaddress.IPv4Address("1.1.1.1"),)
+
+    monkeypatch.setattr(SystemAddressResolver, "resolve", resolve)
 
 
 @pytest.fixture
@@ -360,8 +371,6 @@ def shared_test_config(postgres_url: str, providers: dict[str, dict[str, Any]]) 
         # The suite exercises providers: entries as config.yml serves them;
         # test_configured_provider_import.py turns the copy on.
         import_configured_providers=False,
-        # Off by default in this fork; on here so upstream's trace tests keep running.
-        trace_capture_enabled=True,
     )
 
 
@@ -455,6 +464,7 @@ def _refresh_process_state(app: FastAPI, config: GatewayConfig) -> None:
         if config.dashboard_login_rate_limit_per_minute is not None
         else None
     )
+    app.state.platform_connect_rate_limiter = new_platform_connect_rate_limiter()
     # Built on first use and caching each issuer's signing keys, so a test's stub must not serve the next test.
     app.state.federated_token_verifier = None
     app.state.container = build_container(
@@ -463,6 +473,7 @@ def _refresh_process_state(app: FastAPI, config: GatewayConfig) -> None:
         membership_listener=get_membership_listener,
         hosted_provider_service=functools.partial(build_hosted_provider_service, config=config),
     )
+    app.state.unavailable_model_reporter = build_unavailable_model_reporter(config)
     install_rate_limits(app, config)
 
 
@@ -476,7 +487,7 @@ def dispose_async_engine(async_engine: AsyncEngine) -> None:
         loop.close()
 
 
-def build_test_client(config: GatewayConfig) -> Generator[TestClient]:
+def build_test_client(config: GatewayConfig, *, base_url: str = "http://testserver") -> Generator[TestClient]:
     """Boot an app on the worker's database and hand back a client for it.
 
     Where a test client that owns its database lifecycle is assembled: the schema
@@ -485,6 +496,9 @@ def build_test_client(config: GatewayConfig) -> Generator[TestClient]:
     their own ``yield from`` this rather than restating it. A handful still build
     an app inline through ``build_async_session_override``; those never touched
     the schema, so they were left alone.
+
+    ``base_url`` is the address requests are sent to, which sets the scheme the
+    server sees.
     """
     _run_alembic_migrations(config.database_url)
     async_engine = create_async_engine(_to_async_url(config.database_url), pool_pre_ping=True)
@@ -500,7 +514,7 @@ def build_test_client(config: GatewayConfig) -> Generator[TestClient]:
     app.dependency_overrides = {get_db: override_get_db}
 
     try:
-        with TestClient(app) as test_client:
+        with TestClient(app, base_url=base_url) as test_client:
             yield test_client
     finally:
         dispose_async_engine(async_engine)
@@ -585,10 +599,10 @@ def master_key_header(test_config: GatewayConfig) -> dict[str, str]:
 
 @pytest.fixture
 def api_key_obj(client: TestClient, master_key_header: dict[str, str]) -> dict[str, Any]:
-    """Create a test API key and return its details."""
+    """Create a test API key holding every scope a key that is not a service key may, and return its details."""
     response = client.post(
         f"{API_ROOT}/keys",
-        json={"key_name": "test-key"},
+        json={"key_name": "test-key", "scopes": ALL_KEY_SCOPES},
         headers=master_key_header,
     )
     assert response.status_code == 200

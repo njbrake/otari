@@ -34,9 +34,10 @@ from gateway.core.database import DATABASE_ERRORS
 from gateway.log_config import logger
 from gateway.models.providers import ModelAlias
 from gateway.repositories.users_repository import get_active_user
-from gateway.services.alias_service import alias_names_in, all_alias_names, list_stored_aliases, refresh_alias_cache
-from gateway.services.policy_store import all_policy_names, policy_names_in
+from gateway.services.alias_service import all_alias_names, list_stored_aliases, refresh_alias_cache
+from gateway.services.policy_store import all_policy_names
 from gateway.services.providers import hosted_implementation
+from gateway.services.tenancy import OrgProviderKeyService
 
 router = APIRouter(
     prefix="/aliases",
@@ -98,9 +99,7 @@ class AliasResponse(BaseModel):
         )
 
 
-def _validate(
-    config: GatewayConfig, name: str, target: str, user_id: str | None, *, names_in: uuid.UUID | None = None
-) -> None:
+def _validate(config: GatewayConfig, name: str, target: str, user_id: str | None, own_prefixes: frozenset[str]) -> None:
     """Apply the startup alias rules to a runtime write, as a 400.
 
     A configured alias wins over a *workspace-wide* stored one during resolution,
@@ -109,12 +108,7 @@ def _validate(
     will do. A user-scoped alias is exempt: it outranks both other layers, so
     shadowing a configured name is a working override rather than dead data, and
     is the reason to scope an alias in the first place.
-
-    ``names_in`` limits the policy and chaining checks to the names in force in
-    that workspace, for a tenant's write, as ``routing._validate_write`` does.
     """
-    policies = all_policy_names(config) if names_in is None else policy_names_in(config, names_in)
-    aliases = all_alias_names(config) if names_in is None else alias_names_in(config, names_in)
     if user_id is None and name in config.aliases:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -134,7 +128,7 @@ def _validate(
     # after an alias. Without this, creating an alias named after an existing
     # policy would silently shadow it: alias resolution runs first, so the policy
     # would stop taking effect and nothing would say so.
-    if name in policies:
+    if name in all_policy_names(config):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -142,9 +136,15 @@ def _validate(
                 "silently stop that policy taking effect. Rename the alias, or edit the policy instead."
             ),
         )
-    alias_names = aliases | {name}
+    alias_names = all_alias_names(config) | {name}
     try:
-        config.validate_alias(name, target, alias_names=alias_names, hosted_implementation=hosted_implementation)
+        config.validate_alias(
+            name,
+            target,
+            alias_names=alias_names,
+            hosted_implementation=hosted_implementation,
+            own_prefixes=own_prefixes,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -208,47 +208,12 @@ async def list_aliases(
     )
 
 
-async def stage_alias_replacement(
-    db: AsyncSession, config: GatewayConfig, name: str, *, workspace_id: uuid.UUID
-) -> None:
-    """Stage the removal of a workspace's own alias that a policy of the same name is about to replace.
-
-    Staged rather than committed, so the policy write that follows commits both
-    in one transaction and callers sending the name never find neither. Refuses
-    when the workspace has no such alias, and when the name is also a user's own
-    alias in this workspace or a config.yml one, since the policy would still
-    collide with that. Another workspace's aliases are not read: a name never
-    resolves outside its workspace, and refusing would reveal it to the caller.
-    """
-    rows = (
-        (await db.execute(select(ModelAlias).where(ModelAlias.name == name, ModelAlias.workspace_id == workspace_id)))
-        .scalars()
-        .all()
-    )
-    own = next((row for row in rows if row.workspace_id == workspace_id and row.user_id is None), None)
-    if own is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Alias '{name}' is not a workspace-wide alias of workspace '{workspace_id}'.",
-        )
-    if len(rows) > 1 or name in config.aliases:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"'{name}' is also a user's own alias in this workspace or one in config.yml, so a policy of that "
-                "name would still collide with it. Remove that alias first."
-            ),
-        )
-    await db.delete(own)
-
-
 async def upsert_alias_in_workspace(
     request: AliasRequest,
     db: AsyncSession,
     config: GatewayConfig,
     *,
     workspace_id: uuid.UUID,
-    tenant_names: bool = False,
 ) -> AliasResponse:
     """Create or update a stored alias in an already-resolved workspace.
 
@@ -256,13 +221,13 @@ async def upsert_alias_in_workspace(
     two routers that reach this resolve it differently and must keep doing so:
     the operator's takes the deployment's default when none is named, while the
     tenant-scoped one resolves it inside the caller's own organization
-    (``organization_routing``, otari-ai#1969). ``tenant_names`` checks the name
-    against this workspace's names alone; see ``_validate``.
+    (``organization_routing``, otari-ai#1969).
     """
     if request.user_id is not None:
         await _require_user(db, request.user_id)
     await refresh_alias_cache(db)
-    _validate(config, request.name, request.target, request.user_id, names_in=workspace_id if tenant_names else None)
+    own_prefixes = await OrgProviderKeyService(db, config).get_workspace_byo_providers(workspace_id=workspace_id)
+    _validate(config, request.name, request.target, request.user_id, own_prefixes)
 
     # Both scopes are part of the identity: the upsert must not turn one
     # workspace's alias into another's, nor a workspace-wide alias into a

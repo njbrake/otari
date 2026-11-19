@@ -18,9 +18,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core import error_codes
+from gateway.core.config import END_USER_BUDGET_HEADER
 from gateway.core.database import DATABASE_ERRORS
 from gateway.core.metered_pricing import estimate_metered_cost, priced_per_request
 from gateway.core.sql import defer_commit_flush
+from gateway.core.usage import cache_read_tokens_of, cache_write_tokens_of
 from gateway.log_config import logger
 from gateway.metrics import REGISTRY, Counter
 from gateway.models.budgets import (
@@ -37,7 +39,13 @@ from gateway.repositories.budgets import ApplicableCeiling, HeldAmounts
 from gateway.repositories.users_repository import get_active_user
 from gateway.services.budgets import _ledger as ledger
 from gateway.services.budgets._periods import budget_window
-from gateway.services.budgets._refusals import BlockedAxis, blocked_on, refusal_detail
+from gateway.services.budgets._refusals import (
+    BlockedAxis,
+    blocked_on,
+    end_user_fields,
+    refusal_detail,
+    user_subject,
+)
 from gateway.services.budgets._scoped_enforcement import (
     ApplicableBudget,
     BudgetScopeRequest,
@@ -49,7 +57,15 @@ from gateway.services.budgets._scoped_enforcement import (
 from gateway.services.budgets._scoped_enforcement import release as release_scoped
 from gateway.services.budgets._scoped_enforcement import reserve as reserve_scoped
 from gateway.services.budgets._scoped_enforcement import settle as settle_scoped
-from gateway.services.pricing import Quantities, Slot, has_completion_meter, price_usage
+from gateway.services.pricing import (
+    NO_FACTS,
+    PriceFacts,
+    Quantities,
+    Slot,
+    apply_rules,
+    has_completion_meter,
+    price_usage,
+)
 from gateway.services.pricing_service import find_model_pricing, is_free_pricing, search_unit_cost
 from gateway.services.provider_kwargs import provider_key
 from gateway.types.budget_state import BudgetState
@@ -326,17 +342,27 @@ def _blocked_axis(
     return BlockedAxis("budget")
 
 
-def _budget_exceeded(detail: str, blocked: BlockedAxis, *, budget_scope: str) -> HTTPException:
-    """The 403 for a budget with no room, with ``Retry-After`` when its window ending would let the request in."""
-    return HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail=detail,
-        headers=error_codes.error_headers(
-            error_codes.BUDGET_EXCEEDED,
-            budget_scope=budget_scope,
-            retry_after=blocked.retry_after(datetime.now(UTC)),
-        ),
+def _budget_exceeded(
+    detail: str,
+    blocked: BlockedAxis,
+    *,
+    budget_scope: str,
+    fields: dict[str, str] | None = None,
+    end_user_budget_id: str | None = None,
+) -> HTTPException:
+    """The 403 for a budget with no room, with ``Retry-After`` when its window ending would let the request in.
+
+    ``end_user_budget_id`` is the budget of the end user refused, sent in ``Otari-End-User-Budget`` as an admitted
+    request's is, so a caller can tell which budget it was put on.
+    """
+    headers = error_codes.error_headers(
+        error_codes.BUDGET_EXCEEDED,
+        budget_scope=budget_scope,
+        retry_after=blocked.retry_after(datetime.now(UTC)),
     )
+    if end_user_budget_id is not None:
+        headers[END_USER_BUDGET_HEADER] = end_user_budget_id
+    return error_codes.RefusalException(status.HTTP_403_FORBIDDEN, detail, headers=headers, fields=fields)
 
 
 def _normalize_strategy(strategy: str | None) -> str:
@@ -380,7 +406,7 @@ class ReservationHandle:
     scoped_token_estimate: int = 0
     request_estimate: int = 0
     scoped_request_estimate: int = 0
-    # This is None when the request holds nothing: a free model, a budget-exempt key, or no budget and no ceiling.
+    # This is None when the request holds nothing: a free model under no cap, a budget-exempt key, or nothing capped.
     reservation_id: str | None = None
     # The time to live of a ledger row written for this reservation after admission.
     reservation_ttl_sec: int = DEFAULT_RESERVATION_TTL_SEC
@@ -402,6 +428,8 @@ class EstimateInputs:
     max_output_tokens: int | None
     default_output_tokens: int
     cache_write_ttl: Literal["5m", "1h"] | None = None
+    # What the request says about itself that a price's rules ask.
+    facts: PriceFacts = NO_FACTS
 
     def get_reserved_output_tokens(self, pricing: ModelPricing | None) -> int | None:
         """Return the output tokens an estimate on ``pricing`` assumes, or None where a lower limit cannot shrink it."""
@@ -434,6 +462,11 @@ def estimate_output_tokens(streamed_chars: int) -> int:
     return (max(streamed_chars, 0) + 3) // 4
 
 
+def estimate_prompt_tokens(prompt_chars: int) -> int:
+    """Tokens for a request of ``prompt_chars``, the prompt half of :func:`estimate_tokens`."""
+    return estimate_tokens(prompt_chars=prompt_chars, max_output_tokens=0, default_output_tokens=0)
+
+
 def estimate_abandoned_stream_usage(
     *, policy: str, prompt_chars: int | None, streamed_chars: int
 ) -> CompletionUsage | None:
@@ -443,10 +476,47 @@ def estimate_abandoned_stream_usage(
     """
     if policy != "estimate" or prompt_chars is None:
         return None
-    prompt_tokens = estimate_tokens(prompt_chars=prompt_chars, max_output_tokens=0, default_output_tokens=0)
+    prompt_tokens = estimate_prompt_tokens(prompt_chars)
     output_tokens = estimate_output_tokens(streamed_chars)
     return CompletionUsage(
         prompt_tokens=prompt_tokens, completion_tokens=output_tokens, total_tokens=prompt_tokens + output_tokens
+    )
+
+
+def _reports_prompt(usage: CompletionUsage) -> bool:
+    """Whether ``usage`` counts the prompt, including one cache reads or writes served in full."""
+    return bool(usage.prompt_tokens or cache_read_tokens_of(usage) or cache_write_tokens_of(usage))
+
+
+def topped_up_partial_usage(
+    *,
+    prompt_chars: int | None,
+    streamed_chars: int,
+    reported_usage: CompletionUsage,
+    usage_is_final: bool,
+) -> CompletionUsage | None:
+    """``reported_usage`` raised to what a stream that stopped short evidently used, or None when it stands.
+
+    A report the provider marked final always stands. Otherwise the completion tokens are raised to an
+    estimate of the text streamed to the client, never projected to a full completion, and a prompt the
+    report does not count (no input, cache read or cache write tokens) is estimated from the request.
+    Anthropic reports its input in ``message_start``, so its prompt is kept as reported.
+    """
+    if usage_is_final:
+        return None
+    reported_output = reported_usage.completion_tokens or 0
+    completion_tokens = max(reported_output, estimate_output_tokens(streamed_chars))
+    prompt_tokens = reported_usage.prompt_tokens or 0
+    if not _reports_prompt(reported_usage) and prompt_chars is not None:
+        prompt_tokens = estimate_prompt_tokens(prompt_chars)
+    if completion_tokens == reported_output and prompt_tokens == (reported_usage.prompt_tokens or 0):
+        return None
+    return reported_usage.model_copy(
+        update={
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
     )
 
 
@@ -465,9 +535,14 @@ def settle_abandoned_stream(
     prompt_chars: int | None,
     streamed_chars: int,
     reported_usage: CompletionUsage | None,
+    usage_is_final: bool,
     has_tool_work: bool,
 ) -> AbandonedStreamRow | None:
-    """The row an abandoned stream owes, or None when there is nothing to bill."""
+    """The row an abandoned stream owes, or None when there is nothing to bill.
+
+    Under the ``estimate`` policy, usage the provider reported only in part (an Anthropic stream's input) is
+    topped up as :func:`settle_cut_stream` tops up a provider cut, so leaving early never costs less.
+    """
     estimated = (
         None
         if reported_usage is not None
@@ -475,10 +550,53 @@ def settle_abandoned_stream(
     )
     if not (has_tool_work or reported_usage is not None or estimated is not None):
         return None
+    if reported_usage is not None and policy == "estimate":
+        reported_usage = (
+            topped_up_partial_usage(
+                prompt_chars=prompt_chars,
+                streamed_chars=streamed_chars,
+                reported_usage=reported_usage,
+                usage_is_final=usage_is_final,
+            )
+            or reported_usage
+        )
     return AbandonedStreamRow(
         usage=reported_usage or estimated,
         incomplete=estimated is not None,
         error=None if estimated is not None else "client disconnected before the stream completed",
+    )
+
+
+def settle_cut_stream(
+    *,
+    policy: str,
+    prompt_chars: int | None,
+    streamed_chars: int,
+    reported_usage: CompletionUsage | None,
+    usage_is_final: bool,
+) -> CompletionUsage | None:
+    """The usage a stream the provider cut owes, or None when the row keeps what the provider reported.
+
+    Only the ``estimate`` policy bills one. The output is estimated from the text streamed to the client,
+    never projected to a full completion, and is billed even when the request's size is unknown (a tool
+    loop's), with the prompt then left at zero. Usage the provider reported is topped up by
+    :func:`topped_up_partial_usage`.
+    """
+    if policy != "estimate":
+        return None
+    if reported_usage is not None:
+        return topped_up_partial_usage(
+            prompt_chars=prompt_chars,
+            streamed_chars=streamed_chars,
+            reported_usage=reported_usage,
+            usage_is_final=usage_is_final,
+        )
+    prompt_tokens = estimate_prompt_tokens(prompt_chars) if prompt_chars is not None else 0
+    output_tokens = estimate_output_tokens(streamed_chars)
+    if not (prompt_tokens or output_tokens):
+        return None
+    return CompletionUsage(
+        prompt_tokens=prompt_tokens, completion_tokens=output_tokens, total_tokens=prompt_tokens + output_tokens
     )
 
 
@@ -489,6 +607,7 @@ def estimate_cost(
     max_output_tokens: int | None,
     default_output_tokens: int,
     cache_write_ttl: Literal["5m", "1h"] | None = None,
+    facts: PriceFacts = NO_FACTS,
 ) -> Decimal:
     """Estimate request cost up front for budget pre-debit.
 
@@ -501,13 +620,15 @@ def estimate_cost(
     requested TTL bills at (a ``1h`` request also covers its 5m writes), since
     any prompt token could become a cache write. The estimate is reconciled to
     actual usage on completion. A rate in a unit no completion meter reads
-    settles unpriced, so it holds nothing.
+    settles unpriced, so it holds nothing. The rate is priced at the rules
+    ``facts`` meet, its context the estimated prompt.
     """
-    if not has_completion_meter(pricing):
+    if pricing is None or not has_completion_meter(pricing):
         return ZERO
     # Whole tokens, rounded up: a fraction of a token is not billable, and the
     # estimate is an upper bound, so the fraction rounds towards the gateway.
     prompt_tokens = (max(prompt_chars, 0) + 3) // 4
+    pricing = apply_rules(pricing, replace(facts, context=prompt_tokens)).rate
     # `is None` rather than falsy: max_output_tokens == 0 is an explicit "no
     # output" bound and must not fall through to the default cap. Clamp negatives
     # so a hostile max_output_tokens can't produce a negative estimate.
@@ -534,29 +655,43 @@ _DOCUMENTS_PER_SEARCH_UNIT = 100
 _SEARCH_CHUNK_TOKENS = 500
 
 
-def rerank_estimate(pricing: ModelPricing | None, *, query_chars: int, document_chars: Sequence[int]) -> Decimal:
+def rerank_estimate(
+    pricing: ModelPricing | None,
+    *,
+    query_chars: int,
+    document_chars: Sequence[int],
+    facts: PriceFacts = NO_FACTS,
+) -> Decimal:
     """Upper bound a rerank request holds against its budgets before dispatch.
 
     A per-request rate holds the search units the documents imply, so a request
     over many or long documents cannot settle at several times what it held. A
     per-token rate holds the input tokens estimated from the query and documents.
     """
-    if priced_per_request(pricing):
+    if pricing is not None and priced_per_request(pricing):
         chunks = sum(max(1, ceil((query_chars + chars) / 4 / _SEARCH_CHUNK_TOKENS)) for chars in document_chars)
-        return search_unit_cost(max(1, ceil(chunks / _DOCUMENTS_PER_SEARCH_UNIT)), pricing)
+        units = max(1, ceil(chunks / _DOCUMENTS_PER_SEARCH_UNIT))
+        return search_unit_cost(units, apply_rules(pricing, facts).rate)
     prompt_chars = query_chars + sum(document_chars)
-    return estimate_cost(pricing, prompt_chars=prompt_chars, max_output_tokens=None, default_output_tokens=0)
+    return estimate_cost(
+        pricing, prompt_chars=prompt_chars, max_output_tokens=None, default_output_tokens=0, facts=facts
+    )
 
 
-def count_estimate(pricing: ModelPricing | None, *, meter: str, count: int) -> Decimal:
+def count_estimate(pricing: ModelPricing | None, *, meter: str, count: int, facts: PriceFacts = NO_FACTS) -> Decimal:
     """What a request billed by ``count`` under ``meter`` holds: exactly what that count settles at."""
     clamped = min(max(count, 0), MAX_REPORTED_UNITS)
-    charge = price_usage(pricing, tokens=None, units={meter: clamped})
+    charge = price_usage(pricing, tokens=None, units={meter: clamped}, facts=facts)
     return charge.cost if charge is not None else ZERO
 
 
 def report_estimate(
-    pricing: ModelPricing | None, *, slot: Slot | None, quantities: Quantities, units: Mapping[str, int]
+    pricing: ModelPricing | None,
+    *,
+    slot: Slot | None,
+    quantities: Quantities,
+    units: Mapping[str, int],
+    facts: PriceFacts = NO_FACTS,
 ) -> Decimal:
     """What a request holds for what it says it will report: exactly what that report settles at.
 
@@ -567,7 +702,7 @@ def report_estimate(
     """
     clamped = {meter: min(max(count, 0), MAX_REPORTED_UNITS) for meter, count in units.items()}
     measured = {unit: max(Decimal(quantity), ZERO) for unit, quantity in quantities.items()}
-    charge = price_usage(pricing, tokens=None, units=clamped, quantities=measured, slot=slot)
+    charge = price_usage(pricing, tokens=None, units=clamped, quantities=measured, slot=slot, facts=facts)
     return charge.cost if charge is not None else ZERO
 
 
@@ -707,14 +842,14 @@ async def _held_handle(
 
 
 async def _hold_on_user(
-    db: AsyncSession, statement: Any, *, scoped: Sequence[ApplicableBudget], held: HeldAmounts
+    db: AsyncSession, statement: Any, *, scoped: Sequence[ApplicableBudget], ceiling_held: HeldAmounts
 ) -> Any:
     """Run the per-user hold, giving the ceilings' holds back if the database fails it.
 
     The ceilings committed their holds before this statement, and no ledger row
     records them yet, so an error escaping here would shrink each ceiling until
-    somebody noticed. Given back on a best-effort basis: the database that failed
-    this statement may refuse the release as well.
+    the sweep noticed. Given back on a best-effort basis: the database that
+    failed this statement may refuse the release as well.
     """
     try:
         await defer_commit_flush(db)
@@ -726,9 +861,9 @@ async def _hold_on_user(
                 await release_scoped(
                     db,
                     [item.budget_id for item in scoped],
-                    held.amount,
-                    tokens=held.tokens,
-                    requests=held.requests,
+                    ceiling_held.amount,
+                    tokens=ceiling_held.tokens,
+                    requests=ceiling_held.requests,
                 )
         raise
 
@@ -797,10 +932,11 @@ async def reserve_budget(
             headers=error_codes.error_headers(error_codes.USER_NOT_FOUND),
         )
     if user.blocked:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"User '{user_id}' is blocked",
+        raise error_codes.RefusalException(
+            status.HTTP_403_FORBIDDEN,
+            f"{user_subject(user_id, external_id=user.external_id)} is blocked",
             headers=error_codes.error_headers(error_codes.USER_BLOCKED),
+            fields=end_user_fields(user.external_id),
         )
 
     # Budget-exempt request (e.g. a key flagged exclude_from_budget): the user is
@@ -855,18 +991,21 @@ async def reserve_budget(
     # spend. Priced at the caller's organization's rate, so "free" means free at
     # what this request will settle at rather than at the deployment's list price.
     #
-    # It still spends tokens and is still a request, so a budget capping either of
-    # those holds and gates them here as it would for any other request. Only when
-    # nothing caps a count does the whole reservation drop away, which keeps the
-    # hot path for a free model on a dollars-only budget exactly what it was.
+    # It still takes a hold wherever anything is capped, dollars included. A budget
+    # capping tokens or requests gates them here as for any other request, and a
+    # dollar cap needs the hold for the gateway-run tools: each priced call grows it
+    # through the dollar gate, and settlement records their spend on the ceilings
+    # the hold names. The model call itself is never refused on dollars.
     usd: Decimal | None = held
     if model_is_free is None and model:
         model_is_free = await _is_model_free(
             db, model, pricing_provider=pricing_provider, organization_id=organization_id
         )
     if model_is_free:
-        budget_caps_counts = budget is not None and (budget.token_limit is not None or budget.request_limit is not None)
-        if not budget_caps_counts and not any(ceiling.caps_counts for ceiling in scoped):
+        budget_caps_anything = budget is not None and (
+            budget.max_budget is not None or budget.token_limit is not None or budget.request_limit is not None
+        )
+        if not budget_caps_anything and not scoped:
             return no_reservation
         usd = None
 
@@ -877,7 +1016,7 @@ async def reserve_budget(
     #
     # Deliberately here rather than earlier, so it costs a query only on a request
     # that is actually about to take a hold. Everything above this line returns a
-    # handle holding nothing (no budget and no ceiling, a free model, a disabled
+    # handle holding nothing (no budget and no ceiling, an uncapped free model, a disabled
     # strategy, an exempt key), and none of those can be refused by a leak, so
     # sweeping for one would be a read per request bought for nothing. Skipped on
     # a top-up too, which runs inside a request whose own hold is live.
@@ -948,7 +1087,7 @@ async def reserve_budget(
             )
             .execution_options(synchronize_session=False),
             scoped=scoped,
-            held=HeldAmounts(amount=usd or ZERO, tokens=held_tokens, requests=held_requests),
+            ceiling_held=_ceiling_held(scoped, usd, held_tokens, held_requests),
         )
         return await _held_handle(
             db,
@@ -1000,7 +1139,7 @@ async def reserve_budget(
         )
         .execution_options(synchronize_session=False),
         scoped=scoped,
-        held=HeldAmounts(amount=usd or ZERO, tokens=held_tokens, requests=held_requests),
+        ceiling_held=_ceiling_held(scoped, usd, held_tokens, held_requests),
     )
 
     if not getattr(result, "rowcount", 0):
@@ -1040,13 +1179,15 @@ async def reserve_budget(
         )
         raise _budget_exceeded(
             refusal_detail(
-                f"User '{user_id}'",
+                user_subject(user_id, external_id=user.external_id),
                 blocked,
                 new_request=new_request,
                 reserved_output_tokens=reserved_output_tokens,
             ),
             blocked,
             budget_scope="user",
+            fields=end_user_fields(user.external_id),
+            end_user_budget_id=budget.budget_id if user.external_id is not None else None,
         )
 
     return await _held_handle(
@@ -1320,15 +1461,17 @@ async def increase_reservation(
     if not handle.counts_toward_budget:
         return
     if additional > ZERO or grown_tokens > 0:
+        # A free model's growth adds no dollars, so the dollar axis is not asked, as at admission.
+        scoped_usd = None if model_is_free and additional <= ZERO else additional
         refused = await reserve_scoped(
-            db, handle.scoped_budgets, additional, tokens=grown_tokens, requests=0, new_request=False
+            db, handle.scoped_budgets, scoped_usd, tokens=grown_tokens, requests=0, new_request=False
         )
         if refused is not None:
             BUDGET_EXCEEDED.inc()
             blocked = await blocked_axis(
                 db,
                 refused,
-                amount=additional,
+                amount=scoped_usd,
                 tokens=grown_tokens,
                 requests=0,
                 new_request=False,
@@ -1418,9 +1561,19 @@ async def increase_reservation(
 
 
 async def hold_tool_call(
-    db: AsyncSession, handle: ReservationHandle, amount: Decimal, *, strategy: str, calls: int = 1
+    db: AsyncSession,
+    handle: ReservationHandle,
+    amount: Decimal,
+    *,
+    strategy: str,
+    calls: int = 1,
+    tokens: int = 0,
+    model_is_free: bool = False,
 ) -> Decimal | None:
-    """Grow every leg of ``handle`` by ``amount`` for each of ``calls`` calls before they run, and commit.
+    """Grow every leg of ``handle`` by ``amount`` and ``tokens`` for each of ``calls`` calls, and commit.
+
+    A gateway tool call holds dollars; a tool loop's next model round holds its
+    prompt's tokens too, and on a ``model_is_free`` model only its tokens.
 
     One hold for all of them, all or nothing: the amount held, or ``None`` where
     a budget or a ceiling has no room for it, with the ceilings that had room
@@ -1434,6 +1587,7 @@ async def hold_tool_call(
             caller rolls ``db`` back.
     """
     held = max(to_usd(amount), ZERO) * calls
+    held_tokens = max(tokens, 0) * calls
     before = replace(handle)
     try:
         try:
@@ -1441,15 +1595,22 @@ async def hold_tool_call(
                 db,
                 handle,
                 estimate=max(handle.estimate, handle.scoped_estimate) + held,
-                model_is_free=False,
+                tokens=max(handle.token_estimate, handle.scoped_token_estimate) + held_tokens if held_tokens else 0,
+                model_is_free=model_is_free,
                 strategy=strategy,
             )
         except HTTPException:
             # The ceilings are grown before the per-user leg, so a refusal there leaves them grown.
+            await defer_commit_flush(db)
             await release_scoped(
-                db, handle.scoped_budget_ids, handle.scoped_estimate - before.scoped_estimate, commit=False
+                db,
+                handle.scoped_budget_ids,
+                handle.scoped_estimate - before.scoped_estimate,
+                tokens=handle.scoped_token_estimate - before.scoped_token_estimate,
+                commit=False,
             )
             handle.scoped_estimate = before.scoped_estimate
+            handle.scoped_token_estimate = before.scoped_token_estimate
             await db.commit()
             return None
         await db.commit()

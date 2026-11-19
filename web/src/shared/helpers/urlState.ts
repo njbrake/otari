@@ -1,12 +1,5 @@
-import {
-  type HistoryState,
-  useLocation,
-  useMatch,
-  useNavigate,
-  useRouter,
-  useSearch,
-} from "@tanstack/react-router"
-import { useCallback, useEffect, useMemo, useRef } from "react"
+import { useNavigate, useRouter, useSearch } from "@tanstack/react-router"
+import { useCallback, useMemo } from "react"
 
 import type { DashboardSearch } from "@/shared/helpers/search"
 
@@ -16,16 +9,23 @@ import type { DashboardSearch } from "@/shared/helpers/search"
 // the router's functional updater is based on the current location, so several
 // separate calls in one tick would clobber each other rather than compose.
 // `patch` therefore takes all the keys to change at once.
-//
-// The state belongs to the page that renders the hook. A write that arrives
-// after the location has moved to another page (a timer, an effect, a close
-// handler running as the page leaves) is dropped: `to: "."` resolves against
-// wherever the router is now, so it would otherwise rewrite that page's URL.
+
+const NONE: readonly never[] = []
 
 // `strict: false` because these hooks are shared by every page rather than bound
 // to one route; the shape is the root route's, which every route inherits.
-function useSearchRecord(): DashboardSearch {
-  return useSearch({ strict: false }) as DashboardSearch
+function useSearchRecord(untracked: readonly string[] = NONE): DashboardSearch {
+  return useSearch({
+    strict: false,
+    select: (search: DashboardSearch) =>
+      untracked.length === 0
+        ? search
+        : Object.fromEntries(
+            Object.entries(search).filter(([key]) => !untracked.includes(key)),
+          ),
+    // A fresh object from `select` would re-render on every navigation.
+    structuralSharing: true,
+  }) as DashboardSearch
 }
 
 // The first value of a key, whether it was written once or repeated. `undefined`
@@ -49,28 +49,7 @@ export interface UrlState<K extends string> {
    * Apply several key changes in one history entry; "" or the default drops a key.
    * An array writes the key once per value, and an empty array drops it.
    */
-  patch: (
-    updates: Partial<Record<K, string | number | string[]>>,
-    options?: {
-      /**
-       * Add a history entry rather than rewriting this one, for a view the back
-       * gesture should close (a request opened full screen) instead of leaving
-       * the page.
-       */
-      push?: boolean
-    },
-  ) => void
-  /**
-   * Apply `updates` by stepping back over the entry a `push` added, when that
-   * lands on the same URL, so closing what was pushed leaves no entry behind.
-   * Otherwise (a linked view, or filters changed since) it is a `patch`.
-   */
-  back: (updates: Partial<Record<K, string | number | string[]>>) => void
-}
-
-/** Where a `push` was made from, kept in the entry it added. */
-interface PushedState {
-  urlStatePushedFrom?: string
+  patch: (updates: Partial<Record<K, string | number | string[]>>) => void
 }
 
 /**
@@ -111,118 +90,71 @@ export function readUrlState<K extends string>(
   }
 }
 
-function withoutTrailingSlash(path: string): string {
-  return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path
-}
-
 export function useUrlState<K extends string>(
   defaults: Record<K, string>,
+  {
+    untracked = NONE,
+  }: {
+    /**
+     * Keys whose change alone does not re-render the caller, for state a child
+     * already holds and the URL only mirrors. A read sees the value as of the
+     * caller's last render. Pass a module constant: a new array each render
+     * re-derives every reader each render.
+     */
+    untracked?: readonly NoInfer<K>[]
+  } = {},
 ): UrlState<K> {
-  const search = useSearchRecord()
-  const navigate = useNavigate()
+  const tracked = useSearchRecord(untracked)
   const router = useRouter()
-  // The page's own path, from its match rather than the location: the match
-  // stays this page's while a navigation away is under way.
-  const pagePath = useMatch({
-    strict: false,
-    select: (match) => match.pathname,
-  })
-  const entryKey = useLocation({ select: (location) => location.state.key })
-  // The entry `back` has already left, so a second close (an overlay's Escape
-  // and the page's own) before the router lands does not step back twice.
-  const leftEntry = useRef<string>(undefined)
-  useEffect(() => {
-    if (leftEntry.current !== entryKey) leftEntry.current = undefined
-  }, [entryKey])
+  const navigate = useNavigate()
+  const search = useMemo(
+    () =>
+      untracked.length === 0
+        ? tracked
+        : {
+            ...(router.state.location.search as DashboardSearch),
+            ...tracked,
+          },
+    [tracked, untracked, router],
+  )
 
   const { get, getAll, getNumber } = useMemo(
     () => readUrlState(search, defaults),
     [search, defaults],
   )
 
-  const nextSearch = useCallback(
-    (
-      prev: DashboardSearch,
-      updates: Partial<Record<K, string | number | string[]>>,
-    ) => {
-      const next: DashboardSearch = { ...prev }
-      for (const [key, raw] of Object.entries(updates)) {
-        if (Array.isArray(raw)) {
-          // Rewritten wholesale rather than appended to: the caller passes the
-          // filter's complete value set, so a removed value has to disappear.
-          const values = raw.filter((value) => value !== "")
-          if (values.length === 0) {
-            delete next[key]
-          } else {
-            next[key] = values
-          }
-          continue
-        }
-        const value = String(raw)
-        if (value === "" || value === defaults[key as K]) {
-          delete next[key]
-        } else {
-          next[key] = value
-        }
-      }
-      return next
-    },
-    [defaults],
-  )
-
-  // An index route's match ends in a slash the location need not carry
-  // (`/models/` against `/models`), so the two are compared without it.
-  const isOnPage = useCallback(
-    () =>
-      withoutTrailingSlash(router.latestLocation.pathname) ===
-      withoutTrailingSlash(pagePath),
-    [router, pagePath],
-  )
-
   const patch = useCallback(
-    (
-      updates: Partial<Record<K, string | number | string[]>>,
-      options: { push?: boolean } = {},
-    ) => {
-      if (!isOnPage()) return
-      const from = router.latestLocation.href
+    (updates: Partial<Record<K, string | number | string[]>>) => {
       navigate({
         to: ".",
-        search: (prev: DashboardSearch) => nextSearch(prev, updates),
-        // A rewrite keeps the entry's record of where it was pushed from, so
-        // stepping through what was pushed can still be closed by going back.
-        state: options.push
-          ? (prev: HistoryState) => ({ ...prev, urlStatePushedFrom: from })
-          : true,
-        replace: !options.push,
+        search: (prev) => {
+          const next: DashboardSearch = { ...(prev as DashboardSearch) }
+          for (const [key, raw] of Object.entries(updates)) {
+            if (Array.isArray(raw)) {
+              // Rewritten wholesale rather than appended to: the caller passes the
+              // filter's complete value set, so a removed value has to disappear.
+              const values = raw.filter((value) => value !== "")
+              if (values.length === 0) {
+                delete next[key]
+              } else {
+                next[key] = values
+              }
+              continue
+            }
+            const value = String(raw)
+            if (value === "" || value === defaults[key as K]) {
+              delete next[key]
+            } else {
+              next[key] = value
+            }
+          }
+          return next
+        },
+        replace: true,
       })
     },
-    [navigate, router, isOnPage, nextSearch],
+    [navigate, defaults],
   )
 
-  const back = useCallback(
-    (updates: Partial<Record<K, string | number | string[]>>) => {
-      if (!isOnPage()) return
-      const current = router.latestLocation
-      if (
-        leftEntry.current !== undefined &&
-        leftEntry.current === current.state.key
-      )
-        return
-      const pushedFrom = (current.state as PushedState).urlStatePushedFrom
-      const target = router.buildLocation({
-        to: ".",
-        search: (prev: DashboardSearch) => nextSearch(prev, updates),
-      })
-      if (pushedFrom !== undefined && pushedFrom === target.href) {
-        leftEntry.current = current.state.key
-        router.history.back()
-        return
-      }
-      patch(updates)
-    },
-    [router, isOnPage, nextSearch, patch],
-  )
-
-  return { get, getAll, getNumber, patch, back }
+  return { get, getAll, getNumber, patch }
 }

@@ -35,7 +35,7 @@ from gateway.log_config import logger
 from gateway.schemas.tools import SearchToolTestResponse
 from gateway.services.tools._search_tool_writes import check_tool_entry, check_tool_name_is_free, check_tool_write
 from gateway.services.tools._web_fetch import retrieval_client
-from gateway.services.tools._web_search import resolve_search
+from gateway.services.tools._web_search import refused_cost_tier, resolve_search
 from gateway.services.web_retrieval_policy import DomainPolicy
 
 
@@ -87,8 +87,7 @@ def _library_call(instance: ToolInstance) -> tuple[dict[str, Any], dict[str, Any
 
     The instance's own key and base URL, never the environment's: the libraries
     read a provider's variable when none is passed, and an empty one counts as
-    passed. Options carry otari's defaults below them, and leave out the ones
-    the rules drop.
+    passed. Options leave out the ones the rules drop.
     """
     default_timeout = any_search.DEFAULT_TIMEOUT if instance.kind == "search" else any_fetch.DEFAULT_TIMEOUT
     settings = {
@@ -97,7 +96,7 @@ def _library_call(instance: ToolInstance) -> tuple[dict[str, Any], dict[str, Any
         "timeout": instance.timeout or default_timeout,
     }
     kept = {key: value for key, value in instance.options.items() if key not in instance.dropped_options}
-    return settings, {**instance.provider_defaults, **kept}
+    return settings, kept
 
 
 async def _test_with_library(
@@ -169,7 +168,13 @@ async def run_connection_test(
     """Run one search or one fetch on ``instance`` and say how it went, never what came back.
 
     A provider is called through ``client``, the app's; ``builtin_fetch`` through its own retrieval client.
+    An instance whose cost tier has a value the provider refuses is refused, since none of its calls runs.
     """
+    if (tier := refused_cost_tier(instance)) is not None:
+        raise SearchToolRefusedError(
+            f"{instance.kind.capitalize()} tool '{instance.name}' does not run: {instance.provider} does not take "
+            f"the value of its option '{tier}', which sets the price of each call."
+        )
     if instance.kind == "search" and instance.provider in SEARCH_PROVIDERS_REQUIRING_API_BASE:
         response = await _test_inheriting_search(config, instance, entry, str(query), client)
     elif instance.provider == BUILTIN_FETCH_PROVIDER:

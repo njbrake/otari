@@ -23,7 +23,13 @@ from gateway.models.budgets import Budget, BudgetReservation, ScopedBudget
 from gateway.models.users import User
 from gateway.repositories.budgets import HeldAmounts
 from gateway.services.budgets import _ledger as ledger
-from gateway.services.budgets import increase_reservation, reconcile_reservation, refund_reservation, reserve_budget
+from gateway.services.budgets import (
+    hold_tool_call,
+    increase_reservation,
+    reconcile_reservation,
+    refund_reservation,
+    reserve_budget,
+)
 
 from .test_budget_reservation_ledger import _TTL, _age, _orphan_user_hold, _with_budget
 from .test_scoped_budgets import Fixture, _build_tenancy, _caps_for_two_providers, _scoped, move
@@ -88,6 +94,7 @@ async def test_every_transaction_that_moves_a_hold_defers_its_flush(
 
     settled = await reserve_budget(async_db, tenancy.user_id, 2.0, scope=tenancy.scope())
     await increase_reservation(async_db, settled, estimate=3.0)
+    assert await hold_tool_call(async_db, settled, Decimal("0.5"), strategy="for_update") is not None
     await reconcile_reservation(async_db, settled, 1.0)
     refunded = await reserve_budget(async_db, tenancy.user_id, 2.0, scope=tenancy.scope())
     await refund_reservation(async_db, refunded)
@@ -101,7 +108,7 @@ async def test_every_transaction_that_moves_a_hold_defers_its_flush(
     with pytest.raises(Exception, match="exceeded|budget"):
         await reserve_budget(async_db, tenancy.user_id, 80.0, scope=tenancy.scope())
 
-    _assert_every_hold_defers(transactions, at_least=8)
+    _assert_every_hold_defers(transactions, at_least=9)
 
 
 @pytest.mark.asyncio

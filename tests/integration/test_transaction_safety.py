@@ -1,17 +1,22 @@
 """Tests for transaction safety: rollback on commit failure and narrowed exception handling."""
 
+import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import API_KEY_HEADER, API_ROOT
+from gateway.models.api_keys import APIKey
 from gateway.models.budgets import Budget
 from gateway.models.users import User
+from gateway.repositories.api_keys import ApiKeyRepository
 from gateway.services.budgets._reservations import _cas_reset_user_budget, _is_model_free
 
 
@@ -253,3 +258,29 @@ def test_auth_commit_failure_does_not_break_verification(
         # The /api/v1/users endpoint requires master key, so we may get 401
         # (API key not accepted as master key), but crucially not 500.
         assert resp.status_code != 500
+
+
+@pytest.mark.asyncio
+async def test_the_last_used_stamp_skips_a_locked_key_row(
+    async_db: AsyncSession, client: TestClient, api_key_obj: dict[str, Any]
+) -> None:
+    """Queued behind another writer, the stamp held up its request's authentication."""
+    key_id = api_key_obj["id"]
+    stamped = datetime(2026, 10, 20, tzinfo=UTC)
+
+    async with AsyncSession(async_db.bind) as holder:
+        # What a concurrent bump of the same key holds until it commits.
+        await holder.execute(select(APIKey.id).where(APIKey.id == key_id).with_for_update(key_share=True))
+        async with AsyncSession(async_db.bind) as session:
+            await asyncio.wait_for(ApiKeyRepository(session).touch_last_used(key_id, stamped), timeout=5)
+            await session.commit()
+        await holder.rollback()
+
+    row = await async_db.get_one(APIKey, key_id)
+    assert row.last_used_at != stamped
+
+    async with AsyncSession(async_db.bind) as session:
+        await ApiKeyRepository(session).touch_last_used(key_id, stamped)
+        await session.commit()
+    await async_db.refresh(row)
+    assert row.last_used_at == stamped

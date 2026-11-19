@@ -123,16 +123,18 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
     async def try_create(
         self,
         *,
-        email: str,
+        email: str | None,
         full_name: str | None,
         active_organization_id: uuid.UUID,
     ) -> User | None:
         """Stage an identity for this address, or return None if an identity already holds it.
 
         A taken address leaves the transaction usable.
+
+        NOTE: A NULL address never conflicts in the unique index, so passing none always succeeds.
         """
         user = User(
-            email=email.strip().lower(),
+            email=email.strip().lower() if email is not None else None,
             full_name=full_name,
             active_organization_id=active_organization_id,
             default_organization_id=active_organization_id,
@@ -219,7 +221,7 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
     async def get_by_verification_token_hash(self, token_hash: str) -> User | None:
         """Return the identity a hashed email-verification token names, or None.
 
-        Exact match: the hash is the key `otari.services.tenancy.tokens.hash_token`
+        Exact match: the hash is the key `gateway.core.tokens.hash_token`
         produces, and it either matches the one live row that column holds or it
         does not, the same way an invitation resolves by ``token_hash``.
         """
@@ -246,14 +248,16 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
         both racers read the live hash before either writes and both writes
         land. A deployment that needs this guarantee runs PostgreSQL.
         """
-        await self.db.execute(select(col(User.id)).where(col(User.id) == user_id).with_for_update())
+        # Identity IDs never change. NO KEY UPDATE still serializes status and
+        # token writes while allowing foreign keys to reference this identity.
+        await self.db.execute(select(col(User.id)).where(col(User.id) == user_id).with_for_update(key_share=True))
 
     async def record_sign_in(self, user_id: uuid.UUID, *, at: datetime) -> None:
         """Stage ``at`` as the identity's last sign-in, unless a later one is already recorded.
 
         Skips the write while another transaction holds the identity's row: the
         stamp is display-only, and waiting for the row failed the sign-in it
-        rides with once the wait reached ``db_lock_timeout_ms``.
+        rides with once the wait outlasted the statement timeout.
         """
         unlocked = (
             select(col(User.id))
@@ -274,7 +278,10 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
         NOTE: The lock applies on PostgreSQL only, because SQLite has no row locks.
         """
         result = await self.db.execute(
-            select(User).where(col(User.id) == user_id).with_for_update().execution_options(populate_existing=True)
+            select(User)
+            .where(col(User.id) == user_id)
+            .with_for_update(key_share=True)
+            .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
 
@@ -331,8 +338,8 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
         user.default_organization_id = organization_id
         return await self.set_active_organization(user, organization_id)
 
-    async def set_active_organization(self, user: User, organization_id: uuid.UUID) -> User:
-        """Stage a change of the identity's active organization."""
+    async def set_active_organization(self, user: User, organization_id: uuid.UUID | None) -> User:
+        """Stage a change of the identity's active organization, or ``None`` for no organization."""
         user.active_organization_id = organization_id
         self.db.add(user)
         await self.db.flush()
@@ -344,6 +351,13 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
         result = await self.db.execute(select(col(User.id)).where(col(User.active_organization_id) == organization_id))
         return list(result.scalars().all())
 
+    async def get_by_ids(self, user_ids: Collection[uuid.UUID]) -> list[User]:
+        """Return the identities these IDs name, in one query."""
+        if not user_ids:
+            return []
+        result = await self.db.execute(select(User).where(col(User.id).in_(list(user_ids))))
+        return list(result.scalars().all())
+
     async def get_active_ids(self, user_ids: Collection[uuid.UUID]) -> set[uuid.UUID]:
         """Return which of these identities exist and are active, in one query."""
         if not user_ids:
@@ -353,7 +367,9 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
         )
         return set(result.scalars().all())
 
-    async def move_active_organization(self, user_ids: Collection[uuid.UUID], organization_id: uuid.UUID) -> None:
+    async def move_active_organization(
+        self, user_ids: Collection[uuid.UUID], organization_id: uuid.UUID | None
+    ) -> None:
         """Stage ``organization_id`` as the active organization of each of these identities."""
         if not user_ids:
             return

@@ -28,18 +28,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import CallerWorkspaceQuery, get_config, get_db, require_deployment_operator
 from gateway.api.routes._helpers import database_error, resolve_managed_workspace_id
-from gateway.api.routes.aliases import stage_alias_replacement
 from gateway.core.config import GatewayConfig
 from gateway.core.database import DATABASE_ERRORS
 from gateway.core.surface import Surface
 from gateway.log_config import logger
 from gateway.models.routing import PolicySpec, RoutingPolicy
 from gateway.repositories.users_repository import get_active_user
-from gateway.services.alias_service import alias_names_in, all_alias_names, refresh_alias_cache
+from gateway.services.alias_service import all_alias_names
 from gateway.services.policy_store import (
     all_policy_names,
     list_stored_policies,
-    policy_names_in,
     refresh_policy_cache,
     resolve_effective_policy,
 )
@@ -50,6 +48,7 @@ from gateway.services.routing import (
     compile_policy,
     explain_router_ordering,
 )
+from gateway.services.tenancy import OrgProviderKeyService
 
 router = APIRouter(
     prefix="/routing/policies",
@@ -235,13 +234,7 @@ def validated_spec(name: str, spec: dict[str, Any]) -> PolicySpec:
 
 
 def _validate_write(
-    config: GatewayConfig,
-    name: str,
-    spec: PolicySpec,
-    user_id: str | None,
-    *,
-    replacing_alias: bool = False,
-    names_in: uuid.UUID | None = None,
+    config: GatewayConfig, name: str, spec: PolicySpec, user_id: str | None, own_prefixes: frozenset[str]
 ) -> None:
     """Apply the startup policy rules to a runtime write, as a 400.
 
@@ -250,15 +243,7 @@ def _validate_write(
     never take effect. Refusing is the only answer that does not lie about what the gateway
     will do. A user-scoped policy is exempt: it outranks both other layers, so
     shadowing a configured name is a working override rather than dead data.
-
-    ``names_in`` limits the alias and chaining checks to the names in force in
-    that workspace, for a tenant's write: the deployment-wide sets would answer
-    for every other organization too, so a refusal would tell the caller a name
-    is taken somewhere they cannot see. ``None`` keeps the operator's check,
-    which spans the deployment.
     """
-    aliases = all_alias_names(config) if names_in is None else alias_names_in(config, names_in)
-    policies = all_policy_names(config) if names_in is None else policy_names_in(config, names_in)
     if user_id is None and name in config.routing.policies:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -268,7 +253,7 @@ def _validate_write(
                 "edit config.yml."
             ),
         )
-    if name in aliases and not replacing_alias:
+    if name in all_alias_names(config):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -280,10 +265,16 @@ def _validate_write(
     # Chaining is refused across every scope, matching the alias rule: a policy
     # pointing at another policy or an alias is just as broken whichever side each
     # came from, and resolution is single-pass.
-    indirections = policies | aliases | {name}
+    indirections = all_policy_names(config) | all_alias_names(config) | {name}
     for selector in spec.static_selectors():
         try:
-            config.validate_alias(name, selector, alias_names=indirections, hosted_implementation=hosted_implementation)
+            config.validate_alias(
+                name,
+                selector,
+                alias_names=indirections,
+                hosted_implementation=hosted_implementation,
+                own_prefixes=own_prefixes,
+            )
         except ValueError as exc:
             # `validate_alias` phrases both its target errors and its *name* errors
             # in alias terms, so both are rewritten; otherwise a policy named "a:b"
@@ -422,10 +413,8 @@ async def upsert_policy_in_workspace(
     config: GatewayConfig,
     *,
     workspace_id: uuid.UUID,
-    replacing_alias: bool = False,
-    tenant_names: bool = False,
-) -> PolicyResponse:
-    """Create or update a stored policy in an already-resolved workspace.
+) -> tuple[PolicyResponse, bool]:
+    """Create or update a stored policy in an already-resolved workspace, and say whether it created one.
 
     ``workspace_id`` is a parameter rather than read off ``request`` because the
     two routers that reach this resolve it differently and must keep doing so:
@@ -445,26 +434,16 @@ async def upsert_policy_in_workspace(
     rename can walk a policy into every collision a create can. Sending the field
     asserts the named policy is stored, so it never falls back to creating one.
 
-    ``replacing_alias`` turns the workspace's own workspace-wide alias of the same
-    name into this policy in the same commit, so callers sending the name never
-    find neither (``stage_alias_replacement`` says when it refuses).
-    ``tenant_names`` checks the name against this workspace's names alone; see
-    ``_validate_write``.
+    The second value is true when this write inserted the row rather than editing
+    one, which is what the commit settled: a concurrent create of the same name
+    is refused with 409 here rather than reported as an edit.
     """
     if request.user_id is not None:
         await _require_user(db, request.user_id)
     spec = validated_spec(request.name, request.spec)
     await refresh_policy_cache(db)
-    if replacing_alias:
-        await stage_alias_replacement(db, config, request.name, workspace_id=workspace_id)
-    _validate_write(
-        config,
-        request.name,
-        spec,
-        request.user_id,
-        replacing_alias=replacing_alias,
-        names_in=workspace_id if tenant_names else None,
-    )
+    own_prefixes = await OrgProviderKeyService(db, config).get_workspace_byo_providers(workspace_id=workspace_id)
+    _validate_write(config, request.name, spec, request.user_id, own_prefixes)
 
     # Both scopes are part of the identity: the upsert must not turn one
     # workspace's policy into another's, nor a workspace-wide policy into a
@@ -501,6 +480,7 @@ async def upsert_policy_in_workspace(
     # filled, key order stable) rather than whatever shape the client happened to
     # send. Otherwise two equivalent writes would produce different rows.
     stored_spec = spec.model_dump(mode="json", exclude_none=True)
+    created = policy is None
     if policy:
         policy.spec = stored_spec
     else:
@@ -544,12 +524,7 @@ async def upsert_policy_in_workspace(
         spec.router_backend or "none",
     )
     await _refresh_quietly(db, policy.name)
-    if replacing_alias:
-        try:
-            await refresh_alias_cache(db)
-        except SQLAlchemyError:
-            logger.warning("Alias cache refresh failed after replacing '%s'; converges within TTL", policy.name)
-    return PolicyResponse.from_model(policy, is_dynamic=spec.is_dynamic)
+    return PolicyResponse.from_model(policy, is_dynamic=spec.is_dynamic), created
 
 
 @router.post("")
@@ -563,12 +538,13 @@ async def set_policy(
     Omitting ``workspace_id`` means the deployment's default workspace, which is
     where an operator acting deployment-wide writes.
     """
-    return await upsert_policy_in_workspace(
+    policy, _ = await upsert_policy_in_workspace(
         request,
         db,
         config,
         workspace_id=await resolve_managed_workspace_id(db, request.workspace_id),
     )
+    return policy
 
 
 async def delete_policy_in_workspace(
@@ -652,6 +628,17 @@ async def explain_policy(
     with reasons, which is the part that catches a "failover" policy that has
     quietly compiled down to a single attempt.
     """
+    return explain_in_workspace(request, config, workspace_id=request.workspace_id)
+
+
+def explain_in_workspace(
+    request: ExplainRequest, config: GatewayConfig, *, workspace_id: uuid.UUID | None
+) -> ExplainResponse:
+    """The body of ``explain_policy``, with ``name`` and the candidates resolved in ``workspace_id``.
+
+    Public so the tenant-scoped router can compile in a workspace it resolved
+    itself, rather than one the request names.
+    """
     if request.name is None and request.spec is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -667,7 +654,7 @@ async def explain_policy(
     else:
         assert request.name is not None
         name = request.name
-        resolved = resolve_effective_policy(config, name, request.user_id, workspace_id=request.workspace_id)
+        resolved = resolve_effective_policy(config, name, request.user_id, workspace_id=workspace_id)
         if resolved is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Routing policy '{name}' not found")
         spec = resolved
@@ -680,7 +667,7 @@ async def explain_policy(
         spec,
         user_id=request.user_id,
         allowlist=request.allowed_models,
-        workspace_id=request.workspace_id,
+        workspace_id=workspace_id,
     )
     try:
         plan = compile_policy(
@@ -692,7 +679,7 @@ async def explain_policy(
             allowlist=request.allowed_models,
             budget=BudgetState(used_pct=request.budget_used_pct, remaining_usd=request.budget_remaining_usd),
             router_ordering=weighted_ordering,
-            workspace_id=request.workspace_id,
+            workspace_id=workspace_id,
         )
     except NoEligibleCandidatesError as exc:
         return ExplainResponse(

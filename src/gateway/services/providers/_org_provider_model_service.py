@@ -42,9 +42,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from any_llm import LLMProvider
+from fastapi import BackgroundTasks
+
 from gateway.core.config import GatewayConfig
 from gateway.core.database import DATABASE_ERRORS
 from gateway.core.metered_pricing import quantize_rate
+from gateway.core.provider_params import TENANT_ENDPOINT_PROVIDERS, tenant_client_args
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.providers_exceptions import (
     OrgProviderKeyNotFoundError,
@@ -62,6 +66,7 @@ from gateway.models.provider_keys import (
     OrgProviderKeyModel,
 )
 from gateway.models.tenancy import User
+from gateway.ports.growth_signal_port import GrowthAction, GrowthSignalPort
 from gateway.repositories.providers import OfferedModelConflict, OrgProviderKeyModelRepository
 from gateway.repositories.tenancy import OrgProviderKeyRepository
 from gateway.schemas.providers import (
@@ -72,12 +77,28 @@ from gateway.schemas.providers import (
     OrgProviderKeyPublic,
     OrgProviderModelsRefreshPublic,
 )
+from gateway.services.catalog import (
+    KeyOwner,
+    MetadataOverride,
+    ModelMetadataOverrideService,
+    offered_model_types,
+    record_served_models,
+)
+from gateway.services.model_catalog_service import cached_models_dev_catalog
 from gateway.services.model_discovery_service import ProviderDiscovery, test_provider_credentials
 from gateway.services.organization_pricing_service import EffectiveRate, OrganizationPricingService
 from gateway.services.pricing_service import default_model_pricing, normalize_effective_at
+from gateway.services.providers._model_kinds import page_by_kind
+from gateway.services.providers._owned_endpoint_network import (
+    OwnedEndpointAddressError,
+    check_owned_endpoint_api_base,
+    owned_endpoint_http_client,
+    owned_endpoint_sdk_client,
+)
 from gateway.services.secret_box import SecretBoxUnavailableError, SecretDecryptionError, decrypt_secret
 from gateway.services.tenancy.org_provider_key_service import OrgProviderKeyService
 from gateway.services.tenancy.organization_service import OrganizationService
+from gateway.types.model_type import ModelType, OfferedModelType
 from gateway.types.price_unit import PriceUnit
 
 # What a client is told about where a rate came from. The spellings are
@@ -118,16 +139,19 @@ def _quantized(value: Decimal | None) -> Decimal | None:
 
 
 def _same_rates(stored: OrganizationModelPricing, default: ModelPricing) -> bool:
-    """Whether a stored rate still says what today's community default says.
+    """Whether a stored rate still says what today's community default says, per the same unit.
 
     Compared at the rate column's own scale, because the stored value has been
     through it and the freshly resolved one has not, so an exact comparison
     would report a difference the database cannot hold and reprice every model
-    on every refresh.
+    on every refresh. The unit counts: the same number per image and per token
+    are two prices.
     """
     for field in _RATE_FIELDS:
         if _quantized(getattr(stored, field)) != _quantized(getattr(default, field)):
             return False
+    if (stored.unit or "token") != (default.unit or "token"):
+        return False
     return list(stored.pricing_tiers or []) == list(default.pricing_tiers or [])
 
 
@@ -203,6 +227,7 @@ def _apply_default(row: OrganizationModelPricing, default: ModelPricing) -> None
     row.cache_read_price_per_million = to_usd_or_none(as_float(default.cache_read_price_per_million))
     row.cache_write_price_per_million = to_usd_or_none(as_float(default.cache_write_price_per_million))
     row.pricing_tiers = list(default.pricing_tiers or [])
+    row.unit = default.unit or "token"
     row.rates = rates_of(default)
 
 
@@ -216,11 +241,30 @@ def _resolve_defaults(provider: str, models: Sequence[str], as_of: datetime) -> 
     return resolved
 
 
-def _model_public(row: OrgProviderKeyModel, price: _Price | None) -> OrgProviderKeyModelPublic:
+async def _endpoint_refusal(provider: str, api_base: str) -> str | None:
+    """Why an organization key's ``api_base`` may not be dialed, or ``None`` when it may."""
+    if provider not in TENANT_ENDPOINT_PROVIDERS:
+        return f"A {provider} key cannot take a custom api_base"
+    try:
+        await check_owned_endpoint_api_base(api_base)
+    except OwnedEndpointAddressError as exc:
+        return str(exc)
+    return None
+
+
+def _kinds(key: OrgProviderKey, models: Sequence[str]) -> dict[str, ModelType | None]:
+    """What kind each model on ``key`` is, by models.dev."""
+    return offered_model_types(cached_models_dev_catalog(), key.provider, models)
+
+
+def _model_public(
+    row: OrgProviderKeyModel, price: _Price | None, model_type: ModelType | None
+) -> OrgProviderKeyModelPublic:
     return OrgProviderKeyModelPublic(
         id=row.id,
         org_provider_key_id=row.org_provider_key_id,
         model=row.model,
+        type=model_type,
         input_price_per_million=price.input_price_per_million if price else None,
         output_price_per_million=price.output_price_per_million if price else None,
         cache_read_price_per_million=price.cache_read_price_per_million if price else None,
@@ -247,6 +291,7 @@ class OrgProviderModelService:
         org_pricing: OrganizationPricingService,
         models: OrgProviderKeyModelRepository,
         keys: OrgProviderKeyRepository,
+        metadata_overrides: ModelMetadataOverrideService,
         refresh_overlay: Callable[[], Awaitable[None]],
     ) -> None:
         """Bind the unit of work and the collaborators this service composes.
@@ -270,6 +315,7 @@ class OrgProviderModelService:
         self.org_pricing = org_pricing
         self.models = models
         self.keys = keys
+        self.metadata_overrides = metadata_overrides
         self.refresh_overlay = refresh_overlay
 
     @property
@@ -305,19 +351,54 @@ class OrgProviderModelService:
             raise OrgProviderKeyNotFoundError(key_id)
         return key
 
+    async def _organization_serving(self, user: User, selector: str) -> uuid.UUID:
+        """The caller's organization, having checked they may administer it and it holds a live key under ``selector``.
+
+        Raises:
+            OrgProviderKeyNotFoundError: the organization holds no live key under the selector's prefix.
+        """
+        organization = await self.organizations.get_active_organization_for_user(user)
+        await self.organizations.require_active_organization_management_access(user=user, organization=organization)
+        prefix = selector.partition(":")[0]
+        if not await self.keys.any_under_prefix(organization.id, prefix, live=True):
+            raise OrgProviderKeyNotFoundError(prefix)
+        return organization.id
+
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------
 
     async def list_models(
-        self, *, user: User, key_id: uuid.UUID, skip: int = 0, limit: int = 500
+        self,
+        *,
+        user: User,
+        key_id: uuid.UUID,
+        skip: int = 0,
+        limit: int = 500,
+        model_type: OfferedModelType | None = None,
+        search: str | None = None,
+        enabled: bool | None = None,
     ) -> OrgProviderKeyModelsPublic:
-        """One page of a key's offered models, each priced as it currently serves."""
+        """One page of a key's offered models, of one kind or of every kind, each priced as it currently serves.
+
+        ``search`` keeps the models whose name contains it, case-insensitively, and ``enabled`` the models
+        served (true) or withheld (false); both narrow the counts too.
+
+        Every row is read, because the kind is not stored and each kind's count covers the whole key.
+        """
         async with self.uow:
             key = await self._key_for_user(user, key_id)
-            rows, count = await self.models.list_for_key(key_id, skip=skip, limit=limit)
-            prices = await self._current_prices(key, rows)
-        return OrgProviderKeyModelsPublic(data=[_model_public(row, prices.get(row.model)) for row in rows], count=count)
+            rows = await self.models.list_all_for_key(key_id)
+            kinds = _kinds(key, [row.model for row in rows])
+            page = page_by_kind(
+                rows, kinds, "model", model_type=model_type, skip=skip, limit=limit, search=search, enabled=enabled
+            )
+            prices = await self._current_prices(key, page.rows)
+        return OrgProviderKeyModelsPublic(
+            data=[_model_public(row, prices.get(row.model), kinds.get(row.model)) for row in page.rows],
+            count=page.count,
+            type_counts=page.type_counts,
+        )
 
     async def available_models(self, *, user: User, key_id: uuid.UUID) -> OrgProviderAvailableModelsPublic:
         """What the provider says it serves on this key's stored credential.
@@ -391,7 +472,7 @@ class OrgProviderModelService:
                 # with a 500 rather than the 409 it is.
                 raise OrgProviderModelAlreadyOfferedError(provider, conflict.model) from conflict
             prices = await self._current_prices(key, [row])
-            public = _model_public(row, prices.get(row.model))
+            public = _model_public(row, prices.get(row.model), _kinds(key, [row.model]).get(row.model))
         await self.refresh_overlay()
         return public
 
@@ -428,9 +509,50 @@ class OrgProviderModelService:
             row.enabled = enabled
             await self.models.save(row)
             prices = await self._current_prices(key, [row])
-            public = _model_public(row, prices.get(row.model))
+            public = _model_public(row, prices.get(row.model), _kinds(key, [row.model]).get(row.model))
         await self.refresh_overlay()
         return public
+
+    async def set_metadata_override(self, *, user: User, selector: str, override: MetadataOverride) -> MetadataOverride:
+        """Replace the organization's own override of a model one of its keys serves.
+
+        Raises:
+            OrgProviderKeyNotFoundError: the organization holds no live key under the selector's prefix.
+            ValueError: ``selector`` is not in ``provider:model`` form.
+        """
+        organization_id = await self._organization_serving(user, selector)
+        return await self.metadata_overrides.set(selector, override, organization_id)
+
+    async def delete_key(self, *, user: User, key_id: uuid.UUID) -> None:
+        """Permanently delete an archived key, in one step with the model details its prefix loses.
+
+        The details go with the organization's last key under the prefix. An archived
+        key keeps them, so restoring it brings them back.
+
+        Raises:
+            OrgProviderKeyNotFoundError: no such key in the caller's organization.
+            OrgProviderKeyNotArchivedError: the key is still live.
+        """
+        async with self.uow:
+            key = await self._key_for_user(user, key_id)
+            prefix, organization_id = key.selector_prefix, key.organization_id
+            last = not await self.keys.any_under_prefix(organization_id, prefix, excluding=key.id)
+            if last:
+                await self.metadata_overrides.clear_provider(prefix, organization_id)
+            # Its commit, on this same session, also settles the rows cleared above.
+            await self.provider_keys.delete_key_for_user(user=user, key_id=key_id)
+        if last:
+            self.metadata_overrides.forget_provider(prefix, organization_id)
+
+    async def clear_metadata_override(self, *, user: User, selector: str) -> None:
+        """Drop the organization's own override of a model, leaving the server and models.dev to describe it.
+
+        Raises:
+            OrgProviderKeyNotFoundError: the organization holds no live key under the selector's prefix.
+            ValueError: ``selector`` is not in ``provider:model`` form.
+        """
+        organization_id = await self._organization_serving(user, selector)
+        await self.metadata_overrides.clear(selector, organization_id)
 
     async def remove_model(self, *, user: User, key_id: uuid.UUID, model_id: uuid.UUID) -> None:
         """Stop offering one model. Its rate and its history stay.
@@ -461,7 +583,14 @@ class OrgProviderModelService:
             await self.models.delete_row(row)
         await self.refresh_overlay()
 
-    async def add_provider_key(self, *, user: User, request: OrgProviderKeyCreateRequest) -> OrgProviderKeyPublic:
+    async def add_provider_key(
+        self,
+        *,
+        user: User,
+        request: OrgProviderKeyCreateRequest,
+        growth: GrowthSignalPort | None = None,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> OrgProviderKeyPublic:
         """Create a provider key and offer everything the credential reaches.
 
         One use case, so one method: a key starts with its real catalog rather
@@ -476,6 +605,9 @@ class OrgProviderModelService:
         endpoint, unreachable, credential refused) is already answered rather
         than raised, and a database failure is logged against the key and leaves
         an empty list the Refresh models button fills.
+
+        With ``growth``, the key is reported as ``PROVIDER_KEY_ADDED`` once both
+        steps are done.
         """
         key = await self.provider_keys.create_key_for_user(user=user, request=request)
         try:
@@ -486,6 +618,16 @@ class OrgProviderModelService:
             # authorization or not-found error on a key this call just created
             # would be a bug worth surfacing rather than swallowing.
             logger.exception("Offering the discovered models failed for new provider key %s", key.id)
+        # Last, so nothing an adapter does can stand between the durable key and its models.
+        if growth is not None and background_tasks is not None:
+            await growth.record_action(
+                background_tasks=background_tasks,
+                action=GrowthAction.PROVIDER_KEY_ADDED,
+                user_id=user.id,
+                email=user.email,
+                organization_id=key.organization_id,
+                details={"provider": key.provider},
+            )
         return key
 
     async def refresh_models(self, *, user: User, key_id: uuid.UUID) -> OrgProviderModelsRefreshPublic:
@@ -732,16 +874,41 @@ class OrgProviderModelService:
         except (SecretBoxUnavailableError, SecretDecryptionError):
             return None
 
-    @staticmethod
-    async def _dial(key: OrgProviderKey, credential: dict[str, object], *, timeout: float) -> ProviderDiscovery:
-        """Ask the provider what it serves on this key. Never raises, never echoes the key."""
+    async def _dial(self, key: OrgProviderKey, credential: dict[str, object], *, timeout: float) -> ProviderDiscovery:
+        """Ask the provider what it serves on this key, and keep what its engine says.
+
+        Never raises, never echoes the key.
+
+        Kept under the key and its organization: another organization can list a
+        different server under the same prefix.
+        """
         api_key = credential.get("api_key")
-        return await test_provider_credentials(
+        client_args: dict[str, object] = tenant_client_args(key.provider, key.client_args)
+        engine_client = None
+        if key.api_base:
+            # The organization chose this address, so it is held to public
+            # addresses and dialed through the pinned client, as dispatch is.
+            refusal = await _endpoint_refusal(key.provider, key.api_base)
+            if refusal is not None:
+                return ProviderDiscovery(provider=key.provider, models=[], error=refusal)
+            client_args["http_client"] = owned_endpoint_sdk_client(LLMProvider(key.provider))
+            engine_client = owned_endpoint_http_client()
+        discovery = await test_provider_credentials(
             key.provider,
             api_key=api_key if isinstance(api_key, str) else None,
             api_base=key.api_base,
-            client_args=dict(key.client_args) if key.client_args else None,
+            client_args=client_args or None,
             # An organization's key never borrows the deployment's own credentials.
             declared=False,
             timeout=timeout,
+            engine_client=engine_client,
         )
+        if discovery.error is None:
+            await record_served_models(
+                key.selector_prefix,
+                discovery.models,
+                discovery.engine_settings,
+                owner=KeyOwner(organization_id=key.organization_id, key_id=key.id),
+                uow=self.uow,
+            )
+        return discovery

@@ -83,25 +83,6 @@ describe("DataTable", () => {
     expect(screen.getByText("Nothing here")).toBeInTheDocument()
   })
 
-  // jsdom has no layout and no gestures, so these pin the classes that
-  // cause the behavior (testing.md's layout exception).
-  it("contains a horizontal overscroll, so a swipe past the end is not a back gesture", () => {
-    render(<DataTable {...base({})} />)
-    const scroller = screen.getByRole("grid").parentElement
-    expect(scroller).toHaveClass("overflow-x-auto", "overscroll-x-contain")
-  })
-
-  it("holds the empty message to the scroller's visible width", () => {
-    render(<DataTable {...base({ rows: [], emptyContent: "Nothing here" })} />)
-    expect(screen.getByRole("grid").parentElement).toHaveClass("@container")
-    // The text's own box is EmptyMessage's; one step out is the pin.
-    expect(screen.getByText("Nothing here").parentElement).toHaveClass(
-      "sticky",
-      "left-0",
-      "w-[var(--table-viewport-width,100%)]",
-    )
-  })
-
   it("fires onRowAction with the row key when a row is activated", async () => {
     const user = userEvent.setup()
     const onRowAction = vi.fn()
@@ -738,6 +719,15 @@ describe('DataTable on a phone with mobileLayout="cards"', () => {
     expect(
       within(alpha as HTMLElement).getByRole("button", { name: "Edit Alpha" }),
     ).toBeInTheDocument()
+  })
+
+  it("starts an end-aligned figure in the card's value lane", () => {
+    stubPhone(true)
+    render(<DataTable {...base({ columns, mobileLayout: "cards" })} />)
+    const alpha = screen.getByText("Alpha").closest("li") as HTMLElement
+    // Shrunk to its content, so the column's end alignment cannot carry the
+    // figure across the lane to the card's far edge.
+    expect(within(alpha).getByText("3").classList).toContain("w-fit")
   })
 
   it("keeps the grid on a wide viewport", () => {

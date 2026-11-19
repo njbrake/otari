@@ -1,4 +1,4 @@
-"""API keys for a tenant who does not operate the deployment: their own, or for an owner or admin their organization's.
+"""The caller's own API keys, for a tenant who does not operate the deployment.
 
 ``/api/v1/keys`` is deployment-wide and operator-only (otari-ai#1880), which left a
 hosted organization member with no way to mint a key at all: they could not use
@@ -8,21 +8,15 @@ which scopes to the caller's whole active organization and takes a client-named
 ``user_id``; it is the same second-surface shape ``organization_usage.py``
 established for usage reads (otari#837), applied to a write surface:
 
-* **A member's keys are their own.** A key a member mints is billed to their
-  own attribution row (``users.user_id`` = the identity's UUID as a string, the
-  row ``get_or_create_attribution_user`` mints and the activation guide already
-  keys on), and every load for a member carries that owner predicate, so
-  somebody else's key answers the 404 a nonexistent one does.
-* **An organization owner or admin manages the organization's keys.** Their
-  loads widen the owner predicate to the key of anyone who holds or held a
-  membership in the organization, unless it is budget-exempt or an operator's
-  service key, and to the organization's own service keys (see
-  ``_CallerScope.key_condition``). Their create may name ``user_id``: an active
-  member of the organization who may see the workspace themselves, never an
-  arbitrary or new id. A member naming ``user_id`` is refused. Either way an
-  owner an operator has revoked through ``DELETE /api/v1/users`` stays revoked:
-  this surface refuses rather than reviving the row, which is what would restore
-  the spend that route deactivated.
+* **Ownership is derived, never accepted.** A key minted here is billed to the
+  caller's own attribution row (``users.user_id`` = the identity's UUID as a
+  string, the row ``get_or_create_attribution_user`` mints and the activation
+  guide already keys on), and every load below carries that owner predicate.
+  There is no ``user_id`` parameter, so there is nothing for an escalation to
+  travel on, and somebody else's key answers the 404 a nonexistent one does. An
+  owner an operator has revoked through ``DELETE /api/v1/users`` stays revoked: this
+  surface refuses rather than reviving the row, which is what would restore the
+  spend that route deactivated.
 * **The workspace must be one the caller may see.** A named ``workspace_id``
   goes through ``resolve_workspace_in_organization``, so a workspace in another
   organization, or one in this organization the caller is not a member of,
@@ -34,8 +28,8 @@ established for usage reads (otari#837), applied to a write surface:
   ``OrganizationService.require_workspace_contributor_access``.
   A viewer still lists the keys billed to them, so an operator can issue them one.
 * **No budget bypass.** The operator's create takes ``exclude_from_budget``;
-  this one does not, and always mints an enforced key: an exempt key skips the
-  operator's ceilings on the organization as well as its owner's budget.
+  this one does not, and always mints an enforced key: a member exempting their
+  own key from budget would be minting their own unlimited spend.
 * **A service key belongs to the organization.** Only an owner or admin creates
   one, on this organization's own budgets, and every owner or admin manages it.
   It gets an owner of its own rather than the caller's attribution row, which
@@ -47,17 +41,16 @@ established for usage reads (otari#837), applied to a write surface:
 The operator's deployment-wide view keeps the gate it has, unchanged. A key
 minted here shows up there like any other row in the organization, and the
 narrow-only ``allowed_models`` rule binds against the caller's own user default
-exactly as it does on the operator surface, against the key's owner.
+exactly as it does on the operator surface.
 """
 
 import uuid
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import ColumnElement, and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
@@ -66,26 +59,23 @@ from gateway.api.deps import (
     ApiKeyServiceDep,
     BudgetServiceDep,
     CurrentIdentity,
-    DeploymentUserServiceDep,
-    GrowthSignalPortDep,
+    DeploymentAdministrationAccessDep,
     OrganizationServiceDep,
-    RoutingServiceDep,
+    PersonGrowthSignalPortDep,
     get_config,
     get_db,
     verify_master_key,
 )
 from gateway.api.routes._helpers import database_error
 from gateway.api.routes.keys import (
-    KEY_SEARCH_DESC,
-    KEY_SEARCH_MAX_LENGTH,
+    CREATE_SCOPES_DESCRIPTION,
+    UPDATE_SCOPES_DESCRIPTION,
     CreateKeyResponse,
     KeyInfo,
-    KeyRoutingIds,
     _load_key_in_organization,
     _organization_service_key,
-    key_routing_response,
-    key_search_condition,
 )
+from gateway.api.routes.users import TOTAL_COUNT_HEADER
 from gateway.auth.models import hash_key, key_suffix
 from gateway.core.config import GatewayConfig
 from gateway.core.database import DATABASE_ERRORS
@@ -94,11 +84,10 @@ from gateway.models.api_keys import MAX_END_USER_BUDGETS, APIKey
 from gateway.models.tenancy import Organization, Workspace
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.users import User
-from gateway.ports.growth_signal_port import GrowthActivationEvent
-from gateway.repositories.tenancy.organization_member_repository import OrganizationMemberRepository
+from gateway.ports.growth_signal_port import GrowthAction, GrowthActivationEvent
 from gateway.repositories.users_repository import add_service_key_owner, get_or_create_attribution_user
 from gateway.schemas.api_keys import FederationRuleCreate, FederationRulePublic
-from gateway.schemas.routing import KeyRoutingResponse
+from gateway.schemas.budgets import EndUserPublic, KeyEndUsersPublic
 from gateway.services.api_keys import (
     DEFAULT_ORGANIZATION_MAX_END_USERS,
     END_USER_SETTINGS,
@@ -114,9 +103,10 @@ from gateway.services.model_access import (
     validate_allowed_models,
     validate_allowed_tools,
 )
-from gateway.services.tenancy import DeploymentUserService, OrganizationService
+from gateway.services.tenancy import DeploymentAdministrationAccess, OrganizationService
 from gateway.services.tenancy.authorization import resolve_workspace_in_organization
 from gateway.services.workspace_scope import organization_default_workspace_id
+from gateway.types.key_scope import DEFAULT_KEY_SCOPES, KeyScope, KeyScopeSet
 
 router = APIRouter(
     prefix="/organizations/me/keys",
@@ -130,22 +120,15 @@ router = APIRouter(
 
 
 class CreateOwnKeyRequest(BaseModel):
-    """Create-key body for the tenant surface.
+    """Create-key body for the member surface.
 
-    Deliberately not ``CreateKeyRequest``: its ``user_id`` names an identity in
-    the organization rather than any billing id, and it has no
-    ``exclude_from_budget`` (see the module docstring). A field it does not take
-    is refused rather than dropped.
+    Deliberately not ``CreateKeyRequest``: it carries no ``user_id`` (the owner
+    is the caller, or one of the key's own for a service key) and no
+    ``exclude_from_budget`` (a member must not exempt their own spend from
+    enforcement). A field it does not take is refused rather than dropped.
     """
 
     model_config = ConfigDict(extra="forbid")
-
-    user_id: uuid.UUID | None = Field(
-        default=None,
-        description="Organization owners and admins only: the member who owns the key and whose budget its spend "
-        "counts toward, by identity id. Must be an active member of your active organization who may see the "
-        "workspace. Omitted means you. Not taken with is_service_key, whose key has an owner of its own.",
-    )
 
     key_name: str | None = Field(default=None, description="Optional name for the key")
     expires_at: datetime | None = Field(default=None, description="Optional expiration timestamp")
@@ -160,6 +143,9 @@ class CreateOwnKeyRequest(BaseModel):
         description="Tool allow-list for POST /api/v1/search and /api/v1/fetch: null = inherit your own, "
         "[] = no tool, or search and fetch tool names ('*' for every tool). "
         "A key can only narrow your own tool access.",
+    )
+    scopes: list[KeyScope] = Field(
+        default_factory=lambda: list(DEFAULT_KEY_SCOPES), min_length=1, description=CREATE_SCOPES_DESCRIPTION
     )
     reject_user_mismatch: bool | None = Field(
         default=None,
@@ -231,6 +217,8 @@ class UpdateOwnKeyRequest(BaseModel):
     allowed_models: list[str] | None = None
     # Tri-state the same way: null = inherit your own search tool access.
     allowed_tools: list[str] | None = None
+    # Not nullable on the key, so absent and null both leave it unchanged.
+    scopes: list[KeyScope] | None = Field(default=None, min_length=1, description=UPDATE_SCOPES_DESCRIPTION)
     is_service_key: bool | None = None
     # A service key's alone. Tri-state via model_fields_set: absent = unchanged,
     # null = end users this key creates from now on are uncapped.
@@ -242,63 +230,6 @@ class UpdateOwnKeyRequest(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
-@dataclass(frozen=True)
-class _CallerScope:
-    """The organization a request acts in, and which of its keys the caller may touch."""
-
-    organization: Organization
-    own_user_id: str
-    """The caller's own attribution id: the identity's UUID as a string, as ``get_or_create_attribution_user`` mints."""
-    manages: bool
-    """An owner or admin of the organization, who may touch any member's key in it."""
-
-    @property
-    def key_condition(self) -> ColumnElement[bool]:
-        """What a key in the organization must satisfy for the caller to touch it.
-
-        Always their own. For a manager also the organization's own service keys,
-        and any other key that is neither budget-exempt nor a service key and is
-        billed to someone who holds, or held, a membership in the organization:
-        rotating an exempt key or an operator's service key hands over a
-        credential only the operator may mint, a key with no owner has nobody for
-        an edit to narrow against, and one billed to a user from outside the
-        organization (an operator can mint one into its workspace) is that user's
-        spend and that user's key, not the organization's. A former member still
-        counts, so their keys can be cleaned up after they leave.
-        """
-        own = col(APIKey.user_id) == self.own_user_id
-        if not self.manages:
-            return own
-        return or_(
-            own,
-            _organization_service_key(),
-            and_(
-                col(APIKey.user_id).in_(OrganizationMemberRepository.attribution_ids(self.organization.id)),
-                col(APIKey.exclude_from_budget).is_(False),
-                col(APIKey.is_service_key).is_(False),
-            ),
-        )
-
-
-async def _caller_scope(organizations: OrganizationService, identity: TenancyUser) -> _CallerScope:
-    """Resolve the caller's active organization and their standing in it.
-
-    The organization is the caller's own ``active_organization_id``, resolved
-    through ``get_active_organization_for_user``: a pointer with no live
-    membership behind it falls back to the caller's oldest live membership, and
-    refuses when there is none; moving between organizations is
-    ``POST /api/v1/organizations/me/switch``. Managing takes an active owner or
-    admin membership in that organization, read on every request, so a role
-    lowered since the last one grants nothing.
-    """
-    organization = await organizations.get_active_organization_for_user(identity)
-    return _CallerScope(
-        organization=organization,
-        own_user_id=str(identity.id),
-        manages=await organizations.manages_organization(user=identity, organization=organization),
-    )
-
-
 async def _load_own_writable_key(
     db: AsyncSession,
     organizations: OrganizationService,
@@ -307,17 +238,18 @@ async def _load_own_writable_key(
     *,
     revoking: bool = False,
 ) -> APIKey:
-    """A key the caller may touch (see ``_CallerScope.key_condition``), or 404, refused with 403 to a viewer.
+    """One of the caller's own keys, or 404, refused with 403 to a viewer of its workspace.
 
-    A viewer still lists their keys; changing, rotating or revoking one is a
-    write, and an operator who issued a key to a read-only member is the one who
-    changes it. A caller removed from the key's workspace may still
-    ``revoking`` it, switching it off or deleting it, and nothing else.
+    An owner or admin also reaches the organization's service keys. A viewer
+    still lists their keys; changing, rotating or revoking one is a write, and an
+    operator who issued a key to a read-only member is the one who changes it.
+    A caller removed from the key's workspace may still ``revoking`` it,
+    switching it off or deleting it, and nothing else.
     """
-    scope = await _caller_scope(organizations, identity)
-    key = await _load_key_in_organization(db, key_id, scope.organization.id, condition=scope.key_condition)
+    organization = await organizations.get_active_organization_for_user(identity)
+    key = await _load_member_key(db, organizations, identity, organization, key_id)
     await organizations.hold_workspace_write_access(
-        user=identity, organization_id=scope.organization.id, workspace_id=key.workspace_id, revoking=revoking
+        user=identity, organization_id=organization.id, workspace_id=key.workspace_id, revoking=revoking
     )
     return key
 
@@ -339,29 +271,6 @@ async def _load_member_key(
     )
 
 
-async def _key_owner(
-    organizations: OrganizationService, scope: _CallerScope, user_id: uuid.UUID | None
-) -> TenancyUser | None:
-    """The identity a new key is for, when the caller names one; None means the caller.
-
-    Only a manager may name one, and only an active member of their own
-    organization; anyone else's id answers the 404 an unknown one does.
-    """
-    if user_id is None:
-        return None
-    if not scope.manages:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only an organization owner or admin may create a key for someone else.",
-        )
-    owner = await organizations.users.get(user_id)
-    if owner is None or not await organizations.user_has_active_membership(
-        organization_id=scope.organization.id, user_id=owner.id
-    ):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such member in this organization.")
-    return owner
-
-
 @router.post("")
 async def create_own_key(
     request: CreateOwnKeyRequest,
@@ -369,32 +278,24 @@ async def create_own_key(
     background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
-    growth: GrowthSignalPortDep,
+    growth: PersonGrowthSignalPortDep,
     key_format: ApiKeyFormatPortDep,
     organizations: OrganizationServiceDep,
     budgets: BudgetServiceDep,
 ) -> CreateKeyResponse:
-    """Create an API key, owned by the caller or, for an organization owner or admin, by a member they name.
+    """Create an API key owned by the caller, in a workspace they may see.
 
-    The tenant counterpart of ``POST /api/v1/keys``: the key is always
-    budget-enforced, and the workspace must be visible to the owner (a member of
-    it, or an organization owner/admin, who see every workspace). An owner or
-    admin sees every workspace, so that check is the owner's. A viewer of the
-    workspace is refused with 403. The secret is returned once.
+    The member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the
+    caller's own attribution user, the key is always budget-enforced, and the
+    workspace must be visible to the caller (a member of it, or an organization
+    owner/admin, who see every workspace). A viewer of the workspace is refused
+    with 403. The secret is returned once.
 
     A service key is the organization's rather than the caller's: only an
     organization owner or admin may create one, its end-user budgets must be
     this organization's, and it is owned by a user minted for it alone.
     """
-    if request.user_id is not None and request.is_service_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A service key belongs to the organization and has an owner of its own; omit user_id.",
-        )
-    scope = await _caller_scope(organizations, identity)
-    organization = scope.organization
-    owner_identity = await _key_owner(organizations, scope, request.user_id) or identity
-    for_someone_else = owner_identity.id != identity.id
+    organization = await organizations.get_active_organization_for_user(identity)
     end_users = await admit_organization_key(
         organizations,
         budgets,
@@ -407,7 +308,7 @@ async def create_own_key(
     if request.workspace_id is not None:
         workspace = await resolve_workspace_in_organization(
             db,
-            user=owner_identity,
+            user=identity,
             workspace_id=request.workspace_id,
             organization=organization,
             organizations=organizations,
@@ -425,7 +326,7 @@ async def create_own_key(
         try:
             workspace = await resolve_workspace_in_organization(
                 db,
-                user=owner_identity,
+                user=identity,
                 workspace_id=resolved,
                 organization=organization,
                 organizations=organizations,
@@ -440,13 +341,8 @@ async def create_own_key(
             # parameter they did not send; say what to do instead.
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "That member is not in this organization's default workspace; pass workspace_id naming one "
-                    "they belong to."
-                    if for_someone_else
-                    else "You are not a member of this organization's default workspace; "
-                    "pass workspace_id naming a workspace you belong to."
-                ),
+                detail="You are not a member of this organization's default workspace; "
+                "pass workspace_id naming a workspace you belong to.",
             ) from None
         workspace_id = workspace.id
     await organizations.hold_workspace_write_access(
@@ -456,6 +352,7 @@ async def create_own_key(
     try:
         allowed_models = validate_allowed_models(config, request.allowed_models)
         allowed_tools = validate_allowed_tools(config, request.allowed_tools)
+        scopes = KeyScopeSet.checked(request.scopes, is_service_key=request.is_service_key)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -467,26 +364,20 @@ async def create_own_key(
     # then refuses a request whose owner is deleted. Reviving it is therefore
     # restoring spend, which is not a member's to do for themselves, so this
     # refuses where ``POST /api/v1/keys`` refuses the same owner.
-    revoked = (
-        await db.execute(select(User.deleted_at).where(User.user_id == str(owner_identity.id)))
-    ).scalar_one_or_none()
+    revoked = (await db.execute(select(User.deleted_at).where(User.user_id == str(identity.id)))).scalar_one_or_none()
     if revoked is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "That member's spend identity has been deactivated on this deployment; ask an operator to restore it."
-                if for_someone_else
-                else "Your spend identity has been deactivated on this deployment; ask an operator to restore it."
-            ),
+            detail="Your spend identity has been deactivated on this deployment; ask an operator to restore it.",
         )
 
     owner = await get_or_create_attribution_user(
         db,
-        user_id=str(owner_identity.id),
-        alias=owner_identity.full_name or owner_identity.email,
+        user_id=str(identity.id),
+        alias=identity.full_name or identity.email,
     )
-    # A key must not grant more than its owner's default, the same narrow-only
-    # rule the operator surface enforces.
+    # A key must not grant more than its user's default, the same narrow-only
+    # rule the operator surface enforces; here the user is always the caller.
     if not is_allowlist_subset(allowed_models, owner.allowed_models, tool_keys=config.legacy_search_tool_keys()):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=KEY_MODELS_EXCEED_USER_DETAIL)
     if not tools_within_user(config, allowed_tools, user_tools=owner.allowed_tools, user_models=owner.allowed_models):
@@ -515,6 +406,7 @@ async def create_own_key(
         expires_at=request.expires_at,
         allowed_models=allowed_models,
         allowed_tools=allowed_tools,
+        scopes=scopes,
         exclude_from_budget=False,
         self_service=True,
         reject_user_mismatch=request.reject_user_mismatch,
@@ -532,7 +424,15 @@ async def create_own_key(
         raise database_error("create own key", exc) from None
     await db.refresh(db_key)
 
-    if first_key and owner_identity.email is not None:
+    if growth is not None:
+        await growth.record_action(
+            background_tasks=background_tasks,
+            action=GrowthAction.API_KEY_CREATED,
+            user_id=identity.id,
+            email=identity.email,
+            organization_id=organization.id,
+        )
+    if first_key and growth is not None and identity.email is not None:
         # Skipped for an identity with no address, which is the bootstrap
         # operator's normal state (`services/tenancy/provisioning_service`): the
         # port's ``email`` is what a vendor keys a person on, and there is
@@ -540,8 +440,8 @@ async def create_own_key(
         await growth.record_activation(
             background_tasks=background_tasks,
             event=GrowthActivationEvent.API_KEY_CREATED,
-            user_id=owner_identity.id,
-            email=owner_identity.email,
+            user_id=identity.id,
+            email=identity.email,
         )
 
     key_info = KeyInfo.from_model(db_key)
@@ -559,28 +459,26 @@ async def list_own_keys(
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     workspace_id: Annotated[uuid.UUID | None, Query(description="Only keys in this workspace.")] = None,
-    search: Annotated[str | None, Query(max_length=KEY_SEARCH_MAX_LENGTH, description=KEY_SEARCH_DESC)] = None,
 ) -> list[KeyInfo]:
-    """List API keys in the caller's active organization, newest first.
+    """List the caller's own API keys in their active organization, newest first.
 
-    A member sees only keys billed to their own user: an operator-minted key
-    assigned to them is theirs to see here, and nobody else's key ever is. An
-    organization owner or admin also sees every other member's key and the
-    organization's service keys, apart from budget-exempt keys and an operator's
-    service keys. Naming a workspace outside the organization lists nothing
-    rather than refusing, so the filter reports no more than the unfiltered read
-    does. ``search`` narrows within the same rows.
+    Only keys billed to the caller's own user: an operator-minted key assigned
+    to them is theirs to see here, and nobody else's key ever is. Naming a
+    workspace outside their organization lists nothing rather than refusing, so
+    the filter reports no more than the unfiltered read does. An owner or admin
+    also sees the organization's service keys, which they manage.
     """
-    scope = await _caller_scope(organizations, identity)
+    organization = await organizations.get_active_organization_for_user(identity)
+    owned = col(APIKey.user_id) == str(identity.id)
+    if await organizations.manages_organization(user=identity, organization=organization):
+        owned = or_(owned, _organization_service_key())
     statement = (
         select(APIKey)
         .join(Workspace, col(Workspace.id) == col(APIKey.workspace_id))
-        .where(col(Workspace.organization_id) == scope.organization.id, scope.key_condition)
+        .where(col(Workspace.organization_id) == organization.id, owned)
     )
     if workspace_id is not None:
         statement = statement.where(col(APIKey.workspace_id) == workspace_id)
-    if (matches := key_search_condition(search)) is not None:
-        statement = statement.where(matches)
     # Ordered so paging through more than one page is stable, with the id as a
     # tiebreak for keys minted in the same instant.
     statement = statement.order_by(col(APIKey.created_at).desc(), col(APIKey.id))
@@ -588,35 +486,6 @@ async def list_own_keys(
     keys = result.scalars().all()
 
     return [KeyInfo.from_model(key) for key in keys]
-
-
-@router.get("/routing")
-async def get_own_keys_routing(
-    api_key_id: KeyRoutingIds,
-    identity: CurrentIdentity,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    api_keys: ApiKeyServiceDep,
-    organizations: OrganizationServiceDep,
-    routing: RoutingServiceDep,
-) -> KeyRoutingResponse:
-    """What each key named sent in the last 30 days, and whether a failure on each name has a backup.
-
-    The same read as the operator's, over the keys the list shows the caller: a
-    member's own, or for an owner or admin every member's key in the organization. A key
-    outside that, named or not, is left out like one that does not exist.
-    """
-    scope = await _caller_scope(organizations, identity)
-    visible = await db.execute(
-        select(APIKey.id)
-        .join(Workspace, col(Workspace.id) == col(APIKey.workspace_id))
-        .where(
-            col(APIKey.id).in_(set(api_key_id)),
-            col(Workspace.organization_id) == scope.organization.id,
-            scope.key_condition,
-        )
-    )
-    keys = await api_keys.reach(set(visible.scalars()), organization_id=scope.organization.id)
-    return await key_routing_response(routing, keys, api_key_id)
 
 
 @router.patch("/{key_id}")
@@ -630,18 +499,25 @@ async def update_own_key(
     organizations: OrganizationServiceDep,
     budgets: BudgetServiceDep,
 ) -> KeyInfo:
-    """Update one of the caller's own API keys, or for an organization owner or admin any member's key."""
+    """Update one of the caller's own API keys, or one of the organization's service keys for an owner or admin."""
     fields = request.model_fields_set
     switching_off = fields == {"is_active"} and request.is_active is False
     key = await _load_own_writable_key(db, organizations, identity, key_id, revoking=switching_off)
     refuse_service_key_flag_change(key, request.is_service_key)
 
     # Tri-state via model_fields_set: the nullable columns take null to clear
-    # them, so "absent" and "null" have to be told apart. ``is_active`` and
-    # ``metadata`` are not nullable, so ``is not None`` is the whole distinction there.
-    changes = request.model_dump(include=fields - {"is_active", "metadata", "is_service_key"} - END_USER_SETTINGS)
+    # them, so "absent" and "null" have to be told apart. ``is_active``,
+    # ``metadata`` and ``scopes`` are not nullable, so ``is not None`` is the whole distinction there.
+    changes = request.model_dump(
+        include=fields - {"is_active", "metadata", "is_service_key", "scopes"} - END_USER_SETTINGS
+    )
     if request.is_active is not None:
         changes["is_active"] = request.is_active
+    if request.scopes is not None:
+        try:
+            changes["scopes"] = KeyScopeSet.checked(request.scopes, is_service_key=key.is_service_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if request.metadata is not None:
         changes["metadata_"] = request.metadata
     changes |= await organization_key_changes(
@@ -671,7 +547,7 @@ async def rotate_own_key(
     key_format: ApiKeyFormatPortDep,
     organizations: OrganizationServiceDep,
 ) -> CreateKeyResponse:
-    """Rotate a key's secret in place: the caller's own, or for an organization owner or admin any member's.
+    """Rotate the secret of one of the caller's own API keys, in place.
 
     Same contract as the operator's rotate: the row keeps its identity, the new
     raw key is returned once, and the previous secret stops authenticating
@@ -706,7 +582,7 @@ async def delete_own_key(
     db: Annotated[AsyncSession, Depends(get_db)],
     organizations: OrganizationServiceDep,
 ) -> None:
-    """Delete (revoke) one of the caller's own API keys, or for an organization owner or admin any member's key."""
+    """Delete (revoke) one of the caller's own API keys."""
     key = await _load_own_writable_key(db, organizations, identity, key_id, revoking=True)
 
     await db.delete(key)
@@ -717,10 +593,63 @@ async def delete_own_key(
         raise database_error("delete own key", exc) from None
 
 
+@router.get("/{key_id}/end-users")
+async def list_own_key_end_users(
+    key_id: str,
+    response: Response,
+    identity: CurrentIdentity,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    organizations: OrganizationServiceDep,
+    budgets: BudgetServiceDep,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    budget_id: Annotated[str | None, Query(description="Only end users on this budget.")] = None,
+    blocked: Annotated[bool | None, Query(description="Only end users that are, or are not, blocked.")] = None,
+    external_id: Annotated[
+        str | None, Query(description="Only the end user the service names with this `user` value: zero or one.")
+    ] = None,
+    include_total: Annotated[
+        bool, Query(description="Also count every matching end user, in the Otari-Total-Count response header.")
+    ] = False,
+) -> list[EndUserPublic]:
+    """List the end users of one of the caller's service keys, oldest first.
+
+    The caller's own key, or for an owner or admin one of the organization's service keys; any other answers 404.
+    A read, so a viewer may list the end users of a key billed to them. A deleted end user is not listed.
+    """
+    organization = await organizations.get_active_organization_for_user(identity)
+    key = await _load_member_key(db, organizations, identity, organization, key_id)
+    if include_total:
+        total = await budgets.count_end_users(
+            api_key=key, external_id=external_id, budget_id=budget_id, blocked=blocked
+        )
+        response.headers[TOTAL_COUNT_HEADER] = str(total)
+    return await budgets.list_end_users(
+        api_key=key, external_id=external_id, budget_id=budget_id, blocked=blocked, skip=skip, limit=limit
+    )
+
+
+@router.get("/{key_id}/end-user-count")
+async def get_own_key_end_user_count(
+    key_id: str,
+    identity: CurrentIdentity,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    organizations: OrganizationServiceDep,
+    budgets: BudgetServiceDep,
+) -> KeyEndUsersPublic:
+    """How many end users one of the caller's service keys counts against its ``max_end_users``, and the cap.
+
+    The same keys as listing their end users: the caller's own, or for an owner or admin the organization's.
+    """
+    organization = await organizations.get_active_organization_for_user(identity)
+    key = await _load_member_key(db, organizations, identity, organization, key_id)
+    return await budgets.end_user_seats(api_key=key)
+
+
 async def _federation_rule_key(
     db: AsyncSession,
     organizations: OrganizationService,
-    deployment_users: DeploymentUserService,
+    deployment_users: DeploymentAdministrationAccess,
     identity: TenancyUser,
     key_id: str,
     *,
@@ -751,7 +680,7 @@ async def create_own_federation_rule(
     config: Annotated[GatewayConfig, Depends(get_config)],
     api_keys: ApiKeyServiceDep,
     organizations: OrganizationServiceDep,
-    deployment_users: DeploymentUserServiceDep,
+    deployment_users: DeploymentAdministrationAccessDep,
 ) -> FederationRulePublic:
     """Let an OpenID Connect identity token stand in for a key, through the token exchange.
 
@@ -777,7 +706,7 @@ async def list_own_federation_rules(
     db: Annotated[AsyncSession, Depends(get_db)],
     api_keys: ApiKeyServiceDep,
     organizations: OrganizationServiceDep,
-    deployment_users: DeploymentUserServiceDep,
+    deployment_users: DeploymentAdministrationAccessDep,
 ) -> list[FederationRulePublic]:
     """List the identities that may authenticate as a key, oldest first.
 
@@ -796,7 +725,7 @@ async def delete_own_federation_rule(
     db: Annotated[AsyncSession, Depends(get_db)],
     api_keys: ApiKeyServiceDep,
     organizations: OrganizationServiceDep,
-    deployment_users: DeploymentUserServiceDep,
+    deployment_users: DeploymentAdministrationAccessDep,
 ) -> Response:
     """Remove a federation rule from a key. Tokens it matched stop with the next request.
 

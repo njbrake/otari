@@ -55,6 +55,11 @@ def _replay(provider: str, case: str) -> Callable[[httpx.Request], httpx.Respons
 
 # A provider that signals no error inside a successful response leaves "in_body_error" out.
 SCENARIOS: dict[str, dict[Case, Scenario]] = {
+    "brave": {
+        "normal": Scenario(handler=_replay("brave", "normal")),
+        "empty": Scenario(handler=_replay("brave", "empty")),
+        "error": Scenario(handler=_replay("brave", "error")),
+    },
     "deepseek": {
         "normal": Scenario(handler=_replay("deepseek", "normal")),
         "empty": Scenario(handler=_replay("deepseek", "empty")),
@@ -77,6 +82,11 @@ SCENARIOS: dict[str, dict[Case, Scenario]] = {
         "error": Scenario(handler=_replay("mojeek", "error")),
         "in_body_error": Scenario(handler=_replay("mojeek", "in_body_error")),
     },
+    "perplexity": {
+        "normal": Scenario(handler=_replay("perplexity", "normal")),
+        "empty": Scenario(handler=_replay("perplexity", "empty")),
+        "error": Scenario(handler=_replay("perplexity", "error")),
+    },
     "searxng": {
         "normal": Scenario(handler=_replay("searxng", "normal")),
         "empty": Scenario(handler=_replay("searxng", "empty")),
@@ -88,6 +98,11 @@ SCENARIOS: dict[str, dict[Case, Scenario]] = {
         "empty": Scenario(handler=_replay("serply", "empty")),
         "error": Scenario(handler=_replay("serply", "error")),
     },
+    "tavily": {
+        "normal": Scenario(handler=_replay("tavily", "normal")),
+        "empty": Scenario(handler=_replay("tavily", "empty")),
+        "error": Scenario(handler=_replay("tavily", "error")),
+    },
     # Synthetic's "normal" is the example its documentation gives, and "empty" that shape with no
     # results; neither is a recording, since a search needs a subscription. Record both once one is
     # available.
@@ -95,6 +110,11 @@ SCENARIOS: dict[str, dict[Case, Scenario]] = {
         "normal": Scenario(handler=_replay("synthetic", "normal")),
         "empty": Scenario(handler=_replay("synthetic", "empty")),
         "error": Scenario(handler=_replay("synthetic", "error")),
+    },
+    "youdotcom": {
+        "normal": Scenario(handler=_replay("youdotcom", "normal")),
+        "empty": Scenario(handler=_replay("youdotcom", "empty")),
+        "error": Scenario(handler=_replay("youdotcom", "error")),
     },
 }
 
@@ -176,6 +196,7 @@ async def test_a_normal_answer_fills_the_envelope(provider: str) -> None:
         assert isinstance(hit.title, str)
         assert isinstance(hit.snippet, str)
     assert (result.cost is None) == (result.cost_source == "none")
+    assert (result.cost_source == "reported") == AnySearch.get_provider_metadata(provider).reports_cost
     assert "raw=" not in repr(result)
     assert "raw=" not in repr(result.hits[0])
 
