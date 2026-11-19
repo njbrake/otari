@@ -1,7 +1,7 @@
 # Configuration
 
 Otari reads a YAML file, environment variables, and selected settings stored by
-the management API. Start with [`config.example.yml`](https://github.com/mozilla-ai/otari/blob/1b7e45e35c971e623b5f210967081e808e9d9fae/config.example.yml);
+the management API. Start with [`config.example.yml`](https://github.com/mozilla-ai/otari/blob/0a455f0b754a1b767922347743819b9e01cc47af/config.example.yml);
 the running dashboard's Settings page shows the effective non-secret scalar
 configuration and which values can be changed without a restart.
 
@@ -172,6 +172,18 @@ cancelled, query included, so a page that was reloaded or left gives its turns
 back rather than holding them until its reads finish. The limit is per worker:
 the database sees up to workers × replicas × `usage_read_concurrency` of these reads at once.
 Raise it for a database with memory to spare.
+
+On PostgreSQL the summaries, breakdowns, series and counts take each whole hour
+of their window from hourly rollups (`usage_rollups`) rather than from its
+usage rows, and read the partial hours at the window's ends from the rows, so a
+new request shows up at once. Triggers on `usage_logs` mark the hours an
+insert, update or delete changes, and the gateway rebuilds marked hours every 30
+seconds, one worker at a time; until then a marked hour is read from its rows.
+The migration that adds the rollups marks every hour of existing usage without
+scanning it, and the gateway then builds the history in the background, newest
+hours first, so the recent weeks a dashboard reads are ready within minutes. A
+window with more than 48 unbuilt hours, or a filter on a tag, a request id or a
+tool, reads the rows as before, and so does SQLite.
 
 A completion that cannot reserve its budget because the database did not answer
 in time is answered `503` with a `Retry-After`, and nothing is sent upstream. One
@@ -908,7 +920,7 @@ client_country_header: CF-IPCountry
 ```
 
 OpenAI's list, as 208 codes taken from that page on 2026-10-23, is in
-[openai-supported-countries.json](https://github.com/mozilla-ai/otari/blob/1b7e45e35c971e623b5f210967081e808e9d9fae/docs/public/openai-supported-countries.json), a
+[openai-supported-countries.json](https://github.com/mozilla-ai/otari/blob/0a455f0b754a1b767922347743819b9e01cc47af/docs/public/openai-supported-countries.json), a
 JSON list the dashboard's Load from JSON file button reads for a hosted
 provider. OpenAI changes the page, so check the file against it before relying
 on it. The page allows Ukraine "with certain exceptions", which a country code
@@ -1953,7 +1965,7 @@ contribute capability-gated routers. Most deployments should leave it unset.
 
 This is executable code, not a feature flag. Install the module in the gateway
 environment, pin it to a compatible Otari release, and authenticate every
-contributed route. See [Architecture](https://github.com/mozilla-ai/otari/blob/1b7e45e35c971e623b5f210967081e808e9d9fae/ARCHITECTURE.md) for the extension
+contributed route. See [Architecture](https://github.com/mozilla-ai/otari/blob/0a455f0b754a1b767922347743819b9e01cc47af/ARCHITECTURE.md) for the extension
 boundary.
 
 ## Contacting the Otari team
