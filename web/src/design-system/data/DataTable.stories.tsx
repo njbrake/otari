@@ -3,6 +3,8 @@ import { useState } from "react"
 import type { Selection, SortDescriptor } from "react-aria-components"
 import { CopyableValue } from "../actions/CopyField"
 import { EmptyState } from "../feedback/EmptyState"
+import { ColumnFilter } from "./ColumnFilter"
+import { ColumnFilterList } from "./ColumnFilterList"
 import type { DataTableColumn, DataTableProps } from "./DataTable"
 import { DataTable } from "./DataTable"
 
@@ -108,6 +110,55 @@ type Story = StoryObj<DataTableProps<KeyRow>>
  * rather than hand-rolling a `<table>`.
  */
 export const Default: Story = {}
+
+/**
+ * `headerAction` puts a control beside a header's label, here a `ColumnFilter`.
+ * It keeps its own press, so it never sorts, and a sortable label becomes a
+ * button of its own so the keyboard still reaches the sort.
+ */
+export const HeaderActions: Story = {
+  render: (args) => {
+    const [owners, setOwners] = useState<string[]>([])
+    const [sort, setSort] = useState<SortDescriptor>({
+      column: "requests",
+      direction: "descending",
+    })
+    const columns = args.columns.map((column) =>
+      column.id === "owner" || column.id === "requests"
+        ? {
+            ...column,
+            headerAction: (
+              <ColumnFilter
+                label={column.id === "owner" ? "Owner" : "Requests"}
+                isFiltered={column.id === "owner" && owners.length > 0}
+                onClear={() => setOwners([])}
+              >
+                <ColumnFilterList
+                  label="Owner"
+                  options={[...new Set(ROWS.map((row) => row.owner))].map(
+                    (owner) => ({ value: owner, label: owner }),
+                  )}
+                  selected={owners}
+                  onChange={setOwners}
+                />
+              </ColumnFilter>
+            ),
+          }
+        : column,
+    )
+    return (
+      <DataTable
+        {...args}
+        columns={columns}
+        rows={ROWS.filter(
+          (row) => owners.length === 0 || owners.includes(row.owner),
+        )}
+        sortDescriptor={sort}
+        onSortChange={setSort}
+      />
+    )
+  },
+}
 
 /** A spinner in place of the body while the first page loads. */
 export const Loading: Story = {

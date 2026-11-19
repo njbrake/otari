@@ -129,6 +129,11 @@ class ApiKeyService:
         async with self._uow:
             return await self._keys.names_by_id(key_ids, workspace_ids=workspace_ids)
 
+    async def ids_named_like(self, term: str, *, limit: int) -> list[str]:
+        """Up to ``limit`` ids of the keys whose name contains ``term``, case-insensitive, in a block of its own."""
+        async with self._uow:
+            return await self._keys.ids_named_like(term, limit=limit)
+
     async def summaries_in_workspace(
         self, workspace_id: uuid.UUID, key_ids: Collection[str] | None = None
     ) -> list[KeySummary]:

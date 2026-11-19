@@ -19,8 +19,21 @@ DataTable: { ariaLabel, columns, rows, getRowKey, isLoading?, emptyContent?,
   resizable?, detailKey?, renderDetail?, mobileLayout?: "table" | "cards" }
 
 DataTableColumn: { id, header, cell: (row) => ReactNode, align?: "start" | "end",
-  isRowHeader?, allowsSorting?, width?, minWidth? }
+  isRowHeader?, allowsSorting?, headerAction?, width?, minWidth? }
+
+ColumnFilter: { label, isFiltered, onClear?, onOpenChange?, placement?, children }
+ColumnFilterList: { label, title?, options: { value, label, count? }[], selected,
+  excluded?, selectionMode?: "single" | "multiple", onChange: (selected, excluded) => void,
+  search?, onSearch?, more?, isLoading?, isError?, allowsCustom?, isMono?, emptyLabel? }
 ```
+
+A column filtered from its header takes a `ColumnFilter` in `headerAction`: a
+funnel, faint at rest, brighter on header hover, the accent while the column is
+filtered, opening one `ColumnFilterList` per thing the column filters by. The
+funnel keeps its own press, so it never sorts; on a sortable column the label
+becomes a button of its own, so the keyboard still reaches the sort. The applied
+filters show as `FilterChips` above the table, with no pickers of their own. The
+phone's cards have no header row, so there the chips are how a filter is removed.
 
 Note the names: `id` not `key`, `header` not `label`, `cell` not `renderCell`, and
 `align: "end"` not `"right"`. `align` moves the header with the cell. One column

@@ -1,10 +1,10 @@
 import { expect, type Page, test } from "@playwright/test"
 
 import {
-  addFilterValue,
   filterChip,
   gotoRoute,
   login,
+  pickColumnFilter,
   pickOption,
   tableRows,
 } from "./helpers"
@@ -58,7 +58,7 @@ test.describe("activity log", () => {
     await gotoRoute(page, SCOPED)
     await expect(rows(page)).toHaveCount(ALL)
 
-    await pickOption(page, "Status", "Error")
+    await pickColumnFilter(page, "Status", "Error")
 
     // The chip is the page's own statement that the filter is applied, so it is
     // asserted alongside the rows rather than instead of them.
@@ -68,9 +68,9 @@ test.describe("activity log", () => {
       await expect(row).toContainText("Error")
     }
 
-    // Clearing from the chip must restore the full log, not merely blank the
-    // select: the chip's ✕ is the only affordance on a narrow viewport, where the
-    // picker row is collapsed.
+    // Clearing from the chip must restore the full log, not merely uncheck the
+    // value: the chip's ✕ is the only affordance on a narrow viewport, where the
+    // table is cards with no headers to filter from.
     await filterChip(page, "Status", "Error").getByRole("button").click()
     await expect(filterChip(page, "Status", "Error")).toBeHidden()
     await expect(rows(page)).toHaveCount(ALL)
@@ -98,13 +98,13 @@ test.describe("activity log", () => {
     }
   })
 
-  test("model and user filters compose, and Clear all drops the shared ones together", async ({
+  test("model and user filters compose, and Clear all drops every filter", async ({
     page,
   }) => {
     await login(page)
     await gotoRoute(page, SCOPED)
 
-    await addFilterValue(page, "Model", PARITY.models.unpriced.model)
+    await pickColumnFilter(page, "Model", PARITY.models.unpriced.model)
     await expect(
       filterChip(page, "Model", PARITY.models.unpriced.model),
     ).toBeVisible()
@@ -112,27 +112,28 @@ test.describe("activity log", () => {
     await expect(rows(page)).toHaveCount(COUNTS.unpriced + COUNTS.errors)
 
     // Filters intersect rather than replace: this user owns those same rows, so
-    // adding them must not change the count, while a user who owns none empties it.
-    await addFilterValue(page, "User", PARITY.users.light)
+    // adding them must not change the count.
+    await pickColumnFilter(page, "User", PARITY.users.light)
     await expect(rows(page)).toHaveCount(COUNTS.unpriced + COUNTS.errors)
-    await addFilterValue(page, "User", PARITY.users.heavy)
-    await expect(rows(page)).toHaveCount(COUNTS.unpriced + COUNTS.errors)
+    await expect(filterChip(page, "User", PARITY.users.light)).toBeVisible()
 
-    // Clear all drops the shared filters (model, user, key, status) in one press.
-    // The control removes itself once there is nothing left to clear, which is
-    // the tightest statement that none survived. The source scoping is the log's
-    // own filter, so it stays until its chip is cleared.
-    await page.getByRole("button", { name: "Clear all" }).click()
-    await expect(page.getByRole("button", { name: "Clear all" })).toBeHidden()
-    await expect(
-      filterChip(page, "Model", PARITY.models.unpriced.model),
-    ).toBeHidden()
+    // A chip clears only its own filter: without the model and user the log is
+    // back to the fixture, still scoped to its source.
+    await filterChip(page, "Model", PARITY.models.unpriced.model)
+      .getByRole("button")
+      .click()
+    await filterChip(page, "User", PARITY.users.light)
+      .getByRole("button")
+      .click()
     await expect(filterChip(page, "Source", PARITY.source)).toBeVisible()
     await expect(rows(page)).toHaveCount(ALL)
 
-    // Clearing the source as well widens the log past the fixture rather than
-    // back to it.
-    await filterChip(page, "Source", PARITY.source).getByRole("button").click()
+    // Clear all drops every filter in the one chip row, the source scoping
+    // included, so the log widens past the fixture. The control removes itself
+    // once there is nothing left to clear, which is the tightest statement that
+    // none survived.
+    await page.getByRole("button", { name: "Clear all" }).click()
+    await expect(page.getByRole("button", { name: "Clear all" })).toBeHidden()
     await expect(filterChip(page, "Source", PARITY.source)).toBeHidden()
     await expect
       .poll(() => rows(page).count())

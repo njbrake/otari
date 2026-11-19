@@ -9,6 +9,7 @@ Is it a closed set of alternatives to one value?
  └── Segmented         (24h / 7d / 30d / 90d)
 Does it narrow a list that is already on screen?
  └── FilterChips + FilterSelect / FilterMultiComboBox
+     (a table's own columns: ColumnFilter in the header, chips above, see data.md)
 Does it change route?
  └── A rail row, from the nav registry. Never a Tab.
 ```
@@ -20,7 +21,7 @@ Tab: { isActive, onPress, children }
 TabRow: { children }
 Segmented: { label, value, size?: "sm" | "md", onChange: (next: string) => void,
   options: { value, label }[] }
-FilterChips: { chips: FilterChip[], children, onClearAll?, start?, end? }
+FilterChips: { chips: FilterChip[], children?, onClearAll?, start?, end? }
 FilterChip: { key, label, value, clearLabel?, onClear: () => void }
 DismissChip: { value, onDismiss, label?, dismissLabel? }
 ```

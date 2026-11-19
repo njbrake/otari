@@ -678,6 +678,60 @@ describe("DataTable", () => {
   })
 })
 
+describe("DataTable header actions", () => {
+  function Harness({ onAction }: { onAction: () => void }) {
+    const [sort, setSort] = useState<SortDescriptor | undefined>(undefined)
+    const columns: DataTableColumn<Row>[] = COLUMNS.map((column) =>
+      column.id === "cost"
+        ? {
+            ...column,
+            headerAction: (
+              <button type="button" onClick={onAction}>
+                Filter Cost
+              </button>
+            ),
+          }
+        : column,
+    )
+    return (
+      <>
+        <span data-testid="sort">
+          {sort ? `${String(sort.column)}:${sort.direction}` : "none"}
+        </span>
+        <DataTable
+          {...base({ columns, sortDescriptor: sort, onSortChange: setSort })}
+        />
+      </>
+    )
+  }
+
+  it("renders the action in the header, and pressing it does not sort", async () => {
+    const user = userEvent.setup()
+    const onAction = vi.fn()
+    render(<Harness onAction={onAction} />)
+
+    const header = screen.getByRole("columnheader", { name: /Cost/ })
+    await user.click(
+      within(header).getByRole("button", { name: "Filter Cost" }),
+    )
+
+    expect(onAction).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId("sort")).toHaveTextContent("none")
+  })
+
+  it("keeps the sort on a button of its own, which flips on a second press", async () => {
+    const user = userEvent.setup()
+    render(<Harness onAction={() => {}} />)
+
+    const header = screen.getByRole("columnheader", { name: /Cost/ })
+    const sort = within(header).getByRole("button", { name: "Cost" })
+    await user.click(sort)
+    expect(screen.getByTestId("sort")).toHaveTextContent("cost:ascending")
+    await user.click(sort)
+    expect(screen.getByTestId("sort")).toHaveTextContent("cost:descending")
+  })
+})
+
 describe('DataTable on a phone with mobileLayout="cards"', () => {
   const realMatchMedia = window.matchMedia
 

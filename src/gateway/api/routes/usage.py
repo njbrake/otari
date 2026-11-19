@@ -27,6 +27,7 @@ from gateway.api.key_scopes import key_scope
 from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.api.routes._helpers import retryable_on_database_outage
 from gateway.api.routes._request_tags import MAX_TAG_KEY_LENGTH
+from gateway.api.routes._usage_refinements import UsageRefinementsQuery
 from gateway.core.config import GatewayConfig
 from gateway.core.sql import MAX_FILTER_VALUES
 from gateway.core.surface import Surface
@@ -43,6 +44,8 @@ from gateway.schemas.usage_and_telemetry import (
     UsageEntry,
     UsageGroupedSeries,
     UsageSummary,
+    UsageValueGroups,
+    ValueGroupBy,
 )
 from gateway.services.external_usage_service import (
     ExternalEventsRequest,
@@ -199,6 +202,15 @@ _API_KEY_MULTI_DESC = (
     "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values "
     f"match any of them. At most {MAX_FILTER_VALUES} per call."
 )
+_GROUP_BY_DESC = (
+    "The column to list the values of: 'policy' is the routing policy a request was served through, "
+    "under a null key for the requests that named a model directly."
+)
+_MAX_GROUP_SEARCH = 200
+_GROUP_SEARCH_DESC = (
+    "Keep the values that contain this, case-insensitive, or whose name does: a user's alias, an API key's "
+    f"name. What a column's filter menu searches. At most {_MAX_GROUP_SEARCH} characters."
+)
 _DIMENSIONS_DESC = (
     "Which breakdowns to compute; repeatable (dimensions=model&dimensions=user). Each value names the "
     "'by_<value>' response field it fills, except 'status_code', which fills the failure taxonomy in "
@@ -212,6 +224,7 @@ _DIMENSIONS_DESC = (
 async def list_usage(
     usage: UsageServiceDep,
     usage_scope: CallerUsageScope,
+    refine: UsageRefinementsQuery,
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
     user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
@@ -265,6 +278,7 @@ async def list_usage(
         counts_toward_budget=counts_toward_budget,
         request_group_id=request_group_id,
         workspace_id=workspace_id,
+        refine=refine,
     )
     return await usage.page(filters, usage_scope, skip=skip, limit=limit)
 
@@ -335,6 +349,7 @@ async def get_request_settlement(
 async def count_usage(
     usage: UsageServiceDep,
     usage_scope: CallerUsageScope,
+    refine: UsageRefinementsQuery,
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
     user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
@@ -388,6 +403,7 @@ async def count_usage(
         counts_toward_budget=counts_toward_budget,
         request_group_id=request_group_id,
         workspace_id=workspace_id,
+        refine=refine,
     )
     # counts_toward_budget alone does not say "imported": gateway traffic on an
     # exclude_from_budget key is also False, so without this the count would
@@ -481,6 +497,7 @@ async def set_usage_price_rows(
 async def usage_summary(
     usage: UsageServiceDep,
     usage_scope: CallerUsageScope,
+    refine: UsageRefinementsQuery,
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
     user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
@@ -539,6 +556,7 @@ async def usage_summary(
         tool=tool,
         counts_toward_budget=counts_toward_budget,
         workspace_id=workspace_id,
+        refine=refine,
     )
     return await usage.summary(filters, usage_scope, bucket=bucket, dimensions=dimensions, group_by_tag=group_by_tag)
 
@@ -547,6 +565,7 @@ async def usage_summary(
 async def usage_series(
     usage: UsageServiceDep,
     usage_scope: CallerUsageScope,
+    refine: UsageRefinementsQuery,
     group_by: SeriesGroupBy = Query(description="Dimension to split the series by"),
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
@@ -597,5 +616,64 @@ async def usage_series(
         tool=tool,
         counts_toward_budget=counts_toward_budget,
         workspace_id=workspace_id,
+        refine=refine,
     )
     return await usage.grouped_series(filters, usage_scope, bucket=bucket, group_by=group_by)
+
+
+@operator_router.get("/groups")
+async def usage_value_groups(
+    usage: UsageServiceDep,
+    usage_scope: CallerUsageScope,
+    refine: UsageRefinementsQuery,
+    group_by: ValueGroupBy = Query(description=_GROUP_BY_DESC),
+    start_date: datetime | None = Query(default=None, description=_START_DESC),
+    end_date: datetime | None = Query(default=None, description=_END_DESC),
+    user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
+    status: str | None = Query(default=None, description=_STATUS_DESC),
+    status_code: int | None = Query(default=None, description=_STATUS_CODE_DESC),
+    model: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_MODEL_MULTI_DESC)] = None,
+    endpoint: str | None = Query(default=None, description=_ENDPOINT_DESC),
+    provider: str | None = Query(default=None, description=_PROVIDER_DESC),
+    source: str | None = Query(default=None, description=_SOURCE_DESC),
+    source_label: str | None = Query(default=None, description=_SOURCE_LABEL_DESC),
+    tag: TagFilter = None,
+    api_key_id: Annotated[
+        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_API_KEY_MULTI_DESC)
+    ] = None,
+    priced: bool | None = Query(default=None, description=_PRICED_DESC),
+    tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
+    counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
+    workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    search: Annotated[str | None, Query(max_length=_MAX_GROUP_SEARCH, description=_GROUP_SEARCH_DESC)] = None,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> UsageValueGroups:
+    """One column's values over the window, busiest first, with how many requests carry each.
+
+    What a column's filter menu lists. Same filters and window bounds as
+    ``/summary``; a menu leaves its own column's filters out so its list stays
+    complete. ``total`` counts every value the filters leave, so a menu can say how
+    many more there are past the page. Searched and ordered here rather than by
+    the client, so a window with more values than one page still reaches them all.
+    """
+    filters = UsageFilters(
+        start_date=start_date,
+        end_date=end_date,
+        user_id=user_id,
+        status=status,
+        status_code=status_code,
+        model=model,
+        endpoint=endpoint,
+        provider=provider,
+        source=source,
+        source_label=source_label,
+        tags=parse_tag_filters(tag),
+        api_key_id=api_key_id,
+        priced=priced,
+        tool=tool,
+        counts_toward_budget=counts_toward_budget,
+        workspace_id=workspace_id,
+        refine=refine,
+    )
+    return await usage.value_groups(filters, usage_scope, group_by=group_by, search=search, skip=skip, limit=limit)

@@ -59,11 +59,26 @@ to ask an owner or admin.
 
 Open **Sessions** and pick **Requests** for the per-request log. The two views
 share one time range and the model, user, API key and status filters, which
-stay in place when you switch views and are kept in the URL. **Status** narrows
-Requests, and Sessions for errors and successes. **Provider** narrows Requests
-only, so it stays behind when you switch to Sessions. On Requests, dragging
-across the chart narrows the range. Both views show everyone's requests in the workspace; pick
-yourself under **User** to see only yours.
+stay in place when you switch views and are kept in the URL.
+
+Filter from a column's header: each filterable column has a funnel that opens
+its values with how many requests carry each, busiest first, with a search box
+when the list is long. Check a value to keep only its rows, or press the slash
+beside it to leave it out. On Requests, **Model** also lists providers and,
+once the window ran one, the gateway tool a request used; **API key** lists
+the sources requests came from once there is more than one; **Routing** lists
+routing policies and offers **Direct requests only**; the token, **Cost** and
+**Total time** columns show only the rows above a threshold; and **Cost**
+offers **Priced only** or **Unpriced only**. The funnel takes the accent color
+while its column is filtered. Every filter, including one a link set (a
+session, a status code, an endpoint), is a chip in the one row above the table
+that removes it; **Clear all** removes them together.
+
+**Status** narrows Requests, and Sessions for errors and successes. Exclusions,
+**Provider**, tool, source, pricing, routing and thresholds narrow Requests only, so they stay behind
+when you switch to Sessions. On Requests, dragging across the chart narrows the
+range. Both views show everyone's requests in the workspace; pick yourself in
+the **User** column's filter to see only yours.
 
 ## Find one request
 

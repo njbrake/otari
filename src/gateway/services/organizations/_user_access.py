@@ -32,6 +32,10 @@ class UserAccess:
         """Each of these users that has a row, deleted or not, to its alias."""
         return await self._users.aliases(user_ids)
 
+    async def ids_aliased_like(self, term: str, *, limit: int) -> list[str]:
+        """Up to ``limit`` ids of the users whose alias contains ``term``, case-insensitive."""
+        return await self._users.ids_aliased_like(term, limit=limit)
+
     async def lock_with_end_users(self, user_id: str) -> list[str]:
         """Lock ``user_id`` and its end users against key issuance, and return the ids of those that exist."""
         return await self._users.lock_with_end_users(user_id)

@@ -40,8 +40,10 @@ export function FilterChips({
   alwaysOpen = false,
 }: {
   chips: FilterChip[]
-  // The picker controls (comboboxes/selects), revealed by "Add filter".
-  children: ReactNode
+  // The picker controls (comboboxes/selects), revealed by "Add filter". Left
+  // out where the filters are set elsewhere (a table's column headers): the row
+  // is then `start`, the chips and `end`, with no toggle.
+  children?: ReactNode
   onClearAll?: () => void
   // Optional controls sharing the toggle's row: `start` renders before the
   // toggle (e.g. the date preset buttons), `end` is pushed to the right edge
@@ -77,6 +79,22 @@ export function FilterChips({
       ) : null}
     </>
   )
+
+  if (children === undefined) {
+    return (
+      <div
+        className={`otari-toolbar flex flex-wrap items-center gap-2 ${
+          chips.length > 0 ? "pointer-coarse:gap-y-5" : ""
+        }`}
+      >
+        {start}
+        {chipRow}
+        {end ? (
+          <div className="ml-auto flex items-center gap-3">{end}</div>
+        ) : null}
+      </div>
+    )
+  }
 
   if (alwaysOpen) {
     return (

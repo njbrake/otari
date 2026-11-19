@@ -142,6 +142,20 @@ export interface UsageFilters {
   // and pinning it to the two built-ins forced a cast at the one call site that
   // drills into a named tool.
   tool?: string
+  // Refinements, each the server's own query parameter (see `_usage_refinements`):
+  // values to leave out (a row with no user or key stays), the routing policy a
+  // request was served through, and thresholds a row must exceed.
+  exclude_model?: string[]
+  exclude_user_id?: string[]
+  exclude_api_key_id?: string[]
+  exclude_source?: string[]
+  exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[]
+  policy_name?: string[]
+  exclude_policy_name?: string[]
+  routed?: boolean
+  tokens_gt?: number
+  cost_gt?: number
+  latency_ms_gt?: number
 }
 
 /** Which tool/guardrail service a settings test targets. A path parameter in the

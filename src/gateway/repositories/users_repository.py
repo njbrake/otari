@@ -438,6 +438,13 @@ class UserAccessRepository(BaseRepository[User, Never, Never]):
         ).first()
         return None if row is None else BudgetUse(**row._asdict())
 
+    async def ids_aliased_like(self, term: str, *, limit: int) -> list[str]:
+        """Up to ``limit`` ids of the users whose alias contains ``term``, case-insensitive, deleted or not."""
+        stmt = (
+            select(User.user_id).where(User.alias.icontains(term, autoescape=True)).order_by(User.user_id).limit(limit)
+        )
+        return list((await self.db.execute(stmt)).scalars())
+
     async def aliases(self, user_ids: Collection[str]) -> dict[str, str | None]:
         """Each of these users that has a row, deleted or not, to its alias."""
         if not user_ids:

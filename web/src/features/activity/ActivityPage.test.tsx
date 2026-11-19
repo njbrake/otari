@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { InFlightRequest, InFlightResponse } from "@/client"
 import { ActivityPage } from "@/features/activity/ActivityPage"
+import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
 import { API_ROOT } from "@/shared/api/client"
 import {
   countCalls,
@@ -15,7 +16,26 @@ import {
   renderPage,
 } from "@/tests/activity"
 import { organizationMember } from "@/tests/fixtures"
-import { pickOption, selectTrigger } from "@/tests/select"
+
+// The Requests tab as the Overview draws it: the chip row over the log.
+function renderRequests(search = "") {
+  return renderPage(
+    <>
+      <ObserveFilterRow view="requests" />
+      <ActivityPage embedded />
+    </>,
+    `/requests${search}`,
+  )
+}
+
+// Open a column's funnel and hand back its panel.
+async function openFunnel(
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+) {
+  await user.click(screen.getByRole("button", { name: `Filter ${label}` }))
+  return screen.findByRole("dialog", { name: `Filter ${label}` })
+}
 
 describe("ActivityPage", () => {
   afterEach(() => {
@@ -81,12 +101,10 @@ describe("ActivityPage", () => {
     ).toBe(true)
   })
 
-  it("asks the summary endpoint only for the breakdowns it reads", async () => {
-    // Two summary reads back this page: the source picker (by_source) and the
-    // timeline histogram (series, plus by_tool so the Tool filter knows whether this
-    // window has any gateway-run tool calls to offer). Each breakdown is a separate
-    // GROUP BY over the window server-side, so neither may request the full set.
-    // The model, user and key pickers are the Overview's and read nothing here.
+  it("asks the summary endpoint for no breakdown", async () => {
+    // The one summary read behind this page is the timeline's series. Each
+    // breakdown is a separate GROUP BY over the window server-side, and the
+    // funnels read their own values when opened, so none is requested here.
     const { calls } = mockApi({ rows: [entry()] })
     renderPage(<ActivityPage />)
 
@@ -95,20 +113,9 @@ describe("ActivityPage", () => {
       .filter((c) => c.url.includes(`${API_ROOT}/usage/summary`))
       .map((c) => c.url)
     expect(summaryCalls.length).toBeGreaterThan(0)
-    expect(summaryCalls.some((url) => url.includes("dimensions=source"))).toBe(
+    expect(summaryCalls.every((url) => url.includes("dimensions=none"))).toBe(
       true,
     )
-    expect(
-      summaryCalls.some((url) => /dimensions=(model|user)/.test(url)),
-    ).toBe(false)
-    expect(summaryCalls.some((url) => url.includes("dimensions=tool"))).toBe(
-      true,
-    )
-    // No caller here reads a session/provider/user breakdown.
-    expect(
-      summaryCalls.some((url) => url.includes("dimensions=source_label")),
-    ).toBe(false)
-    expect(summaryCalls.every((url) => url.includes("dimensions="))).toBe(true)
   })
 
   it("honors a source drill-down and shows it as a clearable chip", async () => {
@@ -116,10 +123,7 @@ describe("ActivityPage", () => {
     // select of its own, so if the page ignored it the banner's count and this
     // list would disagree, and the scoping would be invisible.
     const { calls } = mockApi({ rows: [entry({ status: "error" })] })
-    renderPage(
-      <ActivityPage />,
-      "/activity?status=error&range=1h&source=gateway",
-    )
+    renderRequests("?status=error&range=1h&source=gateway")
 
     await screen.findByText("gpt-4o")
     expect(listCalls(calls).some((url) => url.includes("source=gateway"))).toBe(
@@ -140,7 +144,7 @@ describe("ActivityPage", () => {
     const { calls } = mockApi({
       rows: [entry({ source: "claude_code", source_label: "sess-1" })],
     })
-    renderPage(<ActivityPage />, "/activity?source_label=sess-1")
+    renderRequests("?source_label=sess-1")
 
     await screen.findByText("gpt-4o")
     expect(
@@ -292,10 +296,13 @@ describe("ActivityPage", () => {
   it("sends the priced filter to the API", async () => {
     const { calls } = mockApi({ rows: [entry()] })
     const user = userEvent.setup()
-    renderPage(<ActivityPage />)
+    renderRequests()
 
     await screen.findByText("gpt-4o")
-    await pickOption(user, "Priced?", "Unpriced")
+    const panel = await openFunnel(user, "Cost")
+    await user.click(
+      within(panel).getByRole("checkbox", { name: "Unpriced only" }),
+    )
 
     await waitFor(() =>
       expect(listCalls(calls).at(-1)).toContain("priced=false"),
@@ -315,34 +322,37 @@ describe("ActivityPage", () => {
       ],
     })
     const user = userEvent.setup()
-    renderPage(<ActivityPage />)
+    renderRequests()
     await screen.findByText("gpt-4o")
 
-    // Options come from the log itself (the summary's provenance breakdown), with
-    // friendly labels for the sources the page knows about.
-    await user.click(selectTrigger("Source"))
-    await screen.findByRole("option", { name: "Claude Code" })
-    expect(screen.getByRole("option", { name: "Gateway" })).toBeInTheDocument()
+    // Options come from the log itself (the values of its source column), with
+    // friendly labels for the sources the page knows about, under the API key.
+    const panel = await openFunnel(user, "API key")
+    const sources = await within(panel).findByRole("group", { name: "Source" })
+    expect(
+      within(sources).getByRole("checkbox", { name: "Gateway" }),
+    ).toBeInTheDocument()
 
-    await user.click(screen.getByRole("option", { name: "Claude Code" }))
+    await user.click(
+      within(sources).getByRole("checkbox", { name: "Claude Code" }),
+    )
     await waitFor(() =>
       expect(listCalls(calls).at(-1)).toContain("source=claude_code"),
     )
   })
 
   it("keeps a drill-down source listed even when the window holds none of its rows", async () => {
-    // The select must show the filter that is actually applied, or the operator
-    // sees a chip they cannot find in the picker.
+    // The funnel must show the filter that is actually applied, or the operator
+    // sees a chip they cannot find in the menu.
     mockApi({ rows: [entry({ source: "gateway" })] })
-    renderPage(<ActivityPage />, "/activity?source=codex")
+    renderRequests("?source=codex")
     await screen.findByText("gpt-4o")
 
-    const select = selectTrigger("Source")
-    expect(select).toHaveTextContent("Codex")
-    await userEvent.setup().click(select)
+    const panel = await openFunnel(userEvent.setup(), "API key")
+    const sources = await within(panel).findByRole("group", { name: "Source" })
     expect(
-      await screen.findByRole("option", { name: "Codex" }),
-    ).toBeInTheDocument()
+      within(sources).getByRole("checkbox", { name: "Codex" }),
+    ).toBeChecked()
   })
 
   it("surfaces a timeline summary failure instead of an empty strip", async () => {
@@ -524,10 +534,8 @@ describe("ActivityPage", () => {
     expect(await screen.findByText("101–150 of 500")).toBeInTheDocument()
 
     const before = listCalls(calls).length
-    const sourceSummaryBefore = calls.filter(
-      (call) =>
-        call.url.includes(`${API_ROOT}/usage/summary`) &&
-        call.url.includes("dimensions=source"),
+    const summaryBefore = calls.filter((call) =>
+      call.url.includes(`${API_ROOT}/usage/summary`),
     ).length
     const button = screen.getByRole("button", { name: "Refresh" })
     await waitFor(() => expect(button).toBeEnabled())
@@ -537,12 +545,9 @@ describe("ActivityPage", () => {
     await waitFor(() => expect(listCalls(calls).length).toBeGreaterThan(before))
     await waitFor(() =>
       expect(
-        calls.filter(
-          (call) =>
-            call.url.includes(`${API_ROOT}/usage/summary`) &&
-            call.url.includes("dimensions=source"),
-        ).length,
-      ).toBeGreaterThan(sourceSummaryBefore),
+        calls.filter((call) => call.url.includes(`${API_ROOT}/usage/summary`))
+          .length,
+      ).toBeGreaterThan(summaryBefore),
     )
     expect(listCalls(calls).every((url) => url.includes("skip=100"))).toBe(true)
     expect(screen.getByText("101–150 of 500")).toBeInTheDocument()
@@ -872,50 +877,32 @@ describe("ActivityPage", () => {
     ).toHaveValue("vllm:mistral-small")
   })
 
-  it("keeps its own filter pickers behind a 'More filters' toggle", async () => {
+  it("draws no filter toggle and no chip row of its own", async () => {
     mockApi({ rows: [entry()] })
-    const user = userEvent.setup()
-    renderPage(<ActivityPage />)
+    renderPage(<ActivityPage embedded />, "/requests?priced=false&tool=any")
     await screen.findByText("gpt-4o")
 
-    // Named apart from the Overview's own "Add filter" toggle above it. The picker row
-    // is collapsed until the operator opts to add a filter. jsdom
-    // does not apply Tailwind's `.hidden`, so assert on the toggled class rather
-    // than computed visibility.
-    const toggle = screen.getByRole("button", { name: "More filters" })
-    const region = document.getElementById(
-      toggle.getAttribute("aria-controls")!,
-    )!
-    expect(toggle).toHaveAttribute("aria-expanded", "false")
-    // classList, not className: `toContain` on the string is a substring match,
-    // so "hidden" would also be satisfied by `overflow-hidden` and "flex" by
-    // `flex-wrap` alone. Both are one edit away from being true here.
-    expect([...region.classList]).toContain("hidden")
-
-    await user.click(toggle)
-
-    expect(toggle).toHaveAttribute("aria-expanded", "true")
-    expect([...region.classList]).toContain("flex")
-    expect([...region.classList]).not.toContain("hidden")
+    // Every filter is set from a column header and shown in the Overview's one
+    // chip row, so the page itself carries neither.
+    expect(
+      screen.queryByRole("button", { name: /More filters|Add filter/ }),
+    ).toBeNull()
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull()
   })
 
   it("shows its own filters as removable chips and clears one on ✕", async () => {
     const user = userEvent.setup()
     const { calls } = mockApi({ rows: [entry()] })
-    renderPage(<ActivityPage />, "/activity?priced=false&endpoint=/v1/messages")
+    renderRequests("?priced=false&endpoint=/v1/messages")
     await screen.findByText("gpt-4o")
 
-    // The model, user, key and status chips are the Overview's, and the time range is
-    // not a chip.
+    // One row holds every chip; the time range is not one.
     expect(
       screen.getByRole("button", { name: "Remove Priced filter" }),
     ).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: "Remove Endpoint filter" }),
     ).toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: /Remove (Model|Status) filter/ }),
-    ).not.toBeInTheDocument()
 
     // Removing the endpoint chip drops just that filter from the query.
     await user.click(

@@ -324,17 +324,36 @@ export async function pickOption(
   await page.getByRole("option", { name: option, exact: true }).click()
 }
 
-// Commit a value into one of the multi-value filter comboboxes. They allow
-// custom values, so Enter is what commits a typed id.
-export async function addFilterValue(
+// Check a value in a column header's filter: open the column's funnel, narrow
+// the list by searching where it has a box, check the value (named by its label,
+// which for a user carries the id), and put the panel away, waiting until it is
+// gone: an open panel hides the rest of the page from the accessibility tree.
+export async function pickColumnFilter(
   page: Page,
-  label: string,
+  column: string,
   value: string,
 ): Promise<void> {
-  const box = page.getByRole("combobox", { name: label })
-  await box.fill(value)
-  await box.press("Enter")
-  await dismissComboBox(box)
+  const panel = page.getByRole("dialog", { name: `Filter ${column}` })
+  // A press that lands while the table is re-rendering under a query is
+  // discarded, so it is pressed again until the panel opens.
+  await expect(async () => {
+    if (!(await panel.isVisible())) {
+      await page.getByRole("button", { name: `Filter ${column}` }).click()
+    }
+    await expect(panel).toBeVisible({ timeout: 2_000 })
+  }).toPass()
+  const search = panel.getByRole("searchbox")
+  if (await search.isVisible()) await search.fill(value)
+  // The input is visually hidden inside its label, so the label takes the press.
+  await panel
+    .getByRole("checkbox", {
+      name: new RegExp(`(^|\\()${escapeRegExp(value)}(\\)|$)`),
+    })
+    .first()
+    .locator("xpath=ancestor::label")
+    .click()
+  await page.keyboard.press("Escape")
+  await expect(panel).toBeHidden()
 }
 
 // ---------- tables ----------

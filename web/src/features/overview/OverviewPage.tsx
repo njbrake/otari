@@ -11,7 +11,7 @@ import { PageError } from "@/design-system/feedback/PageError"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { useIsMobile } from "@/design-system/hooks/useIsMobile"
 import { PageIntro } from "@/design-system/layout/PageIntro"
-import { ObserveFilterBar } from "@/features/observe/ObserveFilterBar"
+import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
 import {
   carrySearch,
   OBSERVE_PATHS,
@@ -211,7 +211,7 @@ function SessionsLayout() {
             />
           </div>
         ) : null}
-        <ObserveFilterBar view={current} usageAvailable={hasSurface("usage")} />
+        <ObserveFilterRow view={current} />
       </div>
       <Outlet />
     </div>
