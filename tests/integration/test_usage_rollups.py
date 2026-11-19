@@ -34,7 +34,7 @@ from gateway.repositories.usage_and_telemetry import (
     UsageScope,
 )
 from gateway.repositories.usage_and_telemetry.usage_log_repository import MAX_MARKED_HOURS
-from gateway.schemas.usage_and_telemetry import GATEWAY_TOOL_NAMES, Bucket
+from gateway.schemas.usage_and_telemetry import GATEWAY_TOOL_NAMES, Bucket, ValueGroupBy
 from gateway.services.usage_and_telemetry import UsageRollupService
 
 # Every hour the rows fall in is over by then, so a refresh builds them all.
@@ -202,7 +202,16 @@ _FILTERS: list[dict[str, Any]] = [
     {"refine": UsageRefinements(cost_gt=0.5, latency_ms_gt=1000)},
 ]
 
-_VALUE_GROUPS = ("model", "user", "api_key", "provider", "status", "source", "source_label", "policy")
+_VALUE_GROUPS: tuple[ValueGroupBy, ...] = (
+    "model",
+    "user",
+    "api_key",
+    "provider",
+    "status",
+    "source",
+    "source_label",
+    "policy",
+)
 
 _DIMENSIONS = ("model", "user", "api_key", "source", "source_label", "endpoint", "provider")
 
@@ -517,10 +526,12 @@ async def test_a_refinement_the_rollups_do_not_key_reads_the_rows(
         test_db.execute(text("ALTER TABLE usage_logs ENABLE TRIGGER USER"))
         test_db.commit()
     rollups, _ = sessions
-    window = {"start_date": _BASE, "end_date": _BASE + timedelta(hours=4)}
+    start, end = _BASE, _BASE + timedelta(hours=4)
     scope = UsageScope(workspaces=None)
     async with rollups.uow:
-        excluded = UsageFilters(**window, refine=UsageRefinements(exclude_model=["claude-sonnet"]))
+        excluded = UsageFilters(
+            start_date=start, end_date=end, refine=UsageRefinements(exclude_model=["claude-sonnet"])
+        )
         assert await rollups.repo.count_matching(excluded, scope) == 4
         for refine in (
             UsageRefinements(routed=False),
@@ -529,4 +540,7 @@ async def test_a_refinement_the_rollups_do_not_key_reads_the_rows(
             UsageRefinements(latency_ms_gt=0),
             UsageRefinements(policy_name=["fast"]),
         ):
-            assert await rollups.repo.count_matching(UsageFilters(**window, refine=refine), scope) == 0, refine
+            assert (
+                await rollups.repo.count_matching(UsageFilters(start_date=start, end_date=end, refine=refine), scope)
+                == 0
+            ), refine

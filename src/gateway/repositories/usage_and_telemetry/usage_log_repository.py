@@ -985,16 +985,24 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             if named:
                 matched.append(column.in_(sorted(named)))
             where.append(or_(*matched))
-        grouped = select(column).where(*where).group_by(column)
-        stmt = select(column, requests, errors, cost).where(*where).group_by(column)
+        # The total rides on the page as a window count, so the rows are aggregated once.
+        stmt = select(column, requests, errors, cost, func.count().over()).where(*where).group_by(column)
         if relation is not None:
-            grouped = grouped.select_from(relation)
             stmt = stmt.select_from(relation)
-        total = (await self.db.execute(select(func.count()).select_from(grouped.subquery()))).scalar_one()
         page = (await self.db.execute(stmt.order_by(requests.desc(), column).offset(skip).limit(limit))).all()
+        if page:
+            total = int(page[0][4])
+        elif skip:
+            # Past the last page there is no row to carry the count.
+            grouped = select(column).where(*where).group_by(column)
+            if relation is not None:
+                grouped = grouped.select_from(relation)
+            total = int((await self.db.execute(select(func.count()).select_from(grouped.subquery()))).scalar_one())
+        else:
+            total = 0
         return [
             UsageValueGroup(key=row[0], requests=int(row[1]), errors=int(row[2]), cost=float(row[3])) for row in page
-        ], int(total)
+        ], total
 
     async def _tag_groups(
         self, filters: UsageFilters, scope: UsageScope, *, tag_key: str, limit: int | None

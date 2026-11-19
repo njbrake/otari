@@ -171,6 +171,9 @@ def test_groups_list_a_columns_values_busiest_first_with_how_many_there_are(
     assert page["total"] == 2
     second = _get(client, master_key_header, GROUPS_PATH, group_by="model", limit=1, skip=1)
     assert [group["key"] for group in second["groups"]] == ["claude"]
+    assert second["total"] == 2
+    past = _get(client, master_key_header, GROUPS_PATH, group_by="model", limit=1, skip=5)
+    assert (past["groups"], past["total"]) == ([], 2)
 
 
 @pytest.mark.usefixtures("seeded")
@@ -212,9 +215,7 @@ def test_groups_by_status_count_rows_and_by_policy_keep_the_unrouted(
 
 
 @pytest.mark.usefixtures("seeded")
-def test_groups_honor_the_other_filters_and_refinements(
-    client: TestClient, master_key_header: dict[str, str]
-) -> None:
+def test_groups_honor_the_other_filters_and_refinements(client: TestClient, master_key_header: dict[str, str]) -> None:
     body = _get(client, master_key_header, GROUPS_PATH, group_by="user", model="gpt-4o", exclude_status="error")
     assert {group["key"]: group["requests"] for group in body["groups"]} == {"ada": 1, "bob": 1}
     above = _get(client, master_key_header, GROUPS_PATH, group_by="model", cost_gt=1)

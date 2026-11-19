@@ -254,6 +254,38 @@ describe("ActivityPage column filters", () => {
     ).toBeInTheDocument()
   })
 
+  it("sends every exclusion a chip shows to every read of the log", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    const excluded = {
+      exclude_model: "claude-x",
+      exclude_user_id: "bob",
+      exclude_api_key_id: "k2",
+      exclude_source: "codex",
+      exclude_status: "absorbed",
+      exclude_policy_name: "fast",
+    }
+    renderRequests(`?${new URLSearchParams(excluded).toString()}`)
+    await screen.findByText("gpt-4o")
+
+    for (const path of [
+      `${API_ROOT}/usage?`,
+      `${API_ROOT}/usage/count`,
+      `${API_ROOT}/usage/summary`,
+    ]) {
+      for (const [key, value] of Object.entries(excluded)) {
+        await waitFor(() =>
+          expect(
+            calls.some(
+              (call) =>
+                call.url.includes(path) && call.url.includes(`${key}=${value}`),
+            ),
+            `${path} dropped ${key}`,
+          ).toBe(true),
+        )
+      }
+    }
+  })
+
   it("draws no funnels outside the Overview", async () => {
     mockApi({ rows: [entry()] })
     renderPage(<ActivityPage />, "/activity")

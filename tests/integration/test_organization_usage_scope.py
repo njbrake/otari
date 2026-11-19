@@ -288,7 +288,8 @@ def test_a_filter_menus_values_are_scoped_like_the_list(client: TestClient, worl
 
     code, body = _as(client, world, "alpha_newcomer", f"{API_ROOT}/organizations/me/usage/groups?group_by=user")
     assert code == status.HTTP_200_OK, body
-    assert body == {**body, "groups": [], "total": 0}
+    assert isinstance(body, dict)
+    assert (body["groups"], body["total"]) == ([], 0)
 
 
 def test_a_viewer_is_scoped_like_a_member_and_not_like_an_admin(client: TestClient, world: _World) -> None:
