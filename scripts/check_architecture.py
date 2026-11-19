@@ -2955,6 +2955,14 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
         "repository": None,
         "baseline": ("gateway/adapters/telemetry_storage_adapter.py",),
     },
+    "gateway.models.usage.UsageRollup": {
+        "repository": "gateway/repositories/usage_and_telemetry/usage_log_repository.py",
+        "baseline": (),
+    },
+    "gateway.models.usage.UsageRollupDirtyHour": {
+        "repository": "gateway/repositories/usage_and_telemetry/usage_log_repository.py",
+        "baseline": (),
+    },
     "gateway.models.usage.UsageLog": {
         "repository": "gateway/repositories/usage_and_telemetry/usage_log_repository.py",
         "baseline": (
@@ -2962,7 +2970,6 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
             "gateway/api/routes/_pipeline.py",
             "gateway/api/routes/agent_telemetry.py",
             "gateway/api/routes/batches.py",
-            "gateway/api/routes/catalog.py",
             "gateway/api/routes/code_execution.py",
             "gateway/api/routes/users.py",
             "gateway/repositories/users_repository.py",

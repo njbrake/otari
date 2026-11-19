@@ -191,6 +191,7 @@ from gateway.api.deps.traces import (
     workspace_members,
     workspaces_keeping_content_for,
 )
+from gateway.api.deps.usage_and_telemetry import build_usage_rollup_service
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.database import get_db
 from gateway.core.unit_of_work import UnitOfWork, create_unit_of_work
@@ -1281,6 +1282,7 @@ __all__ = [
     "build_trace_service",
     "build_unavailable_model_reporter",
     "build_update_check_service",
+    "build_usage_rollup_service",
     "catalog_reader_operates_deployment",
     "catalog_reader_organization",
     "cookie_may_authenticate",

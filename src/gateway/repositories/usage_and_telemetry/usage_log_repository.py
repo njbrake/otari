@@ -1,18 +1,39 @@
 """Data access for ``usage_logs``, one row per attempt the gateway served or imported. Flushes, never commits."""
 
 import uuid
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Never, cast
 
-from sqlalchemy import ColumnElement, CursorResult, Select, and_, case, delete, false, func, null, or_, select, update
+from sqlalchemy import (
+    BigInteger,
+    ColumnElement,
+    CursorResult,
+    Float,
+    Numeric,
+    Select,
+    Subquery,
+    and_,
+    case,
+    delete,
+    false,
+    func,
+    insert,
+    literal,
+    null,
+    or_,
+    select,
+    union_all,
+    update,
+)
+from sqlalchemy import cast as sql_cast
 
 from gateway.core.metered_pricing import ChargeLine
 from gateway.core.sql import bucket_expr, canonical_bucket, dialect_name, match_any, utc_bound
 from gateway.core.unit_of_work import UnitOfWork
-from gateway.models.usage import SERVED_HERE_SLUG, UsageLog
+from gateway.models.usage import SERVED_HERE_SLUG, UsageLog, UsageRollup, UsageRollupDirtyHour
 from gateway.repositories.base_repository import BaseRepository
 from gateway.schemas.usage_and_telemetry import (
     ANY_TOOL,
@@ -199,34 +220,112 @@ class RequestRows:
     tool_costed_rows: int
 
 
+@dataclass(frozen=True)
+class OfferingTraffic:
+    """The successful requests one provider instance served for one model id, and what they used."""
+
+    provider: str | None
+    model: str
+    requests: int
+    total_tokens: int
+    prompt_tokens: int
+    cache_read_tokens: int
+    spend: float
+
+
 # The columns a breakdown can group by, named by the summary's dimension vocabulary.
-_GROUP_COLUMNS: dict[str, Any] = {
-    "model": UsageLog.model,
-    "user": UsageLog.user_id,
-    "api_key": UsageLog.api_key_id,
-    "source": UsageLog.source,
-    "source_label": UsageLog.source_label,
-    "endpoint": UsageLog.endpoint,
-    "provider": UsageLog.provider,
+_GROUP_COLUMNS: dict[str, str] = {
+    "model": "model",
+    "user": "user_id",
+    "api_key": "api_key_id",
+    "source": "source",
+    "source_label": "source_label",
+    "endpoint": "endpoint",
+    "provider": "provider",
 }
 
+# The usage columns an hour's rollups are grouped by, under the same names, so a
+# condition over them reads the same against either table.
+_ROLLUP_KEYS: tuple[str, ...] = (
+    "workspace_id",
+    "model",
+    "provider",
+    "endpoint",
+    "user_id",
+    "api_key_id",
+    "source",
+    "source_label",
+    "status",
+    "status_code",
+    "counts_toward_budget",
+)
 
-def _scope_conditions(scope: UsageScope) -> list[ColumnElement[bool]]:
+
+def _scope_conditions(scope: UsageScope, columns: Any) -> list[ColumnElement[bool]]:
     conditions: list[ColumnElement[bool]] = []
     workspaces = scope.workspaces
     if isinstance(workspaces, Select):
-        conditions.append(UsageLog.workspace_id.in_(workspaces))
+        conditions.append(columns.workspace_id.in_(workspaces))
     elif workspaces is not None:
         ids = sorted(workspaces)
         if not ids:
             # Belongs to no workspace yet: nothing was refused, there is simply nothing here.
             conditions.append(false())
         elif len(ids) == 1:
-            conditions.append(UsageLog.workspace_id == ids[0])
+            conditions.append(columns.workspace_id == ids[0])
         else:
-            conditions.append(UsageLog.workspace_id.in_(ids))
+            conditions.append(columns.workspace_id.in_(ids))
     if scope.api_key_id is not None:
-        conditions.append(UsageLog.api_key_id == scope.api_key_id)
+        conditions.append(columns.api_key_id == scope.api_key_id)
+    return conditions
+
+
+def _key_conditions(
+    filters: UsageFilters, scope: UsageScope, columns: Any, needs_pricing: ColumnElement[bool]
+) -> list[ColumnElement[bool]]:
+    """The scope and every filter over a column the rollups keep, against ``usage_logs`` or ``usage_rollups``.
+
+    ``columns`` is either table's columns, and ``needs_pricing`` says whether a row
+    still needs pricing: a predicate on ``usage_logs``, a column on the rollups. A
+    new filter goes here when the rollups keep its column, and in
+    :func:`_row_only_conditions` otherwise.
+    """
+    conditions = _scope_conditions(scope, columns)
+    if filters.workspace_id is not None:
+        conditions.append(columns.workspace_id == filters.workspace_id)
+    if filters.user_id:
+        conditions.append(match_any(columns.user_id, filters.user_id))
+    if filters.status is not None:
+        conditions.append(columns.status == filters.status)
+    if filters.status_code is not None:
+        conditions.append(columns.status_code == filters.status_code)
+        if filters.status is None:
+            # Only a failure carries a status code (see ``UsageLog.status_code``),
+            # so a bare code filter means "these failures" rather than "whatever
+            # rows happen to hold this code": it stays error-scoped even if a
+            # future write path starts stamping a code on a non-error row, and it
+            # is served by the (status, timestamp) index instead of scanning the
+            # window. An explicit ``status`` wins, so the combination stays a
+            # literal query rather than a silently contradictory one.
+            conditions.append(columns.status == "error")
+    if filters.model:
+        conditions.append(match_any(columns.model, filters.model))
+    if filters.endpoint is not None:
+        conditions.append(columns.endpoint == filters.endpoint)
+    if filters.provider is not None:
+        conditions.append(columns.provider == filters.provider)
+    if filters.source is not None:
+        conditions.append(columns.source == filters.source)
+    if filters.source_label is not None:
+        conditions.append(columns.source_label == filters.source_label)
+    if filters.api_key_id:
+        conditions.append(match_any(columns.api_key_id, filters.api_key_id))
+    if filters.priced is True:
+        conditions.append(~needs_pricing)
+    elif filters.priced is False:
+        conditions.append(needs_pricing)
+    if filters.counts_toward_budget is not None:
+        conditions.append(columns.counts_toward_budget.is_(filters.counts_toward_budget))
     return conditions
 
 
@@ -244,54 +343,24 @@ def usage_conditions(filters: UsageFilters, scope: UsageScope) -> list[ColumnEle
     local timezone, so the same query would size a different set of rows per
     deployment.
     """
-    conditions = _scope_conditions(scope)
-    if filters.workspace_id is not None:
-        conditions.append(UsageLog.workspace_id == filters.workspace_id)
+    conditions = _key_conditions(filters, scope, UsageLog.__table__.c, _needs_pricing_expr())
     if filters.start_date is not None:
         conditions.append(UsageLog.timestamp >= utc_bound(filters.start_date))
     if filters.end_date is not None:
         conditions.append(UsageLog.timestamp < utc_bound(filters.end_date))
-    if filters.user_id:
-        conditions.append(match_any(UsageLog.user_id, filters.user_id))
-    if filters.status is not None:
-        conditions.append(UsageLog.status == filters.status)
-    if filters.status_code is not None:
-        conditions.append(UsageLog.status_code == filters.status_code)
-        if filters.status is None:
-            # Only a failure carries a status code (see ``UsageLog.status_code``),
-            # so a bare code filter means "these failures" rather than "whatever
-            # rows happen to hold this code": it stays error-scoped even if a
-            # future write path starts stamping a code on a non-error row, and it
-            # is served by the (status, timestamp) index instead of scanning the
-            # window. An explicit ``status`` wins, so the combination stays a
-            # literal query rather than a silently contradictory one.
-            conditions.append(UsageLog.status == "error")
-    if filters.model:
-        conditions.append(match_any(UsageLog.model, filters.model))
-    if filters.endpoint is not None:
-        conditions.append(UsageLog.endpoint == filters.endpoint)
-    if filters.provider is not None:
-        conditions.append(UsageLog.provider == filters.provider)
-    if filters.source is not None:
-        conditions.append(UsageLog.source == filters.source)
-    if filters.source_label is not None:
-        conditions.append(UsageLog.source_label == filters.source_label)
-    conditions.extend(match_any(_tag_expr(key), values) for key, values in filters.tags.items())
-    if filters.api_key_id:
-        conditions.append(match_any(UsageLog.api_key_id, filters.api_key_id))
+    return [*conditions, *_row_only_conditions(filters)]
+
+
+def _row_only_conditions(filters: UsageFilters) -> list[ColumnElement[bool]]:
+    """The filters over what only a usage row carries. A read with any of them takes no hour from the rollups."""
+    conditions = [match_any(_tag_expr(key), values) for key, values in filters.tags.items()]
     if filters.request_group_id:
         # A one-id lookup stays an equality test so it uses the index the same way
         # a single-row fetch would; the IN form is for the dashboard's batched
         # page lookup.
         conditions.append(match_any(UsageLog.request_group_id, filters.request_group_id))
-    if filters.priced is True:
-        conditions.append(~_needs_pricing_expr())
-    elif filters.priced is False:
-        conditions.append(_needs_pricing_expr())
     if filters.tool is not None:
         conditions.append(_tool_used_expr(filters.tool))
-    if filters.counts_toward_budget is not None:
-        conditions.append(UsageLog.counts_toward_budget.is_(filters.counts_toward_budget))
     return conditions
 
 
@@ -426,11 +495,145 @@ def _billed_output_sum() -> Any:
     return func.coalesce(func.sum(_billed_expr("completion_tokens", UsageLog.completion_tokens)), 0)
 
 
-class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
-    """Read usage rows inside a set of workspaces."""
+# Past this many marked hours in a window, a read takes the whole window from the
+# rows: the rollups are still being built (as after the migration that adds them)
+# or a bulk change marked much of the history, and the rows then read in one pass.
+MAX_MARKED_HOURS = 48
 
-    def __init__(self, uow: UnitOfWork) -> None:
+_HOUR = timedelta(hours=1)
+# Any fixed number serves; it only has to be the rollup refresh's alone.
+_REFRESH_LOCK = 0x7573_6167_6572_6F6C
+
+# The tool spend measures sum as ``numeric``, so an hour's sums add up to what the
+# rows do; a sum of floats depends on the order its terms arrive in.
+_EXACT = Numeric(asdecimal=False)
+
+
+def _row_measures() -> dict[str, Any]:
+    """What one usage row contributes to each measure a usage read sums, by measure name.
+
+    The refresh sums these into an hour's rollups and a read projects them from the
+    rows, so the two cannot disagree on what a measure means.
+    """
+    measures: dict[str, Any] = {
+        "cost": UsageLog.cost,
+        "prompt_tokens": UsageLog.prompt_tokens,
+        "completion_tokens": UsageLog.completion_tokens,
+        "total_tokens": UsageLog.total_tokens,
+        "cache_read_tokens": UsageLog.cache_read_tokens,
+        "cache_write_tokens": UsageLog.cache_write_tokens,
+        "cache_write_1h_tokens": UsageLog.cache_write_1h_tokens,
+        "reasoning_tokens": UsageLog.reasoning_tokens,
+        "billed_input_tokens": _billed_expr("total_input_tokens", UsageLog.prompt_tokens),
+        "billed_output_tokens": _billed_expr("completion_tokens", UsageLog.completion_tokens),
+        "billed_cache_read_tokens": _billed_expr("cache_read_tokens", UsageLog.cache_read_tokens),
+        "billed_cache_write_tokens": _billed_expr("cache_write_tokens", UsageLog.cache_write_tokens),
+        "latency_ms": UsageLog.latency_ms,
+        "latency_count": case((UsageLog.latency_ms.is_not(None), 1), else_=0),
+    }
+    for tool in GATEWAY_TOOL_NAMES:
+        calls = _tool_calls_expr(tool)
+        ran = calls.is_not(None)
+        measures[f"{tool}_calls"] = calls
+        # Counted only where the row billed calls of the tool, as the tool table reads them.
+        measures[f"{tool}_errors"] = case(
+            (ran, UsageLog.billing_meters[(TOOL_METER_NAMESPACE, tool, "errors")].as_integer())
+        )
+        measures[f"{tool}_cost"] = sql_cast(_tool_cost_expr(tool), _EXACT)
+        measures[f"{tool}_rows"] = case((ran, 1), else_=0)
+    return measures
+
+
+_MEASURES: tuple[str, ...] = tuple(_row_measures())
+
+
+def _raw_rows(conditions: Sequence[ColumnElement[bool]]) -> Select[Any]:
+    """The usage rows the conditions leave, each standing for itself, in the usage relation's columns."""
+    measures = _row_measures()
+    table = UsageLog.__table__.c
+    return select(
+        *(table[key].label(key) for key in _ROLLUP_KEYS),
+        _needs_pricing_expr().label("needs_pricing"),
+        UsageLog.timestamp.label("ts"),
+        literal(1, BigInteger).label("rows"),
+        *(measures[name].label(name) for name in _MEASURES),
+    ).where(*conditions)
+
+
+def _summed_rows(conditions: Sequence[ColumnElement[bool]]) -> Select[Any]:
+    """The rollups the conditions leave, in :func:`_raw_rows`'s columns and order."""
+    rollup = UsageRollup.__table__.c
+    return select(
+        *(rollup[key] for key in _ROLLUP_KEYS),
+        rollup.needs_pricing,
+        rollup.hour.label("ts"),
+        rollup.rows,
+        *(rollup[name] for name in _MEASURES),
+    ).where(*conditions)
+
+
+def _hour_of(timestamp: Any) -> Any:
+    """The UTC hour a timestamp falls in, as a ``timestamptz``, the way the triggers mark it."""
+    return func.timezone("UTC", func.date_trunc("hour", func.timezone("UTC", timestamp)))
+
+
+def _floor_hour(moment: datetime) -> datetime:
+    """The UTC hour ``moment`` falls in. In UTC because an offset of half an hour has its own hours."""
+    return cast("datetime", utc_bound(moment)).astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+
+
+def _ceil_hour(moment: datetime) -> datetime:
+    floor = _floor_hour(moment)
+    return floor if floor == utc_bound(moment) else floor + _HOUR
+
+
+def _spans(hours: Collection[datetime]) -> list[tuple[datetime, datetime]]:
+    """Hours as the fewest ``[start, end)`` spans that cover them."""
+    spans: list[tuple[datetime, datetime]] = []
+    for hour in sorted(hours):
+        if spans and spans[-1][1] == hour:
+            spans[-1] = (spans[-1][0], hour + _HOUR)
+        else:
+            spans.append((hour, hour + _HOUR))
+    return spans
+
+
+def _in_spans(column: Any, spans: Sequence[tuple[datetime, datetime]]) -> list[ColumnElement[bool]]:
+    return [and_(column >= start, column < end) for start, end in spans]
+
+
+def _no_extra(_columns: Any) -> list[ColumnElement[bool]]:
+    return []
+
+
+def _requests(rows: Subquery, status_filter: str | None = None) -> Any:
+    """The requests the usage relation's rows stand for; see :func:`_request_count_expr`."""
+    if status_filter == "absorbed":
+        return func.coalesce(func.sum(rows.c.rows), 0)
+    return func.coalesce(func.sum(case((rows.c.status != "absorbed", rows.c.rows), else_=0)), 0)
+
+
+def _summed(column: Any, zero: Any = 0) -> Any:
+    return func.coalesce(func.sum(column), zero)
+
+
+class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
+    """Read usage rows inside a set of workspaces, and keep their hourly rollups.
+
+    The aggregate reads sum one relation in a row's shape (:func:`_raw_rows`),
+    where a relation row stands for ``rows`` usage rows. On PostgreSQL that is a
+    whole hour's sums from ``usage_rollups`` wherever they are current, and the
+    rows themselves for the rest of the window: its partial edge hours, which take
+    the current hour's writes as they land, and any hour a write marked since its
+    sums were built. A read whose filters name what the rollups do not keep (a
+    tag, a request id, a tool) takes the whole window from the rows, and so does
+    every read on SQLite, where nothing marks the hours a write changed.
+    ``rollups=False`` reads the rows everywhere.
+    """
+
+    def __init__(self, uow: UnitOfWork, *, rollups: bool = True) -> None:
         super().__init__(uow, UsageLog)
+        self._rollups = rollups
 
     async def add(self, row: UsageLog) -> None:
         """Stage ``row`` in the open block, so it commits with the step that settled it."""
@@ -528,11 +731,12 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
 
     async def count_matching(self, filters: UsageFilters, scope: UsageScope, *, imported_only: bool = False) -> int:
         """How many rows match these filters inside this scope; with ``imported_only``, only rows not served here."""
-        conditions = usage_conditions(filters, scope)
-        if imported_only:
-            conditions.append(UsageLog.source != SERVED_HERE_SLUG)
-        stmt: Any = select(func.count()).select_from(UsageLog).where(*conditions)
-        return int((await self.db.execute(stmt)).scalar_one())
+
+        def imported(columns: Any) -> list[ColumnElement[bool]]:
+            return [columns.source != SERVED_HERE_SLUG] if imported_only else []
+
+        rows = await self._usage_rows(filters, scope, imported)
+        return int((await self.db.execute(select(_summed(rows.c.rows)))).scalar_one())
 
     async def request_rows(self, request_id: str, *, api_key_id: str | None) -> RequestRows:
         """The sums over the rows one request wrote, confined to one key's rows when ``api_key_id`` is set."""
@@ -571,42 +775,46 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
 
     async def cost_and_requests(self, filters: UsageFilters, scope: UsageScope) -> tuple[float, int]:
         """The spend and the request count over the matching rows."""
-        stmt = select(func.coalesce(func.sum(UsageLog.cost), 0.0), _request_count_expr(filters.status)).where(
-            *usage_conditions(filters, scope)
-        )
+        rows = await self._usage_rows(filters, scope)
+        stmt = select(_summed(rows.c.cost, 0.0), _requests(rows, filters.status))
         cost, requests = (await self.db.execute(stmt)).one()
         return float(cost), int(requests)
 
     async def totals(self, filters: UsageFilters, scope: UsageScope) -> UsageTotals:
         """Grand totals over the matching rows."""
+        rows = await self._usage_rows(filters, scope)
+        c = rows.c
+        # Averaged over requests, not attempts: an absorbed row carries the time
+        # spent on a candidate that did not serve, and folding it in would make a
+        # policy that recovers quickly look slower than one that never fails.
+        served = c.status != "absorbed"
+        # The quotient ``avg`` would compute: ``numeric`` on PostgreSQL, a float on
+        # SQLite, where dividing two integers truncates.
+        ratio_type: Numeric[Any] | Float[Any] = Numeric() if dialect_name(self.db) == "postgresql" else Float()
+        latency = sql_cast(func.sum(case((served, c.latency_ms))), ratio_type) / func.nullif(
+            sql_cast(func.sum(case((served, c.latency_count))), ratio_type), 0
+        )
         row = (
             await self.db.execute(
                 select(
-                    func.coalesce(func.sum(UsageLog.cost), 0.0),
-                    func.coalesce(func.sum(UsageLog.prompt_tokens), 0),
-                    func.coalesce(func.sum(UsageLog.completion_tokens), 0),
-                    func.coalesce(func.sum(UsageLog.total_tokens), 0),
-                    func.coalesce(func.sum(UsageLog.cache_read_tokens), 0),
-                    func.coalesce(func.sum(UsageLog.cache_write_tokens), 0),
-                    func.coalesce(func.sum(UsageLog.cache_write_1h_tokens), 0),
-                    _request_count_expr(filters.status),
-                    func.coalesce(func.sum(case((UsageLog.status == "error", 1), else_=0)), 0),
-                    # Averaged over requests, not attempts: an absorbed row carries the
-                    # time spent on a candidate that did not serve, and folding it in
-                    # would make a policy that recovers quickly look slower than one
-                    # that never fails.
-                    func.avg(case((UsageLog.status != "absorbed", UsageLog.latency_ms))),
+                    _summed(c.cost, 0.0),
+                    _summed(c.prompt_tokens),
+                    _summed(c.completion_tokens),
+                    _summed(c.total_tokens),
+                    _summed(c.cache_read_tokens),
+                    _summed(c.cache_write_tokens),
+                    _summed(c.cache_write_1h_tokens),
+                    _requests(rows, filters.status),
+                    _summed(case((c.status == "error", c.rows), else_=0)),
+                    latency,
                     # Unpriced *served* rows only; see UsageTotals.unpriced_requests. The
                     # predicate is shared with the list filter so the tile and the rows it
                     # sends an operator to agree.
-                    func.coalesce(
-                        func.sum(case(((UsageLog.status == "success") & _needs_pricing_expr(), 1), else_=0)),
-                        0,
-                    ),
-                    _billed_input_sum(),
-                    _billed_output_sum(),
-                    func.coalesce(func.sum(UsageLog.reasoning_tokens), 0),
-                ).where(*usage_conditions(filters, scope))
+                    _summed(case(((c.status == "success") & c.needs_pricing, c.rows), else_=0)),
+                    _summed(c.billed_input_tokens),
+                    _summed(c.billed_output_tokens),
+                    _summed(c.reasoning_tokens),
+                )
             )
         ).one()
         return UsageTotals(
@@ -639,9 +847,36 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
 
         ``tokens`` is the *billed* total (input including both cache buckets, plus
         output), the same quantity both series report, so every analytics surface
-        agrees on what a token count means.
+        agrees on what a token count means. Equal spend ranks by key, so the cap
+        cuts the same groups wherever the sums came from.
         """
-        column = _tag_expr(tag_key) if tag_key is not None else _GROUP_COLUMNS[cast("str", dimension)]
+        if tag_key is not None:
+            return await self._tag_groups(filters, scope, tag_key=tag_key, limit=limit)
+        rows = await self._usage_rows(filters, scope)
+        column = rows.c[_GROUP_COLUMNS[cast("str", dimension)]]
+        cost_sum = _summed(rows.c.cost, 0.0)
+        stmt = (
+            select(
+                column,
+                cost_sum,
+                _summed(rows.c.billed_input_tokens) + _summed(rows.c.billed_output_tokens),
+                _requests(rows, filters.status),
+            )
+            .group_by(column)
+            .order_by(cost_sum.desc(), column)
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return [
+            UsageGroupRow(key=row[0], cost=float(row[1]), tokens=int(row[2]), requests=int(row[3]))
+            for row in (await self.db.execute(stmt)).all()
+        ]
+
+    async def _tag_groups(
+        self, filters: UsageFilters, scope: UsageScope, *, tag_key: str, limit: int | None
+    ) -> list[UsageGroupRow]:
+        """:meth:`groups` by one tag's values, which only the rows carry."""
+        column = _tag_expr(tag_key)
         cost_sum = func.coalesce(func.sum(UsageLog.cost), 0.0)
         stmt = (
             select(
@@ -664,11 +899,11 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
     async def tool_usage(self, filters: UsageFilters, scope: UsageScope) -> list[UsageToolRow]:
         """Per-tool calls, failures, spend and requests over the matching rows, biggest spend first.
 
-        One aggregate per known tool rather than a ``GROUP BY`` over the meter map:
-        a JSON map's keys cannot be grouped portably across SQLite and PostgreSQL
-        (``json_each`` versus ``jsonb_each``, on a plain ``json`` column), and the set
-        of gateway-run tools is small and fixed. Cost comes from each row's charge
-        line rather than the row total, because a row's ``cost`` also carries tokens.
+        One set of aggregates per known tool rather than a ``GROUP BY`` over the
+        meter map: a JSON map's keys cannot be grouped portably across SQLite and
+        PostgreSQL, and the set of gateway-run tools is small and fixed. Cost comes
+        from each row's charge line rather than the row total, because a row's
+        ``cost`` also carries tokens.
 
         ``calls`` and ``errors`` count every call a request made, including calls made by
         an attempt a routing policy later abandoned: the tally is shared across a
@@ -677,66 +912,77 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         requests, so the two answer different questions on purpose: "how much tool work
         did we do" and "how many requests used a tool".
         """
-        conditions = usage_conditions(filters, scope)
-        out: list[UsageToolRow] = []
-        for tool in GATEWAY_TOOL_NAMES:
-            calls = _tool_calls_expr(tool)
-            errors = UsageLog.billing_meters[(TOOL_METER_NAMESPACE, tool, "errors")].as_integer()
-            row = (
-                await self.db.execute(
-                    select(
-                        func.coalesce(func.sum(calls), 0),
-                        func.coalesce(func.sum(errors), 0),
-                        # Requests, not rows: a request that failed over through a
-                        # routing policy writes an absorbed row per recovered attempt,
-                        # and counting those would report more requests using a tool
-                        # than the Activity list shows for the same filter.
-                        _request_count_expr(),
-                        func.coalesce(func.sum(_tool_cost_expr(tool)), 0.0),
-                    ).where(*conditions, calls.is_not(None))
+        rows = await self._usage_rows(filters, scope)
+        c = rows.c
+        # Requests, not rows: a request that failed over through a routing policy
+        # writes an absorbed row per recovered attempt, and counting those would
+        # report more requests using a tool than the Activity list shows for the
+        # same filter.
+        served = c.status != "absorbed"
+        stmt = select(
+            *(
+                aggregate
+                for tool in GATEWAY_TOOL_NAMES
+                for aggregate in (
+                    _summed(c[f"{tool}_calls"]),
+                    _summed(c[f"{tool}_errors"]),
+                    _summed(case((served, c[f"{tool}_rows"]), else_=0)),
+                    _summed(c[f"{tool}_cost"], 0.0),
                 )
-            ).one()
-            if not row[0] and not row[1]:
+            )
+        )
+        row = (await self.db.execute(stmt)).one()
+        out: list[UsageToolRow] = []
+        for index, tool in enumerate(GATEWAY_TOOL_NAMES):
+            calls, errors, requests, cost = row[index * 4 : index * 4 + 4]
+            if not calls and not errors:
                 continue
             out.append(
-                UsageToolRow(tool=tool, calls=int(row[0]), errors=int(row[1]), requests=int(row[2]), cost=float(row[3]))
+                UsageToolRow(tool=tool, calls=int(calls), errors=int(errors), requests=int(requests), cost=float(cost))
             )
         return sorted(out, key=lambda r: r.cost, reverse=True)
 
     async def errors_by_status_code(
         self, filters: UsageFilters, scope: UsageScope, *, limit: int
     ) -> list[tuple[int | None, int]]:
-        """Failures among the matching rows by status code, most frequent first, as ``(status_code, requests)``."""
-        request_count = func.count()
-        rows = (
+        """Failures among the matching rows by status code, most frequent first, as ``(status_code, requests)``.
+
+        Equal counts rank by code, so the cap cuts the same codes wherever the sums came from.
+        """
+
+        def failures(columns: Any) -> list[ColumnElement[bool]]:
+            return [columns.status == "error"]
+
+        rows = await self._usage_rows(filters, scope, failures)
+        request_count = _summed(rows.c.rows)
+        result = (
             await self.db.execute(
-                select(UsageLog.status_code, request_count)
-                .where(*usage_conditions(filters, scope), UsageLog.status == "error")
-                .group_by(UsageLog.status_code)
-                .order_by(request_count.desc())
+                select(rows.c.status_code, request_count)
+                .group_by(rows.c.status_code)
+                .order_by(request_count.desc(), rows.c.status_code)
                 .limit(limit)
             )
         ).all()
-        return [(row[0], int(row[1])) for row in rows]
+        return [(row[0], int(row[1])) for row in result]
 
     async def series(self, filters: UsageFilters, scope: UsageScope, *, bucket: Bucket) -> list[UsageSeriesPoint]:
         """The populated time buckets of the matching rows."""
-        expr = bucket_expr(dialect_name(self.db), bucket, UsageLog.timestamp)
-        rows = (
+        rows = await self._usage_rows(filters, scope)
+        c = rows.c
+        expr = bucket_expr(dialect_name(self.db), bucket, c.ts)
+        result = (
             await self.db.execute(
                 select(
                     expr,
-                    func.coalesce(func.sum(UsageLog.cost), 0.0),
-                    func.coalesce(func.sum(UsageLog.total_tokens), 0),
-                    _request_count_expr(filters.status),
-                    func.coalesce(func.sum(case((UsageLog.status == "error", 1), else_=0)), 0),
-                    _billed_input_sum(),
-                    func.coalesce(func.sum(_billed_expr("cache_read_tokens", UsageLog.cache_read_tokens)), 0),
-                    func.coalesce(func.sum(_billed_expr("cache_write_tokens", UsageLog.cache_write_tokens)), 0),
-                    _billed_output_sum(),
-                )
-                .where(*usage_conditions(filters, scope))
-                .group_by(expr)
+                    _summed(c.cost, 0.0),
+                    _summed(c.total_tokens),
+                    _requests(rows, filters.status),
+                    _summed(case((c.status == "error", c.rows), else_=0)),
+                    _summed(c.billed_input_tokens),
+                    _summed(c.billed_cache_read_tokens),
+                    _summed(c.billed_cache_write_tokens),
+                    _summed(c.billed_output_tokens),
+                ).group_by(expr)
             )
         ).all()
         return [
@@ -751,7 +997,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 cache_write_tokens=int(row[7]),
                 output_tokens=int(row[8]),
             )
-            for row in rows
+            for row in result
         ]
 
     async def grouped_series(
@@ -777,25 +1023,24 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         that ranked among the named ones (a real ``key=None`` series, e.g. a
         deleted user) from the remainder.
         """
-        column = _GROUP_COLUMNS[dimension]
+        rows = await self._usage_rows(filters, scope)
+        column = rows.c[_GROUP_COLUMNS[dimension]]
         key_expr = case((column.in_(named), column), else_=null())
         if keeps_null:
             fold_expr = case((column.is_(None), 0), (column.in_(named), 0), else_=1)
         else:
             fold_expr = case((column.in_(named), 0), else_=1)
-        expr = bucket_expr(dialect_name(self.db), bucket, UsageLog.timestamp)
-        rows = (
+        expr = bucket_expr(dialect_name(self.db), bucket, rows.c.ts)
+        result = (
             await self.db.execute(
                 select(
                     expr,
                     key_expr,
                     fold_expr,
-                    func.coalesce(func.sum(UsageLog.cost), 0.0),
-                    _billed_input_sum() + _billed_output_sum(),
-                    _request_count_expr(filters.status),
-                )
-                .where(*usage_conditions(filters, scope))
-                .group_by(expr, key_expr, fold_expr)
+                    _summed(rows.c.cost, 0.0),
+                    _summed(rows.c.billed_input_tokens) + _summed(rows.c.billed_output_tokens),
+                    _requests(rows, filters.status),
+                ).group_by(expr, key_expr, fold_expr)
             )
         ).all()
         return [
@@ -807,5 +1052,168 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 tokens=int(row[4]),
                 requests=int(row[5]),
             )
-            for row in rows
+            for row in result
         ]
+
+    async def offering_traffic(
+        self, scope: UsageScope, *, since: datetime, offerings: Collection[tuple[str, str, str]]
+    ) -> list[OfferingTraffic]:
+        """The successful requests since ``since`` against these offerings, by provider and model.
+
+        Each offering is ``(selector, instance, model id)``. A usage row carries the
+        instance and the provider's model id separately, and older rows carry the
+        whole selector in ``model``, so both spellings match and both come back as
+        groups of their own.
+        """
+        if not offerings:
+            return []
+
+        def matching(columns: Any) -> list[ColumnElement[bool]]:
+            return [
+                or_(
+                    *(
+                        ((columns.provider == instance) & (columns.model == model_id)) | (columns.model == selector)
+                        for selector, instance, model_id in offerings
+                    )
+                )
+            ]
+
+        rows = await self._usage_rows(UsageFilters(start_date=since, status="success"), scope, matching)
+        c = rows.c
+        stmt = select(
+            c.provider,
+            c.model,
+            _summed(c.rows),
+            _summed(c.total_tokens),
+            _summed(c.prompt_tokens),
+            _summed(c.cache_read_tokens),
+            _summed(c.cost),
+        ).group_by(c.provider, c.model)
+        return [
+            OfferingTraffic(
+                provider=row[0],
+                model=row[1],
+                requests=int(row[2]),
+                total_tokens=int(row[3]),
+                prompt_tokens=int(row[4]),
+                cache_read_tokens=int(row[5]),
+                spend=float(row[6]),
+            )
+            for row in (await self.db.execute(stmt)).all()
+        ]
+
+    async def _usage_rows(
+        self,
+        filters: UsageFilters,
+        scope: UsageScope,
+        extra: Callable[[Any], list[ColumnElement[bool]]] = _no_extra,
+    ) -> Subquery:
+        """The rows these filters leave inside this scope, as the usage relation, rollups wherever they serve.
+
+        ``extra`` adds conditions over the keys the rollups keep, given either
+        table's columns.
+        """
+        conditions = [*usage_conditions(filters, scope), *extra(UsageLog.__table__.c)]
+        window = await self._rollup_window(filters)
+        if window is None:
+            return _raw_rows(conditions).subquery("usage_rows")
+        whole_start, whole_end, marked = window
+        rollup = UsageRollup.__table__.c
+        summed = [*_key_conditions(filters, scope, rollup, rollup.needs_pricing), *extra(rollup)]
+        from_rows = _in_spans(UsageLog.timestamp, marked)
+        if whole_start is not None:
+            summed.append(rollup.hour >= whole_start)
+            from_rows.append(UsageLog.timestamp < whole_start)
+        if whole_end is not None:
+            summed.append(rollup.hour < whole_end)
+            from_rows.append(UsageLog.timestamp >= whole_end)
+        if marked:
+            summed.append(~or_(*_in_spans(rollup.hour, marked)))
+        return union_all(
+            _summed_rows(summed), _raw_rows([*conditions, or_(*from_rows) if from_rows else false()])
+        ).subquery("usage_rows")
+
+    async def _rollup_window(
+        self, filters: UsageFilters
+    ) -> tuple[datetime | None, datetime | None, list[tuple[datetime, datetime]]] | None:
+        """The whole hours the rollups serve and the marked spans inside them, or None to read only the rows.
+
+        A missing bound leaves that side open: the rollups then serve every hour
+        on it that no write has marked.
+        """
+        if not self._rollups or _row_only_conditions(filters) or dialect_name(self.db) != "postgresql":
+            return None
+        whole_start = _ceil_hour(filters.start_date) if filters.start_date is not None else None
+        whole_end = _floor_hour(filters.end_date) if filters.end_date is not None else None
+        if whole_start is not None and whole_end is not None and whole_start >= whole_end:
+            return None
+        dirty = UsageRollupDirtyHour.__table__.c
+        stmt = select(dirty.hour).distinct()
+        if whole_start is not None:
+            stmt = stmt.where(dirty.hour >= whole_start)
+        if whole_end is not None:
+            stmt = stmt.where(dirty.hour < whole_end)
+        marked = list((await self.db.execute(stmt.limit(MAX_MARKED_HOURS + 1))).scalars())
+        if len(marked) > MAX_MARKED_HOURS:
+            return None
+        return whole_start, whole_end, _spans(marked)
+
+    async def refresh_rollups(self, max_hours: int, *, now: datetime) -> int:
+        """Rebuild up to ``max_hours`` of the latest marked hours before ``now``'s, and return how many.
+
+        Latest first, so after the rollups first appear the weeks a dashboard reads
+        are built before the history. The hour ``now`` falls in is left marked: a
+        window that ends now reads it from its rows as a partial hour anyway, and
+        it is built once it is over.
+
+        One refresh at a time, under a transaction-scoped advisory lock, and a
+        refresh that finds it taken builds nothing: two building the same hour would
+        each delete the sums the other has not committed yet and both insert theirs.
+        The marks are taken before the rows are read, so a write that commits in
+        between leaves its mark for the next refresh, which builds the hour again.
+        PostgreSQL only; elsewhere nothing marks an hour.
+        """
+        if dialect_name(self.db) != "postgresql":
+            return 0
+        if not (await self.db.execute(select(func.pg_try_advisory_xact_lock(_REFRESH_LOCK)))).scalar_one():
+            return 0
+        dirty = UsageRollupDirtyHour.__table__.c
+        latest = (
+            select(dirty.hour)
+            .where(dirty.hour < _floor_hour(now))
+            .distinct()
+            .order_by(dirty.hour.desc())
+            .limit(max_hours)
+            .scalar_subquery()
+        )
+        taken = await self.db.execute(delete(UsageRollupDirtyHour).where(dirty.hour.in_(latest)).returning(dirty.hour))
+        hours = set(taken.scalars())
+        if not hours:
+            return 0
+        rollup = UsageRollup.__table__.c
+        await self.db.execute(delete(UsageRollup).where(rollup.hour.in_(sorted(hours))))
+        measures = _row_measures()
+        table = UsageLog.__table__.c
+        keys = [table[key] for key in _ROLLUP_KEYS]
+        needs_pricing = _needs_pricing_expr()
+        hour = _hour_of(UsageLog.timestamp)
+        summed = (
+            select(
+                *keys,
+                needs_pricing,
+                hour,
+                func.count(),
+                *(func.sum(measures[name]) for name in _MEASURES),
+            )
+            .where(or_(*_in_spans(UsageLog.timestamp, _spans(hours))))
+            .group_by(*keys, needs_pricing, hour)
+        )
+        await self.db.execute(
+            insert(UsageRollup).from_select([*_ROLLUP_KEYS, "needs_pricing", "hour", "rows", *_MEASURES], summed)
+        )
+        return len(hours)
+
+    async def marked_hours(self) -> int:
+        """How many distinct hours wait for the rollup refresh."""
+        dirty = UsageRollupDirtyHour.__table__.c
+        return int((await self.db.execute(select(func.count(func.distinct(dirty.hour))))).scalar_one())

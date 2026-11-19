@@ -173,6 +173,18 @@ back rather than holding them until its reads finish. The limit is per worker:
 the database sees up to workers × replicas × `usage_read_concurrency` of these reads at once.
 Raise it for a database with memory to spare.
 
+On PostgreSQL the summaries, breakdowns, series and counts take each whole hour
+of their window from hourly rollups (`usage_rollups`) rather than from its
+usage rows, and read the partial hours at the window's ends from the rows, so a
+new request shows up at once. Triggers on `usage_logs` mark the hours an
+insert, update or delete changes, and the gateway rebuilds marked hours every 30
+seconds, one worker at a time; until then a marked hour is read from its rows.
+The migration that adds the rollups marks every hour of existing usage without
+scanning it, and the gateway then builds the history in the background, newest
+hours first, so the recent weeks a dashboard reads are ready within minutes. A
+window with more than 48 unbuilt hours, or a filter on a tag, a request id or a
+tool, reads the rows as before, and so does SQLite.
+
 A completion that cannot reserve its budget because the database did not answer
 in time is answered `503` with a `Retry-After`, and nothing is sent upstream. One
 whose provider already answered is still served when settling it fails. Its hold

@@ -89,6 +89,11 @@ def to_sync_url(database_url: str) -> str:
     return url.set(drivername=sync_drivername).render_as_string(hide_password=False)
 
 
+def is_postgresql(database_url: str) -> bool:
+    """Whether ``database_url`` names a PostgreSQL database, whichever driver it spells."""
+    return make_url(database_url).get_backend_name() == "postgresql"
+
+
 def sqlite_database_file(database_url: str) -> Path | None:
     """The file a SQLite ``database_url`` names, or ``None`` for any other database.
 

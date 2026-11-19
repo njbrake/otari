@@ -9,7 +9,13 @@ from datetime import datetime, timedelta
 from gateway.core.metered_pricing import quantize_cost
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.usage_and_telemetry_exceptions import UsageSeriesTooLongError
-from gateway.repositories.usage_and_telemetry import ServedTraffic, UsageFilters, UsageLogRepository, UsageScope
+from gateway.repositories.usage_and_telemetry import (
+    OfferingTraffic,
+    ServedTraffic,
+    UsageFilters,
+    UsageLogRepository,
+    UsageScope,
+)
 from gateway.schemas.usage_and_telemetry import (
     Bucket,
     RequestSettlement,
@@ -165,6 +171,16 @@ class UsageService:
             total_tokens=rows.total_tokens,
             row_count=rows.row_count,
         )
+
+    async def offering_traffic(
+        self, scope: UsageScope, *, since: datetime, offerings: Collection[tuple[str, str, str]]
+    ) -> list[OfferingTraffic]:
+        """The successful requests since ``since`` against these ``(selector, instance, model id)`` offerings.
+
+        By provider and model, so an offering's two spellings come back as groups of their own.
+        """
+        async with self._heavy_read():
+            return await self._usage_logs.offering_traffic(scope, since=since, offerings=offerings)
 
     async def cost_and_requests(self, filters: UsageFilters, scope: UsageScope) -> tuple[float, int]:
         """The spend and the request count over the matching rows, counting requests as every summary does."""

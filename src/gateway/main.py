@@ -37,6 +37,7 @@ from gateway.api.deps import (
     build_telemetry_retention_service,
     build_trace_service,
     build_unavailable_model_reporter,
+    build_usage_rollup_service,
     get_api_key_service,
     get_membership_listener,
     set_config,
@@ -66,6 +67,7 @@ from gateway.core.database import (
     dispose_db,
     holds_encrypted_secrets,
     init_db,
+    is_postgresql,
     release_session,
     sqlite_database_file,
 )
@@ -228,7 +230,7 @@ from gateway.services.tools import (
     warn_about_tool_instances,
 )
 from gateway.services.traces import RequestTraces, SpanContent, TraceWriter
-from gateway.services.usage_and_telemetry import HeavyUsageReads, TelemetryRetentionService
+from gateway.services.usage_and_telemetry import HeavyUsageReads, TelemetryRetentionService, UsageRollupService
 from gateway.services.workspace_scope import default_workspace_id
 from gateway.types.traces import TraceWrite, WriteResult
 from gateway.version import __version__
@@ -451,6 +453,19 @@ def _build_trace_writer(config: GatewayConfig, content: SpanContent) -> TraceWri
         write_timeout_s=config.trace_write_timeout_s,
         shutdown_s=config.trace_shutdown_flush_s,
     )
+
+
+def _start_usage_rollup_refresher(config: GatewayConfig, _container: Container) -> Coroutine[Any, Any, None] | None:
+    """Return the usage rollup refresh, or None where the database is not PostgreSQL, the one that marks hours."""
+    if not is_postgresql(config.database_url):
+        return None
+
+    @asynccontextmanager
+    async def open_service() -> AsyncIterator[UsageRollupService]:
+        async with create_unit_of_work() as uow:
+            yield build_usage_rollup_service(uow)
+
+    return UsageRollupService.poll(open_service)
 
 
 def _start_container_sweeper(config: GatewayConfig, _container: Container) -> Coroutine[Any, Any, None] | None:
@@ -686,6 +701,9 @@ _LIFESPAN_WORKERS: tuple[_LifespanWorker, ...] = (
     # Imported usage and agent telemetry arrive far faster than served traffic;
     # this keeps them to the configured window.
     _LifespanWorker("telemetry retention sweep", _start_telemetry_retention_sweeper),
+    # Rebuilds the hours of usage a write changed, so the usage reads take their
+    # sums instead of scanning their rows.
+    _LifespanWorker("usage rollup refresh", _start_usage_rollup_refresher),
     # The provider reclaims a held sandbox on its own timer; this drops the
     # rows that named it once nobody can resume them.
     _LifespanWorker("sandbox container sweep", _start_container_sweeper),
