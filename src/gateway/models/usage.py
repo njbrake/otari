@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, UniqueConstraint, Uuid, event, false
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from gateway.models.base import Base
@@ -36,6 +37,14 @@ class UsageLog(Base):
     __tablename__ = "usage_logs"
     __table_args__ = (
         Index("ix_usage_logs_user_id_timestamp", "user_id", "timestamp"),
+        # Answers whether a user has usage in an organization's workspaces, which
+        # scopes the users list (users_repository._spent_in) one probe per user.
+        Index("ix_usage_logs_user_id_workspace_id", "user_id", "workspace_id"),
+        # Every dashboard read scoped to a workspace or an organization narrows by
+        # workspace and then by a time window, newest first, with no source or
+        # status pinned, which the four-column index below cannot serve past its
+        # first column.
+        Index("ix_usage_logs_workspace_id_timestamp", "workspace_id", "timestamp"),
         # Supports the activity-log viewer's primary "show errors, newest-first"
         # query. status is low-cardinality; model is high-cardinality and left
         # unindexed on purpose.
@@ -64,8 +73,9 @@ class UsageLog(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
     # The workspace this row belongs to; see `APIKey.workspace_id` for why.
+    # No index of its own: `ix_usage_logs_workspace_id_timestamp` leads with it.
     workspace_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("workspace.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid, ForeignKey("workspace.id", ondelete="RESTRICT"), nullable=False
     )
     api_key_id: Mapped[str | None] = mapped_column(ForeignKey("api_keys.id", ondelete="SET NULL"), index=True)
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id", ondelete="SET NULL"), index=True)
@@ -133,7 +143,9 @@ class UsageLog(Base):
     # A default would make every historical row claim a convention nothing
     # checked, and mis-price the half that were the other one.
     cache_tokens_in_prompt: Mapped[bool | None] = mapped_column()
-    billing_meters: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # ``jsonb`` on PostgreSQL: the usage analytics extract meters from every row in
+    # a window, and a ``json`` value is re-parsed from text on each extraction.
+    billing_meters: Mapped[dict[str, Any] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
     pricing_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     # The settled amount, and the accounting truth for this row
     # (mozilla-ai/otari-ai#1751). Exact to the micro-dollar; see
