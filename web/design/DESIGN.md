@@ -85,6 +85,8 @@ for a component, not for those.
 | `actions/RowMenu` | `RowMenu`, and the `RowMenuAction` type |
 | `actions/ConfirmRowAction` | `ConfirmRowAction` |
 | `data/DataTable` | `DataTable`, and the `DataTableColumn` type |
+| `data/ColumnFilter` | `ColumnFilter`, the funnel a `DataTableColumn.headerAction` takes |
+| `data/ColumnFilterList` | `ColumnFilterList`, and the `ColumnFilterOption` type |
 | `data/TablePagination` | `TablePagination`, `PAGE_SIZE_OPTIONS` |
 | `data/BulkActionBar` | `BulkActionBar` |
 | `navigation/TabRow` | `TabRow`, `Tab` |

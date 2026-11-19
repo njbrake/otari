@@ -2635,7 +2635,7 @@ body {
   width: 100%;
 }
 .otari-activity-table .table__content {
-  min-width: 60rem;
+  min-width: 64rem;
 }
 .otari-activity-table .table__row .table__cell {
   height: 1.75rem;
@@ -2653,18 +2653,20 @@ body {
 .otari-activity-table .table__column[data-key="user"] {
   width: 8rem;
 }
-.otari-activity-table .table__column[data-key="input_tokens"] {
-  width: 6rem;
-}
+/* The numeric lanes and Status carry a filter funnel beside their label in the
+   Requests tab, so each is wide enough for both. */
+.otari-activity-table .table__column[data-key="input_tokens"],
 .otari-activity-table .table__column[data-key="output_tokens"] {
-  width: 5.5rem;
+  width: 6.5rem;
 }
-.otari-activity-table .table__column[data-key="cost"],
+.otari-activity-table .table__column[data-key="cost"] {
+  width: 6.25rem;
+}
 .otari-activity-table .table__column[data-key="latency"] {
-  width: 5.75rem;
+  width: 7.75rem;
 }
 .otari-activity-table .table__column[data-key="status"] {
-  width: 6.5rem;
+  width: 7rem;
 }
 
 /* Each pin is offset by the width of everything pinned before it. */

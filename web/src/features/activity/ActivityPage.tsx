@@ -27,6 +27,11 @@ import {
   type ManualRates,
   SetPriceDialog,
 } from "@/features/models/SetPriceDialog"
+import {
+  type FilterSection,
+  ObserveColumnFilter,
+} from "@/features/observe/ObserveColumnFilter"
+import { readThreshold } from "@/features/observe/observeFilters"
 import { useObserveScope } from "@/features/observe/useObserveScope"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { userDisplay } from "@/features/users/userDisplay"
@@ -85,6 +90,28 @@ const TOOL_BREAKDOWN: SummaryDimension[] = ["tool"]
 
 const DEFAULT_PAGE_SIZE = 50
 
+// What each column's funnel filters. Tokens are one threshold over input plus
+// output, so the Input and Output columns carry the same one.
+const FUNNELS = {
+  user: [{ kind: "values", dimension: "user" }],
+  model: [
+    { kind: "values", dimension: "model" },
+    { kind: "values", dimension: "provider" },
+  ],
+  routing: [
+    { kind: "values", dimension: "policy" },
+    { kind: "extra", key: "direct" },
+  ],
+  api_key: [{ kind: "values", dimension: "api_key" }],
+  tokens: [{ kind: "threshold", key: "tokens_gt" }],
+  cost: [
+    { kind: "threshold", key: "cost_gt" },
+    { kind: "extra", key: "unpriced" },
+  ],
+  latency: [{ kind: "threshold", key: "latency_ms_gt" }],
+  status: [{ kind: "values", dimension: "status" }],
+} as const satisfies Record<string, FilterSection[]>
+
 // The source picker's option list: the sources with usage in the window.
 const SOURCE_BREAKDOWN: SummaryDimension[] = ["source"]
 
@@ -104,6 +131,16 @@ const URL_DEFAULTS = {
   endpoint: "",
   provider: "",
   tool: "",
+  exclude_model: "",
+  exclude_user_id: "",
+  exclude_api_key_id: "",
+  exclude_status: "",
+  policy_name: "",
+  exclude_policy_name: "",
+  routed: "",
+  tokens_gt: "",
+  cost_gt: "",
+  latency_ms_gt: "",
   page: "0",
   size: String(DEFAULT_PAGE_SIZE),
   // The request open in the panel: a usage row's id, or the `Otari-Request-ID`
@@ -162,7 +199,7 @@ function ActivityPageContent({
   const sourceFilter = url.get("source")
   // Session, status code and endpoint have no select of their own: a link
   // carries them, shown as a chip so the scoping is visible and one click
-  // removes it. The provider's select is in the Overview's filter bar.
+  // removes it. The provider is filtered from the Model column header.
   const sessionFilter = url.get("source_label")
   const statusCodeFilter = url.get("status_code")
   const endpointFilter = url.get("endpoint")
@@ -250,6 +287,44 @@ function ActivityPageContent({
         ? false
         : undefined
 
+  // The refinements the column headers set: values left out, the routing
+  // policy, and thresholds. Read as one set and keyed on its serialized form,
+  // since each list is a fresh array per render.
+  const refinementsKey = JSON.stringify({
+    exclude_model: url.getAll("exclude_model"),
+    exclude_user_id: url.getAll("exclude_user_id"),
+    exclude_api_key_id: url.getAll("exclude_api_key_id"),
+    exclude_status: url.getAll("exclude_status"),
+    policy_name: url.getAll("policy_name"),
+    exclude_policy_name: url.getAll("exclude_policy_name"),
+    routed: url.get("routed"),
+    tokens_gt: readThreshold(url.get("tokens_gt")),
+    cost_gt: readThreshold(url.get("cost_gt")),
+    latency_ms_gt: readThreshold(url.get("latency_ms_gt")),
+  })
+  const refinements: Partial<UsageFilters> = useMemo(() => {
+    const read = JSON.parse(refinementsKey) as Record<string, unknown>
+    const list = (key: string) => {
+      const values = read[key] as string[]
+      return values.length > 0 ? values : undefined
+    }
+    return {
+      exclude_model: list("exclude_model"),
+      exclude_user_id: list("exclude_user_id"),
+      exclude_api_key_id: list("exclude_api_key_id"),
+      exclude_status: list("exclude_status") as UsageFilters["exclude_status"],
+      policy_name: list("policy_name"),
+      exclude_policy_name: list("exclude_policy_name"),
+      routed: read.routed === "false" ? false : undefined,
+      tokens_gt: read.tokens_gt as number | undefined,
+      cost_gt: read.cost_gt as number | undefined,
+      latency_ms_gt: read.latency_ms_gt as number | undefined,
+    }
+  }, [refinementsKey])
+  const hasRefinements = Object.values(refinements).some(
+    (value) => value !== undefined,
+  )
+
   const { selected: workspace } = useSelectedWorkspace()
   const filters: UsageFilters = useMemo(
     () => ({
@@ -269,8 +344,10 @@ function ActivityPageContent({
       provider: providerFilter || undefined,
       tool: (toolFilter || undefined) as UsageFilters["tool"],
       priced,
+      ...refinements,
     }),
     [
+      refinements,
       workspace,
       win,
       toolFilter,
@@ -333,7 +410,7 @@ function ActivityPageContent({
   // and switching would mean clearing first. The session/endpoint drill-down
   // chips are not applied either, so the list stays complete (and the picker
   // useful) while a drill-down narrows everything else. The model, user, key
-  // and provider pickers are the Overview's, which fetches their options.
+  // and provider funnels fetch their own options when opened.
   const sourceSuggestFilters: UsageFilters = useMemo(
     () => ({
       workspace_id: workspace?.workspace_id,
@@ -344,8 +421,10 @@ function ActivityPageContent({
       user_id: userFilters.length > 0 ? userFilters : undefined,
       api_key_id: apiKeyFilters.length > 0 ? apiKeyFilters : undefined,
       provider: providerFilter || undefined,
+      ...refinements,
     }),
     [
+      refinements,
       workspace?.workspace_id,
       win,
       statusFilter,
@@ -412,8 +491,10 @@ function ActivityPageContent({
       provider: providerFilter || undefined,
       tool: (toolFilter || undefined) as UsageFilters["tool"],
       priced,
+      ...refinements,
     }),
     [
+      refinements,
       workspace?.workspace_id,
       winOutsideExtent,
       toolFilter,
@@ -535,6 +616,7 @@ function ActivityPageContent({
       endpointFilter ||
       providerFilter ||
       toolFilter ||
+      hasRefinements ||
       timeFiltered,
   )
 
@@ -760,12 +842,43 @@ function ActivityPageContent({
   // Memoized on its per-render inputs (the roster labels and the routing
   // outcomes, both themselves memoized) so DataTable's per-row cache holds: a
   // fresh array every render would rebuild all rows per click.
-  const columns = useMemo<DataTableColumn<UsageEntry>[]>(
-    () => [
+  // Inside the Overview the filters are set from the headers: a funnel on each
+  // column a filter reads. The provider has no column, so the Model funnel
+  // carries it. Built apart from the columns, so a funnel is the same element
+  // while the routing outcomes the columns read come in.
+  const funnels = useMemo(() => {
+    const funnel = (
+      label: string,
+      sections: readonly FilterSection[],
+      placement?: "bottom end",
+    ) =>
+      embedded ? (
+        <ObserveColumnFilter
+          view="requests"
+          label={label}
+          sections={[...sections]}
+          placement={placement}
+        />
+      ) : undefined
+    return {
+      user: funnel("User", FUNNELS.user),
+      model: funnel("Model", FUNNELS.model),
+      routing: funnel("Routing", FUNNELS.routing),
+      apiKey: funnel("API key", FUNNELS.api_key),
+      input: funnel("Input", FUNNELS.tokens),
+      output: funnel("Output", FUNNELS.tokens),
+      cost: funnel("Cost", FUNNELS.cost),
+      latency: funnel("Total time", FUNNELS.latency, "bottom end"),
+      status: funnel("Status", FUNNELS.status, "bottom end"),
+    }
+  }, [embedded])
+  const columns = useMemo<DataTableColumn<UsageEntry>[]>(() => {
+    return [
       TIME_COLUMN,
       {
         id: "user",
         header: "User",
+        headerAction: funnels.user,
         cell: (entry) => {
           if (entry.user_id === null) return "—"
           const { label } = userDisplay(
@@ -780,10 +893,11 @@ function ActivityPageContent({
           )
         },
       },
-      MODEL_COLUMN,
+      { ...MODEL_COLUMN, headerAction: funnels.model },
       {
         id: "routing",
         header: "Routing",
+        headerAction: funnels.routing,
         // The policy the caller named, plus where this row sits in its plan and how
         // that turned out. The Model column keeps meaning the model that actually
         // ran (it is the join key for filters and for spend-by-model), so this is
@@ -795,20 +909,29 @@ function ActivityPageContent({
           />
         ),
       },
-      API_KEY_COLUMN,
-      INPUT_TOKENS_COLUMN,
-      OUTPUT_TOKENS_COLUMN,
-      COST_COLUMN,
+      { ...API_KEY_COLUMN, headerAction: funnels.apiKey },
+      {
+        ...INPUT_TOKENS_COLUMN,
+        headerAction: funnels.input,
+      },
+      {
+        ...OUTPUT_TOKENS_COLUMN,
+        headerAction: funnels.output,
+      },
+      { ...COST_COLUMN, headerAction: funnels.cost },
       {
         id: "latency",
         header: "Total time",
+        headerAction: funnels.latency,
         align: "end",
         cell: (entry) => formatLatencyCell(entry.latency_ms),
       },
-      STATUS_COLUMN,
-    ],
-    [groupOutcomes, memberLabels],
-  )
+      {
+        ...STATUS_COLUMN,
+        headerAction: funnels.status,
+      },
+    ]
+  }, [groupOutcomes, memberLabels, funnels])
 
   return (
     <div className="flex flex-col">

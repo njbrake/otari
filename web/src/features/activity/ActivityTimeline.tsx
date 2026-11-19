@@ -43,7 +43,7 @@ interface ActivityTimelineProps<B extends ChartBucket> {
   // while a sub-window is selected, since it still describes how far back we span.
   extentKey: string
   onPreset: (preset: RangePreset<B>) => void
-  // The presets are picked elsewhere (the Overview's filter bar), so the row
+  // The presets are picked elsewhere (the Overview's filter row), so the row
   // drops them; they still bound how far the chart zooms out.
   hidePresets?: boolean
   // A selected sub-window, resolved to absolute instants (end exclusive).

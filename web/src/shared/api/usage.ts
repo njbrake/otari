@@ -9,6 +9,8 @@ import type {
   UsageGroupBy,
   UsageGroupedSeries,
   UsageSummary,
+  UsageValueGroups,
+  ValueGroupBy,
 } from "@/client"
 import { ApiError, apiFetch, heavyReadSignal } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
@@ -51,6 +53,17 @@ function usageParams(filters: UsageFilters): URLSearchParams {
   if (filters.source_label) params.set("source_label", filters.source_label)
   if (filters.tool) params.set("tool", filters.tool)
   if (filters.priced !== undefined) params.set("priced", String(filters.priced))
+  appendAll("exclude_model", filters.exclude_model)
+  appendAll("exclude_user_id", filters.exclude_user_id)
+  appendAll("exclude_api_key_id", filters.exclude_api_key_id)
+  appendAll("exclude_status", filters.exclude_status)
+  appendAll("policy_name", filters.policy_name)
+  appendAll("exclude_policy_name", filters.exclude_policy_name)
+  if (filters.routed !== undefined) params.set("routed", String(filters.routed))
+  for (const key of ["tokens_gt", "cost_gt", "latency_ms_gt"] as const) {
+    const value = filters[key]
+    if (value !== undefined) params.set(key, String(value))
+  }
   return params
 }
 
@@ -400,6 +413,39 @@ export function useUsageSummary(
       }
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
+      )
+    },
+    enabled: enabled && scope.isReady,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    ...HEAVY_READ,
+  })
+}
+
+/**
+ * One column's values over the window, busiest first, for a column's filter
+ * menu: searched and paged on the server, so a window with more values than
+ * one page still reaches them all. `total` says how many there are in all.
+ */
+export function useUsageValueGroups(
+  filters: UsageFilters,
+  groupBy: ValueGroupBy,
+  search: string,
+  enabled = true,
+  limit = 50,
+) {
+  const scope = useUsageScope("caller")
+  return useQuery({
+    queryKey: [USAGE, "groups", scope.base, filters, groupBy, search, limit],
+    meta: workspaceMeta(filters.workspace_id),
+    queryFn: ({ signal }) => {
+      const params = usageParams(filters)
+      params.set("group_by", groupBy)
+      params.set("limit", String(limit))
+      if (search) params.set("search", search)
+      return apiFetch<UsageValueGroups>(
+        `${scope.base}/groups?${params.toString()}`,
         { signal: heavyReadSignal(signal) },
       )
     },

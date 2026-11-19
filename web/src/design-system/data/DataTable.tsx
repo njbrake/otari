@@ -14,7 +14,10 @@ import {
   useState,
 } from "react"
 import type { Key, Selection, SortDescriptor } from "react-aria-components"
-import { Checkbox as AriaCheckbox } from "react-aria-components"
+import {
+  Button as AriaButton,
+  Checkbox as AriaCheckbox,
+} from "react-aria-components"
 import { createPortal } from "react-dom"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { Checkbox, CheckboxVisual } from "@/design-system/forms/Checkbox"
@@ -70,6 +73,15 @@ export interface DataTableColumn<Row> {
   /** Marks the column react-aria announces as the row's header (usually the name). */
   isRowHeader?: boolean
   allowsSorting?: boolean
+  /**
+   * A control beside the header label, such as a `ColumnFilter`. It keeps its
+   * own press, so pressing it never sorts the column, and arrowing onto the
+   * header focuses it. A sortable column's label then becomes a button of its
+   * own, so the keyboard can still reach the sort. Styled on hover of the
+   * header through the `group/column` it sits in. The phone's cards have no
+   * header row and leave it out.
+   */
+  headerAction?: ReactNode
   /** Fixed/initial pixel width; only meaningful when the table is `resizable`. */
   width?: number
   minWidth?: number
@@ -164,6 +176,9 @@ function hasTextSelectionIn(root: HTMLElement | null): boolean {
 // on Edit does not also open the card.
 const OWN_PRESS =
   "button, a, input, select, textarea, label, [data-card-detail]"
+
+const stopPress = (event: { stopPropagation: () => void }) =>
+  event.stopPropagation()
 
 function isSelected(selected: Selection | undefined, key: string): boolean {
   return selected === "all" || (selected?.has(key) ?? false)
@@ -771,19 +786,61 @@ function DataTableGrid<Row extends object>({
                 allowsSorting={col.allowsSorting}
                 width={col.width}
                 minWidth={col.minWidth}
-                className={col.align === "end" ? "text-right" : undefined}
+                className={`group/column${col.align === "end" ? " text-right" : ""}`}
               >
                 {({ sortDirection }) => (
                   <div
                     className={`flex items-center gap-1 ${col.align === "end" ? "justify-end" : ""}`}
                   >
-                    {col.allowsSorting ? (
+                    {col.allowsSorting && col.headerAction ? (
+                      // A header with a control in it focuses that control, so
+                      // the sort is a button of its own beside it. Its press
+                      // does what the header's would: the other direction on
+                      // the sorted column, ascending on any other.
+                      <AriaButton
+                        className="cursor-pointer text-inherit outline-none data-[focus-visible]:otari-focus-ring"
+                        onPress={() =>
+                          onSortChange?.({
+                            column: col.id,
+                            direction:
+                              sortDescriptor?.column === col.id &&
+                              sortDescriptor.direction === "ascending"
+                                ? "descending"
+                                : "ascending",
+                          })
+                        }
+                      >
+                        <Table.SortableColumnHeader
+                          sortDirection={sortDirection}
+                        >
+                          {col.header}
+                        </Table.SortableColumnHeader>
+                      </AriaButton>
+                    ) : col.allowsSorting ? (
                       <Table.SortableColumnHeader sortDirection={sortDirection}>
                         {col.header}
                       </Table.SortableColumnHeader>
                     ) : (
                       <span>{col.header}</span>
                     )}
+                    {col.headerAction ? (
+                      // A press inside stays inside: without this a control
+                      // that is not a react-aria pressable would also sort.
+                      // Arrow keys still bubble, so the grid can leave it.
+                      // biome-ignore lint/a11y/noStaticElementInteractions: stops events from the control inside, which is the interactive element
+                      <span
+                        className="inline-flex shrink-0"
+                        onPointerDown={stopPress}
+                        onMouseDown={stopPress}
+                        onClick={stopPress}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ")
+                            event.stopPropagation()
+                        }}
+                      >
+                        {col.headerAction}
+                      </span>
+                    ) : null}
                     {isResizable ? (
                       <Table.ColumnResizer className="ml-auto cursor-col-resize px-1" />
                     ) : null}

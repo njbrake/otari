@@ -1,8 +1,10 @@
-import { screen, waitFor } from "@testing-library/react"
+import { useLocation } from "@tanstack/react-router"
+import { screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ActivityPage } from "@/features/activity/ActivityPage"
+import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
 import { API_ROOT } from "@/shared/api/client"
 import { entry, listCalls, mockApi, renderPage } from "@/tests/activity"
 import { pickOption, selectTrigger } from "@/tests/select"
@@ -66,5 +68,156 @@ describe("ActivityPage filter serialization", () => {
         listCalls(calls).some((url) => url.includes("tool=web_fetch")),
       ).toBe(true),
     )
+  })
+})
+
+function UrlProbe() {
+  const { searchStr } = useLocation()
+  return <output aria-label="Search in the URL">{searchStr}</output>
+}
+
+describe("ActivityPage column filters", () => {
+  const renderRequests = (search = "") =>
+    renderPage(
+      <>
+        <ObserveFilterRow view="requests" />
+        <ActivityPage embedded />
+        <UrlProbe />
+      </>,
+      `/requests${search}`,
+    )
+  const urlParams = () =>
+    new URLSearchParams(document.querySelector("output")?.textContent ?? "")
+
+  it("puts a funnel on each column that shows a shared filter", async () => {
+    mockApi({ rows: [entry()] })
+    renderRequests()
+    await screen.findByText("gpt-4o")
+
+    const headers = screen.getAllByRole("columnheader")
+    const funnels = headers.flatMap((header) =>
+      within(header)
+        .queryAllByRole("button", { name: /^Filter / })
+        .map((button) => button.getAttribute("aria-label")),
+    )
+    expect(funnels).toEqual([
+      "Filter User",
+      "Filter Model",
+      "Filter Routing",
+      "Filter API key",
+      "Filter Input",
+      "Filter Output",
+      "Filter Cost",
+      "Filter Total time",
+      "Filter Status",
+    ])
+  })
+
+  it("checking a value in a funnel filters the log and shows a chip", async () => {
+    const user = userEvent.setup()
+    const { calls } = mockApi({
+      rows: [
+        entry({ id: "a", model: "gpt-4o" }),
+        entry({ id: "b", model: "claude-x" }),
+      ],
+    })
+    renderRequests("?page=2")
+    await screen.findAllByText("claude-x")
+
+    await user.click(screen.getByRole("button", { name: "Filter Model" }))
+    const panel = await screen.findByRole("dialog", { name: "Filter Model" })
+    await user.click(
+      await within(panel).findByRole("checkbox", { name: "claude-x" }),
+    )
+
+    await waitFor(() =>
+      expect(urlParams().getAll("model")).toEqual(["claude-x"]),
+    )
+    expect(urlParams().has("page")).toBe(false)
+    // No row opened on the way: the press stayed in the panel.
+    expect(urlParams().has("request")).toBe(false)
+    await user.keyboard("{Escape}")
+    expect(
+      await screen.findByRole("button", {
+        name: "Remove Model filter claude-x",
+      }),
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(
+        listCalls(calls).some((url) => url.includes("model=claude-x")),
+      ).toBe(true),
+    )
+    // The funnel takes the accent while its column is filtered.
+    expect(screen.getByRole("button", { name: "Filter Model" })).toHaveClass(
+      "text-accent",
+    )
+  })
+
+  it("excluding a value in a funnel leaves it out of the log and says so", async () => {
+    const user = userEvent.setup()
+    const { calls } = mockApi({
+      rows: [
+        entry({ id: "a", model: "gpt-4o" }),
+        entry({ id: "b", model: "claude-x" }),
+      ],
+    })
+    renderRequests()
+    await screen.findAllByText("claude-x")
+
+    await user.click(screen.getByRole("button", { name: "Filter Model" }))
+    const panel = await screen.findByRole("dialog", { name: "Filter Model" })
+    await user.click(
+      await within(panel).findByRole("button", { name: "Exclude claude-x" }),
+    )
+    await user.keyboard("{Escape}")
+
+    await waitFor(() =>
+      expect(urlParams().getAll("exclude_model")).toEqual(["claude-x"]),
+    )
+    expect(
+      await screen.findByRole("button", {
+        name: "Remove Model filter not claude-x",
+      }),
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(
+        listCalls(calls).some((url) => url.includes("exclude_model=claude-x")),
+      ).toBe(true),
+    )
+  })
+
+  it("sends a threshold to every read of the log", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    renderRequests("?latency_ms_gt=5000&routed=false")
+    await screen.findByText("gpt-4o")
+
+    for (const path of [
+      `${API_ROOT}/usage?`,
+      `${API_ROOT}/usage/count`,
+      `${API_ROOT}/usage/summary`,
+    ]) {
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (call) =>
+              call.url.includes(path) &&
+              call.url.includes("latency_ms_gt=5000") &&
+              call.url.includes("routed=false"),
+          ),
+          `${path} dropped the refinements`,
+        ).toBe(true),
+      )
+    }
+    expect(
+      screen.getByRole("button", { name: "Remove Total time filter" }),
+    ).toBeInTheDocument()
+  })
+
+  it("draws no funnels outside the Overview", async () => {
+    mockApi({ rows: [entry()] })
+    renderPage(<ActivityPage />, "/activity")
+    await screen.findByText("gpt-4o")
+
+    expect(screen.queryByRole("button", { name: /^Filter / })).toBeNull()
   })
 })

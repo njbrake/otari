@@ -53,6 +53,38 @@ export const WithChips: Story = {
   },
 }
 
+/**
+ * No pickers: the filters are set elsewhere (a table's column headers), so the
+ * row is `start`, the chips and `end`, with no toggle.
+ */
+export const SetElsewhere: Story = {
+  render: () => (
+    <FilterChips
+      start={
+        <FilterSelect
+          label="Time range"
+          value="24h"
+          onChange={() => {}}
+          options={[
+            { value: "24h", label: "24h" },
+            { value: "7d", label: "7d" },
+          ]}
+        />
+      }
+      chips={[
+        {
+          key: "model",
+          label: "Model",
+          value: "not gpt-4o",
+          onClear: () => {},
+        },
+        { key: "cost", label: "Cost", value: "> $0.10", onClear: () => {} },
+      ]}
+      onClearAll={() => {}}
+    />
+  ),
+}
+
 /** `alwaysOpen`: the pickers are the page's main control, so no toggle. */
 export const AlwaysOpen: Story = {
   args: {
