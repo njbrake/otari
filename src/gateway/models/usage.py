@@ -47,6 +47,9 @@ class UsageLog(Base):
     __tablename__ = "usage_logs"
     __table_args__ = (
         Index("ix_usage_logs_user_id_timestamp", "user_id", "timestamp"),
+        # Answers whether a user has usage in an organization's workspaces, which
+        # scopes the users list (users_repository._spent_in) one probe per user.
+        Index("ix_usage_logs_user_id_workspace_id", "user_id", "workspace_id"),
         # Every dashboard read scoped to a workspace or an organization narrows by
         # workspace and then by a time window, newest first, with no source or
         # status pinned, which the four-column index below cannot serve past its

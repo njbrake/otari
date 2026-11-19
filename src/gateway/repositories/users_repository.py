@@ -232,13 +232,24 @@ def _spent_in(organization_id: uuid.UUID | None) -> ColumnElement[bool]:
     Separate from :func:`_keyed_in` because a key can be revoked: an owner whose
     keys are all gone still has the spend the budgets page is there to show, and
     dropping them would hide a ledger rather than a credential.
+
+    Both forms are written to stay index probes. ``usage_logs`` usually holds few
+    distinct users, so the planner expects an early match in a sequential scan
+    and, given the choice, takes one, which reads the whole table for each user
+    with no usage. The scoped form probes ``ix_usage_logs_user_id_workspace_id``
+    through the join. The unscoped one is a scalar subquery rather than an
+    ``EXISTS``, because Postgres drops ``ORDER BY`` and ``LIMIT`` from an
+    ``EXISTS``, and the ordering on ``timestamp`` is what makes the
+    ``(user_id, timestamp)`` index cheaper than scanning and sorting.
     """
     condition = select(UsageLog.user_id).where(UsageLog.user_id == User.user_id)
-    if organization_id is not None:
-        condition = condition.join(Workspace, col(Workspace.id) == UsageLog.workspace_id).where(
-            col(Workspace.organization_id) == organization_id
-        )
-    return condition.exists()
+    if organization_id is None:
+        return condition.order_by(UsageLog.timestamp).limit(1).scalar_subquery().is_not(None)
+    return (
+        condition.join(Workspace, col(Workspace.id) == UsageLog.workspace_id)
+        .where(col(Workspace.organization_id) == organization_id)
+        .exists()
+    )
 
 
 def _on_roster_of(organization_id: uuid.UUID | None) -> ColumnElement[bool]:
