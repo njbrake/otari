@@ -126,7 +126,7 @@ from gateway.core.config import (
     SERVER_TIMING_HEADER,
     GatewayConfig,
 )
-from gateway.core.database import DATABASE_ERRORS, describe_database_error, release_session
+from gateway.core.database import DATA_ERRORS, DATABASE_ERRORS, describe_database_error, release_session
 from gateway.core.env import otari_env
 from gateway.core.error_codes import (
     BUDGET_EXCEEDED,
@@ -1969,6 +1969,9 @@ async def move_reservation_for_attempt(ctx: RequestContext, attempt: Attempt) ->
             describe_database_error(exc),
         )
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=BUDGETS_UNAVAILABLE_DETAIL) from exc
+    # Gotcha: planning a move reads prices on `ctx.db` and returns without a commit
+    # when nothing moves, and the candidate's provider call follows.
+    await release_session(ctx.db)
 
 
 def spend_ceiling_refusal(exc: SpendCeilingExceededError) -> HTTPException:
@@ -2021,7 +2024,12 @@ async def _grow_reservation(
     if ctx.reservation is None or ctx.estimate_inputs is None:
         return
     prices = ctx.prices if ctx.prices is not None else get_request_prices(ctx.db, ctx.organization_id)
-    resolved = await prices.resolve(ctx.db, instance, model, deployment_paid=deployment_paid)
+    try:
+        resolved = await prices.resolve(ctx.db, instance, model, deployment_paid=deployment_paid)
+    except DATA_ERRORS:
+        raise
+    except DATABASE_ERRORS as exc:
+        raise await _growth_unavailable(ctx.db, instance, model, refused_detail, exc) from exc
     pricing = resolved.pricing if resolved is not None else None
     # `require_pricing` is a billing safety gate: it refuses a request the gateway
     # cannot price, because it then cannot debit it. The gate at admission prices
@@ -2067,6 +2075,36 @@ async def _grow_reservation(
         raise RefusalException(
             exc.status_code, refused_detail, headers=exc.headers, fields=body_fields_of(exc)
         ) from exc
+    except DATA_ERRORS:
+        raise
+    except DATABASE_ERRORS as exc:
+        raise await _growth_unavailable(ctx.db, instance, model, refused_detail, exc) from exc
+    # Gotcha: the price read above, or a top-up with nothing to add, can leave a
+    # transaction open, and the candidate's provider call follows.
+    await release_session(ctx.db)
+
+
+async def _growth_unavailable(
+    db: AsyncSession, instance: str, model: str, refused_detail: str | None, exc: BaseException
+) -> HTTPException:
+    """Stop the chain on a database failure while growing the hold, as a retryable 503.
+
+    Not the candidate's failure: left to the walker, it was recorded as one, and
+    the next candidate topped up on a session that was never rolled back.
+    """
+    with contextlib.suppress(*DATABASE_ERRORS):
+        await db.rollback()
+    logger.error(
+        "Could not grow the reservation for %s:%s; stopping the chain: %s",
+        instance,
+        model,
+        describe_database_error(exc),
+    )
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=BUDGETS_UNAVAILABLE_DETAIL if refused_detail is not None else DATABASE_UNAVAILABLE_DETAIL,
+        headers={"Retry-After": DATABASE_RETRY_AFTER_SECONDS},
+    )
 
 
 class ReservationToolGate:
@@ -2207,6 +2245,24 @@ class ReservationRoundGate:
 
 
 BUDGETS_UNAVAILABLE_DETAIL = "Budgets could not be checked for a fallback, so it was not sent."
+DATABASE_UNAVAILABLE_DETAIL = "The gateway's database did not respond, so the request was not sent. Retry shortly."
+DATABASE_RETRY_AFTER_SECONDS = "5"
+
+
+def database_unavailable(adapter: FormatAdapter[Any, Any], operation: str, exc: BaseException) -> HTTPException:
+    """Log a database failure before dispatch and render it as a retryable 503.
+
+    For a failure that left nothing to settle: the caller has rolled back and
+    released whatever the request held, so the request is refused cleanly
+    rather than escaping as an unhandled 500.
+    """
+    logger.error("%s failed before dispatch: %s", operation, describe_database_error(exc))
+    return adapter.error(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        DATABASE_UNAVAILABLE_DETAIL,
+        ErrorKind.API,
+        {"Retry-After": DATABASE_RETRY_AFTER_SECONDS},
+    )
 
 
 def budget_exhausted_mid_failover_detail() -> str:
@@ -3008,6 +3064,15 @@ async def resolve_request_context(
                 safety_identifier=upstream_user,
             )
         raise
+    except DATA_ERRORS:
+        raise
+    except DATABASE_ERRORS as exc:
+        # `reserve_budget` gives back what it held before raising, as far as the
+        # failing database lets it; a commit that landed while reporting failure
+        # is reclaimed by the ledger sweep.
+        with contextlib.suppress(*DATABASE_ERRORS):
+            await db.rollback()
+        raise database_unavailable(adapter, "Budget reservation", exc) from exc
     unresolved = unresolved_model_refusal(gate_instance, selector=model)
     if unresolved is not None:
         await refund_reservation(db, reservation)
@@ -3904,13 +3969,16 @@ async def prepare_gateway_tools(
         if unpriced_tool is not None:
             await _log_unpriced_tool_rejection(adapter, ctx, unpriced_tool)
         raise
-    except DATABASE_ERRORS:
+    except DATABASE_ERRORS as exc:
         # A database failure is not an HTTPException, so the reservation is released here too.
         # The rollback comes first, because a failed statement leaves the session unusable for the release.
         await ctx.uow.abandon()
         with contextlib.suppress(*DATABASE_ERRORS):
             await release_reservation(ctx)
-        raise
+        # A row the database refused is not an outage, so it is not answered as one.
+        if isinstance(exc, DATA_ERRORS):
+            raise
+        raise database_unavailable(adapter, "Tool admission", exc) from exc
     except asyncio.CancelledError:
         # The client disconnected during an admission step's I/O. Released as a database failure is,
         # rolling back first, because an interrupted statement leaves the session unusable.
@@ -5309,6 +5377,43 @@ async def charge_deployment_paid(
     )
 
 
+async def release_after_failed_settlement(
+    db: AsyncSession,
+    reservation: ReservationHandle | None,
+    exc: BaseException,
+    *,
+    logged: LoggedUsage,
+    actual_tokens: int,
+) -> None:
+    """Settle a request's hold once more after the database refused its settlement.
+
+    The provider has already answered, so the response is still served. When
+    the usage row was written its cost is known, and the hold is reconciled to
+    it again, in one transaction, so spend does not fall behind the rows; when
+    it was not, the hold is refunded. Either way it is done now rather than at
+    the reservation sweep, so the estimate does not shrink the caller's budget
+    for the hold's whole TTL. A settlement that committed while reporting
+    failure has claimed the ledger row, which makes this a no-op.
+    """
+    logger.error("Settlement failed after the provider answered: %s", describe_database_error(exc))
+    with contextlib.suppress(*DATABASE_ERRORS):
+        await db.rollback()
+    if reservation is None:
+        return
+    try:
+        if logged.cost is not None:
+            await reconcile_reservation(db, reservation, logged.cost, actual_tokens=actual_tokens)
+        else:
+            await refund_reservation(db, reservation)
+    except DATABASE_ERRORS as release_exc:
+        with contextlib.suppress(*DATABASE_ERRORS):
+            await db.rollback()
+        logger.error(
+            "Could not release the reservation either, so the sweep reclaims it: %s",
+            describe_database_error(release_exc),
+        )
+
+
 async def release_reservation(ctx: RequestContext) -> None:
     """Refund the request's budget reservation, if one was taken.
 
@@ -6068,35 +6173,41 @@ def build_streaming_response(
             automatic_observation.finish(success=True)
         if rate_limit_grant is not None:
             await rate_limit_grant.settle(_settled_tokens(usage_data))
-        logged = await record_usage(
-            request_facts=price_facts,
-            result_tier=streamed_tier,
-            db=db,
-            log_writer=log_writer,
-            api_key_id=api_key_id,
-            model=model,
-            provider=provider,
-            provider_type=provider_type,
-            endpoint=adapter.endpoint,
-            user_id=user_id,
-            usage_override=usage_data,
-            latency_ms=_elapsed_ms(started_at),
-            ttft_ms=_ttft_ms(started_at, first_chunk_at),
-            counts_toward_budget=_handle_counts_toward_budget(reservation),
-            attribution=attribution,
-            tool_tally=tool_tally,
-            workspace_id=workspace_id,
-            request_id=request_id,
-            tags=tags,
-            source_label=source_label,
-            safety_identifier=safety_identifier,
-            prices=prices,
-            deployment_paid=deployment_paid,
-        )
-        if reservation is not None:
-            await _charge(logged, expects_cost=True)
-            await reconcile_reservation(
-                db, reservation, logged.cost or Decimal(0), actual_tokens=_settled_tokens(usage_data)
+        logged = LoggedUsage(None, None)
+        try:
+            logged = await record_usage(
+                request_facts=price_facts,
+                result_tier=streamed_tier,
+                db=db,
+                log_writer=log_writer,
+                api_key_id=api_key_id,
+                model=model,
+                provider=provider,
+                provider_type=provider_type,
+                endpoint=adapter.endpoint,
+                user_id=user_id,
+                usage_override=usage_data,
+                latency_ms=_elapsed_ms(started_at),
+                ttft_ms=_ttft_ms(started_at, first_chunk_at),
+                counts_toward_budget=_handle_counts_toward_budget(reservation),
+                attribution=attribution,
+                tool_tally=tool_tally,
+                workspace_id=workspace_id,
+                request_id=request_id,
+                tags=tags,
+                source_label=source_label,
+                safety_identifier=safety_identifier,
+                prices=prices,
+                deployment_paid=deployment_paid,
+            )
+            if reservation is not None:
+                await _charge(logged, expects_cost=True)
+                await reconcile_reservation(
+                    db, reservation, logged.cost or Decimal(0), actual_tokens=_settled_tokens(usage_data)
+                )
+        except DATABASE_ERRORS as exc:
+            await release_after_failed_settlement(
+                db, reservation, exc, logged=logged, actual_tokens=_settled_tokens(usage_data)
             )
         return inline_settlement(logged)
 
@@ -7220,65 +7331,72 @@ async def run_non_stream(
         if ctx.rate_limit_grant is not None:
             await ctx.rate_limit_grant.settle(_settled_tokens(usage_data))
         logged = LoggedUsage(None, None)
-        # A request whose provider reported no usage still owes for the tool
-        # calls it ran, so a non-empty tally forces the row that
-        # ``log_success_without_usage = False`` would otherwise suppress.
-        if (
-            usage_data is not None
-            or refused is not None
-            or adapter.log_success_without_usage
-            or not tool_ctx.tally.is_empty()
-            # A model priced per request owes for the call whatever it reported.
-            or await bills_per_request(
-                ctx.db,
-                provider=provider,
-                model=model,
-                api_key_id=ctx.api_key_id,
-                workspace_id=ctx.workspace_id,
-                prices=ctx.prices,
-                deployment_paid=ctx.deployment_charge is not None,
-            )
-        ):
-            logged = await record_usage(
-                request_facts=ctx.price_facts,
-                result_tier=service_tier_on(result),
-                db=ctx.db,
-                log_writer=ctx.log_writer,
-                api_key_id=ctx.api_key_id,
-                model=model,
-                provider=provider,
-                provider_type=ctx.config.provider_instance_type(provider_key(provider)),
-                endpoint=adapter.endpoint,
-                user_id=ctx.user_id,
-                usage_override=usage_data,
-                error=UpstreamFailure(refused).logged_message if refused is not None else None,
-                status_code=refused.status_code if refused is not None else None,
-                answered=refused is not None,
-                latency_ms=_elapsed_ms(ctx.started_at),
-                counts_toward_budget=_handle_counts_toward_budget(ctx.reservation),
-                attribution=attribution,
-                tool_tally=tool_ctx.tally,
-                workspace_id=ctx.workspace_id,
-                request_id=ctx.request_id,
-                tags=ctx.tags,
-                source_label=ctx.source_label,
-                safety_identifier=ctx.upstream_user,
-                prices=ctx.prices,
-                deployment_paid=ctx.deployment_charge is not None,
-            )
-        if ctx.reservation is not None:
-            await charge_deployment_paid(
-                ctx.deployment_charge,
-                ctx.db,
-                logged.deployment_paid_cost,
-                tools=logged.deployment_paid_tools,
-                provider=provider,
-                model=model,
-                expects_cost=True,
-                tool_funding=ctx.tool_funding,
-            )
-            await reconcile_reservation(
-                ctx.db, ctx.reservation, logged.cost or Decimal(0), actual_tokens=_settled_tokens(usage_data)
+        # Inside the provider call's `try`, a database failure here would be
+        # mistaken for a provider failure and logged and refunded as one.
+        try:
+            # A request whose provider reported no usage still owes for the tool
+            # calls it ran, so a non-empty tally forces the row that
+            # ``log_success_without_usage = False`` would otherwise suppress.
+            if (
+                usage_data is not None
+                or refused is not None
+                or adapter.log_success_without_usage
+                or not tool_ctx.tally.is_empty()
+                # A model priced per request owes for the call whatever it reported.
+                or await bills_per_request(
+                    ctx.db,
+                    provider=provider,
+                    model=model,
+                    api_key_id=ctx.api_key_id,
+                    workspace_id=ctx.workspace_id,
+                    prices=ctx.prices,
+                    deployment_paid=ctx.deployment_charge is not None,
+                )
+            ):
+                logged = await record_usage(
+                    request_facts=ctx.price_facts,
+                    result_tier=service_tier_on(result),
+                    db=ctx.db,
+                    log_writer=ctx.log_writer,
+                    api_key_id=ctx.api_key_id,
+                    model=model,
+                    provider=provider,
+                    provider_type=ctx.config.provider_instance_type(provider_key(provider)),
+                    endpoint=adapter.endpoint,
+                    user_id=ctx.user_id,
+                    usage_override=usage_data,
+                    error=UpstreamFailure(refused).logged_message if refused is not None else None,
+                    status_code=refused.status_code if refused is not None else None,
+                    answered=refused is not None,
+                    latency_ms=_elapsed_ms(ctx.started_at),
+                    counts_toward_budget=_handle_counts_toward_budget(ctx.reservation),
+                    attribution=attribution,
+                    tool_tally=tool_ctx.tally,
+                    workspace_id=ctx.workspace_id,
+                    request_id=ctx.request_id,
+                    tags=ctx.tags,
+                    source_label=ctx.source_label,
+                    safety_identifier=ctx.upstream_user,
+                    prices=ctx.prices,
+                    deployment_paid=ctx.deployment_charge is not None,
+                )
+            if ctx.reservation is not None:
+                await charge_deployment_paid(
+                    ctx.deployment_charge,
+                    ctx.db,
+                    logged.deployment_paid_cost,
+                    tools=logged.deployment_paid_tools,
+                    provider=provider,
+                    model=model,
+                    expects_cost=True,
+                    tool_funding=ctx.tool_funding,
+                )
+                await reconcile_reservation(
+                    ctx.db, ctx.reservation, logged.cost or Decimal(0), actual_tokens=_settled_tokens(usage_data)
+                )
+        except DATABASE_ERRORS as exc:
+            await release_after_failed_settlement(
+                ctx.db, ctx.reservation, exc, logged=logged, actual_tokens=_settled_tokens(usage_data)
             )
         if refused is not None:
             raise refused

@@ -8,12 +8,12 @@ test is the fold and the join, not the sources.
 import uuid
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from any_llm.types.model import Model
-from fastapi import status
+from fastapi import FastAPI, status
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from gateway.ports.model_provider_port import NO_ORGANIZATION
 from gateway.services import model_catalog_service as mcs
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 from gateway.services.model_discovery_service import get_model_cache
+from gateway.services.usage_and_telemetry import HeavyUsageReads
 from gateway.types.models_dev import parse_catalog, parse_catalog_v2
 
 from .conftest import build_test_client
@@ -841,6 +842,27 @@ def test_a_signed_in_caller_sees_their_own_usage_of_an_offering(
         body = _get(priced, f"{API_ROOT}/catalog/models/z-ai/glm-5.3", headers=key_header)
         by_selector = {offering["selector"]: offering for offering in body["offerings"]}
         assert (by_selector[_NEBIUS_GLM]["usage_30d"] is not None) is reads_usage
+
+
+def test_a_models_usage_waits_its_turn_among_the_heavy_usage_reads(
+    priced: TestClient, master_header: dict[str, str]
+) -> None:
+    """The 30-day usage is a grouped pass over usage rows, so it takes a turn like the usage summaries."""
+    state = cast(FastAPI, priced.app).state
+    state.heavy_usage_reads = HeavyUsageReads(0, wait_s=0.05)
+
+    with patch.object(mcs, "_fallback", return_value=parse_catalog(CATALOG)):
+        busy = priced.get(f"{API_ROOT}/catalog/models/z-ai/glm-5.3", headers=master_header)
+        # The list carries no usage, so it does not wait.
+        listed = priced.get(f"{API_ROOT}/catalog/models", headers=master_header)
+
+    assert busy.status_code == status.HTTP_503_SERVICE_UNAVAILABLE, busy.text
+    assert busy.json() == {"detail": "Usage reads are busy; try again shortly"}
+    assert listed.status_code == status.HTTP_200_OK, listed.text
+
+    state.heavy_usage_reads = HeavyUsageReads(1, wait_s=0.05)
+    _get(priced, f"{API_ROOT}/catalog/models/z-ai/glm-5.3", headers=master_header)
+    _get(priced, f"{API_ROOT}/catalog/models/z-ai/glm-5.3", headers=master_header)
 
 
 @pytest.mark.parametrize(

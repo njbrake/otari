@@ -65,9 +65,20 @@ WORKDIR /app
 # distrusted emSign roots, whatever the system trust store says.
 RUN pip install --no-cache-dir --upgrade "pip>=26.2.2"
 
+# jemalloc replaces glibc malloc, whose arenas fragment under a long-lived
+# gateway: in production, glibc's free-but-held heap grew tenfold over a day
+# while the heap in use stayed flat. The symlink gives LD_PRELOAD one path on
+# both amd64 and arm64. Set LD_PRELOAD to an empty value to run on glibc malloc.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libjemalloc2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s "$(ls /usr/lib/*-linux-gnu/libjemalloc.so.2)" /usr/local/lib/libjemalloc.so.2 \
+    && test -e /usr/local/lib/libjemalloc.so.2
+
 # /data holds what must outlive the container: the default SQLite database and
-# the secret key file beside it. Created and owned here, before VOLUME, so a new
-# volume starts out writable by the otari user.
+# the secret key file beside it. Created and owned here, so a volume mounted
+# there starts out writable by the otari user. No VOLUME instruction: Railway
+# refuses to build a Dockerfile that has one.
 RUN useradd -m -u 1000 otari && mkdir /data && chown otari:otari /app /data
 
 COPY --from=builder --chown=otari:otari /app/.venv /app/.venv
@@ -98,7 +109,10 @@ ENV OTARI_PORT=8000
 # The default only: a database_url in a mounted config file, or
 # OTARI_DATABASE_URL, still wins.
 ENV OTARI_DEFAULT_DATABASE_URL=sqlite:////data/otari.db
-
-VOLUME /data
+# One process, so two arenas are plenty; the background thread returns freed
+# pages to the kernel within seconds instead of on the next allocation.
+# MALLOC_ARENA_MAX is a glibc setting and does nothing while jemalloc is loaded.
+ENV LD_PRELOAD=/usr/local/lib/libjemalloc.so.2
+ENV MALLOC_CONF=background_thread:true,narenas:2,dirty_decay_ms:5000,muzzy_decay_ms:5000
 
 CMD ["otari", "serve"]

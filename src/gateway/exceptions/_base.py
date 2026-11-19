@@ -13,6 +13,9 @@ class TenancyError(Exception):
     status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR
     # The ``Otari-Error-Code`` a caller maps this refusal by, when it has one.
     error_code: str | None = None
+    # A 5xx message is logged and replaced by a generic one; a class whose message
+    # names no deployment detail and tells the caller what to do may show it.
+    detail_is_public: bool = False
 
     def __init__(self, message: str):
         super().__init__(message)

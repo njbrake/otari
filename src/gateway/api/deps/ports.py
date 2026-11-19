@@ -21,11 +21,10 @@ from gateway.api.deps._base import (
 from gateway.api.deps.auth import (
     verify_master_key,
 )
-from gateway.container import Container
 from gateway.core.config import (
     GatewayConfig,
 )
-from gateway.core.database import get_db, release_session
+from gateway.core.database import get_db
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.ports.agent_model_recommender_port import AgentModelRecommenderPort
 from gateway.ports.api_key_format_port import ApiKeyFormatPort
@@ -34,7 +33,6 @@ from gateway.ports.billing_port import (
 )
 from gateway.ports.code_execution_port import CodeExecutionPort
 from gateway.ports.entitlement_port import EntitlementPort
-from gateway.ports.feedback_delivery_port import FeedbackDeliveryPort
 from gateway.ports.growth_signal_port import GrowthSignalPort
 from gateway.ports.identity_provider_port import IdentityProviderPort
 from gateway.ports.model_provider_port import ModelProviderPort
@@ -114,21 +112,6 @@ def get_entitlement_port(db: PortSessionDep, container: ContainerDep) -> Entitle
 
 
 EntitlementPortDep = Annotated[EntitlementPort, Depends(get_entitlement_port)]
-
-
-async def get_feedback_delivery_port(
-    container: Annotated[Container, Depends(get_container)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-    _authenticated: Annotated[str | None, Depends(verify_master_key)],
-) -> FeedbackDeliveryPort:
-    """Resolve where accepted feedback goes, with authentication's database work finished first.
-
-    Delivery can wait seconds on the network, so the request's connection goes
-    back to the pool here. The adapter gets no session: one that needs the
-    database opens its own unit of work.
-    """
-    await release_session(db)
-    return container.resolve(FeedbackDeliveryPort, None)
 
 
 def get_growth_signal_port(

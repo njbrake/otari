@@ -9,7 +9,7 @@ import type {
   ModelListResponse,
   ModelMetadataOverride,
 } from "@/client"
-import { apiFetch } from "@/shared/api/client"
+import { apiFetch, heavyReadSignal } from "@/shared/api/client"
 import {
   CATALOG,
   DISCOVERABLE,
@@ -108,7 +108,8 @@ export function useCatalogModel(
     ...NO_RETRY,
     queryKey: [CATALOG, "model", modelId, workspaceId],
     meta: workspaceMeta(workspaceId),
-    queryFn: () =>
+    // Its offerings' 30-day usage waits its turn with the usage pages' reads.
+    queryFn: ({ signal }) =>
       // Segment by segment: the id carries its vendor, `z-ai/glm-5.3`, and
       // the slash is the path's, not the id's to encode.
       apiFetch<CatalogModelDetail>(
@@ -118,6 +119,7 @@ export function useCatalogModel(
           .join(
             "/",
           )}${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`,
+        { signal: heavyReadSignal(signal) },
       ),
     staleTime: 60_000,
     enabled: modelId !== undefined && enabled,

@@ -22,7 +22,7 @@ from gateway.schemas.update_check import (
     UpdateCheckReply,
     UpdateCheckStatus,
 )
-from gateway.services.update_check._client import UpdateCheckFailedError, send_check
+from gateway.services.update_check._client import UpdateCheckFailedError
 from gateway.services.update_check._schedule import (
     format_version,
     next_daily_check,
@@ -62,7 +62,8 @@ def preset_answer(config: UpdateCheckSettings) -> bool | None:
 
 
 async def _send(url: str, version: str, install_id: uuid.UUID) -> UpdateCheckReply:
-    return await send_check(url, version=version, install_id=install_id)
+    # Fork: this deployment never reports its version or install id to otari.ai.
+    raise UpdateCheckFailedError("the update check is disabled in this build")
 
 
 class UpdateCheckService:

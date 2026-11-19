@@ -65,6 +65,7 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
 )
 from opentelemetry.proto.metrics.v1.metrics_pb2 import AggregationTemporality
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import ClientDisconnect
 
 from gateway.api.deps import (
     TelemetryStoragePortDep,
@@ -160,6 +161,26 @@ _HEX = re.compile(r"[0-9A-Fa-f]+")
 
 def _content_type(request: Request) -> str:
     return request.headers.get("content-type", "").split(";")[0].strip().lower()
+
+
+# nginx's "client closed request": nobody reads it, but it keeps the access log honest.
+_CLIENT_CLOSED_REQUEST = 499
+
+
+async def _read_export(request: Request) -> bytes:
+    """Read and decode the export body, ending quietly if the exporter gave up first.
+
+    An exporter waits a bounded time (ten seconds by default) and then closes the
+    connection to retry later, so a slow gateway sees the body vanish mid-read.
+    That is not a server fault, and left unhandled it reached the ASGI server as
+    an exception with a full traceback per abandoned export.
+    """
+    try:
+        raw = await request.body()
+    except ClientDisconnect:
+        logger.info("OTLP exporter disconnected before its export was read")
+        raise HTTPException(_CLIENT_CLOSED_REQUEST, "Client closed request") from None
+    return _decode_body(raw, request.headers.get("content-encoding"))
 
 
 def _decode_body(body: bytes, content_encoding: str | None) -> bytes:
@@ -585,7 +606,7 @@ async def receive_traces(
     generation = await _content_generation(traces, config, api_key.workspace_id) if writer is not None else None
     await _release_after_auth(db)
     content_type = _content_type(request)
-    body = _decode_body(await request.body(), request.headers.get("content-encoding"))
+    body = await _read_export(request)
     parsed = _parse(body, content_type, ExportTraceServiceRequest())
     assert isinstance(parsed, ExportTraceServiceRequest)
 
@@ -684,7 +705,7 @@ async def receive_logs(
     api_key = _require_import_key(auth_result[0])
     await _release_after_auth(db)
     content_type = _content_type(request)
-    body = _decode_body(await request.body(), request.headers.get("content-encoding"))
+    body = await _read_export(request)
     parsed = _parse(body, content_type, ExportLogsServiceRequest())
     assert isinstance(parsed, ExportLogsServiceRequest)
 
@@ -762,7 +783,7 @@ async def receive_metrics(
     api_key = _require_import_key(auth_result[0])
     await _release_after_auth(db)
     content_type = _content_type(request)
-    body = _decode_body(await request.body(), request.headers.get("content-encoding"))
+    body = await _read_export(request)
     parsed = _parse(body, content_type, ExportMetricsServiceRequest())
     assert isinstance(parsed, ExportMetricsServiceRequest)
 

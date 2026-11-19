@@ -170,7 +170,6 @@ _UNGATED_ROUTERS: dict[str, str] = {
     "identity_apps.public_router": "registered app metadata is public; exchanging a grant requires its S256 PKCE proof",
     "bootstrap.router": "unauthenticated on purpose: read before a browser knows whether to sign in",
     "health.router": "unauthenticated liveness and readiness",
-    "retired_root.router": "a 404 naming the API root that replaced /v1; serves nothing",
 }
 
 

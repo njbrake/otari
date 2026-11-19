@@ -69,7 +69,6 @@ import { PendingPage } from "@/app/PendingPage"
 import { TelemetryIdentity } from "@/app/TelemetryIdentity"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { useAdoptBrowserAvatar } from "@/features/account/avatar/avatarChoice"
-import { FeedbackDialog } from "@/features/feedback/FeedbackDialog"
 import { CreateKeyHost } from "@/features/keys/CreateKeyHost"
 import { useOpenCreateKey } from "@/features/keys/openCreateKey"
 import { PricingWarning } from "@/features/models/PricingWarning"
@@ -77,11 +76,9 @@ import { UnpricedUsageWarning } from "@/features/models/UnpricedUsageWarning"
 import { useCanCreateKey } from "@/features/organization/access"
 import { UpdateCheckPrompt } from "@/features/updateCheck/UpdateCheckPrompt"
 import { UpdateNotice } from "@/features/updateCheck/UpdateNotice"
-import { useSessionCaller } from "@/shared/api/auth"
 import { useOrganizationContext } from "@/shared/api/organizations"
 import { BreadcrumbLeafProvider } from "@/shared/hooks/BreadcrumbLeaf"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
-import { useDeployment } from "@/shared/hooks/useDeployment"
 import { useDocumentTitle } from "@/shared/hooks/useDocumentTitle"
 import { useEntitlements } from "@/shared/hooks/useEntitlements"
 import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
@@ -505,12 +502,9 @@ export function AppShell() {
 }
 
 function AppShellChrome() {
-  const { feedback_enabled } = useDeployment()
-  const [feedbackOpen, setFeedbackOpen] = useState(false)
   // The rail's Create API key, which opens the dialog `CreateKeyHost` holds.
   const canCreateKey = useCanCreateKey()
   const openCreateKey = useOpenCreateKey()
-  const feedbackTriggerRef = useRef<HTMLButtonElement>(null)
 
   // Navigation is data: the shell renders whatever the registry declares and
   // decides visibility from the deployment and the entitlements,
@@ -577,9 +571,6 @@ function AppShellChrome() {
   const inOrganization = navContext === "organization"
   const inDeployment = navContext === "deployment"
   const organization = useOrganizationContext()
-  // The identity the gateway reads the shared email from, so the address the
-  // dialog offers is the one that is sent.
-  const caller = useSessionCaller()
   const { selected: selectedWorkspace } = useSelectedWorkspace()
   // True for the local operator, who owns the organization the gateway
   // provisioned for itself, and load-bearing for every account that signs in
@@ -1193,10 +1184,6 @@ function AppShellChrome() {
               <div className="-mx-3 flex h-14 shrink-0 items-center border-t border-border">
                 <AccountMenu
                   isCollapsed={effectiveCollapsed}
-                  onOpenFeedback={() => {
-                    closeMobileNav()
-                    setFeedbackOpen(true)
-                  }}
                   triggerRef={accountTriggerRef}
                   // Below `md` the Deployment row opens a level inside the
                   // drawer instead of navigating: the popover it lives in is
@@ -1273,10 +1260,7 @@ function AppShellChrome() {
             <div className="flex shrink-0 items-center empty:hidden md:hidden">
               <MobileWalletNavSlot />
             </div>
-            <TopBarActions
-              onOpenFeedback={() => setFeedbackOpen(true)}
-              feedbackTriggerRef={feedbackTriggerRef}
-            />
+            <TopBarActions />
           </header>
           <main
             ref={mainRef}
@@ -1387,16 +1371,6 @@ function AppShellChrome() {
           </main>
         </div>
       </div>
-      {feedback_enabled ? (
-        <FeedbackDialog
-          isOpen={feedbackOpen}
-          onOpenChange={setFeedbackOpen}
-          // Below `md` the drawer has closed by then, and the menu row inside it
-          // with it, so the control that reopens the drawer takes focus.
-          returnFocusRef={isMobile ? toggleRef : feedbackTriggerRef}
-          email={caller?.email?.trim() || null}
-        />
-      ) : null}
     </div>
   )
 }

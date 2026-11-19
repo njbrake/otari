@@ -10,9 +10,9 @@ import type {
   UsageGroupedSeries,
   UsageSummary,
 } from "@/client"
-import { ApiError, apiFetch } from "@/shared/api/client"
+import { ApiError, apiFetch, heavyReadSignal } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
-import { USAGE, workspaceMeta } from "@/shared/api/queryKeys"
+import { NO_RETRY, USAGE, workspaceMeta } from "@/shared/api/queryKeys"
 import { isoAgo } from "@/shared/helpers/timeRange"
 
 // ---------- activity / request log ----------
@@ -102,6 +102,15 @@ export function useUsageScope(scope: UsageScope = "caller"): {
   }
 }
 
+/**
+ * What every usage aggregate the gateway runs a few at a time shares: no retry.
+ * A busy refusal, a failed query or a read past its deadline would put the same
+ * work back in the same queue, so a failed one waits for the page's refresh.
+ * Each also passes `heavyReadSignal`, so a read nothing on screen wants is
+ * abandoned and the gateway cancels it.
+ */
+const HEAVY_READ = NO_RETRY
+
 // `placeholderData: keepPreviousData` keeps the current page on screen while the
 // next loads, so paging does not flash empty.
 export function useUsageLogs(
@@ -144,13 +153,15 @@ export function useUsageCount(filters: UsageFilters) {
   return useQuery({
     queryKey: [USAGE, "count", scope.base, filters],
     meta: workspaceMeta(filters.workspace_id),
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiFetch<UsageCount>(
         `${scope.base}/count?${usageParams(filters).toString()}`,
+        { signal: heavyReadSignal(signal) },
       ),
     enabled: scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 10_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -173,9 +184,10 @@ export function useLiveUsageCount(filters: UsageFilters, enabled = true) {
   return useQuery({
     queryKey: [USAGE, "count", "live", scope.base, filters],
     meta: workspaceMeta(filters.workspace_id),
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiFetch<UsageCount>(
         `${scope.base}/count?${usageParams(filters).toString()}`,
+        { signal: heavyReadSignal(signal) },
       ),
     enabled: enabled && scope.isReady,
     refetchInterval: NEW_ROW_POLL_MS,
@@ -238,7 +250,7 @@ export function useFailureCount(windowSeconds: number, enabled = true) {
   const scope = useUsageScope()
   return useQuery({
     queryKey: [USAGE, "count", "failures", scope.base, windowSeconds],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const filters: UsageFilters = {
         status: "error",
         source: "gateway",
@@ -246,6 +258,7 @@ export function useFailureCount(windowSeconds: number, enabled = true) {
       }
       return apiFetch<UsageCount>(
         `${scope.base}/count?${usageParams(filters).toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
@@ -285,7 +298,7 @@ export function useUnpricedUsage(
       windowSeconds,
     ],
     meta: workspaceMeta(workspaceId),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams({
         workspace_id: workspaceId || undefined,
         status: "success",
@@ -297,6 +310,7 @@ export function useUnpricedUsage(
       params.append("dimensions", "model")
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
@@ -373,7 +387,7 @@ export function useUsageSummary(
       dimensions ?? "all",
     ],
     meta: workspaceMeta(filters.workspace_id),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams(filters)
       params.set("bucket", bucket)
       // A repeated query param has no empty-list form, so an empty selection goes
@@ -386,11 +400,13 @@ export function useUsageSummary(
       }
       return apiFetch<UsageSummary>(
         `${scope.base}/summary?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -408,22 +424,21 @@ export function useUsageGroupedSeries(
   return useQuery({
     queryKey: [USAGE, "series", scope.base, filters, bucket, groupBy],
     meta: workspaceMeta(filters.workspace_id),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = usageParams(filters)
       params.set("bucket", bucket)
       params.set("group_by", groupBy as string)
       return apiFetch<UsageGroupedSeries>(
         `${scope.base}/series?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
       )
     },
     enabled: enabled && groupBy !== null && scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
-    // A 404 is version skew (a gateway older than this dashboard, e.g. not yet
-    // restarted onto the build that ships it); retrying cannot fix that, and
-    // the page falls back to the ungrouped view with a notice instead.
-    retry: (failureCount, error) =>
-      !(error instanceof ApiError && error.status === 404) && failureCount < 3,
+    // A 404 among the failures is version skew (a gateway older than this
+    // dashboard), and the page falls back to the ungrouped view with a notice.
+    ...HEAVY_READ,
   })
 }
 
@@ -449,7 +464,7 @@ export function useRefusalsSince(
       workspaceId ?? "",
       userId ?? "",
     ],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiFetch<UsageSummary>(
         `${scope.base}/summary?${new URLSearchParams({
           start_date: start,
@@ -459,9 +474,11 @@ export function useRefusalsSince(
           ...(workspaceId ? { workspace_id: workspaceId } : {}),
           ...(userId ? { user_id: userId } : {}),
         })}`,
+        { signal: heavyReadSignal(signal) },
       ),
     enabled: scope.isReady && isEnabled,
     staleTime: 30_000,
+    ...HEAVY_READ,
   })
 }
 
@@ -488,7 +505,7 @@ export function useWorkspaceSpendSummaries(
         end,
         "model",
       ],
-      queryFn: () =>
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
         apiFetch<UsageSummary>(
           `${scope.base}/summary?${new URLSearchParams({
             workspace_id: workspaceId,
@@ -497,9 +514,11 @@ export function useWorkspaceSpendSummaries(
             bucket: "day",
             dimensions: "model",
           })}`,
+          { signal: heavyReadSignal(signal) },
         ),
       enabled: isEnabled && scope.isReady,
       staleTime: 30_000,
+      ...HEAVY_READ,
     })),
   })
 }
@@ -571,7 +590,7 @@ export function useModelSummariesBy(
         workspaceId,
         userId ?? null,
       ],
-      queryFn: () =>
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
         apiFetch<UsageSummary>(
           `${scope.base}/summary?${new URLSearchParams({
             start_date: start,
@@ -582,9 +601,11 @@ export function useModelSummariesBy(
             ...(workspaceId ? { workspace_id: workspaceId } : {}),
             ...(userId ? { user_id: userId } : {}),
           })}`,
+          { signal: heavyReadSignal(signal) },
         ),
       enabled: scope.isReady && value !== null,
       staleTime: 30_000,
+      ...HEAVY_READ,
     })),
   })
 }

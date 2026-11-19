@@ -81,6 +81,7 @@ echo "Starting gateway container with image: $IMAGE_TAG"
 docker run -d --name "$OTARI_CONTAINER" \
     --add-host=host.docker.internal:host-gateway \
     -e OTARI_PROVIDER_ACCOUNT_PEPPER="$(openssl rand -base64 32)" \
+    -e OTARI_DEBUG_MEMORY=true \
     -p 8000:8000 \
     -v "$CONFIG_FILE":/app/config.yml \
     "$IMAGE_TAG" \
@@ -133,5 +134,22 @@ if ! curl -sf http://localhost:8000/dashboard-build.json; then
     exit 1
 fi
 echo ""
+
+# The image preloads jemalloc in place of glibc malloc. A wrong LD_PRELOAD path
+# is only a warning from the loader, so the process boots on glibc either way and
+# this has to be read from the running process.
+echo "Testing the gateway process runs on jemalloc..."
+if ! docker exec "$OTARI_CONTAINER" grep -q libjemalloc /proc/1/maps; then
+    echo "libjemalloc is not mapped into the gateway process: check LD_PRELOAD in the Dockerfile"
+    docker exec "$OTARI_CONTAINER" sh -c 'echo "LD_PRELOAD=$LD_PRELOAD"; ls -l /usr/local/lib/libjemalloc.so.2'
+    exit 1
+fi
+allocator="$(curl -sf -H "Otari-Key: Bearer test-master-key" "http://localhost:8000/api/v1/debug/memory?limit=1" \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["allocator"])')"
+echo "The memory diagnostics report allocator: $allocator"
+if [[ "$allocator" != "jemalloc" ]]; then
+    echo "Expected the memory diagnostics to report jemalloc"
+    exit 1
+fi
 
 echo "All liveness checks passed!"

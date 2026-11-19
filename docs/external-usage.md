@@ -105,3 +105,11 @@ In **Sessions**, the **Requests** view marks imported rows by their source.
 Their cost is an estimate at API rates, not what a subscription charged, and an
 event with no price is kept without a cost. Budget gauges leave imported usage out. How each
 event is priced is in [Pricing](external-usage-reference.md#pricing).
+
+## Keep imported usage for a set time
+
+Imported rows and agent telemetry are kept indefinitely by default. Set
+`telemetry_retention_days` (`OTARI_TELEMETRY_RETENTION_DAYS`) to have a
+background sweep delete both once they are older than that many days. It runs
+every six hours. Usage the gateway served itself is never deleted, budget-exempt
+traffic included.

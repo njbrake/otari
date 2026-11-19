@@ -91,7 +91,6 @@ def app(tmp_path_factory: pytest.TempPathFactory, monkeypatch_module: pytest.Mon
         bootstrap_api_key=False,
         federation_issuers=[FederationIssuer(issuer="https://scopes.invalid")],
         federation_audiences=["https://scopes.invalid"],
-        feedback_enabled=True,
     )
     return create_app(config)
 

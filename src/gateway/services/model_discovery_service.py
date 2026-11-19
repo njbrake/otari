@@ -44,6 +44,7 @@ from gateway.services.provider_kwargs import (
     credential_ladder_exhausted,
     get_provider_kwargs,
     keyless_placeholder_api_key,
+    otari_gateway_origin,
 )
 from gateway.services.upstream_redaction import redact_upstream_message
 from gateway.services.url_safety import UnsafeURLError, validate_provider_api_base
@@ -635,6 +636,8 @@ async def test_provider_credentials(
             models=[],
             error=f"'{impl_name}' is not a known provider implementation.",
         )
+    if provider_enum == LLMProvider.OTARI:
+        api_base = otari_gateway_origin(api_base)
     # Opt-in SSRF gate (default allow-all): refuse an internal api_base before we
     # dial it, when the operator has turned the gate on. Reported like any other
     # test failure so the key is never echoed. Truthy check so an empty/absent

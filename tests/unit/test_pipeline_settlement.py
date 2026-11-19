@@ -89,7 +89,7 @@ from gateway.services.budgets import (
 )
 from gateway.services.inference import DeploymentCharge, UnavailableModel, UnavailableModelReporter
 from gateway.services.mcp_loop import AnsweredRounds
-from gateway.services.pricing_service import ResolvedPricing
+from gateway.services.pricing_service import RequestPrices, ResolvedPricing
 from gateway.services.routing import CompiledPlan
 from gateway.services.tenancy.workspace_mcp_server_service import RequestMcpServers
 from gateway.services.tool_usage import ToolUsageTally
@@ -2708,13 +2708,16 @@ async def test_a_database_failure_releases_the_reservation(monkeypatch: pytest.M
         workspace_id=uuid.uuid4(),
         uow=UnitOfWork(db),
     )
-    with pytest.raises(SQLAlchemyError):
+    with pytest.raises(HTTPException) as exc_info:
         await _call_prepare_gateway_tools(
             ctx,
             mcp_server=_Servers(failing),
             mcp_server_ids=[cast(Any, "11111111-1111-1111-1111-111111111111")],
         )
 
+    assert exc_info.value.status_code == 503, "a database outage is retryable, not an unhandled 500"
+    assert exc_info.value.headers == {"Retry-After": pipeline.DATABASE_RETRY_AFTER_SECONDS}
+    assert isinstance(exc_info.value.__cause__, SQLAlchemyError)
     assert settlement.refunded == 1
     assert db.rollback.await_count == 1, "the session is rolled back first, or the release cannot run"
 
@@ -2741,7 +2744,7 @@ async def test_a_domain_error_no_admission_step_renders_releases_the_reservation
 
 @pytest.mark.asyncio
 async def test_a_release_that_also_fails_reraises_the_original(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A database still refusing work must surface the first failure, not a second one."""
+    """A database still refusing work must report the first failure, not a second one."""
     settlement = _Settlement()
     settlement.install(monkeypatch)
 
@@ -2762,12 +2765,15 @@ async def test_a_release_that_also_fails_reraises_the_original(monkeypatch: pyte
         workspace_id=uuid.uuid4(),
         uow=UnitOfWork(db),
     )
-    with pytest.raises(SQLAlchemyError, match="connection reset"):
+    with pytest.raises(HTTPException) as exc_info:
         await _call_prepare_gateway_tools(
             ctx,
             mcp_server=_Servers(failing),
             mcp_server_ids=[cast(Any, "11111111-1111-1111-1111-111111111111")],
         )
+
+    assert exc_info.value.status_code == 503
+    assert str(exc_info.value.__cause__) == "connection reset"
 
 
 @pytest.mark.asyncio
@@ -3914,3 +3920,166 @@ async def test_every_format_hands_the_round_gate_to_its_tool_loop(
         await adapter.run_tool_loop(kwargs, cast(Any, object()), 3, round_gate=gate)
 
     assert seen["round_gate"] is gate
+
+
+# ---------------------------------------------------------------------------
+# A database that stops answering after the provider has
+# ---------------------------------------------------------------------------
+
+
+def _statement_timeout() -> sqlalchemy_exc.OperationalError:
+    """What a statement, or a COMMIT, that outlived ``db_command_timeout`` raises."""
+    return sqlalchemy_exc.OperationalError("database statement timed out (db_command_timeout)", None, TimeoutError())
+
+
+@pytest.mark.asyncio
+async def test_non_stream_settlement_failure_serves_the_answer_and_releases_the_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A settlement commit that times out is not a provider failure.
+
+    It used to fall into the provider-failure arm, which wrote an error row and
+    refunded on a session the failed commit had left unusable, so that second
+    write raised too and the request ended in an unhandled 500 with its hold
+    left to the sweep.
+    """
+    settlement = _Settlement()
+    settlement.install(monkeypatch)
+
+    reconciled: list[Decimal] = []
+
+    async def times_out_once(db: Any, handle: Any, cost: Decimal, *, actual_tokens: int = 0) -> None:
+        if not reconciled:
+            reconciled.append(Decimal(-1))
+            raise _statement_timeout()
+        reconciled.append(cost)
+
+    monkeypatch.setattr(pipeline, "reconcile_reservation", times_out_once)
+    db = AsyncMock()
+    completion = _completion(usage=_usage())
+
+    returned, _ = await _run_non_stream(monkeypatch, result=completion, reservation=_reservation(), db=db)
+
+    assert returned is completion
+    assert db.rollback.await_count >= 1, "the failed transaction is rolled back before the retry"
+    assert reconciled == [Decimal(-1), Decimal("0.25")], "settled again at the cost the usage row recorded"
+    assert settlement.refunded == 0
+    assert [row.get("error") for row in settlement.logged] == [None], "no failure row for a served request"
+
+
+@pytest.mark.asyncio
+async def test_non_stream_settlement_with_no_usage_row_refunds_the_hold(monkeypatch: pytest.MonkeyPatch) -> None:
+    settlement = _Settlement()
+    settlement.install(monkeypatch)
+
+    async def timing_out(*args: Any, **kwargs: Any) -> None:
+        raise _statement_timeout()
+
+    monkeypatch.setattr(pipeline, "record_usage", timing_out)
+    completion = _completion(usage=_usage())
+
+    returned, _ = await _run_non_stream(monkeypatch, result=completion, reservation=_reservation(), db=AsyncMock())
+
+    assert returned is completion
+    assert settlement.refunded == 1
+
+
+@pytest.mark.asyncio
+async def test_non_stream_settlement_and_release_both_failing_still_serves(monkeypatch: pytest.MonkeyPatch) -> None:
+    settlement = _Settlement()
+    settlement.install(monkeypatch)
+
+    async def timing_out(*args: Any, **kwargs: Any) -> None:
+        raise _statement_timeout()
+
+    monkeypatch.setattr(pipeline, "reconcile_reservation", timing_out)
+    monkeypatch.setattr(pipeline, "refund_reservation", timing_out)
+    completion = _completion(usage=_usage())
+
+    returned, _ = await _run_non_stream(monkeypatch, result=completion, reservation=_reservation(), db=AsyncMock())
+
+    assert returned is completion
+
+
+@pytest.mark.asyncio
+async def test_stream_settlement_failure_releases_the_hold(monkeypatch: pytest.MonkeyPatch) -> None:
+    settlement = _Settlement()
+    settlement.install(monkeypatch)
+
+    async def timing_out(*args: Any, **kwargs: Any) -> None:
+        raise _statement_timeout()
+
+    monkeypatch.setattr(pipeline, "record_usage", timing_out)
+
+    async def stream() -> AsyncIterator[ChatCompletionChunk]:
+        yield _chunk(CompletionUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+
+    frames = await _drain(_build(stream(), GatewayConfig(), db=AsyncMock()))
+
+    assert frames[-1] == "data: [DONE]\n\n"
+    assert not any('"error"' in frame for frame in frames)
+    assert settlement.refunded == 1
+
+
+@pytest.mark.parametrize("move", ["move", "top_up"])
+@pytest.mark.asyncio
+async def test_failover_admission_releases_the_connection_before_the_attempt(
+    monkeypatch: pytest.MonkeyPatch, move: str
+) -> None:
+    """Admitting a fallback reads prices, and the candidate's provider call follows.
+
+    A move with nothing to move, or a top-up with nothing to add, returns
+    without a commit, which held a pooled connection idle in its transaction for
+    the whole of that candidate's call.
+    """
+
+    class _Budgets:
+        move_reservation = AsyncMock()
+
+    monkeypatch.setattr(pipeline, "get_budget_service", lambda uow, db: _Budgets())
+    monkeypatch.setattr(pipeline, "increase_reservation", AsyncMock())
+
+    async def priced(self: Any, db: Any, instance: str, model: str, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(RequestPrices, "resolve", priced)
+    db = AsyncMock()
+    ctx = _ctx(GatewayConfig(require_pricing=False), db=cast(Any, db), reservation=_reservation())
+    ctx.estimate_inputs = EstimateInputs(
+        prompt_chars=10, max_output_tokens=None, default_output_tokens=100, cache_write_ttl=None
+    )
+    attempt = cast(Any, SimpleNamespace(instance="openai", model="gpt-4", deployment_paid=False))
+
+    if move == "move":
+        await pipeline.move_reservation_for_attempt(ctx, attempt)
+    else:
+        await pipeline.top_up_reservation_for_attempt(ctx, attempt)
+
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_database_failure_growing_a_fallbacks_hold_stops_the_chain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not the candidate's failure, so not recorded as one and not followed by the next candidate."""
+
+    async def timing_out(*args: Any, **kwargs: Any) -> None:
+        raise _statement_timeout()
+
+    async def priced(self: Any, db: Any, instance: str, model: str, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(pipeline, "increase_reservation", timing_out)
+    monkeypatch.setattr(RequestPrices, "resolve", priced)
+    db = AsyncMock()
+    ctx = _ctx(GatewayConfig(require_pricing=False), db=cast(Any, db), reservation=_reservation())
+    ctx.estimate_inputs = EstimateInputs(
+        prompt_chars=10, max_output_tokens=None, default_output_tokens=100, cache_write_ttl=None
+    )
+    attempt = cast(Any, SimpleNamespace(instance="openai", model="gpt-4", deployment_paid=False))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await pipeline.top_up_reservation_for_attempt(ctx, attempt)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == pipeline.BUDGETS_UNAVAILABLE_DETAIL
+    db.rollback.assert_awaited_once()

@@ -21,6 +21,7 @@ from gateway.core import error_codes
 from gateway.core.config import END_USER_BUDGET_HEADER
 from gateway.core.database import DATABASE_ERRORS
 from gateway.core.metered_pricing import estimate_metered_cost, priced_per_request
+from gateway.core.sql import defer_commit_flush
 from gateway.core.usage import cache_read_tokens_of, cache_write_tokens_of
 from gateway.log_config import logger
 from gateway.metrics import REGISTRY, Counter
@@ -111,6 +112,7 @@ async def _cas_reset_user_budget(db: AsyncSession, user: User, budget: Budget, n
     window = budget_window(now, budget)
     started_at, next_reset_at = window if window is not None else (now, None)
 
+    await defer_commit_flush(db)
     result = await db.execute(
         update(User)
         .where(
@@ -839,6 +841,33 @@ async def _held_handle(
     )
 
 
+async def _hold_on_user(
+    db: AsyncSession, statement: Any, *, scoped: Sequence[ApplicableBudget], ceiling_held: HeldAmounts
+) -> Any:
+    """Run the per-user hold, giving the ceilings' holds back if the database fails it.
+
+    The ceilings committed their holds before this statement, and no ledger row
+    records them yet, so an error escaping here would shrink each ceiling until
+    the sweep noticed. Given back on a best-effort basis: the database that
+    failed this statement may refuse the release as well.
+    """
+    try:
+        await defer_commit_flush(db)
+        return await db.execute(statement)
+    except DATABASE_ERRORS:
+        with contextlib.suppress(*DATABASE_ERRORS):
+            await db.rollback()
+            if scoped:
+                await release_scoped(
+                    db,
+                    [item.budget_id for item in scoped],
+                    ceiling_held.amount,
+                    tokens=ceiling_held.tokens,
+                    requests=ceiling_held.requests,
+                )
+        raise
+
+
 async def reserve_budget(
     db: AsyncSession,
     user_id: str,
@@ -1047,7 +1076,8 @@ async def reserve_budget(
     if budget.max_budget is None and budget.token_limit is None and budget.request_limit is None:
         # No cap on any axis, but still reserve so reconciliation math is uniform
         # and concurrent spend is reflected immediately.
-        await db.execute(
+        await _hold_on_user(
+            db,
             update(User)
             .where(User.user_id == user_id, User.deleted_at.is_(None))
             .values(
@@ -1055,7 +1085,9 @@ async def reserve_budget(
                 reserved_tokens=User.reserved_tokens + held_tokens,
                 reserved_requests=User.reserved_requests + held_requests,
             )
-            .execution_options(synchronize_session=False)
+            .execution_options(synchronize_session=False),
+            scoped=scoped,
+            ceiling_held=_ceiling_held(scoped, usd, held_tokens, held_requests),
         )
         return await _held_handle(
             db,
@@ -1092,7 +1124,8 @@ async def reserve_budget(
         guards += guards_for(User.current_tokens + User.reserved_tokens, held_tokens, budget.token_limit)
     if budget.request_limit is not None:
         guards += guards_for(User.current_requests + User.reserved_requests, held_requests, budget.request_limit)
-    result = await db.execute(
+    result = await _hold_on_user(
+        db,
         update(User)
         .where(
             User.user_id == user_id,
@@ -1104,7 +1137,9 @@ async def reserve_budget(
             reserved_tokens=User.reserved_tokens + held_tokens,
             reserved_requests=User.reserved_requests + held_requests,
         )
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session=False),
+        scoped=scoped,
+        ceiling_held=_ceiling_held(scoped, usd, held_tokens, held_requests),
     )
 
     if not getattr(result, "rowcount", 0):
@@ -1217,6 +1252,7 @@ async def reconcile_reservation(
     # expression clamps at zero that would pass silently as an under-count of
     # live holds rather than fail.
     reclaimed_early = False
+    await defer_commit_flush(db)
     if not await ledger.try_terminate(db, handle.reservation_id, RESERVATION_SETTLED):
         # Losing that claim has two causes and they settle differently. Another
         # settlement site for this request already ran, and there is nothing left
@@ -1333,6 +1369,7 @@ async def refund_reservation(db: AsyncSession, handle: ReservationHandle) -> Non
     reachable from roughly seven sites, and only control flow (a ``raise`` after
     each) has kept two of them from firing for one request.
     """
+    await defer_commit_flush(db)
     if not await ledger.try_terminate(db, handle.reservation_id, RESERVATION_RELEASED):
         # Commit rather than roll back the empty transaction: the guarded UPDATE
         # matched nothing, so there is nothing to undo, and ``rollback()`` expires
@@ -1511,6 +1548,7 @@ async def increase_reservation(
                 values["reserved_tokens"] = ledger.release_reserved_count_expression(
                     User.reserved_tokens, delta.token_estimate
                 )
+            await defer_commit_flush(db)
             await db.execute(
                 update(User)
                 .where(User.user_id == handle.user_id, User.deleted_at.is_(None))
@@ -1563,6 +1601,7 @@ async def hold_tool_call(
             )
         except HTTPException:
             # The ceilings are grown before the per-user leg, so a refusal there leaves them grown.
+            await defer_commit_flush(db)
             await release_scoped(
                 db,
                 handle.scoped_budget_ids,

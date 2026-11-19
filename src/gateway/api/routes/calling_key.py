@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Query
 
 from gateway.api.deps import BudgetServiceDep, CallingKey, UsageServiceDep, get_config, verify_api_key
 from gateway.api.key_scopes import key_scope
+from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.api.routes.usage import (
     _COUNTS_DESC,
     _DIMENSIONS_DESC,
@@ -51,7 +52,9 @@ from gateway.services.usage_and_telemetry import UsageFilters, UsageScope, parse
 from gateway.types.key_scope import KeyScope
 
 # An API key and nothing else, declared on the router so a route added here inherits it.
-router = APIRouter(prefix="/key", tags=["key"], dependencies=[Depends(verify_api_key)])
+router = APIRouter(
+    prefix="/key", tags=["key"], dependencies=[Depends(verify_api_key)], route_class=CancelOnDisconnectRoute
+)
 
 
 def _own_rows(api_key: APIKey) -> UsageScope:

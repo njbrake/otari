@@ -37,9 +37,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.api.deps import (
+    HeavyUsageReadsDep,
     HostedProviderServiceDep,
     OrgProviderKeyServiceDep,
     RequestSessionModelProviderPortDep,
+    UnitOfWorkDep,
     get_config,
     get_db,
     get_session_identity,
@@ -47,8 +49,10 @@ from gateway.api.deps import (
     verify_catalog_reader_or_public,
 )
 from gateway.api.key_scopes import key_scope
+from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.core.config import HOSTED_OFFERING_INSTANCE, GatewayConfig
 from gateway.core.metered_pricing import effective_rates
+from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import PriceSource, PricingSnapshot
 from gateway.models.tenancy import User as TenancyUser
@@ -108,6 +112,7 @@ from gateway.services.selector_index_service import (
     rebuild_selector_index,
 )
 from gateway.services.tenancy import OrgProviderKeyService
+from gateway.services.usage_and_telemetry import HeavyUsageReads
 from gateway.types.model_endpoint import ModelEndpoint
 from gateway.types.models_dev import ModelsDevCatalog, models_dev_provider_id
 
@@ -118,6 +123,7 @@ router = APIRouter(
     prefix="/catalog",
     tags=["catalog"],
     dependencies=[Depends(verify_catalog_reader_or_public)],
+    route_class=CancelOnDisconnectRoute,
 )
 # The one write on the catalog: an operator asking for the short spellings to
 # be re-indexed now rather than on the next tick, after pricing or providers
@@ -474,22 +480,30 @@ async def _group(
 
 
 async def _with_usage(
-    db: AsyncSession, grouped: _Grouped, members: list[_Offering], caller: CatalogCaller
+    db: AsyncSession,
+    grouped: _Grouped,
+    members: list[_Offering],
+    caller: CatalogCaller,
+    *,
+    uow: UnitOfWork,
+    heavy_reads: HeavyUsageReads,
 ) -> list[CatalogOffering]:
     """One model's offerings with the viewer's 30-day usage of each.
 
     Queried for these selectors alone rather than the whole catalog's: a usage
     row is matched on two unindexed columns, and a detail read asks about one
     model. A visitor has no organization, and a viewer that does not read usage
-    may not read this one's, so both get the offerings as they are.
+    may not read this one's, so both get the offerings as they are. The grouped
+    pass over 30 days of rows takes a turn among the worker's heavy usage reads.
     """
     if grouped.organization_id is None or not viewer_reads_usage(caller):
         return [member.wire for member in members]
-    usage = await _usage_by_selector(
-        db,
-        grouped.organization_id,
-        ((member.wire.selector, member.wire.provider, member.model_id) for member in members),
-    )
+    async with heavy_reads.turn(uow):
+        usage = await _usage_by_selector(
+            db,
+            grouped.organization_id,
+            ((member.wire.selector, member.wire.provider, member.model_id) for member in members),
+        )
     return [member.wire.model_copy(update={"usage_30d": usage.get(member.wire.selector)}) for member in members]
 
 
@@ -690,6 +704,8 @@ async def list_catalog(
 async def get_catalog_model(
     model_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    uow: UnitOfWorkDep,
+    heavy_reads: HeavyUsageReadsDep,
     config: Annotated[GatewayConfig, Depends(get_config)],
     caller: Annotated[CatalogCaller, Depends(verify_catalog_reader_or_public)],
     session_identity: Annotated[TenancyUser | None, Depends(get_session_identity)],
@@ -733,7 +749,7 @@ async def get_catalog_model(
     # The cheapest offering first, unpriced ones last, so the comparison the
     # page exists for is the order the rows arrive in.
     offerings = sorted(
-        await _with_usage(db, grouped, members, caller),
+        await _with_usage(db, grouped, members, caller, uow=uow, heavy_reads=heavy_reads),
         key=lambda o: (o.pricing is None, o.pricing.input_price_per_million if o.pricing else 0.0, o.selector),
     )
     return CatalogModelDetail(

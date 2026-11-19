@@ -2230,3 +2230,30 @@ async def test_a_free_models_round_holds_its_tokens_past_an_overspent_dollar_cei
     assert await _token_counters(async_db, org_cap.id) == (0, 600)
     await reconcile_reservation(async_db, handle, 0.0)
     assert await _token_counters(async_db, org_cap.id) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_database_error_on_a_later_ceiling_gives_the_earlier_holds_back(
+    async_db: AsyncSession, tenancy: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each ceiling commits its hold before the next is tried, and no ledger row records them yet."""
+    caps = await _caps_for_two_providers(async_db, tenancy)
+    aggregate_id, openai_id, _ = (cap.id for cap in caps)
+    hold = ScopedBudgetRepository.hold
+    calls = 0
+
+    async def fails_second(self: ScopedBudgetRepository, *args: Any, **kwargs: Any) -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OperationalError("UPDATE scoped_budgets", {}, Exception("connection lost"))
+        return await hold(self, *args, **kwargs)
+
+    monkeypatch.setattr(ScopedBudgetRepository, "hold", fails_second)
+
+    with pytest.raises(OperationalError):
+        await reserve_budget(async_db, tenancy.user_id, 3.0, scope=tenancy.scope("openai"))
+
+    assert calls == 2
+    assert await _counters(async_db, aggregate_id) == (0.0, 0.0)
+    assert await _counters(async_db, openai_id) == (0.0, 0.0)

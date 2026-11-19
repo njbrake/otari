@@ -66,7 +66,6 @@ from gateway.api.routes import (
     rate_limits,
     rerank,
     responses,
-    retired_root,
     routing,
     scoped_budgets,
     search,
@@ -104,8 +103,6 @@ def register_routers(app: FastAPI, config: GatewayConfig) -> None:
     # /v1/{traces,logs,metrics} tail, so an exporter pointed at `{origin}/otlp`
     # appends it unaided.
     app.include_router(otlp.router, prefix=OTLP_ROOT)
-    # The pre-/api root, refused with a pointer to its successor.
-    app.include_router(retired_root.router)
 
 
 def _register_contributed_routers(api: APIRouter, container: Container) -> None:

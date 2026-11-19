@@ -234,8 +234,20 @@ class ApiKeyRepository(BaseRepository[APIKey, Never, Never]):
         return result.scalar_one_or_none()
 
     async def touch_last_used(self, key_id: str, when: datetime) -> None:
-        """Record that the key ``key_id`` was used at ``when``."""
-        await self.db.execute(update(APIKey).where(APIKey.id == key_id).values(last_used_at=when))
+        """Record that the key ``key_id`` was used at ``when``, unless another transaction holds its row.
+
+        Every request on a key whose stamp is stale makes this same write, so a
+        locked row is skipped rather than queued on: queued, each write held up
+        its request's authentication for as long as the database took to commit
+        the write ahead of it.
+        """
+        unlocked = (
+            select(APIKey.id)
+            .where(APIKey.id == key_id)
+            .with_for_update(skip_locked=True, key_share=True)
+            .scalar_subquery()
+        )
+        await self.db.execute(update(APIKey).where(APIKey.id == unlocked).values(last_used_at=when))
 
     async def add_declared_if_absent(
         self,

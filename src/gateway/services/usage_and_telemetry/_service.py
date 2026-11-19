@@ -1,7 +1,8 @@
 """The usage domain's reads, each in a block of its own on the Unit of Work it was built with."""
 
 import uuid
-from collections.abc import Collection
+from collections.abc import AsyncIterator, Collection
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -24,6 +25,7 @@ from gateway.schemas.usage_and_telemetry import (
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.organizations import UserAccess
 from gateway.services.usage_and_telemetry._model_groups import grouped_models
+from gateway.services.usage_and_telemetry._read_gate import HeavyUsageReads
 from gateway.services.usage_and_telemetry._window import (
     MAX_SERIES_POINTS,
     SERIES_TOP_N,
@@ -76,12 +78,26 @@ class UsageService:
     """
 
     def __init__(
-        self, uow: UnitOfWork, usage_logs: UsageLogRepository, *, keys: ApiKeyService, users: UserAccess
+        self,
+        uow: UnitOfWork,
+        usage_logs: UsageLogRepository,
+        *,
+        keys: ApiKeyService,
+        users: UserAccess,
+        heavy_reads: HeavyUsageReads,
     ) -> None:
         self._uow = uow
         self._usage_logs = usage_logs
         self._keys = keys
         self._users = users
+        # Shared by every request this worker serves.
+        self._heavy_reads = heavy_reads
+
+    @asynccontextmanager
+    async def _heavy_read(self) -> AsyncIterator[None]:
+        """One block of the Unit of Work, opened once this worker's gate admits it."""
+        async with self._heavy_reads.turn(self._uow), self._uow:
+            yield
 
     async def reassign_owner(self, user_ids: Collection[str], to_user_id: str) -> None:
         """Move these users' usage onto ``to_user_id``, clearing the caller-supplied fields that could name a person."""
@@ -119,7 +135,7 @@ class UsageService:
 
     async def count(self, filters: UsageFilters, scope: UsageScope, *, imported_only: bool = False) -> int:
         """How many rows match these filters inside this scope; with ``imported_only``, only imported rows."""
-        async with self._uow:
+        async with self._heavy_read():
             return await self._usage_logs.count_matching(filters, scope, imported_only=imported_only)
 
     async def request_settlement(self, request_id: str, *, api_key_id: str | None) -> RequestSettlement | None:
@@ -174,7 +190,7 @@ class UsageService:
         # ``none`` is dropped rather than rejected: it exists only so a caller can send
         # an empty selection, and it never contributes a dimension of its own.
         requested = _ALL_SUMMARY_DIMENSIONS if dimensions is None else {d for d in dimensions if d != "none"}
-        async with self._uow:
+        async with self._heavy_read():
             totals = await self._usage_logs.totals(filters, scope)
             breakdowns = {
                 name: await self._breakdown(filters, scope, totals, dimension=name, limit=cap)
@@ -239,7 +255,7 @@ class UsageService:
         if (end - start) / step > MAX_SERIES_POINTS:
             raise UsageSeriesTooLongError(MAX_SERIES_POINTS, bucket)
         dimension = _SERIES_DIMENSIONS[group_by]
-        async with self._uow:
+        async with self._heavy_read():
             totals = await self._usage_logs.totals(filters, scope)
             groups = await self._breakdown(filters, scope, totals, dimension=dimension, limit=SERIES_TOP_N)
             points = await self._usage_logs.grouped_series(

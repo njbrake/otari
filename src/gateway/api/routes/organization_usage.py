@@ -49,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.api.deps import CurrentIdentity, UsageServiceDep, get_db, verify_master_key
+from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.api.routes.usage import (
     _API_KEY_MULTI_DESC,
     _COUNTS_DESC,
@@ -100,6 +101,7 @@ router = APIRouter(
     # is the pattern the tenant-scoped routers already follow and the reason the
     # deployment operator gate does not belong here.
     dependencies=[Depends(verify_master_key)],
+    route_class=CancelOnDisconnectRoute,
 )
 
 # Beside ``usage``, which reads one workspace at a time, because a deployment can serve several organizations.

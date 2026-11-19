@@ -8,11 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps._base import (
     ContainerDep,
+    HeavyUsageReadsDep,
     PortSessionDep,
     UnitOfWorkDep,
     get_config,
     get_container,
     get_enabled_features,
+    get_heavy_usage_reads,
     get_log_writer,
     get_unit_of_work,
     reset_config,
@@ -118,7 +120,6 @@ from gateway.api.deps.ports import (
     get_billing_port,
     get_code_execution_port,
     get_entitlement_port,
-    get_feedback_delivery_port,
     get_growth_signal_port,
     get_identity_provider_port,
     get_model_provider_port,
@@ -201,6 +202,7 @@ from gateway.ports.entitlement_port import EntitlementPort
 from gateway.ports.file_storage_port import FileStoragePort
 from gateway.ports.model_provider_port import HostedModels
 from gateway.ports.provider_file_port import ProviderFilePort
+from gateway.ports.telemetry_storage_port import TelemetryStoragePort
 from gateway.ports.usage_signal_port import UsageSignalPort
 from gateway.repositories.catalog import ModelMetadataOverrideRepository
 from gateway.repositories.files import FileRepositories
@@ -253,7 +255,6 @@ from gateway.services.batch_service import claim_batch_accounting
 from gateway.services.budgets import record_external_spend
 from gateway.services.catalog import ModelMetadataOverrideService
 from gateway.services.code_execution import SandboxContainerRegistry
-from gateway.services.feedback import FeedbackService
 from gateway.services.files import FileBackends, FileService, SandboxFileBridge, StagedFile
 from gateway.services.health_checks import HealthCheckService, UnavailableModelListener
 from gateway.services.identity import AccountDeletionService
@@ -316,7 +317,7 @@ from gateway.services.tools import (
     WorkspaceMcpServerUrls,
 )
 from gateway.services.update_check import UpdateCheckService
-from gateway.services.usage_and_telemetry import UsageService, VideoUsageWriter
+from gateway.services.usage_and_telemetry import TelemetryRetentionService, UsageService, VideoUsageWriter
 from gateway.services.workspace_scope import default_workspace_id, organization_for_workspace_id
 from gateway.types.traces import (
     ContentReader,
@@ -959,12 +960,23 @@ def get_automatic_router(request: Request) -> AutomaticRouter:
     return router
 
 
-def get_usage_service(uow: UnitOfWorkDep) -> UsageService:
+def get_usage_service(uow: UnitOfWorkDep, heavy_reads: HeavyUsageReadsDep) -> UsageService:
     """Build the usage service on the request's Unit of Work; its labels come from the key and user domains."""
-    return UsageService(uow, UsageLogRepository(uow), keys=get_api_key_service(uow), users=get_user_access(uow))
+    return UsageService(
+        uow,
+        UsageLogRepository(uow),
+        keys=get_api_key_service(uow),
+        users=get_user_access(uow),
+        heavy_reads=heavy_reads,
+    )
 
 
 UsageServiceDep = Annotated[UsageService, Depends(get_usage_service)]
+
+
+def build_telemetry_retention_service(uow: UnitOfWork, storage: TelemetryStoragePort) -> TelemetryRetentionService:
+    """Build the telemetry retention sweep for one worker pass."""
+    return TelemetryRetentionService(uow, UsageLogRepository(uow), storage)
 
 
 class _BatchAccountingClaim:
@@ -998,10 +1010,11 @@ def get_routing_service(
     uow: UnitOfWorkDep,
     config: Annotated[GatewayConfig, Depends(get_config)],
     organizations: OrganizationServiceDep,
+    heavy_reads: HeavyUsageReadsDep,
 ) -> RoutingService:
     """Build the routing service, and the usage and key services it reads through, on the request's Unit of Work."""
     return RoutingService(
-        config, get_usage_service(uow), get_api_key_service(uow), uow=uow, organizations=organizations
+        config, get_usage_service(uow, heavy_reads), get_api_key_service(uow), uow=uow, organizations=organizations
     )
 
 
@@ -1122,7 +1135,7 @@ async def get_account_deletion_service(
         organizations=AccountRelease(OrganizationRepositories.on(uow)),
         users=get_user_access(uow),
         keys=get_api_key_service(uow),
-        usage=get_usage_service(uow),
+        usage=get_usage_service(uow, get_heavy_usage_reads(request)),
         files=files,
         traces=traces,
         trace_writer=getattr(request.app.state, "trace_writer", None),
@@ -1163,10 +1176,6 @@ async def get_deployment_trace_scope(
     )
 
 
-def get_feedback_service() -> FeedbackService:
-    return FeedbackService()
-
-
 __all__ = [
     "AUTH_FAILURES",
     "AccountDeletionServiceDep",
@@ -1196,6 +1205,7 @@ __all__ = [
     "FileServiceDep",
     "GrowthSignalPortDep",
     "HealthCheckServiceDep",
+    "HeavyUsageReadsDep",
     "HostedProviderServiceDep",
     "IdentityProviderPortDep",
     "IdentityServiceDep",
@@ -1267,6 +1277,7 @@ __all__ = [
     "build_mcp_catalog_service",
     "build_search_tool_refresh",
     "build_search_tool_service",
+    "build_telemetry_retention_service",
     "build_trace_service",
     "build_unavailable_model_reporter",
     "build_update_check_service",
@@ -1292,10 +1303,9 @@ __all__ = [
     "get_enabled_features",
     "get_entitlement_port",
     "get_federation_token_exchange",
-    "get_feedback_delivery_port",
-    "get_feedback_service",
     "get_file_store",
     "get_growth_signal_port",
+    "get_heavy_usage_reads",
     "get_identity_provider_port",
     "get_identity_service",
     "get_invitation_claim_settings",

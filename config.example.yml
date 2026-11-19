@@ -126,6 +126,7 @@ providers:
 # files_provider_copy_max_sec: 60
 # files_retention_hours: 168
 # files_sweep_interval_sec: 3600
+# telemetry_retention_days: 90
 # A copy at the provider that runs a request's code, and how long it lives there:
 # files_provider_upload_enabled: true
 # files_provider_upload_ttl_hours: 1

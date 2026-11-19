@@ -7,11 +7,11 @@ Each entry names the ``CoreFeature`` its own module declares, so nothing is buil
 Whether a listed feature runs is that feature's own ``enabled`` setting.
 """
 
-from gateway.api.routes.feedback import FEATURE as FEEDBACK
 from gateway.api.routes.health_checks import FEATURE as HEALTH_CHECKS
 from gateway.api.routes.identity_apps import FEATURE as OAUTH_APPS
 from gateway.api.routes.mcp_catalog import FEATURE as MCP_CATALOG
 from gateway.api.routes.oauth import FEATURE as WORKLOAD_IDENTITY_EXCHANGE
+from gateway.api.routes.platform import FEATURE as DEBUG_MEMORY
 from gateway.api.routes.platform_connect import FEATURE as PLATFORM_CONNECT
 from gateway.api.routes.traces import FEATURE as TRACES
 from gateway.api.routes.traces import RETENTION_FEATURE as TRACE_RETENTION
@@ -20,7 +20,6 @@ from gateway.core.feature import CoreFeature
 
 CORE_FEATURES: tuple[CoreFeature, ...] = (
     OAUTH_APPS,
-    FEEDBACK,
     HEALTH_CHECKS,
     MCP_CATALOG,
     PLATFORM_CONNECT,
@@ -28,4 +27,5 @@ CORE_FEATURES: tuple[CoreFeature, ...] = (
     TRACE_RETENTION,
     UPDATE_CHECK,
     WORKLOAD_IDENTITY_EXCHANGE,
+    DEBUG_MEMORY,
 )

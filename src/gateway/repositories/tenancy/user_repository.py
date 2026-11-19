@@ -253,10 +253,21 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
         await self.db.execute(select(col(User.id)).where(col(User.id) == user_id).with_for_update(key_share=True))
 
     async def record_sign_in(self, user_id: uuid.UUID, *, at: datetime) -> None:
-        """Stage ``at`` as the identity's last sign-in, unless a later one is already recorded."""
+        """Stage ``at`` as the identity's last sign-in, unless a later one is already recorded.
+
+        Skips the write while another transaction holds the identity's row: the
+        stamp is display-only, and waiting for the row failed the sign-in it
+        rides with once the wait outlasted the statement timeout.
+        """
+        unlocked = (
+            select(col(User.id))
+            .where(col(User.id) == user_id)
+            .with_for_update(skip_locked=True, key_share=True)
+            .scalar_subquery()
+        )
         await self.db.execute(
             update(User)
-            .where(col(User.id) == user_id)
+            .where(col(User.id) == unlocked)
             .where(or_(col(User.last_sign_in_at).is_(None), col(User.last_sign_in_at) < at))
             .values(last_sign_in_at=at)
         )

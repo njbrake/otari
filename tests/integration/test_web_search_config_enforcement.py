@@ -776,11 +776,11 @@ def test_a_config_read_that_fails_releases_the_budget_reservation(
         "gateway.services.tenancy.workspace_web_search_service.resolve_workspace_web_search_config",
         failing_resolve,
     )
-    # The Messages route answers an unexpected failure as Anthropic's 500; what matters
-    # is the state it left behind.
+    # A database outage is retryable, answered in Anthropic's shape.
     failed = _post(funded)
-    assert failed.status_code == 500, failed.text
+    assert failed.status_code == 503, failed.text
     assert failed.json()["error"]["type"] == "api_error"
+    assert failed.headers["Retry-After"]
 
     session = db_session_factory()
     try:

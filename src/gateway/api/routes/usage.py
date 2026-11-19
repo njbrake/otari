@@ -24,6 +24,7 @@ from gateway.api.deps import (
     verify_api_key_or_master_key,
 )
 from gateway.api.key_scopes import key_scope
+from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.api.routes._helpers import retryable_on_database_outage
 from gateway.api.routes._request_tags import MAX_TAG_KEY_LENGTH
 from gateway.core.config import GatewayConfig
@@ -72,6 +73,7 @@ operator_router = APIRouter(
     prefix="/usage",
     tags=["usage"],
     dependencies=[Depends(require_deployment_operator)],
+    route_class=CancelOnDisconnectRoute,
 )
 key_router = APIRouter(
     prefix="/usage",

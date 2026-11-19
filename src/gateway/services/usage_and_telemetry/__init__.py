@@ -1,10 +1,13 @@
 """The usage domain: the rows each request served or imported leaves behind.
 
-``UsageService`` is its service. The bulk mutations are still in the old shape
+``UsageService`` is its service, and ``TelemetryRetentionService`` deletes imported
+rows past ``telemetry_retention_days``. The bulk mutations are still in the old shape
 (``services/usage_admin_service.py``) and move here when the rest of the domain does.
 """
 
 from gateway.repositories.usage_and_telemetry import ServedTraffic, UsageFilters, UsageScope
+from gateway.services.usage_and_telemetry._read_gate import HeavyUsageReads
+from gateway.services.usage_and_telemetry._retention import RetentionSweep, TelemetryRetentionService
 from gateway.services.usage_and_telemetry._service import UsageService
 from gateway.services.usage_and_telemetry._video_usage_writer import VideoUsageWriter
 from gateway.services.usage_and_telemetry._window import (
@@ -19,7 +22,10 @@ from gateway.services.usage_and_telemetry._window import (
 __all__ = [
     "MAX_SERIES_POINTS",
     "SERIES_TOP_N",
+    "HeavyUsageReads",
+    "RetentionSweep",
     "ServedTraffic",
+    "TelemetryRetentionService",
     "UsageFilters",
     "UsageScope",
     "UsageService",

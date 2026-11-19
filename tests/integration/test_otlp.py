@@ -1348,3 +1348,18 @@ def test_otlp_claude_managed_agents_session_is_booked_per_model_request(
     assert row.source_event_id == f"{_CLAUDE_TRACE}:{'6' * 16}"
     assert row.source_label == "sesn_1"
     assert row.prompt_tokens == 1000 and row.model == "claude-opus-4-8"
+
+
+@pytest.mark.asyncio
+async def test_otlp_exporter_that_disconnects_mid_body_ends_quietly() -> None:
+    """An exporter that gives up while its body is read is not a server fault."""
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.disconnect"}
+
+    request = Request({"type": "http", "method": "POST", "path": _PATH, "headers": []}, receive)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await otlp_routes._read_export(request)
+
+    assert exc_info.value.status_code == 499

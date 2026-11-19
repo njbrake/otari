@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Never
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +47,41 @@ class ReservationRepository(BaseRepository[BudgetReservation, Never, Never]):
 
     def __init__(self, db: AsyncSession | UnitOfWork) -> None:
         super().__init__(db, BudgetReservation)
+
+    async def active_ceiling_held(self, scoped_budget_id: str) -> HeldAmounts:
+        """Return what the active rows' lines hold on this ceiling, summed on each axis."""
+        amount, tokens, requests = (
+            await self.db.execute(
+                select(
+                    func.coalesce(func.sum(BudgetReservationScope.amount), Decimal(0)),
+                    func.coalesce(func.sum(BudgetReservationScope.token_amount), 0),
+                    func.coalesce(func.sum(BudgetReservationScope.request_amount), 0),
+                )
+                .join(BudgetReservation, BudgetReservation.id == BudgetReservationScope.reservation_id)
+                .where(
+                    BudgetReservationScope.scoped_budget_id == scoped_budget_id,
+                    BudgetReservation.status == RESERVATION_ACTIVE,
+                )
+            )
+        ).one()
+        return HeldAmounts(amount=amount, tokens=int(tokens), requests=int(requests))
+
+    async def active_user_held(self, user_id: str) -> HeldAmounts:
+        """Return what this user's active rows hold on the per-user counters, summed on each axis."""
+        amount, tokens, requests = (
+            await self.db.execute(
+                select(
+                    func.coalesce(func.sum(BudgetReservation.estimate), Decimal(0)),
+                    func.coalesce(func.sum(BudgetReservation.token_estimate), 0),
+                    func.coalesce(func.sum(BudgetReservation.request_estimate), 0),
+                ).where(
+                    BudgetReservation.user_id == user_id,
+                    BudgetReservation.status == RESERVATION_ACTIVE,
+                    BudgetReservation.user_reserved.is_(True),
+                )
+            )
+        ).one()
+        return HeldAmounts(amount=amount, tokens=int(tokens), requests=int(requests))
 
     async def add(
         self,

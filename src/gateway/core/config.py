@@ -24,7 +24,6 @@ from gateway.core.env import otari_env
 from gateway.core.link_urls import normalize_link_url
 from gateway.core.settings.api_keys import ApiKeySettings
 from gateway.core.settings.budgets import BudgetSettings
-from gateway.core.settings.feedback import FeedbackSettings
 from gateway.core.settings.health_checks import HealthCheckFeatureSettings
 from gateway.core.settings.identity import IdentitySettings
 from gateway.core.settings.inference import InferenceSettings
@@ -647,7 +646,6 @@ class GatewayConfig(
     ApiKeySettings,
     PricingSettings,
     ProviderSettings,
-    FeedbackSettings,
     HealthCheckFeatureSettings,
     McpCatalogSettings,
     IdentitySettings,
@@ -749,6 +747,16 @@ class GatewayConfig(
             "metering is not starved by traffic. No overflow above this."
         ),
     )
+    usage_read_concurrency: Annotated[int, Shown(SettingsGroup.SERVER)] = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Heavy usage reads (summaries, breakdowns, grouped series, counts, a catalog model's "
+            "30-day usage) one worker runs at once; the rest wait their turn. Each can sort or "
+            "group a large window of usage rows, and a dashboard page asks for several together, "
+            "so this bounds the database memory one page load can take."
+        ),
+    )
     master_key: Annotated[str | None, SECRET] = Field(
         default=None, description="Master key for protecting management endpoints"
     )
@@ -837,6 +845,13 @@ class GatewayConfig(
     enable_metrics: Annotated[bool, Shown(SettingsGroup.GENERAL)] = Field(
         default=False,
         description="Enable Prometheus metrics endpoint at /metrics",
+    )
+    debug_memory: Annotated[bool, OMITTED] = Field(
+        default=False,
+        description=(
+            "Serve the process memory diagnostics endpoint to the deployment's operator. "
+            "Off by default, which leaves the path a 404."
+        ),
     )
     accept_incoming_trace_context: Annotated[bool, Shown(SettingsGroup.GENERAL)] = Field(
         default=False,
@@ -1129,6 +1144,16 @@ class GatewayConfig(
             "discarded before storage; usage capture and billing are unaffected either way. This "
             "is the deployment-wide default: an individual key can override it in either direction "
             "with its own capture_agent_telemetry (null inherits this setting)."
+        ),
+    )
+    telemetry_retention_days: Annotated[int, OMITTED] = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Days imported usage rows and agent_telemetry rows are kept before a background sweep "
+            "deletes them. Imported usage is what this deployment did not serve (coding-agent "
+            "telemetry, the external-events API) and never counts toward a budget; usage the gateway "
+            "served is never deleted. 0 keeps everything."
         ),
     )
     streaming_keepalive_interval_ms: Annotated[int, Shown(SettingsGroup.GENERAL)] = Field(

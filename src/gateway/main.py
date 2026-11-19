@@ -2,7 +2,7 @@ import asyncio
 import functools
 import importlib.util
 import logging
-from collections.abc import AsyncGenerator, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
@@ -34,6 +34,7 @@ from gateway.api.deps import (
     build_scheduled_catalog_update,
     build_search_tool_refresh,
     build_search_tool_service,
+    build_telemetry_retention_service,
     build_trace_service,
     build_unavailable_model_reporter,
     get_api_key_service,
@@ -87,6 +88,7 @@ from gateway.dashboard import (
 from gateway.exceptions import TenancyError
 from gateway.exceptions.tools_exceptions import DirectToolCallError
 from gateway.inflight import InFlightMiddleware, InFlightRegistry
+from gateway.legacy_routes import LegacyRouteMiddleware
 from gateway.log_config import log_plain, logger
 from gateway.models.usage import configure_usage_data_location
 from gateway.ports.api_key_format_port import ApiKeyFormatPort
@@ -95,6 +97,7 @@ from gateway.ports.file_storage_port import FileStoragePort
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.ports.provider_file_port import ProviderFilePort
 from gateway.ports.rate_limit_store_port import RateLimitStorePort
+from gateway.ports.telemetry_storage_port import TelemetryStoragePort
 from gateway.ports.usage_signal_port import UsageSignalPort
 from gateway.rate_limit import RateLimiter, RateLimitGrantMiddleware, RateLimitRules, UserRateLimiter
 from gateway.root_page import FAVICON_SVG, ROOT_TUTORIAL_HTML
@@ -110,7 +113,6 @@ from gateway.services.catalog import (
 )
 from gateway.services.code_execution.container_sweeper import run_sandbox_container_sweeper
 from gateway.services.dashboard_session_service import revoke_sessions_on_master_key_change
-from gateway.services.feedback import new_feedback_rate_limiter
 from gateway.services.files import FileBackends, run_file_sweeper
 from gateway.services.inference import (
     close_decision_client,
@@ -226,6 +228,7 @@ from gateway.services.tools import (
     warn_about_tool_instances,
 )
 from gateway.services.traces import RequestTraces, SpanContent, TraceWriter
+from gateway.services.usage_and_telemetry import HeavyUsageReads, TelemetryRetentionService
 from gateway.services.workspace_scope import default_workspace_id
 from gateway.types.traces import TraceWrite, WriteResult
 from gateway.version import __version__
@@ -338,6 +341,7 @@ def _start_reservation_sweeper(config: GatewayConfig, _container: Container) -> 
         config.budget_reservation_sweep_interval_sec,
         batch_size=config.budget_reservation_sweep_batch,
         retention_sec=config.budget_reservation_retention_sec,
+        ttl_sec=config.budget_reservation_ttl_sec,
     )
 
 
@@ -403,6 +407,20 @@ def _start_file_sweeper(config: GatewayConfig, container: Container) -> Coroutin
         storage=container.resolve(FileStoragePort, None), provider_files=container.resolve(ProviderFilePort, None)
     )
     return run_file_sweeper(config.files_sweep_interval_sec, lambda uow: build_file_service(uow, backends, config))
+
+
+def _start_telemetry_retention_sweeper(config: GatewayConfig, container: Container) -> Coroutine[Any, Any, None] | None:
+    """Return the telemetry retention sweep, or None when no retention window is set."""
+    if config.telemetry_retention_days <= 0:
+        return None
+
+    @asynccontextmanager
+    async def open_service() -> AsyncIterator[TelemetryRetentionService]:
+        # The telemetry port commits on its own; the usage deletes commit per block of the Unit of Work.
+        async with create_unit_of_work_with_session() as (session, uow):
+            yield build_telemetry_retention_service(uow, container.resolve(TelemetryStoragePort, session))
+
+    return TelemetryRetentionService.poll(config.telemetry_retention_days, open_service)
 
 
 def _start_idempotency_sweeper(config: GatewayConfig, _container: Container) -> Coroutine[Any, Any, None]:
@@ -665,6 +683,9 @@ _LIFESPAN_WORKERS: tuple[_LifespanWorker, ...] = (
     # Same posture for uploaded files: expiry hides a file, this gives its
     # bytes back.
     _LifespanWorker("file retention sweep", _start_file_sweeper),
+    # Imported usage and agent telemetry arrive far faster than served traffic;
+    # this keeps them to the configured window.
+    _LifespanWorker("telemetry retention sweep", _start_telemetry_retention_sweeper),
     # The provider reclaims a held sandbox on its own timer; this drops the
     # rows that named it once nobody can resume them.
     _LifespanWorker("sandbox container sweep", _start_container_sweeper),
@@ -1213,6 +1234,8 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
             # Persisted dashboard overrides win over config/env; apply them
             # before pricing init so default-pricing behavior is consistent.
             await apply_overrides_from_db(config, session)
+            # One per worker, built here so each start's event loop gets a fresh one.
+            app.state.heavy_usage_reads = HeavyUsageReads(config.usage_read_concurrency)
             # The bundled catalog is several MB of JSON: build its prices here,
             # off the event loop, so no request waits on them.
             await asyncio.to_thread(load_bundled_index)
@@ -1445,7 +1468,7 @@ async def _tenancy_error_handler(request: Request, exc: Exception) -> Response:
     answered.
 
     A 4xx message is written for the caller and is rendered as it is. A 5xx one
-    is not: it describes the deployment rather than the request, and
+    is not, unless its class sets ``detail_is_public``: it describes the deployment rather than the request, and
     ``ForeignTenancyError`` already interpolates organization names and slugs
     read out of the database. That message goes to the log, where an operator
     can act on it, and the response carries the generic detail the rest of this
@@ -1460,7 +1483,7 @@ async def _tenancy_error_handler(request: Request, exc: Exception) -> Response:
         code = error_code_of(exc.headers)
         body = {"detail": exc.message} if code is None else {"detail": exc.message, "code": code, **body_fields_of(exc)}
         return with_request_id(request, JSONResponse(body, status_code=exc.status_code, headers=exc.headers))
-    if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+    if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR and not exc.detail_is_public:
         logger.error("Tenancy request failed: %s", exc.message)
         return JSONResponse(
             status_code=exc.status_code,
@@ -1732,6 +1755,9 @@ def create_app(config: GatewayConfig) -> FastAPI:
 
         app.add_middleware(MetricsMiddleware)
 
+    # Added last so it is outermost: everything above sees the current path.
+    app.add_middleware(LegacyRouteMiddleware)
+
     # Three budgets of the same size: failed sign-ins, the public auth routes
     # (signup, resend, reset request, OAuth, invitation links), and failed
     # verifications, so spending one does not lock a person out of another.
@@ -1744,7 +1770,6 @@ def create_app(config: GatewayConfig) -> FastAPI:
         app.state.public_auth_rate_limiter = None
         app.state.verification_failure_rate_limiter = None
 
-    app.state.feedback_rate_limiter = new_feedback_rate_limiter() if config.feedback_enabled else None
     app.state.platform_connect_rate_limiter = new_platform_connect_rate_limiter()
 
     if config.public_catalog_rate_limit_per_minute is not None:

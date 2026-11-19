@@ -81,13 +81,13 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
 
 
 def test_with_nothing_configured_an_operator_is_asked(clean_env: pytest.MonkeyPatch) -> None:
-    assert preset_answer(UpdateCheckSettings()) is None
+    assert preset_answer(UpdateCheckSettings(update_check=None)) is None
 
 
 @pytest.mark.parametrize(("name", "value"), [("DO_NOT_TRACK", "1"), ("DO_NOT_TRACK", "true"), ("CI", "true")])
 def test_do_not_track_and_ci_answer_no(clean_env: pytest.MonkeyPatch, name: str, value: str) -> None:
     clean_env.setenv(name, value)
-    assert preset_answer(UpdateCheckSettings()) is False
+    assert preset_answer(UpdateCheckSettings(update_check=None)) is False
 
 
 def test_update_check_in_config_wins_over_do_not_track(clean_env: pytest.MonkeyPatch) -> None:
@@ -100,9 +100,9 @@ def test_update_check_in_config_wins_over_do_not_track(clean_env: pytest.MonkeyP
     [
         ({}, UpdateCheckSettings(update_check=False), (False, "update_check")),
         ({"OTARI_UPDATE_CHECK": "true"}, UpdateCheckSettings(update_check=True), (True, "OTARI_UPDATE_CHECK")),
-        ({"DO_NOT_TRACK": "1"}, UpdateCheckSettings(), (False, "DO_NOT_TRACK")),
-        ({"CI": "true"}, UpdateCheckSettings(), (False, "CI")),
-        ({}, UpdateCheckSettings(), None),
+        ({"DO_NOT_TRACK": "1"}, UpdateCheckSettings(update_check=None), (False, "DO_NOT_TRACK")),
+        ({"CI": "true"}, UpdateCheckSettings(update_check=None), (False, "CI")),
+        ({}, UpdateCheckSettings(update_check=None), None),
     ],
 )
 def test_the_preset_names_the_setting_that_answered(

@@ -161,7 +161,12 @@ later ceiling refuses.
 `services/budgets/_ledger.py` gives each request's holds one identity.
 Settlement claims that row before changing counters, making duplicate release a
 no-op. Write the ledger after the holds it records; a top-up grows the existing
-row rather than creating a second independently expiring hold.
+row rather than creating a second independently expiring hold. The sweep also
+clamps a counter untouched for the reservation TTL down to the sum of its
+active rows, which returns a hold whose row never landed. A transaction that
+moves a hold on a user's row or a ceiling's calls `defer_commit_flush`
+(`core/sql.py`, or the method of that name on `ScopedBudgetRepository`) before
+its first write, so its row lock does not last as long as a slow WAL flush.
 
 Every exit after reservation must settle or refund, including cancellation,
 client disconnect, tool failure, and provider error. Preserve the sweeper and

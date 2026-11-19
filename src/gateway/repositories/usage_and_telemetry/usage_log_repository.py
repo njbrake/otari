@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Never, cast
 
-from sqlalchemy import ColumnElement, Select, and_, case, false, func, null, or_, select, update
+from sqlalchemy import ColumnElement, CursorResult, Select, and_, case, delete, false, func, null, or_, select, update
 
 from gateway.core.metered_pricing import ChargeLine
 from gateway.core.sql import bucket_expr, canonical_bucket, dialect_name, match_any, utc_bound
@@ -458,6 +458,25 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             return
         self.db.add_all(rows)
         await self.db.flush()
+
+    async def delete_imported_before(self, cutoff: datetime, *, limit: int) -> int:
+        """Delete up to ``limit`` imported rows older than ``cutoff``, returning how many went.
+
+        Imported means this deployment did not serve the request and it never
+        counted toward a budget, so a row the gateway served, budget-exempt
+        traffic included, is never matched.
+        """
+        expired = (
+            select(UsageLog.id)
+            .where(
+                UsageLog.timestamp < cutoff,
+                UsageLog.source != SERVED_HERE_SLUG,
+                UsageLog.counts_toward_budget.is_(False),
+            )
+            .limit(limit)
+        )
+        result = cast("CursorResult[Any]", await self.db.execute(delete(UsageLog).where(UsageLog.id.in_(expired))))
+        return result.rowcount or 0
 
     async def served_traffic(self, *, workspace_ids: Collection[uuid.UUID], since: datetime) -> list[ServedTraffic]:
         """The requests served here since ``since`` in these workspaces, by name sent, offering reached and key.

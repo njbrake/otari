@@ -1,5 +1,6 @@
 """Sign-in through the identity service, and the core identity provider policy."""
 
+import asyncio
 import functools
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -638,6 +639,26 @@ async def test_starting_a_session_records_the_sign_in_on_the_account(async_db: A
 
     await async_db.refresh(account)
     assert account.last_sign_in_at is not None
+
+
+async def test_a_locked_account_row_does_not_hold_up_starting_a_session(async_db: AsyncSession) -> None:
+    """The sign-in stamp is skipped while another transaction holds the account's row."""
+    organization = await create_organization(async_db, slug="acme")
+    # A member already acting in its organization, so starting the session writes nothing else to the row.
+    account = await create_member(async_db, organization, role="member", full_name="Ada")
+    await async_db.commit()
+
+    async with AsyncSession(async_db.bind) as holder:
+        # What a competing UPDATE of a non-key column holds.
+        await holder.execute(select(col(User.id)).where(col(User.id) == account.id).with_for_update(key_share=True))
+        signed_in = await asyncio.wait_for(
+            _service(async_db, open_signup=False).start_session(account, asserted_email=None), timeout=5
+        )
+        await holder.rollback()
+
+    assert signed_in.session_token
+    await async_db.refresh(account)
+    assert account.last_sign_in_at is None
 
 
 class _ReturnsAccount:

@@ -17,6 +17,7 @@ from gateway.core.feature import CoreFeature
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.services.log_writer import LogWriter
 from gateway.services.routing import clear_router_backend_cache
+from gateway.services.usage_and_telemetry import HeavyUsageReads
 
 # Legacy module-level fallback. Config now lives on ``app.state.config`` (set in
 # ``create_app``); ``get_config`` reads from the request's app state and only
@@ -103,3 +104,12 @@ async def get_log_writer(request: Request) -> LogWriter:
     """Return the usage-log writer this app's lifespan built."""
     writer: LogWriter = request.app.state.log_writer
     return writer
+
+
+def get_heavy_usage_reads(request: Request) -> HeavyUsageReads:
+    """Return the gate this worker's heavy usage reads take turns at, which the lifespan built."""
+    gate: HeavyUsageReads = request.app.state.heavy_usage_reads
+    return gate
+
+
+HeavyUsageReadsDep = Annotated[HeavyUsageReads, Depends(get_heavy_usage_reads)]

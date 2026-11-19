@@ -115,6 +115,7 @@ the corresponding startup value after the database is available.
 | `closed_model_open_families` | Model name prefixes that are open-weight even on a closed provider or in a closed family, matched the same way. Defaults to `gpt-oss` and `gemma`. |
 | `streaming_keepalive_interval_ms` | Idle interval after which a streaming response sends a keepalive, so an intermediary with a read timeout does not cut a slow stream. Defaults to 15000; `0` disables keepalives. |
 | `streaming_first_chunk_hold_ms` | How long the gateway holds a streaming response's status line for the provider's first chunk, so a provider failure before any output gets its own HTTP status, and falls over in a routing policy, rather than ending a `200` in an error event. A slower provider still streams. Defaults to 15000; `0` commits the response as soon as the stream opens. See [Error codes](api-reference.md#error-codes). |
+| `telemetry_retention_days` | Days imported usage rows and agent telemetry are kept before a background sweep deletes them, every six hours. Usage the gateway served is never deleted, budget-exempt traffic included. Defaults to `0`, which keeps everything. See [Keep imported usage for a set time](external-usage.md#keep-imported-usage-for-a-set-time). |
 | `idempotency_retention_sec` | How long a completion sent with an `Idempotency-Key` is kept for a retry to replay. Defaults to a day; `0` ignores the header. Needs `OTARI_SECRET_KEY`, which encrypts the stored response. See [Retrying safely](api-reference.md#retrying-safely). |
 | `provider_request_timeout_seconds` | How long a non-streaming provider call may take, in seconds. Defaults to 600. Connecting stays capped at 5 seconds for providers whose SDK separates the two (Anthropic, OpenAI and OpenAI-compatible, Groq, Cerebras, Together); Bedrock, Gemini, Vertex AI, Mistral and Cohere apply the value as a whole. Without it, Anthropic's SDK refuses a non-streaming request with a large `max_tokens`. Providers with no per-request timeout, and a provider whose `client_args` sets its own `timeout`, keep their client's timeout. |
 | `enable_metrics` | Serve Prometheus metrics at `/metrics`. Needs the `metrics` extra (`pip install gateway[metrics]`), which the Docker image installs; setting this without it refuses to start. |
@@ -126,6 +127,7 @@ the corresponding startup value after the database is available.
 | `cors_inference_origins` | Origins whose pages may call the model and web tool endpoints from a browser with an API key, and exchange an OAuth app code for one, or `*` for any. Never with credentials. Empty, the default, opens none. Startup setting. See [Calling models from a browser](#calling-models-from-a-browser). |
 | `accept_incoming_trace_context` | Join spans the gateway creates to the caller's trace. Defaults to `false`. See [Trace context propagation](#trace-context-propagation). |
 | `enable_docs` | Serve OpenAPI, Swagger UI, and ReDoc. |
+| `debug_memory` | Serve process memory diagnostics to the deployment's operator. Defaults to `false`. See [Diagnose memory growth](deployment.md#diagnose-memory-growth). |
 
 For every field, its current default, validation, and description live on
 `GatewayConfig` in `src/gateway/core/config.py`, or in the per-domain module
@@ -143,6 +145,7 @@ non-secret effective set through `GET /api/v1/settings`.
 | `db_command_timeout` | Client-side ceiling on one statement. `0` disables. |
 | `db_statement_timeout_ms` | Server-side ceiling on one statement, the backstop for the setting above. Must exceed it; `0` disables. |
 | `db_log_pool_size` | Connections reserved for usage logging, separate from the pool above. |
+| `usage_read_concurrency` | Heavy usage reads (summaries, breakdowns, grouped series, counts, a catalog model's 30-day usage) one worker runs at once; default `2`. |
 
 The pool sizes bound concurrent database work, not provider calls: a request
 returns its connection before the upstream call. Raise them for heavy
@@ -156,6 +159,42 @@ blocks on the dead socket too).
 `db_statement_timeout_ms` (server-side) still ends a statement when the client
 is the stuck half. It must be above `db_command_timeout` (client-side); the
 defaults are, and startup validation requires it.
+
+`usage_read_concurrency` bounds what one dashboard page can ask of the database.
+A usage page asks for several aggregates at once, each sorting or grouping
+every usage row in its window, and run together against a small database they
+can exhaust its memory and get a query killed, which restarts PostgreSQL and
+fails every request open at the time. Reads past the limit wait their turn
+without holding a connection, so a page fills in more slowly rather than
+failing, and one that waits more than 30 seconds is answered `503` with
+"Usage reads are busy; try again shortly". A read whose caller disconnects is
+cancelled, query included, so a page that was reloaded or left gives its turns
+back rather than holding them until its reads finish. The limit is per worker:
+the database sees up to workers × replicas × `usage_read_concurrency` of these reads at once.
+Raise it for a database with memory to spare.
+
+A completion that cannot reserve its budget because the database did not answer
+in time is answered `503` with a `Retry-After`, and nothing is sent upstream. One
+whose provider already answered is still served when settling it fails. Its hold
+is settled once more straight away rather than left for the reservation sweep: at
+the cost its usage row recorded, or refunded when the row was never written.
+
+On PostgreSQL the transactions that hold, settle or release a budget commit with
+`synchronous_commit` off. Every request of a user writes that user's row, and
+every request of a key writes its ceiling's row, so a commit waiting on a slow
+disk flush would hold the row for the whole stall, and each concurrent request
+waiting on it would fail once its wait outlasted the statement timeouts. The
+commit is still atomic and visible at once, but it is durable only once the WAL
+reaches disk: normally within about three times `wal_writer_delay` (600 ms by
+default), and only after the stall ends when the disk is stalled. A crash of
+PostgreSQL in that window, or a failover to a standby, drops those commits.
+Commits are replayed in order, so a dropped hold takes its ledger row with it
+and its request's spend never reaches the budget counter; a dropped release
+lingers until the reservation sweep; a dropped settlement leaves its spend off
+the counter and its hold for the sweep. A ceiling hold dropped just before its
+request's own commit failed can also be given back once more than it held, which
+lowers that ceiling's holds until the requests holding it settle. Usage rows are
+written separately, synchronously, and keep the cost.
 
 ### Rate limits across replicas
 
@@ -488,7 +527,7 @@ These settings govern how [budgets](budgets.md) are enforced:
 | Setting | Purpose |
 | --- | --- |
 | `budget_strategy` | `for_update` (the default), `cas` (lock-free), or `disabled`, which bypasses budget enforcement for the whole deployment. |
-| `budget_reservation_ttl_sec` | How long a request's budget hold may stay in flight before it is treated as leaked and returned, as for a crashed request. Defaults to 900 (15 minutes); it must comfortably exceed the slowest request the deployment serves. |
+| `budget_reservation_ttl_sec` | How long a request's budget hold may stay in flight before it is treated as leaked and returned, as for a crashed request. Defaults to 900 (15 minutes); it must comfortably exceed the slowest request the deployment serves. The sweep also returns a hold no in-flight request records once its counter has gone this long without a write. |
 | `budget_estimate_default_output_tokens` | The output tokens a hold assumes for a request that sets no output limit. Defaults to 1024. |
 
 A budget's per-minute limits, `rpm_limit` and `tpm_limit`, are counted in

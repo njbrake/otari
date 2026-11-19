@@ -234,6 +234,23 @@ def keyless_placeholder_api_key(api_base: Any, api_key: Any) -> str | None:
     return None
 
 
+def otari_gateway_origin(api_base: Any) -> Any:
+    """An ``otari`` instance's ``api_base`` with a trailing API root (or bare ``/v1``) removed.
+
+    Fork-only stopgap. any-llm appends the API root to the origin itself and
+    raises on a base that already carries it, which is how an instance configured
+    for any-llm 1.27 (``https://api.otari.ai`` plus the root) is spelled. Stripping
+    the root reaches the URL that spelling reached before.
+    """
+    if not isinstance(api_base, str):
+        return api_base
+    trimmed = api_base.rstrip("/")
+    for suffix in (API_ROOT, "/v1"):
+        if trimmed.endswith(suffix):
+            return trimmed.removesuffix(suffix)
+    return api_base
+
+
 def credential_ladder_exhausted(provider: LLMProvider, kwargs: dict[str, Any], *, declared: bool) -> bool:
     """Whether a call to ``provider`` with ``kwargs`` has nothing to authenticate with.
 
@@ -619,6 +636,9 @@ def get_provider_kwargs(
         max_retries = config.provider_max_retries
     if max_retries is not None:
         kwargs = with_provider_retries(provider, kwargs, max_retries)
+
+    if provider == LLMProvider.OTARI and kwargs.get("api_base"):
+        kwargs["api_base"] = otari_gateway_origin(kwargs["api_base"])
 
     placeholder = keyless_placeholder_api_key(kwargs.get("api_base"), kwargs.get("api_key"))
     if placeholder is not None:

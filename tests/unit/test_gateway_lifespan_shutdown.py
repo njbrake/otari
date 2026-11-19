@@ -43,6 +43,7 @@ from gateway.main import (
 )
 from gateway.services.organizations import ExpiredInvitationCleanup, InvitationDelivery
 from gateway.services.tools import AttachedMcpServerIndex
+from gateway.services.usage_and_telemetry import TelemetryRetentionService
 
 
 async def _absorbs_cancellation() -> None:
@@ -260,6 +261,9 @@ async def _started_worker_names(config: GatewayConfig, monkeypatch: pytest.Monke
     monkeypatch.setattr(InvitationDelivery, "poll", _recording_refresher("InvitationDelivery.poll", called))
     monkeypatch.setattr(ExpiredInvitationCleanup, "poll", _recording_refresher("ExpiredInvitationCleanup.poll", called))
     monkeypatch.setattr(
+        TelemetryRetentionService, "poll", _recording_refresher("TelemetryRetentionService.poll", called)
+    )
+    monkeypatch.setattr(
         AttachedMcpServerIndex, "run_refresher", _recording_refresher("AttachedMcpServerIndex.run_refresher", called)
     )
 
@@ -278,7 +282,12 @@ def _full_config(**overrides: Any) -> GatewayConfig:
     gated on a setting this config leaves unset would look like a worker the
     change under test dropped.
     """
-    return GatewayConfig(master_key="sk-test-master", sandbox_url="http://sandbox:8080", **overrides)
+    settings: dict[str, Any] = {
+        "master_key": "sk-test-master",
+        "sandbox_url": "http://sandbox:8080",
+        "telemetry_retention_days": 90,
+    }
+    return GatewayConfig(**{**settings, **overrides})
 
 
 @pytest.mark.asyncio
@@ -329,7 +338,7 @@ async def test_the_file_sweeper_stops_with_files_or_its_interval(
 @pytest.mark.parametrize(
     "config",
     [
-        GatewayConfig(master_key="sk-test-master"),
+        _full_config(sandbox_url=None),
         _full_config(sandbox_container_idle_ttl_sec=0),
     ],
 )
@@ -341,6 +350,14 @@ async def test_the_container_sweeper_stops_without_a_sandbox_or_without_reuse(
 
     assert "sandbox container sweep" not in names
     assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "sandbox container sweep"]
+
+
+@pytest.mark.asyncio
+async def test_the_telemetry_retention_sweep_is_off_without_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retention is opt-in, and leaving it off must not drop any other worker."""
+    names, _called = await _started_worker_names(_full_config(telemetry_retention_days=0), monkeypatch)
+
+    assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "telemetry retention sweep"]
 
 
 @pytest.mark.asyncio

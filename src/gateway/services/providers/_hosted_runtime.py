@@ -15,6 +15,7 @@ from gateway.services.provider_kwargs import (
     hosted_lookup,
     keyless_placeholder_api_key,
     missing_declared_credential,
+    otari_gateway_origin,
 )
 from gateway.services.providers._country_gate import CountryGate, ensure_hosted_country
 from gateway.services.providers._hosted_credentials import ResolvedHostedProvider
@@ -94,7 +95,10 @@ def dispatch_on_hosted_credential(
     api_key = credential.api_key or keyless_placeholder_api_key(credential.api_base, None)
     kwargs: dict[str, Any] = {} if api_key is None else {"api_key": api_key}
     if credential.api_base is not None:
-        kwargs["api_base"] = credential.api_base
+        # The fork's stopgap for an ``otari`` api_base that carries the API root.
+        kwargs["api_base"] = (
+            otari_gateway_origin(credential.api_base) if upstream == LLMProvider.OTARI else credential.api_base
+        )
     if credential.client_args:
         # The key a ``config.yml`` instance's extras travel under, so Bedrock's
         # region reaches the SDK client as it would from the file.

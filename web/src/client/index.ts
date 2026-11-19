@@ -885,9 +885,6 @@ export type SsoSessionPublic = Schemas["SsoSessionPublic"]
 
 export type * from "./local"
 
-export type FeedbackSubmission =
-  operations["feedback-submit_feedback"]["requestBody"]["content"]["application/json"]
-
 export type AppDetails = components["schemas"]["AppDetails"]
 export type AppAuthorizationRequest =
   components["schemas"]["AppAuthorizationRequest"]
