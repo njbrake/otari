@@ -97,11 +97,6 @@ export interface DataTableProps<Row> {
   onSortChange?: (descriptor: SortDescriptor) => void
   /** Fired when a row body is activated (click / Enter), for detail drill-in. */
   onRowAction?: (key: string) => void
-  /**
-   * Rows `onRowAction` has nothing to open for (a total, a fold of the rest):
-   * they take no pointer cursor and their activation is never reported.
-   */
-  isRowInert?: (row: Row) => boolean
   rowClassName?: (row: Row) => string | undefined
   /** Enables draggable column resize handles. */
   isResizable?: boolean
@@ -323,10 +318,16 @@ function DataCardList<Row extends object>({
                   </div>
                 ) : null}
                 <div className="flex min-h-11 min-w-0 flex-1 items-center">
-                  <div className="min-w-0 flex-1">{title.cell(row)}</div>
+                  {/* A long unbroken name (a domain, an id) wraps rather than
+                      running under the actions beside it. */}
+                  <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                    {title.cell(row)}
+                  </div>
                 </div>
+                {/* The title's 44px line, so a 32px row action centers on
+                    the title. */}
                 {actions ? (
-                  <div className="flex shrink-0 items-center">
+                  <div className="flex min-h-11 shrink-0 items-center">
                     {actions.cell(row)}
                   </div>
                 ) : null}
@@ -339,7 +340,18 @@ function DataCardList<Row extends object>({
                       className="col-span-2 grid grid-cols-subgrid items-baseline"
                     >
                       <dt className="text-overline">{col.header}</dt>
-                      <dd className="min-w-0 text-sm">{col.cell(row)}</dd>
+                      <dd className="min-w-0 text-sm">
+                        {/* Shrunk to its content, so an end-aligned figure starts
+                            in the value lane with the others and keeps its own
+                            lines aligned to each other. */}
+                        {col.align === "end" ? (
+                          <div className="w-fit max-w-full">
+                            {col.cell(row)}
+                          </div>
+                        ) : (
+                          col.cell(row)
+                        )}
+                      </dd>
                     </div>
                   ))}
                 </dl>
@@ -407,7 +419,6 @@ function DataTableGrid<Row extends object>({
   onSortChange,
   onRowAction,
   rowClassName,
-  isRowInert,
   isResizable = false,
   detailKey = null,
   renderDetail,
@@ -562,10 +573,6 @@ function DataTableGrid<Row extends object>({
   const fireRowAction = useCallback(
     (key: string) => {
       if (!onRowAction) return
-      if (isRowInert) {
-        const row = rows.find((one) => getRowKey(one) === key)
-        if (row && isRowInert(row)) return
-      }
       if (renderDetail && key !== detailKey) {
         clearOpening()
         const target = rootRef.current?.querySelector(
@@ -583,15 +590,7 @@ function DataTableGrid<Row extends object>({
       }
       onRowAction(key)
     },
-    [
-      onRowAction,
-      isRowInert,
-      rows,
-      getRowKey,
-      renderDetail,
-      detailKey,
-      clearOpening,
-    ],
+    [onRowAction, renderDetail, detailKey, clearOpening],
   )
 
   // The row key an event activates, or null when the event belongs to something
@@ -662,10 +661,7 @@ function DataTableGrid<Row extends object>({
       // `globals.css` cannot reach it: nothing in the markup tells a row that
       // opens something from one that is inert.
       const className =
-        [
-          hasRowAction && !isRowInert?.(row) ? "cursor-pointer" : null,
-          rowClassName?.(row),
-        ]
+        [hasRowAction ? "cursor-pointer" : null, rowClassName?.(row)]
           .filter(Boolean)
           .join(" ") || undefined
       return (
@@ -692,16 +688,13 @@ function DataTableGrid<Row extends object>({
         </Table.Row>
       )
     },
-    [getRowKey, rowClassName, isRowInert, showSelection, columns, hasRowAction],
+    [getRowKey, rowClassName, showSelection, columns, hasRowAction],
   )
 
   return (
     <Table.Root ref={rootRef} className="otari-table">
-      {/* `overscroll-x-contain`: a trackpad swipe that runs past the last
-          column stops here instead of turning into the browser's back
-          gesture. `@container` is what the empty state measures below. */}
       <Container
-        className="@container overflow-x-auto overscroll-x-contain"
+        className="overflow-x-auto"
         onPointerDownCapture={startPress}
         onMouseDownCapture={startPress}
         onClickCapture={(event: ReactMouseEvent) => {

@@ -30,6 +30,8 @@ import { useDirtySnapshot } from "@/design-system/forms/useDirtySnapshot"
 import { Dot } from "@/design-system/indicators/Dot"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
+import { servingFilterOf } from "@/features/models/OfferedModelFilters"
+import { kindFilterOf } from "@/features/models/offeredKinds"
 import { PricingOverrideDialog } from "@/features/organization/PricingOverrideDialog"
 import { canManage } from "@/features/organization/roles"
 import {
@@ -88,6 +90,9 @@ const URL_DEFAULTS = {
   override: "",
   models_page: "0",
   models_size: String(PAGE_SIZE_OPTIONS[0]),
+  models_type: "",
+  models_serving: "",
+  models_q: "",
 }
 
 // The organization's own upstream credentials: one BYO key per provider that
@@ -457,7 +462,7 @@ export function OrganizationProvidersPage() {
         // the organization's default is marked, and one that is merely
         // available carries nothing. Archived takes the subtle dot, because it
         // is a row still present rather than a problem.
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-medium text-foreground">{row.name}</span>
           {row.is_org_default ? (
             <span className="flex items-center gap-2 text-mono-caption text-muted">
@@ -571,7 +576,8 @@ export function OrganizationProvidersPage() {
                     accepts a delete for an archived key alone. */}
               <RowAction
                 icon={FiTrash2}
-                label="Delete"
+                label="Delete…"
+                isDestructive
                 onPress={() => setPendingDelete(row)}
               />
             </>
@@ -584,8 +590,12 @@ export function OrganizationProvidersPage() {
                 onPress={() =>
                   url.patch({
                     provider: expandedKeyId === row.id ? "" : row.id,
-                    // A different provider's panel starts at its own first page.
+                    // A different provider's panel starts at its own first page,
+                    // on every model.
                     models_page: "0",
+                    models_type: "",
+                    models_serving: "",
+                    models_q: "",
                   })
                 }
               />
@@ -608,7 +618,7 @@ export function OrganizationProvidersPage() {
               )}
               <RowAction
                 icon={FiEdit2}
-                label="Edit"
+                label="Edit…"
                 onPress={() => {
                   setAdding(false)
                   setEditingId(row.id)
@@ -655,12 +665,7 @@ export function OrganizationProvidersPage() {
             </Button>
           ) : null
         }
-      >
-        The organization&rsquo;s own upstream credentials. Every workspace in
-        the organization can use them, and the default for a provider is the one
-        a request gets when it names no instance. Keys are encrypted at rest and
-        never shown again.
-      </PageIntro>
+      />
 
       <ErrorBanner
         error={
@@ -750,6 +755,7 @@ export function OrganizationProvidersPage() {
         <TableScrollFrame className="otari-provider-keys-table">
           <DataTable
             ariaLabel="Organization provider keys"
+            mobileLayout="cards"
             columns={columns}
             rows={rows}
             getRowKey={(row) => row.id}
@@ -784,6 +790,18 @@ export function OrganizationProvidersPage() {
             onPageChange={(next) => url.patch({ models_page: String(next) })}
             onPageSizeChange={(size) =>
               url.patch({ models_size: String(size), models_page: "0" })
+            }
+            kind={kindFilterOf(url.get("models_type"))}
+            onKindChange={(next) =>
+              url.patch({ models_type: next, models_page: "0" })
+            }
+            serving={servingFilterOf(url.get("models_serving"))}
+            onServingChange={(next) =>
+              url.patch({ models_serving: next, models_page: "0" })
+            }
+            search={url.get("models_q")}
+            onSearchChange={(next) =>
+              url.patch({ models_q: next, models_page: "0" })
             }
           />
         </section>

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import {
+  FiAnchor,
   FiCheckCircle,
-  FiGitMerge,
   FiKey,
   FiShield,
   FiSlash,
@@ -9,7 +9,6 @@ import {
 } from "react-icons/fi"
 
 import type { DeploymentUser } from "@/client"
-import { CopyableValue } from "@/design-system/actions/CopyField"
 import { RowAction, RowActionRow } from "@/design-system/actions/RowAction"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import {
@@ -19,21 +18,18 @@ import {
 import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
-import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { SearchField } from "@/design-system/forms/SearchField"
-import { Select } from "@/design-system/forms/Select"
 import { Dot } from "@/design-system/indicators/Dot"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import {
   useDeploymentAdminAccess,
   useDeploymentUsers,
-  useGenerateDeploymentUserPassword,
+  useIsBootstrapOperator,
   useUpdateDeploymentUser,
 } from "@/shared/api/deployment"
-import { useMergeUser, useUsers } from "@/shared/api/users"
 import { formatRelative } from "@/shared/helpers/format"
 import { useUrlState } from "@/shared/helpers/urlState"
 import { useDebounced } from "@/shared/hooks/useDebounced"
@@ -41,12 +37,12 @@ import { useDebounced } from "@/shared/hooks/useDebounced"
 import {
   accountLabel,
   accountLockoutReason,
-  mergeCandidates,
+  bootstrapHandoverBlockedReason,
   organizationSummary,
   passwordLinkBlockedReason,
-  passwordUnavailableReason,
 } from "./accounts"
 import { BlockedEmailsSection } from "./BlockedEmailsSection"
+import { BootstrapHandoverDialog } from "./BootstrapHandoverDialog"
 import { PasswordLinkDialog } from "./PasswordLinkDialog"
 
 // Every account on the deployment, which is the one identity list that is not
@@ -57,9 +53,10 @@ import { PasswordLinkDialog } from "./PasswordLinkDialog"
 //
 // The controls match what the API serves: deactivate (which also ends that
 // account's dashboard sessions), reactivate, grant or remove operator access,
-// generate a password, which is how a deployment with no mail gets a member
-// signed in, send a password link to someone who cannot sign in, and keep the
-// email blocklist (`BlockedEmailsSection`). Creating an account
+// send a password link to someone who cannot sign in, hand the bootstrap
+// operator role to another operator (offered to the bootstrap operator alone,
+// the one account the gateway lets do it), and keep the email blocklist
+// (`BlockedEmailsSection`). Creating an account
 // is not here, because an account without a
 // membership can do nothing and memberships are the organization surface's; nor
 // is deleting one, because historical attribution resolves through rows that
@@ -106,23 +103,9 @@ export function DeploymentAccountsPage() {
   const search = useDebounced(url.get("q").trim().slice(0, MAX_SEARCH_LENGTH))
   const accounts = useDeploymentUsers({ page, pageSize, search }, isGranted)
   const update = useUpdateDeploymentUser()
-  const generate = useGenerateDeploymentUserPassword()
-  const merge = useMergeUser()
-  // Read only while the merge dialog is open: the list is the organization's
-  // whole users table and nothing else on the page needs it.
-  const [mergingInto, setMergingInto] = useState<DeploymentUser | null>(null)
-  const [mergeSource, setMergeSource] = useState("")
-  const users = useUsers(isGranted && mergingInto !== null)
+  const isBootstrapOperator = useIsBootstrapOperator().data === true
   const [deactivating, setDeactivating] = useState<DeploymentUser>()
-  const [settingPassword, setSettingPassword] = useState<DeploymentUser | null>(
-    null,
-  )
-  // The plaintext, held only until the operator acknowledges it: the server
-  // stores the hash, so closing this dialog is the last time it can be read.
-  const [generated, setGenerated] = useState<{
-    account: DeploymentUser
-    password: string
-  } | null>(null)
+  const [handingTo, setHandingTo] = useState<DeploymentUser>()
   const [linkFor, setLinkFor] = useState<DeploymentUser>()
 
   const rows = accounts.data?.data ?? []
@@ -196,13 +179,22 @@ export function DeploymentAccountsPage() {
         align: "end",
         cell: (account) => {
           const blocked = accountLockoutReason(account)
-          const passwordBlocked = passwordUnavailableReason(account)
           const linkBlocked = passwordLinkBlockedReason(account)
+          const handoverBlocked = bootstrapHandoverBlockedReason(account)
           return (
             <RowActionRow>
+              {isBootstrapOperator ? (
+                <RowAction
+                  icon={FiAnchor}
+                  label="Make bootstrap operator"
+                  isDisabled={handoverBlocked !== undefined}
+                  ariaLabel={`Make ${accountLabel(account)} the bootstrap operator${handoverBlocked ? ` (${handoverBlocked})` : ""}`}
+                  onPress={() => setHandingTo(account)}
+                />
+              ) : null}
               <RowAction
                 icon={FiKey}
-                label="Password link"
+                label="Password link…"
                 isDisabled={linkBlocked !== undefined}
                 ariaLabel={`Send ${accountLabel(account)} a password link${linkBlocked ? ` (${linkBlocked})` : ""}`}
                 onPress={() => setLinkFor(account)}
@@ -223,6 +215,7 @@ export function DeploymentAccountsPage() {
                 label={
                   account.is_superuser ? "Remove operator" : "Make operator"
                 }
+                isDestructive={account.is_superuser}
                 isDisabled={
                   (account.is_superuser && blocked !== undefined) ||
                   update.isPending
@@ -244,7 +237,8 @@ export function DeploymentAccountsPage() {
                 // the same act: this person's access stops, their record
                 // stays.
                 icon={account.is_active ? FiSlash : FiCheckCircle}
-                label={account.is_active ? "Deactivate" : "Reactivate"}
+                label={account.is_active ? "Deactivate…" : "Reactivate"}
+                isDestructive={account.is_active}
                 isDisabled={
                   (account.is_active && blocked !== undefined) ||
                   update.isPending
@@ -265,29 +259,12 @@ export function DeploymentAccountsPage() {
                   })
                 }}
               />
-              <RowAction
-                icon={FiKey}
-                label="Set password"
-                isDisabled={passwordBlocked !== undefined || generate.isPending}
-                ariaLabel={`Set a password for ${accountLabel(account)}${passwordBlocked ? ` (${passwordBlocked})` : ""}`}
-                onPress={() => setSettingPassword(account)}
-              />
-              <RowAction
-                icon={FiGitMerge}
-                label="Merge user record"
-                ariaLabel={`Merge a user record into ${accountLabel(account)}`}
-                onPress={() => {
-                  merge.reset()
-                  setMergeSource("")
-                  setMergingInto(account)
-                }}
-              />
             </RowActionRow>
           )
         },
       },
     ],
-    [update, generate, merge],
+    [update, isBootstrapOperator],
   )
 
   if (access.isLoading) {
@@ -328,20 +305,15 @@ export function DeploymentAccountsPage() {
 
   return (
     <div className="flex flex-col">
-      <PageIntro title="Accounts">
-        Every account on this deployment, across all its organizations.
-        Deactivating one ends its dashboard sessions immediately; operator
-        access is what reaches this page. A password link lets someone who
-        forgot their password back in, including where this deployment sends no
-        mail.
-      </PageIntro>
+      <PageIntro title="Accounts" />
 
       <ErrorBanner error={accounts.error ?? update.error} />
 
       <InfoBanner>
         Your own account, and the bootstrap operator that master-key sign-in
         reaches this deployment through, cannot be deactivated or lose operator
-        access here. Everything else on this page applies to them normally.
+        access here. Everything else on this page applies to them normally. The
+        bootstrap operator can hand that role to another operator.
       </InfoBanner>
 
       <SearchField
@@ -408,111 +380,12 @@ export function DeploymentAccountsPage() {
         }}
       />
 
-      <ConfirmDialog
-        isOpen={settingPassword !== null}
-        onOpenChange={(open) => {
-          if (!open) setSettingPassword(null)
-        }}
-        heading="Set password"
-        body={
-          <>
-            Generate a new password for{" "}
-            <strong>
-              {settingPassword ? accountLabel(settingPassword) : ""}
-            </strong>
-            ? It replaces any password they have now and signs them out
-            everywhere. It is shown once, for you to send them; they can change
-            it afterwards from their account page.
-          </>
-        }
-        confirmLabel="Generate password"
-        confirmVariant="primary"
-        isPending={generate.isPending}
-        error={generate.error}
-        onConfirm={() => {
-          const account = settingPassword
-          if (!account) return
-          generate.mutate(account.id, {
-            onSuccess: ({ password }) => {
-              setSettingPassword(null)
-              setGenerated({ account, password })
-            },
-          })
-        }}
-      />
-
-      <FormDialog
-        isOpen={mergingInto !== null}
-        onOpenChange={(open) => {
-          if (!open) setMergingInto(null)
-        }}
-        title="Merge user record"
-        submitLabel="Merge"
-        isPending={merge.isPending}
-        isSubmitDisabled={mergeSource === ""}
-        error={merge.error}
-        onSubmit={() => {
-          if (!mergingInto || mergeSource === "") return
-          merge.mutate(
-            { targetId: mergingInto.id, sourceId: mergeSource },
-            { onSuccess: () => setMergingInto(null) },
-          )
-        }}
-      >
-        <InfoBanner>
-          The record&apos;s API keys, usage history, budgets and routing state
-          move to{" "}
-          <strong>{mergingInto ? accountLabel(mergingInto) : ""}</strong>, its
-          spend is added to theirs, and the record is retired. This cannot be
-          undone.
-        </InfoBanner>
-        <Select
-          label="User record to merge"
-          value={mergeSource}
-          onChange={setMergeSource}
-          placeholder={users.isLoading ? "Loading users…" : "Choose a user"}
-          options={
-            mergingInto
-              ? mergeCandidates(mergingInto, users.data ?? [], rows).map(
-                  (user) => ({
-                    value: user.user_id,
-                    label: user.alias
-                      ? `${user.user_id} (${user.alias})`
-                      : user.user_id,
-                  }),
-                )
-              : []
-          }
+      {handingTo ? (
+        <BootstrapHandoverDialog
+          key={handingTo.id}
+          account={handingTo}
+          onClose={() => setHandingTo(undefined)}
         />
-      </FormDialog>
-
-      {generated ? (
-        <FormDialog
-          isOpen
-          onOpenChange={(open) => {
-            if (!open) setGenerated(null)
-          }}
-          // Dismissing loses the password for good, so the acknowledgement is
-          // the only way out, as on the Keys page.
-          isDismissable={false}
-          title="Password generated"
-          submitLabel="I’ve sent this password"
-          onSubmit={() => setGenerated(null)}
-          isPending={false}
-        >
-          <InfoBanner>
-            Send this to <strong>{accountLabel(generated.account)}</strong>.
-            They sign in with <strong>{generated.account.email}</strong> and
-            this password. It is not shown again.
-            <div className="mt-2">
-              <CopyableValue value={generated.password} label="Password">
-                <span className="break-all font-mono text-xs">
-                  {generated.password}
-                </span>
-              </CopyableValue>
-            </div>
-          </InfoBanner>
-        </FormDialog>
       ) : null}
 
       <PasswordLinkDialog

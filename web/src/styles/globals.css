@@ -381,6 +381,10 @@
   --color-chart-cat-6: #0871c1;
   --color-chart-cat-7: #a9912b;
   --color-chart-cat-8: #a64450;
+  /* How much chart tone an avatar's background takes, mixed into the surface.
+     Dark needs more: at the light theme's share the tint sinks into the page
+     and the square loses its edge. */
+  --avatar-tint-amount: 14%;
   --color-chart-cat-other: #8b969b;
   --color-chart-ramp-1: #14242c;
   --color-chart-ramp-2: #3c6678;
@@ -643,6 +647,7 @@
   --color-chart-cat-6: #0075dc;
   --color-chart-cat-7: #af9000;
   --color-chart-cat-8: #c04154;
+  --avatar-tint-amount: 26%;
   /* The neutral fold-in slot is the one value that holds across both
      themes: it already clears each surface, and a "not one of the named
      groups" bucket that changed hue with the theme would read as a group. */
@@ -1419,6 +1424,14 @@ body {
   --field-height: 2.25rem;
   --field-padding-block: 0.375rem;
 }
+/* The form size meets the phone's 44px floor too, the way the dense places do
+   in design-system.css, so a field matches the buttons and toolbar fields
+   beside it there. */
+@media (max-width: 767px) {
+  :root {
+    --field-height: 2.75rem;
+  }
+}
 .input,
 .select__trigger {
   min-height: var(--field-height);
@@ -1476,6 +1489,56 @@ main {
   button:disabled,
   [aria-disabled="true"] {
     cursor: not-allowed;
+  }
+}
+
+/* =============================================================
+ * Touch, once.
+ *
+ * Two platform defaults that make a phone treat the dashboard as a page
+ * rather than an app; HeroUI already clears the tap highlight. A control that
+ * could be double-tapped to zoom holds its click for a beat while the browser
+ * waits for a second tap, so every control opts out, not only HeroUI's own
+ * buttons. And a long press on a control selects its label or opens the link
+ * callout.
+ *
+ * Keyed on what the element is, like the cursor above. `[role="button"]` is
+ * left out of the second list because HeroUI's tooltip trigger is a `div`
+ * with that role around text, and a table cell or a card keeps selectable
+ * text: that is content, and ids are copied out of it.
+ *
+ * The shell scrolls inside `<main>` and the document never scrolls, so the
+ * document's vertical overscroll (Android's pull-to-refresh, iOS's rubber band
+ * on the whole frame) only ever reloads the page or moves the header. The
+ * horizontal axis is left alone: it is a desktop trackpad's back and forward.
+ * ============================================================= */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+@layer base {
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  label,
+  summary,
+  [role="button"],
+  [role="tab"],
+  [role="switch"],
+  [role="option"],
+  [role="menuitem"] {
+    touch-action: manipulation;
+  }
+  button,
+  summary,
+  [role="tab"],
+  [role="switch"],
+  [role="menuitem"] {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
 }
 
@@ -1692,6 +1755,16 @@ main {
 .alert-dialog__dialog {
   border: 1px solid var(--color-control-border);
 }
+/* Square, which `--radius: 0` alone does not make these four: HeroUI rounds
+   them by `calc(var(--radius-2xl) + var(--spacing) * 1.5)`, so with the radius
+   zeroed the spacing term still leaves a 6px corner on every select, combo box
+   and menu popover, the one rounded surface in the product. */
+.select__popover,
+.combo-box__popover,
+.dropdown__popover,
+.autocomplete__popover {
+  border-radius: 0;
+}
 
 /* The primary button's own ramp, which darkens rather than lightens. HeroUI
    drives it from `--accent`, so this overrides the four variables the button
@@ -1888,6 +1961,19 @@ main {
   border-color: transparent;
 }
 
+/* A toolbar's leading ghost. Edgeless here, so its label is the part the eye
+   lines up, and it is pulled out by its own inline padding (the values in the
+   ghost padding rule below) so the label lands on the column edge the fields
+   and cards below it start on, while the target keeps its width. Only the
+   first item: a later one sits after a gap, and pulling it would overlap
+   whatever is in front of it. */
+.otari-toolbar > .button--ghost.button--sm:not(.button--icon-only):first-child {
+  margin-inline-start: -0.6875rem;
+}
+.otari-toolbar > .button--ghost.button--md:not(.button--icon-only):first-child {
+  margin-inline-start: -0.9375rem;
+}
+
 /* The public auth pages' footer row, which holds plain text links and one
    control that has to be a button: Help opens a popover, and a popover trigger
    must be a react-aria pressable. So the button takes the links' ink, their
@@ -1916,14 +2002,13 @@ main {
    the row (a lone Help, where there is no link beside it): its label lines up with
    the card's content edge as a link's does, and its target keeps its width. */
 .otari-auth-actions
-.button--ghost:not(.button--sm):not(.button--icon-only):first-child {
+  .button--ghost:not(.button--sm):not(.button--icon-only):first-child {
   margin-inline-start: -13px;
 }
+/* `data-hovered` alone, which react-aria sets for a mouse and never for a
+   tap; a bare `:hover` stayed applied after a tap on Help. */
 .otari-auth-actions
-  .button--ghost:not(.button--sm):not(.button--icon-only):is(
-    :hover,
-    [data-hovered="true"]
-  ) {
+  .button--ghost:not(.button--sm):not(.button--icon-only)[data-hovered="true"] {
   --button-fg: var(--color-link-hover);
 }
 
@@ -2199,17 +2284,33 @@ main {
  * decides the desktop height. `[data-slot="button"]` is only ever HeroUI's
  * Button, which is why the hook is narrow enough to be safe.
  *
- * 767px is the shell's own MOBILE_QUERY boundary (`useIsPhone`), so the rule
- * applies exactly where the sidebar has already become a drawer.
- *
- * `a.button` is the other half: a router `Link` dressed with `buttonVariants`
- * carries the class but not the slot, so a link beside a row of buttons came
- * out 8px shorter than they did. */
+ * 767px is the shell's own MOBILE_QUERY boundary (`AppShell`), so the rule
+ * applies exactly where the sidebar has already become a drawer. */
 @media (max-width: 767px) {
-  [data-slot="button"],
-  a.button {
+  [data-slot="button"] {
     min-height: 2.75rem;
     min-width: 2.75rem;
+  }
+  /* The rows a select or combo box opens are the same kind of target, and
+     measure 34px without this. */
+  .list-box-item {
+    min-height: 2.75rem;
+  }
+}
+
+/* The text-entry floor on a touch screen, the input-size twin of the button
+ * floor above. iOS zooms the page into any field under 16px when it takes
+ * focus and does not zoom back out. Keyed on the pointer rather than on width,
+ * because the zoom belongs to the touch screen: HeroUI's own fields are 16px
+ * only below 640px, and an iPhone held sideways is 844 to 932 wide. Unlayered,
+ * so it wins over a `text-sm` at the call site, which is the point. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
+    [type="color"]
+  ),
+  textarea,
+  select {
+    font-size: max(1rem, 16px);
   }
 }
 
@@ -2401,13 +2502,11 @@ main {
 .otari-breakdown .otari-table .table__header {
   border-top: 0;
 }
-/* Only the breakdown tables freeze a lane, and the Overview preview is ruled
-   *out* rather than pending: it is five rows of four lanes and never
-   scrolls, and Time leading is right for a chronology preview even though the
-   identity is Model. Where a table does scroll and its identity is not the
-   first lane, the frozen region runs from the first lane through the row header
-   inclusive; if that exceeds about a third of the table's width, the column
-   order is wrong and the order is the fix, so the pin doubles as a detector. */
+/* Only the breakdown tables freeze a lane. Where a table does scroll and its
+   identity is not the first lane, the frozen region runs from the first lane
+   through the row header inclusive; if that exceeds about a third of the
+   table's width, the column order is wrong and the order is the fix, so the pin
+   doubles as a detector. */
 .otari-breakdown .table__column:first-child,
 .otari-breakdown .table__row .table__cell:first-child {
   position: sticky;
@@ -2458,6 +2557,18 @@ main {
 .otari-offerings-table .table__column[data-key="provider"] {
   min-width: 12.5rem;
 }
+/* On a phone the held provider lane is narrower and its cell wraps, so the
+   prices it exists beside get most of the width, and the column heads keep
+   to one line rather than doubling the header row. */
+@media (max-width: 767px) {
+  .otari-offerings-table .table__column[data-key="provider"] {
+    min-width: 10rem;
+    width: 10rem;
+  }
+  .otari-offerings-table .table__column {
+    white-space: nowrap;
+  }
+}
 /* The identity lane holds while the rest scrolls, as everywhere else. */
 .otari-models-table .table__column:first-child,
 .otari-models-table .table__row .table__cell:first-child,
@@ -2473,6 +2584,12 @@ main {
   left: 0;
   z-index: 1;
   background-color: var(--color-background);
+}
+/* The offerings table sits on the model page's surface frame rather than on
+   the page ground, so its held lane takes the frame's fill. */
+.otari-offerings-table .table__column:first-child,
+.otari-offerings-table .table__row .table__cell:first-child {
+  background-color: var(--color-surface);
 }
 .otari-models-table[data-scrolled="true"] .table__column:first-child,
 .otari-models-table[data-scrolled="true"] .table__row .table__cell:first-child,
@@ -2493,27 +2610,248 @@ main {
   border-right: 1px solid var(--color-control-border);
 }
 
+/* The activity log. Ten lanes, and the only table so far whose identity is
+   not its first column: a request is named by what ran, but a log is read
+   chronologically, so Time leads and Model is third.
+
+   The frozen region therefore runs from the first lane through the row header
+   inclusive, Time + User + Model, which is the general rule rather than a
+   special case here: everything up to and including the identity is held,
+   because holding only the identity would leave it floating away from the
+   columns that qualify it. It is about a third of the table at any width,
+   which is the ceiling the rule sets.
+
+   The table fits the pane rather than scrolling in it. Every row is one line
+   and nothing in a cell or a header wraps; the lanes are fixed, the numbers
+   and Status each sized to their longest value, and Model, Routing and API key
+   share what is left, cut short with their full text as a title. Below 60rem
+   the table holds that width and scrolls, which is what the pins are for. */
+.otari-activity-table .otari-table.table-root {
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+.otari-activity-table .table__content {
+  table-layout: fixed;
+  width: 100%;
+}
+.otari-activity-table .table__content {
+  min-width: 60rem;
+}
+.otari-activity-table .table__row .table__cell {
+  height: 1.75rem;
+  padding-block: 0;
+}
+/* Tighter than the base 1rem, which across ten lanes is 320px of padding. */
+.otari-activity-table .table__column,
+.otari-activity-table .table__cell[data-column] {
+  padding-inline: 0.75rem;
+  white-space: nowrap;
+}
+.otari-activity-table .table__column[data-key="time"] {
+  width: 5.25rem;
+}
+.otari-activity-table .table__column[data-key="user"] {
+  width: 8rem;
+}
+.otari-activity-table .table__column[data-key="input_tokens"] {
+  width: 6rem;
+}
+.otari-activity-table .table__column[data-key="output_tokens"] {
+  width: 5.5rem;
+}
+.otari-activity-table .table__column[data-key="cost"],
+.otari-activity-table .table__column[data-key="latency"] {
+  width: 5.75rem;
+}
+.otari-activity-table .table__column[data-key="status"] {
+  width: 6.5rem;
+}
+
+/* Each pin is offset by the width of everything pinned before it. */
+.otari-activity-table .table__column[data-key="time"],
+.otari-activity-table .table__cell[data-column="time"] {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background-color: var(--color-background);
+}
+.otari-activity-table .table__column[data-key="user"],
+.otari-activity-table .table__cell[data-column="user"] {
+  position: sticky;
+  left: 5.25rem;
+  z-index: 1;
+  background-color: var(--color-background);
+}
+.otari-activity-table .table__column[data-key="model"],
+.otari-activity-table .table__cell[data-column="model"] {
+  position: sticky;
+  left: 13.25rem;
+  z-index: 1;
+  background-color: var(--color-background);
+}
+/* One boundary, at the edge of the held region, and only while it is holding
+   something back. */
+.otari-activity-table[data-scrolled="true"] .table__column[data-key="model"],
+.otari-activity-table[data-scrolled="true"] .table__cell[data-column="model"] {
+  border-right: 1px solid var(--color-control-border);
+}
+/* Sessions: one row per agent session, dense on a desk. Last activity and Name
+   are held while the measures scroll, from md up; below md the table is cards. */
+.otari-sessions-table .otari-table.table-root {
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+.otari-sessions-table .table__row .table__cell {
+  height: 2.75rem;
+  padding-block: 0;
+}
+/* Every row is one line high. A cell's height is only a floor, so a wrapped
+   chip, duration or header would grow its row; the scroll frame takes the
+   width instead. */
+.otari-sessions-table .table__column,
+.otari-sessions-table .table__cell[data-column] {
+  white-space: nowrap;
+}
+.otari-sessions-table .table__column[data-key="last_activity"] {
+  width: 11.375rem;
+  min-width: 11.375rem;
+}
+.otari-sessions-table .table__column[data-key="name"] {
+  min-width: 10rem;
+}
+.otari-sessions-table .table__column[data-key="levels"] {
+  width: 6rem;
+  min-width: 6rem;
+}
+.otari-sessions-table .table__column[data-key="latency"] {
+  width: 6rem;
+  min-width: 6rem;
+}
+.otari-sessions-table .table__column[data-key="tokens"] {
+  width: 11rem;
+  min-width: 11rem;
+}
+.otari-sessions-table .table__column[data-key="cost"] {
+  width: 6.5rem;
+  min-width: 6.5rem;
+}
+.otari-sessions-table .table__column[data-key="tags"] {
+  width: 6rem;
+  min-width: 6rem;
+}
+@media (min-width: 48rem) {
+  .otari-sessions-table .table__row .table__cell {
+    height: 1.75rem;
+  }
+  .otari-sessions-table .table__column[data-key="last_activity"],
+  .otari-sessions-table .table__cell[data-column="last_activity"] {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background-color: var(--color-background);
+  }
+  .otari-sessions-table .table__column[data-key="name"],
+  .otari-sessions-table .table__cell[data-column="name"] {
+    position: sticky;
+    left: 11.375rem;
+    z-index: 1;
+    background-color: var(--color-background);
+  }
+  .otari-sessions-table[data-scrolled="true"] .table__column[data-key="name"],
+  .otari-sessions-table[data-scrolled="true"] .table__cell[data-column="name"] {
+    border-right: 1px solid var(--color-control-border);
+  }
+}
+/* The row open in the panel. On the cells, pinned ones included: every cell
+   paints its own background over the row's. */
+.otari-sessions-table .table__row.is-peeked .table__cell {
+  background-color: var(--color-surface-subtle);
+}
+/* The request open in the panel. A translucent wash on the cells, so a failed or
+   absorbed row keeps its tint and a pinned cell keeps its own background. */
+.otari-activity-table .table__row.is-peeked .table__cell {
+  background-image: linear-gradient(
+    color-mix(in oklab, var(--color-text) 6%, transparent),
+    color-mix(in oklab, var(--color-text) 6%, transparent)
+  );
+}
+/* The session panel's rows and resize handles sit flush with a scrolling
+   pane, which would clip the base ring's outward 2px, so theirs is drawn
+   inside. */
+.otari-trace-ring:focus-visible {
+  outline: 2px solid var(--focus-ring-ink, var(--color-focus));
+  outline-offset: -2px;
+}
+/* The timeline bar of the span open in the panel. */
+.otari-trace-mark--selected {
+  outline: 1px solid var(--color-text);
+}
+/* A tree row a live session adds while the panel is open: its contents, connectors
+   included, fade and rise into place while a wash fades from the row, so the eye
+   finds what just happened. The wash is a layer under the row's contents whose
+   opacity fades, so it stays on the compositor, and it outlasts the entrance
+   because it is what the eye follows. It starts lighter than the selected row's
+   fill so an arrival never reads as a selection. `backwards` holds both at their
+   start through the stagger delay. */
+.otari-trace-arrive {
+  position: relative;
+  isolation: isolate;
+}
+.otari-trace-arrive::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: color-mix(
+    in oklab,
+    var(--color-primary-subtle) 60%,
+    transparent
+  );
+  opacity: 0;
+  animation: otari-trace-wash 600ms ease-out var(--arrive-delay, 0ms) backwards;
+}
+.otari-trace-arrive > * {
+  animation: otari-trace-rise 250ms var(--ease-out-fluid)
+    var(--arrive-delay, 0ms) backwards;
+}
+@keyframes otari-trace-wash {
+  from {
+    opacity: 1;
+  }
+}
+@keyframes otari-trace-rise {
+  from {
+    opacity: 0;
+    translate: 0 0.25rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .otari-trace-arrive::before,
+  .otari-trace-arrive > * {
+    animation: none;
+  }
+}
 .otari-mcp-table .table__row .table__cell {
   height: 3.25rem;
   padding-block: 0;
 }
-.otari-mcp-table .table__column[data-key="server_id"] {
-  width: 9.5rem;
-  min-width: 9.5rem;
+/* Room for a whole host on a line, so a URL does not stack a few letters a row. */
+.otari-mcp-table .table__column[data-key="url"] {
+  min-width: 10rem;
 }
-.otari-mcp-table .table__column[data-key="token"] {
-  width: 8.75rem;
-  min-width: 8.75rem;
+.otari-mcp-table .table__column[data-key="mode"] {
+  width: 6.5rem;
+  min-width: 6.5rem;
 }
-.otari-mcp-table .table__column[data-key="enabled"] {
-  width: 8.75rem;
-  min-width: 8.75rem;
+.otari-mcp-table .table__column[data-key="connections"] {
+  width: 8rem;
+  min-width: 8rem;
 }
-/* Wide enough for the longest label, "TOKEN UNREADABLE", on one line inside the
-   button that opens its detail. */
-.otari-mcp-table .table__column[data-key="health"] {
-  width: 12rem;
-  min-width: 12rem;
+/* Wide enough for the longest value, EVERY REQUEST, on one line. */
+.otari-mcp-table .table__column[data-key="availability"] {
+  width: 10.5rem;
+  min-width: 10.5rem;
 }
 /* Three 24px actions 16px apart, plus the cell's padding. */
 .otari-mcp-table .table__column[data-key="actions"] {
@@ -2778,6 +3116,10 @@ main {
   height: 3.625rem;
   padding-block: 0;
 }
+/* A header holds its title on one line, and its column grows to fit it. */
+.otari-offered-models-table .table__column {
+  white-space: nowrap;
+}
 .otari-offered-models-table .table__column[data-key="model"] {
   min-width: 16rem;
 }
@@ -2799,6 +3141,18 @@ main {
 .otari-offered-models-table .table__column[data-key="actions"] {
   width: 6.25rem;
   min-width: 6.25rem;
+}
+/* A column per region beside the provider's price. Narrow, with its header
+   free to wrap (a region is named "Southeast Asia"), and a narrower model
+   column, so three regions still fit a desktop row without scrolling. */
+.otari-offered-models-table--regions .table__column[data-key="model"] {
+  min-width: 12rem;
+}
+.otari-offered-models-table .table__column[data-key^="region:"] {
+  width: 6.5rem;
+  min-width: 6.5rem;
+  white-space: normal;
+  text-align: end;
 }
 .otari-members-table .table__row .table__cell {
   height: 3.625rem;
@@ -2840,140 +3194,97 @@ main {
 .otari-members-table[data-scrolled="true"] .table__cell[data-column="member"] {
   border-right: 1px solid var(--color-control-border);
 }
-/* The pinned lanes above, body cells only. They were filled with the page
-   canvas, while a body cell's own fill is the surface, so every held lane read
-   as a grey column beside white rows; on a phone, where these tables scroll,
-   it looked like a second table. The header keeps the canvas, which is what it
-   sits on. Listed together so a new pinned lane is one line here, and after
-   every block so source order settles the tie. */
-.otari-breakdown .table__row .table__cell:first-child,
-.otari-providers-table .table__row .table__cell:first-child,
-.otari-routing-table .table__row .table__cell:first-child,
-.otari-budgets-table .table__row .table__cell:first-child,
-.otari-budgets-table .table__cell[data-column="budget"],
-.otari-accounts-table .table__cell[data-column="account"],
-.otari-workspaces-table .table__cell[data-column="name"],
-.otari-provider-keys-table .table__cell[data-column="name"],
-.otari-members-table .table__cell[data-column="member"] {
-  background-color: var(--color-surface);
-}
-.otari-breakdown .table__row:hover .table__cell:first-child,
-.otari-providers-table .table__row:hover .table__cell:first-child,
-.otari-routing-table .table__row:hover .table__cell:first-child,
-.otari-budgets-table .table__row:hover .table__cell:first-child,
-.otari-budgets-table .table__row:hover .table__cell[data-column="budget"],
-.otari-accounts-table .table__row:hover .table__cell[data-column="account"],
-.otari-workspaces-table .table__row:hover .table__cell[data-column="name"],
-.otari-provider-keys-table .table__row:hover .table__cell[data-column="name"],
-.otari-members-table .table__row:hover .table__cell[data-column="member"] {
-  background-color: var(--color-surface-muted);
-}
-/* A held lane narrower than the phone it is held on. Two were sized for a
-   desk, at 300px and 440px, which on a 390px screen left the scroll nothing to
-   reveal: the other columns slid under a lane as wide as the table's window. */
-@media (max-width: 767px) {
-  .otari-accounts-table .table__column[data-key="account"],
-  .otari-accounts-table .table__cell[data-column="account"],
-  .otari-workspaces-table .table__column[data-key="name"],
-  .otari-workspaces-table .table__cell[data-column="name"] {
-    width: 11.25rem;
-    min-width: 11.25rem;
-  }
-}
-/* Key lanes stay fixed while the name absorbs the available width. */
-.otari-keys-table .table__content {
-  table-layout: fixed;
-  width: 100%;
+/* The API keys table: one line per key, on the Sessions table's terms (rules
+   above and below, no side rules, cells that never wrap). Rows are 44px at
+   every width rather than Sessions' 28px on a desk, because each carries a
+   pressable menu trigger. Key takes the width the fixed lanes leave. */
+.otari-keys-table .otari-table.table-root {
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
 }
 .otari-keys-table .table__row .table__cell {
-  height: 3.625rem;
-  padding-block: 0.5rem;
+  height: 2.75rem;
+  padding-block: 0;
+}
+.otari-keys-table .table__column,
+.otari-keys-table .table__cell[data-column] {
   white-space: nowrap;
 }
-.otari-keys-table .table__column {
-  white-space: nowrap;
+/* Every other lane is a fixed width, so the whole of the slack goes here:
+   an auto-layout table otherwise shares it out by content, and the name's
+   zero max-width below gives it next to none. */
+.otari-keys-table .table__column[data-key="name"] {
+  width: 100%;
+  min-width: 12rem;
 }
-.otari-keys-table .table__column:first-child {
-  width: 3rem;
+/* A zero max-width stops the auto-layout table sizing Key to its longest name,
+   so the name's own ellipsis has an edge to cut at. */
+.otari-keys-table .table__cell[data-column="name"] {
+  max-width: 0;
 }
-.otari-keys-table .table__column[data-key="models"] {
-  width: 11rem;
+.otari-keys-table .table__column[data-key="state"] {
+  width: 7rem;
+  min-width: 7rem;
 }
-.otari-keys-table .table__column[data-key="most_used"] {
-  width: 11rem;
+.otari-keys-table .table__column[data-key="owner"] {
+  width: 10.5rem;
+  min-width: 10.5rem;
 }
+.otari-keys-table .table__cell[data-column="owner"] {
+  max-width: 10.5rem;
+}
+.otari-keys-table .table__column[data-key="used"],
+.otari-keys-table .table__column[data-key="expires"] {
+  width: 6.5rem;
+  min-width: 6.5rem;
+}
+/* A budget is "$15.00 a day" at most. */
 .otari-keys-table .table__column[data-key="budget"] {
   width: 10rem;
+  min-width: 10rem;
 }
-.otari-keys-table .table__column[data-key="expires"] {
-  width: 6.875rem;
+.otari-keys-table .table__column[data-key="spend"] {
+  width: 10rem;
+  min-width: 10rem;
 }
-.otari-keys-table .table__column[data-key="last_used"] {
-  width: 7.5rem;
+.otari-keys-table .table__column[data-key="tokens"] {
+  width: 5.5rem;
+  min-width: 5.5rem;
 }
+/* 56px: the 32px trigger, the row's 16px end padding, and 8px before it. */
 .otari-keys-table .table__column[data-key="actions"] {
-  width: 5rem;
+  width: 3.5rem;
+  min-width: 3.5rem;
 }
-.otari-key-actions-trigger {
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.75rem;
-  height: 2.75rem;
-  flex-shrink: 0;
-  color: var(--color-text-muted);
+.otari-keys-table .table__column[data-key="actions"],
+.otari-keys-table .table__cell[data-column="actions"] {
+  padding-inline-start: 0.5rem;
 }
-.otari-key-actions-trigger:hover {
-  color: var(--color-text);
-  background: var(--color-surface-muted);
+/* The phone's cards (`DataTable` with `mobileLayout="cards"`): the name over
+   its last four, and each field's label in sentence case in a 120px lane,
+   rather than the table header's overline. */
+.otari-keys-table li {
+  padding-bottom: 0.875rem;
 }
-/* The ring is `otari-focus-ring` on the trigger; only the offset is local. The
-   trigger is flush with the row's right edge, where the utility's outward 2px
-   would be clipped by the table's own overflow. */
-.otari-key-actions-trigger[data-focus-visible],
-.otari-key-actions-trigger[aria-expanded="true"] {
-  outline: 2px solid var(--focus-ring-ink, var(--color-focus));
-  outline-offset: -2px;
+.otari-keys-table li .otari-key-cell {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
 }
-/* HeroUI has no prop for the menu's density or its two text lanes. */
-.otari-key-actions-menu {
-  width: 16.75rem;
-  max-width: calc(100vw - 2rem);
+.otari-keys-table li .otari-key-name {
+  font-weight: 550;
 }
-.otari-key-actions-menu .dropdown__menu {
-  padding: 0;
+.otari-keys-table li dl {
+  grid-template-columns: 7.5rem minmax(0, 1fr);
 }
-.otari-key-actions-menu .menu-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 2.75rem;
-  padding: 0.5rem 0.75rem;
-  color: var(--color-text-muted);
-}
-.otari-key-actions-menu .menu-item .label {
-  white-space: nowrap;
-}
-.otari-key-actions-menu .menu-item [slot="description"] {
-  margin-left: auto;
-  text-align: right;
-}
-.otari-key-actions-menu .menu-item:last-child {
-  border-top: 1px solid var(--color-border-subtle);
-}
-.otari-key-actions-menu .menu-item[data-focused],
-.otari-key-actions-menu .menu-item[data-hovered] {
-  background: var(--color-surface-muted);
-}
-@media (min-width: 48rem) and (pointer: fine) {
-  .otari-key-actions-trigger {
-    width: 2rem;
-    height: 2rem;
-  }
-  .otari-key-actions-menu .menu-item {
-    min-height: 2.25rem;
-  }
+.otari-keys-table li dt {
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.25rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-text-subtle);
 }
 .otari-breakdown .table__column[data-key="requests"],
 .otari-breakdown .table__column[data-key="tokens"] {
@@ -2985,47 +3296,6 @@ main {
   width: 6.25rem;
 } /* Header background and edges: see the divided-surface table block above, which
    is now the only place they are declared. */
-.otari-overview-activity .table__column[data-key="time"] {
-  /* Back to 120. This was widened to 130 because "6 minutes ago" did not fit,
-     which was a layout fix for a copy problem; the copy is compact now ("6m
-     ago") and the lane no longer has to pay for the phrase. */
-  width: 7.5rem;
-}
-/* A relative time is short but wraps at this lane width ("4 minutes ago" is
-   three words), and a wrapped cell is the one thing that can break the row
-   pitch below. */
-.otari-overview-activity .table__cell[data-column="time"] {
-  white-space: nowrap;
-}
-/* Fixed lanes, so a long error message truncates in its lane rather than
-   pushing the table past the column. */
-.otari-overview-activity .table__content {
-  table-layout: fixed;
-  width: 100%;
-}
-.otari-overview-activity .table__column[data-key="model"] {
-  width: 13.75rem;
-}
-.otari-overview-activity .table__column[data-key="key"] {
-  width: 8.125rem;
-}
-.otari-overview-activity .table__row .table__cell {
-  height: 2.8125rem;
-  padding-block: 0;
-}
-/* A phone renders two of the four lanes (`RecentFailures`), with the time and
-   key as a second line under the model, so the model lane gives up its floor and the
-   row grows to hold the two lines. */
-@media (max-width: 767px) {
-  .otari-overview-activity .table__column[data-key="model"] {
-    min-width: 0;
-    width: 50%;
-  }
-  .otari-overview-activity .table__row .table__cell {
-    height: auto;
-    padding-block: 0.625rem;
-  }
-}
 
 /* The rail's footprint, published by the shell (`data-rail`) so a fixed overlay
  * can center on the content beside the rail instead of on the viewport. Zero by
@@ -3093,28 +3363,193 @@ main {
   }
 }
 
-/* A projected bar: hatched in the ramp's mid step, capped by a line in it, so
- * it reads as an estimate beside the solid bars of what happened. Past the
- * budget it hatches in danger instead. Used by the Overview's budget chart and
- * its legend swatch. */
-.otari-hatch {
-  --hatch: var(--color-chart-ramp-3);
-  background: repeating-linear-gradient(
-    135deg,
-    var(--hatch) 0 1px,
-    transparent 1px 5px
-  );
-  box-shadow: inset 0 1px 0 var(--hatch);
+/*
+ * Rules, as the Sessions table reads (`.otari-sessions-table` above): one-line rows, 28px on a desk and 44px below it, the rule
+ * held while the measures scroll. The lanes are fixed and the rule's name
+ * takes what is left, so a long name ends in an ellipsis instead of pushing
+ * the figures off the row.
+ */
+.otari-rules-table .otari-table.table-root {
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
 }
-.otari-hatch--over {
-  --hatch: color-mix(in srgb, var(--color-danger) 45%, transparent);
-  box-shadow: inset 0 1px 0 var(--color-danger);
+/* Each view's lanes plus 14rem for the name, which a narrower table would
+   squeeze to nothing: the frame scrolls instead. */
+.otari-rules-table .table__content {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 69.5rem; /* All: 55.5rem of lanes */
 }
-.otari-hatch-swatch {
-  background: repeating-linear-gradient(
-    135deg,
-    var(--color-chart-ramp-3) 0 1px,
-    transparent 1px 3px
-  );
-  box-shadow: inset 0 0 0 1px var(--color-chart-ramp-3);
+.otari-rules-table:is(.is-spend, .is-access, .is-data) .table__content {
+  min-width: 64.5rem; /* 50.5rem */
+}
+.otari-rules-table.is-people .table__content {
+  min-width: 36rem;
+}
+.otari-rules-table.is-member .table__content {
+  min-width: 67.5rem; /* All: 53.5rem */
+}
+.otari-rules-table.is-member.is-spend .table__content {
+  min-width: 62.5rem; /* 48.5rem */
+}
+.otari-rules-table.is-member.is-access .table__content {
+  min-width: 70.5rem; /* 56.5rem */
+}
+.otari-rules-table .table__row .table__cell {
+  height: 2.75rem;
+  padding-block: 0;
+}
+.otari-rules-table .table__column,
+.otari-rules-table .table__cell[data-column] {
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* Each lane is its widest content plus the cell's padding: "$40.00 each,
+   a month" is 166px, the Enforce chip 59px. */
+.otari-rules-table .table__column[data-key="type"] {
+  width: 5rem;
+}
+.otari-rules-table .table__column[data-key="mode"] {
+  width: 6rem;
+}
+.otari-rules-table .table__column[data-key="scope"] {
+  width: 15rem;
+}
+.otari-rules-table .table__column[data-key="limit"] {
+  width: 12.5rem;
+}
+.otari-rules-table .table__column[data-key="spent"] {
+  width: 5.5rem;
+}
+.otari-rules-table .table__column[data-key="used"] {
+  width: 8.5rem;
+}
+.otari-rules-table .table__column[data-key="models"] {
+  width: 14rem;
+}
+.otari-rules-table .table__column[data-key="tools"] {
+  width: 11rem;
+}
+.otari-rules-table .table__column[data-key="actions"] {
+  width: 3rem;
+}
+.otari-rules-table.is-data .table__column[data-key="scope"] {
+  width: 40rem;
+}
+/* A member's list has no spend lanes, so its words get the room. */
+.otari-rules-table.is-member .table__column[data-key="scope"] {
+  width: 22.5rem;
+}
+.otari-rules-table.is-member .table__column[data-key="limit"] {
+  width: 17rem;
+}
+/* The people under one rule: a name, then two or three figures. */
+.otari-rules-table.is-people .table__column[data-key="spent"],
+.otari-rules-table.is-people .table__column[data-key="limit"] {
+  width: 11rem;
+}
+.otari-rules-table.is-people .table__column[data-key="used"] {
+  width: 12.5rem;
+}
+.otari-rules-table.is-people .table__column[data-key="team"] {
+  width: 12.5rem;
+}
+@media (min-width: 48rem) {
+  .otari-rules-table .table__row .table__cell {
+    height: 1.75rem;
+  }
+  .otari-rules-table .table__column[data-key="name"],
+  .otari-rules-table .table__cell[data-column="name"] {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background-color: var(--color-background);
+  }
+  .otari-rules-table[data-scrolled="true"] .table__column[data-key="name"],
+  .otari-rules-table[data-scrolled="true"] .table__cell[data-column="name"] {
+    border-right: 1px solid var(--color-control-border);
+  }
+}
+/* The row menu's trigger, inside the 28px row on a desk with a pointer: the
+   row's 28px include its 1px divider, so 26px is what fits without growing
+   it. A touch screen keeps the 44px target and the row grows to it. */
+@media (min-width: 48rem) and (pointer: fine) {
+  .otari-rules-table .otari-row-menu-trigger {
+    width: 1.625rem;
+    height: 1.625rem;
+  }
+}
+
+/* On a phone the page's one action stays beside the title. */
+@media (max-width: 39.99rem) {
+  .otari-rules-intro > header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 1rem;
+  }
+  .otari-rules-intro > header > div:first-child {
+    display: contents;
+  }
+  .otari-rules-intro > header > div:last-child:not(:first-child) {
+    grid-row: 1;
+    grid-column: 2;
+  }
+}
+/* One rule's action can be long ("Change the limit for everyone in
+   Platform"), so below md it goes under the title, as PageIntro places an
+   action on a phone, rather than squeezing the title beside it. */
+@media (max-width: 47.99rem) {
+  .otari-rules-intro.is-stacked > header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .otari-rules-intro.is-stacked > header > div:first-child {
+    display: block;
+  }
+}
+
+/* New rule, "Applies to". The search icon sits inside the field, so the text
+   starts after it; the field's inline padding is set unlayered in otari's
+   globals.css, which a utility at the call site would lose to. */
+.otari-rule-target .input {
+  padding-inline-start: 2.25rem;
+}
+/* The list is the field's width, so a row with a long name and a limit cuts
+   the name short instead of widening the list past the field on a phone. */
+.otari-rule-target__list {
+  width: var(--trigger-width);
+  max-width: var(--trigger-width);
+}
+/* Everyone has no list to search, so its sentence holds the field's height. */
+.otari-rule-everyone {
+  min-height: var(--field-height);
+}
+/* Where the dialog is a sheet, four kinds side by side would scroll, so they
+   stand two by two at the touch height the track already has. */
+@media (width <= 639px) {
+  .otari-rule-kinds [role="radiogroup"] {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+  .otari-rule-kinds [role="radiogroup"] > label {
+    justify-content: center;
+  }
+  .otari-rule-kinds [role="radiogroup"] > label:nth-child(odd) {
+    border-left-width: 0;
+  }
+  .otari-rule-kinds [role="radiogroup"] > label:nth-child(n + 3) {
+    border-top: 1px solid var(--color-control-border);
+  }
+}
+
+/* People's table: the limit lane holds its meter rather than being squeezed by
+   the name, and the top model's name takes what room is left. */
+.otari-spend-table .table__column[data-key="limit"] {
+  min-width: 17rem;
+}
+.otari-spend-table .table__column[data-key="model"] {
+  min-width: 10.375rem;
 }

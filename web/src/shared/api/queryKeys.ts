@@ -12,12 +12,13 @@
  * are deliberately kept apart; read them before adding one.
  */
 
+// Registered third-party apps, separate from dashboard sign-in providers.
+export const OAUTH_APPS = "oauth-apps"
 export const MODELS = "models"
 // The same selectors as MODELS, folded by model and priced for the viewer. Its
 // own key so the two reads can be cached apart, and every pricing mutation
 // invalidates both: a rate change moves a row in each.
 export const CATALOG = "catalog"
-export const OVERVIEW = "overview"
 export const PRICING = "pricing"
 export const SETTINGS = "settings"
 export const MAIL_SETTINGS = "mail-settings"
@@ -46,9 +47,9 @@ export const BUILTIN_GUARDRAIL_CATALOG = "builtin-guardrail-catalog"
 export const ALIASES = "aliases"
 export const ROUTING_POLICIES = "routing-policies"
 export const AUTOMATIC_FALLBACKS = "automatic-fallbacks"
-// Who sent each routing name and what each step did, over the last 30 days.
-// Usage, not configuration, so a routing write does not invalidate it.
-export const ROUTING_TRAFFIC = "routing-traffic"
+// Not under ROUTING_POLICIES: `useRoutingSyncing` holds every Save while that
+// head is fetching, and a plan being compiled is no reason to.
+export const ROUTING_EXPLAIN = "routing-explain"
 // Deliberately not nested under MODELS: pricing mutations invalidate that key,
 // and a price change cannot alter which models a provider serves. Sharing the
 // key would fire a live provider call on every save.
@@ -61,13 +62,26 @@ export const HEALTH_CHECKS = "health-checks"
 // A run is started by a worker that polls every 15 seconds, so the page polls
 // at the same pace while it is open.
 export const HEALTH_CHECKS_POLL_MS = 15_000
+// The catalog of remote MCP servers: its search, its Popular shelf and its sync
+// status, under one head, since a sync changes them all.
+export const MCP_CATALOG = "mcp-catalog"
+// A sync is started by a worker that polls once a minute and stores a page at
+// a time, so the status is worth re-reading this often only while one is
+// running or waiting to start.
+export const MCP_CATALOG_SYNC_POLL_MS = 5_000
+// Members' requests for a catalog server, the segment after a workspace's own
+// key: `[WORKSPACES, id, MCP_SERVER_REQUESTS, "mine" | "pending", ...page]`.
+export const MCP_SERVER_REQUESTS = "mcp-server-requests"
+export const UPDATE_CHECK = "update-check"
 export const BUILD = "build"
-export const GATEWAY_LIVENESS = "gateway-liveness"
 export const KEYS = "keys"
 // One key's federation rules. Its own root rather than a child of KEYS: a key
 // edit invalidates KEYS, and that changes nothing about which identities may
 // stand in for the key.
 export const FEDERATION_RULES = "federation-rules"
+// A service key's end users, which requests create rather than key edits, so
+// also a root of its own.
+export const KEY_END_USERS = "key-end-users"
 export const BUDGETS = "budgets"
 export const SCOPED_BUDGETS = "scoped-budgets"
 export const USERS = "users"
@@ -89,6 +103,9 @@ export const DEPLOYMENT_ADMIN = "deployment-admin"
 // offered models: a catalog sweep touches every provider at once, so one
 // invalidation of the root covers the list and every open panel.
 export const HOSTED_PROVIDERS = "hosted-providers"
+// Not under HOSTED_PROVIDERS: a pending read asks otari.ai, so a provider edit
+// must not fire one.
+export const PLATFORM_CONNECT = "platform-connect"
 // What a provider says it serves on the stored key, and what a catalog update
 // would do. Both dial the upstream, so neither sits under HOSTED_PROVIDERS: every
 // save there would re-dial, and the preview would refetch while its confirm
@@ -96,6 +113,9 @@ export const HOSTED_PROVIDERS = "hosted-providers"
 export const HOSTED_PROVIDER_AVAILABLE_MODELS =
   "hosted-provider-available-models"
 export const HOSTED_CATALOG_UPDATE_PREVIEW = "hosted-catalog-update-preview"
+// A price sync's dry run, apart for a like reason: the apply invalidates
+// HOSTED_PROVIDERS, which would ask for the preview again under the open dialog.
+export const HOSTED_PRICE_RESET_PREVIEW = "hosted-price-reset-preview"
 // The decision models that pick a subagent's model. One root: switching one on
 // switches the others off on the server, so every write refetches the list.
 export const AGENT_RECOMMENDERS = "agent-recommenders"
@@ -113,12 +133,6 @@ export const ORGANIZATION_PRICING = "organization-pricing"
 // admin and invalidate reads neither caller can make.
 export const ORGANIZATION_BUDGETS = "organization-budgets"
 export const ORGANIZATION_SPEND_CEILINGS = "organization-spend-ceilings"
-// One workspace's own spend ceiling, under the ceilings' head so every budget
-// or ceiling write refreshes it. Composed here because the usage reads address
-// it too: the setting that refuses a member's totals also withholds its dollars.
-export function workspaceSpendKey(workspaceId: string) {
-  return [ORGANIZATION_SPEND_CEILINGS, "workspace", workspaceId] as const
-}
 export const ORGANIZATION_GUARDRAILS = "organization-guardrails"
 // What each guardrail is, apart from where it runs. No mandate field changes
 // when a definition does, so a definition write leaves the mandates alone.
@@ -146,15 +160,14 @@ export const ORGANIZATION_PROVIDER_AVAILABLE_MODELS =
 // The organization's email-domain claims. Its own key for the same reason:
 // one page reads it, and claiming a domain has no bearing on anything else.
 export const ORGANIZATION_DOMAINS = "organization-domains"
+// The organization's own bring-your-own OIDC connection. Its own key: one page
+// reads it, and saving, testing or removing it has no bearing on anything else.
+export const ORGANIZATION_SSO = "organization-sso"
+// Who enabling that connection's enforcement would affect. A member linking
+// changes this count, so it invalidates independently of the connection
+// itself.
+export const ORGANIZATION_SSO_PREFLIGHT = "organization-sso-preflight"
 export const WORKSPACES = "workspaces"
-// What a workspace shows members who do not manage it. Composed here because
-// three modules address it: its own read and write, the overview, whose answer
-// carries the setting and seeds it, and the usage reads, whose refusal says it
-// has changed. Nested under WORKSPACES, so a roster write re-reads it too, which
-// is one small GET and keeps it beside the workspace it describes.
-export function workspaceVisibilityKey(workspaceId: string) {
-  return [WORKSPACES, workspaceId, "visibility"] as const
-}
 // The first-request setup guide's state. Its own key rather than a child of
 // WORKSPACES: the guide polls while it is on screen, and nesting it would make
 // every one of those ticks invalidate (or be invalidated by) the workspace list
@@ -173,13 +186,6 @@ export const ACTIVATION = "workspace-activation"
 // somebody saved. Nesting would make every workspace write refetch the page's
 // whole history.
 export const PLAYGROUND = "playground"
-// Named views of a dashboard page, per workspace. Its own key: a view is a
-// query string under a name, so nothing else a page edits changes one.
-export const SAVED_VIEWS = "saved-views"
-// Not a server read: the clock a live page anchors its windows to, as a query
-// so that it ticks on `refetchInterval` and pauses in a background tab the way
-// every poll here does.
-export const LIVE_CLOCK = "live-clock"
 
 // The signed-in identity's own passkeys. Its own key and not a child of any
 // organization key: a passkey belongs to a person, not to the organization they
@@ -195,10 +201,6 @@ export const MAILED_LINK_STATUS = "mailed-link-status"
 // gateway serves. Cheap (a hash of one small file) and only while the tab is
 // open, so a minute keeps a deploy from going unnoticed for long.
 export const BUILD_POLL_MS = 60_000
-// How often the liveness probe behind `useGatewayUnreachable` asks again while
-// the gateway is not answering: often enough that the alarm clears within a few
-// seconds of it coming back.
-export const GATEWAY_LIVENESS_RECHECK_MS = 5_000
 
 // The four queries below are backed by provider or models.dev fan-out
 // gateway-side. That is cached and refreshed in the background now, so they are

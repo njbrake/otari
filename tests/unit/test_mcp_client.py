@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -14,19 +15,25 @@ import anyio
 import httpx2
 import pytest
 from mcp.shared._httpx_utils import request_within_origin
-from mcp.types import CallToolResult, TextContent
+from mcp.types import BlobResourceContents, CallToolResult, EmbeddedResource, TextContent, TextResourceContents
 
 from conftest import TaskGroupMcpTransport
 from gateway.exceptions.tools_exceptions import McpSessionsInterruptedError
-from gateway.models.mcp import McpServerConfig
-from gateway.services.mcp_client import MCPClientPool, _ConnectedServer, _origin_bound_http_client
+from gateway.models.mcp import AttachedTimeBudget, McpServerConfig
+from gateway.services.mcp_client import (
+    MCP_RESULT_MAX_CHARS,
+    MCPClientPool,
+    _ConnectedServer,
+    _origin_bound_http_client,
+    _result_text,
+)
 
 
 @pytest.mark.asyncio
 async def test_aenter_rejects_duplicate_server_name(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two configs sharing a name raise instead of the second silently overwriting the first."""
 
-    async def fake_connect(self: MCPClientPool, cfg: McpServerConfig) -> _ConnectedServer:
+    async def fake_connect(self: MCPClientPool, cfg: McpServerConfig, *_: object) -> _ConnectedServer:
         return _ConnectedServer(name=cfg.name, session=object())  # type: ignore[arg-type]
 
     monkeypatch.setattr(MCPClientPool, "_connect", fake_connect)
@@ -46,7 +53,7 @@ async def test_aenter_connects_distinct_names(monkeypatch: pytest.MonkeyPatch) -
 
     connected: list[str] = []
 
-    async def fake_connect(self: MCPClientPool, cfg: McpServerConfig) -> _ConnectedServer:
+    async def fake_connect(self: MCPClientPool, cfg: McpServerConfig, *_: object) -> _ConnectedServer:
         connected.append(cfg.name)
         return _ConnectedServer(name=cfg.name, session=object())  # type: ignore[arg-type]
 
@@ -354,6 +361,74 @@ async def test_call_tool_result_extraction_returns_native_mcp_result() -> None:
     assert returned.structured_content == {"issue": 791}
     assert returned.is_error is True
     session.call_tool.assert_awaited_once_with("lookup", {"id": 791})
+
+
+def test_an_embedded_text_resource_reaches_the_model_with_its_text() -> None:
+    """GitHub MCP's get_file_contents returns the file as an embedded resource (#2995)."""
+    result = CallToolResult(
+        content=[
+            TextContent(type="text", text="successfully downloaded text file"),
+            EmbeddedResource(
+                type="resource",
+                resource=TextResourceContents(
+                    uri="repo://o/r/contents/a.py", mime_type="text/x-python", text="def f():\n    pass\n"
+                ),
+            ),
+        ]
+    )
+
+    assert _result_text(result) == (
+        "successfully downloaded text file\n[resource uri=repo://o/r/contents/a.py]\ndef f():\n    pass\n"
+    )
+
+
+def test_an_embedded_blob_resource_is_summarized_not_decoded() -> None:
+    result = CallToolResult(
+        content=[
+            EmbeddedResource(
+                type="resource",
+                resource=BlobResourceContents(uri="repo://o/r/contents/a.png", mime_type="image/png", blob="iVBORw0K"),
+            )
+        ]
+    )
+
+    assert _result_text(result) == "[resource uri=repo://o/r/contents/a.png type=image/png bytes_b64=8]"
+
+
+def _pool_returning(result: CallToolResult) -> MCPClientPool:
+    pool = MCPClientPool([])
+    session = SimpleNamespace(call_tool=AsyncMock(return_value=result))
+    pool._servers["fixture"] = _ConnectedServer(name="fixture", session=cast(Any, session))
+    pool._tool_owner["lookup"] = "fixture"
+    return pool
+
+
+@pytest.mark.asyncio
+async def test_a_result_at_the_limit_reaches_the_model_whole() -> None:
+    text = "a" * MCP_RESULT_MAX_CHARS
+    pool = _pool_returning(CallToolResult(content=[TextContent(type="text", text=text)]))
+
+    outcome = await pool.call_tool_outcome("lookup", {})
+
+    assert outcome.content == text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_error", [False, True])
+async def test_a_result_over_the_limit_is_cut_and_says_so(is_error: bool) -> None:
+    """A server can return any amount; the model reads a bounded prefix and is told the rest exists."""
+    text = "a" * MCP_RESULT_MAX_CHARS + "b" * 10
+    pool = _pool_returning(CallToolResult(content=[TextContent(type="text", text=text)], is_error=is_error))
+
+    outcome = await pool.call_tool_outcome("lookup", {})
+
+    note = (
+        f"\n[truncated: the tool returned {MCP_RESULT_MAX_CHARS + 10} characters; "
+        f"only the first {MCP_RESULT_MAX_CHARS} are shown]"
+    )
+    shown = "a" * MCP_RESULT_MAX_CHARS + note
+    assert outcome.activity_content == shown
+    assert outcome.content == (f"[tool error] {shown}" if is_error else shown)
 
 
 # --------------------------------------------------------------------------- #
@@ -735,3 +810,158 @@ async def test_pool_abandoned_owner_that_fails_later_is_logged_by_type_only(
 
     assert [context["message"] for context in unhandled] == []
     assert warnings[-1] == "Abandoned MCP sessions failed to close: RuntimeError"
+
+
+# --------------------------------------------------------------------------- #
+# An attached server the request did not name
+# --------------------------------------------------------------------------- #
+
+
+_ATTACHED = McpServerConfig(name="attached", url="https://93.184.216.34/mcp", attached=True)
+
+
+class _HangingSession(_FakeSession):
+    async def initialize(self) -> None:
+        await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_an_attached_server_that_never_answers_is_left_out_after_its_deadline(
+    transport: TaskGroupMcpTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("gateway.services.mcp_client.ClientSession", _HangingSession)
+    monkeypatch.setattr("gateway.services.mcp_client.ATTACHED_CONNECT_DEADLINE_S", 0.05)
+
+    async with asyncio.timeout(5), MCPClientPool([_ATTACHED]) as pool:
+        assert pool.openai_tools == []
+
+
+@contextlib.asynccontextmanager
+async def _failing_transport(*args: Any, **kwargs: Any) -> AsyncIterator[tuple[object, object]]:
+    """A transport whose own task fails while the session starts, which cancels the task holding it."""
+
+    async def fail() -> None:
+        await asyncio.sleep(0)
+        raise ConnectionError("refused")
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(fail)
+        yield object(), object()
+
+
+@pytest.mark.asyncio
+async def test_an_attached_server_whose_transport_fails_is_left_out_and_a_named_one_still_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("gateway.services.mcp_client.streamable_http_client", _failing_transport)
+    monkeypatch.setattr("gateway.services.mcp_client.ClientSession", _HangingSession)
+
+    async with asyncio.timeout(5), MCPClientPool([_ATTACHED]) as pool:
+        assert pool.openai_tools == []
+    with pytest.raises(BaseExceptionGroup) as raised:
+        async with asyncio.timeout(5), MCPClientPool([_TASK_GROUP_CONFIG]):
+            pass
+    assert raised.group_contains(ConnectionError)
+
+
+@pytest.mark.asyncio
+async def test_a_request_canceled_while_an_attached_server_connects_is_still_canceled(
+    transport: TaskGroupMcpTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("gateway.services.mcp_client.ClientSession", _HangingSession)
+    opening = asyncio.create_task(MCPClientPool([_ATTACHED]).__aenter__())
+    await asyncio.sleep(0.05)
+
+    opening.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+
+@pytest.mark.asyncio
+async def test_attached_servers_share_one_time_budget(
+    transport: TaskGroupMcpTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("gateway.services.mcp_client.ClientSession", _HangingSession)
+    monkeypatch.setattr("gateway.services.mcp_client.ATTACHED_CONNECT_DEADLINE_S", 0.2)
+    monkeypatch.setattr("gateway.services.mcp_client.ATTACHED_CONNECT_BUDGET_S", 0.3)
+    configs = [_ATTACHED.model_copy(update={"name": f"attached-{n}"}) for n in range(5)]
+    started = asyncio.get_running_loop().time()
+
+    async with asyncio.timeout(5), MCPClientPool(configs) as pool:
+        assert pool.openai_tools == []
+
+    assert asyncio.get_running_loop().time() - started < 0.8, "five hung servers cost one budget, not five deadlines"
+
+
+@pytest.mark.asyncio
+async def test_the_connection_gets_only_what_a_renewal_left_of_the_one_budget(
+    transport: TaskGroupMcpTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Renewing, checking the URL and connecting draw on one budget, so a hang in each costs it once."""
+    monkeypatch.setattr("gateway.services.mcp_client.ClientSession", _HangingSession)
+    monkeypatch.setattr("gateway.services.mcp_client.ATTACHED_CONNECT_DEADLINE_S", 5.0)
+    budget = AttachedTimeBudget(0.3)
+    with pytest.raises(TimeoutError):
+        async with budget.spend():
+            await asyncio.sleep(0.25)
+            await asyncio.Event().wait()
+    started = asyncio.get_running_loop().time()
+
+    async with asyncio.timeout(5), MCPClientPool([_ATTACHED.model_copy(update={"attached_budget": budget})]) as pool:
+        assert pool.openai_tools == []
+
+    assert asyncio.get_running_loop().time() - started < 0.2
+    assert budget.left() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_slow_named_server_spends_none_of_the_attached_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("gateway.services.mcp_client.ATTACHED_CONNECT_BUDGET_S", 0.1)
+    connected: list[str] = []
+
+    async def fake_connect(
+        self: MCPClientPool, cfg: McpServerConfig, expires_at: float | None = None
+    ) -> _ConnectedServer:
+        if not cfg.attached:
+            await asyncio.sleep(0.2)
+        else:
+            # The budget is enforced as the pool enforces it: an attached server past it never connects.
+            assert expires_at is not None and expires_at > asyncio.get_running_loop().time(), "budget already spent"
+        connected.append(cfg.name)
+        return _ConnectedServer(name=cfg.name, session=object())  # type: ignore[arg-type]
+
+    monkeypatch.setattr(MCPClientPool, "_connect", fake_connect)
+    named = McpServerConfig(name="named", url="https://93.184.216.34/mcp")
+
+    async with MCPClientPool([named, _ATTACHED]):
+        pass
+
+    assert connected == ["named", "attached"]
+
+
+@pytest.mark.asyncio
+async def test_an_attached_servers_retry_after_a_refused_token_stays_inside_its_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow renewal after a 401 is cut off at the attached server's deadline, not added on top of it."""
+    monkeypatch.setattr("gateway.services.mcp_client.ATTACHED_CONNECT_DEADLINE_S", 0.2)
+    request = httpx2.Request("POST", "https://93.184.216.34/mcp")
+
+    async def refused(self: MCPClientPool, stack: Any, cfg: McpServerConfig, *_: object) -> Any:
+        raise BaseExceptionGroup(
+            "refused", [httpx2.HTTPStatusError("401", request=request, response=httpx2.Response(401, request=request))]
+        )
+
+    async def slow_renewal(rejected: str) -> str:
+        await asyncio.sleep(5)
+        return "renewed"
+
+    monkeypatch.setattr(MCPClientPool, "_open", refused)
+    attached = _ATTACHED.model_copy(update={"authorization_token": "stale", "renew_token": slow_renewal})
+    started = asyncio.get_running_loop().time()
+
+    async with MCPClientPool([attached]) as pool:
+        assert pool.openai_tools == []
+
+    assert asyncio.get_running_loop().time() - started < 1

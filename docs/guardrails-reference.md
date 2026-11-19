@@ -1,18 +1,22 @@
-# Inference Guardrails reference
+# Guardrails reference
 
-The fields, headers, states and endpoints of inference guardrails. The
-[Inference Guardrails guide](guardrails.md) covers adding a guardrail to a
-request and mandating one across an organization, and explains how the layers
-compose.
+The fields, headers, states and endpoints of guardrails. A guardrail checks
+what a model is asked before the provider is called, on
+`/api/v1/chat/completions`, `/api/v1/messages` and `/api/v1/responses`.
+[Configure guardrails](configure-guardrails.md) covers setting one up in the
+dashboard, in a request and over the API.
 
 Contents:
 
 - [The `guardrails` request field](#the-guardrails-request-field)
+- [What a guardrail reads](#what-a-guardrail-reads)
 - [Modes](#modes)
 - [Reading the `Otari-Guardrails` header](#reading-the-otari-guardrails-header)
 - [When the guardrails service is unreachable](#when-the-guardrails-service-is-unreachable)
+- [How the layers compose](#how-the-layers-compose)
 - [Mandate fields](#mandate-fields)
 - [Definition fields](#definition-fields)
+- [How Otari builds a definition](#how-otari-builds-a-definition)
 - [Telling whether a definition is running](#telling-whether-a-definition-is-running)
 - [Which profiles exist, and what they take](#which-profiles-exist-and-what-they-take)
 - [The guardrail catalog](#the-guardrail-catalog)
@@ -29,25 +33,69 @@ A top-level list on `/api/v1/chat/completions`, `/api/v1/messages` and
 | `mode` | `monitor` (default) or `block`. See [Modes](#modes). |
 | `on_unavailable` | `block` (default) or `monitor`. See [When the guardrails service is unreachable](#when-the-guardrails-service-is-unreachable). |
 | `validate_kwargs` | Extra arguments for the check, merged on top of the profile's own. |
-| `url` | A guardrails service to send this check to instead of the deployment's. A URL that fails Otari's address safety check is a `400`. |
-| `on` | The directions to check. Defaults to `["input"]`; `output` is accepted but not enforced yet. |
+| `url` | A guardrails service to send this check to instead of the deployment's. It must be on a public address: loopback, private and other internal addresses are refused with a `400`, and Otari connects to the address it checked, with no redirect followed. |
+| `credential` | Sent to `url` as `Authorization: Bearer`. Requires `url`, which must then be `https`, and an entry carrying one must be the only entry for its profile. Dropped when an organization or a routing policy mandates the same profile, because the mandate's endpoint replaces yours. |
+| `on` | What the guardrail reads: any of `input`, `tool_results`, `tool_calls` and `output`. Defaults to `["input"]`. See [What a guardrail reads](#what-a-guardrail-reads). |
+
+## What a guardrail reads
+
+`on` lists what a guardrail reads, on all three endpoints:
+
+| `on` | What it reads | When |
+| --- | --- | --- |
+| `input` | The user content that arrived since the model's last turn. A final assistant message (a prefill) is not a turn. | Before the provider is called. |
+| `tool_results` | Every tool result in the request (a Chat Completions `tool` message, a Messages `tool_result` block, a Responses `function_call_output`), and each result of a tool Otari runs (MCP, web search, web fetch, code execution) before the model reads it. | Before the provider is called, and inside the tool loop. |
+| `tool_calls` | Each call the model makes: to a tool Otari runs, before it runs, and to one the client runs, before the answer reaches the client. A call's arguments are read as JSON. | Inside the tool loop, and once the answer is complete. |
+| `output` | The text of the model's answer. | Once the answer is complete. |
+
+An older tool result is read again on every request because a client resends
+the results it holds, and a result withheld once has to stay withheld. Otari's
+own `[tool error]` messages are never read.
+
+Each piece of content is its own check, and the checks on one request run
+concurrently. A gateway worker keeps the verdicts it got for about an hour, by the check (profile, endpoint, credential and arguments, or a
+definition's version) and the exact text, so a tool result resent on every turn
+of an agent loop costs one call to the guardrail per worker. A check that gave no
+verdict is asked again.
+
+Images and documents are not read, and neither is a Responses `shell_call_output`,
+whose output is stdout and stderr chunks rather than text. A guardrail on `output`
+or `tool_calls` needs the whole answer, so a streamed answer is held until it is complete and then sent
+at once.
 
 ## Modes
 
-| Mode | Behavior |
+| Mode | What it does when the guardrail fires |
 | --- | --- |
-| `monitor` (default) | Forwards to the provider and surfaces the verdict on the `Otari-Guardrails` response header. |
-| `block` | Returns `403` (`guardrail_violation`) and never calls the provider when the input is flagged. |
+| `monitor` (default) | Records the verdict on the `Otari-Guardrails` response header and the request's trace, and changes nothing. |
+| `block` | Refuses flagged input with `403` (`guardrail_violation`) before the provider is called, and a flagged answer with the same `403` after it ran (the answer is billed). A flagged tool result is withheld: the model reads a `[tool error]` message saying Otari withheld it and which profile flagged it, and the request goes on, so an agent can recover. A flagged call to a tool Otari runs is skipped the same way. A flagged call the client would run refuses the answer. |
+
+The client still holds the original of a tool result Otari withheld; Otari
+replaces it again each time it is sent.
 
 ## Reading the `Otari-Guardrails` header
 
-A served non-streaming request carries one entry per input guardrail. A
-streamed response does not carry the header yet, though a `block` guardrail
-still refuses the request before any bytes are sent.
+When input guardrail results are available, both non-streamed and streamed
+responses carry one header entry per profile. When no guardrails apply, the header
+is absent. A `block` guardrail refuses a flagged request before any bytes are sent.
 
 ```json
 [{"profile": "prompt-injection", "mode": "monitor", "valid": null, "score": null, "status": "unavailable", "reason": "not_configured"}]
 ```
+
+A profile that read several pieces of content reports the one that says the
+most: a flag, then a check that could not run, then one with no verdict. A tool
+result read again only so it stays withheld is reported only when it was.
+`withheld` counts the tool results and tool calls the profile withheld, and is
+absent at zero:
+
+```json
+[{"profile": "prompt-injection", "mode": "block", "valid": false, "score": 1.0, "status": "evaluated", "withheld": 1}]
+```
+
+A streamed response's header is sent before the answer, so it does not count what
+the tool loop or the answer's guardrails did; the request's trace records each
+check.
 
 `valid: null` alone cannot tell a check that did not run from one that ran and
 gave no verdict, so `status` says which:
@@ -58,33 +106,60 @@ gave no verdict, so `status` says which:
 | `inconclusive` | The check ran and the guardrail returned no verdict. |
 | `unavailable` | The check could not run, and the request was served anyway. `reason` says why. |
 
-`reason` appears only on an `unavailable` entry. `not_configured` means the
-deployment has no guardrails service for the profile. `evaluation_failed`
-covers everything else: the service is down, does not serve the profile, or
-answered something malformed. The detail goes to the gateway's log, not to the
-caller. The guardrail's own explanation stays out of the header too, because it
-is free text of any length.
+`reason` appears only on an `unavailable` entry:
+
+- `not_configured`: the deployment has no guardrails service for the profile.
+- `evaluation_failed`: everything else (the service is down, does not serve the
+  profile, or answered something malformed). The detail goes to the gateway's
+  log, not to the caller.
+
+The guardrail's own explanation is never put in the header.
 
 ## When the guardrails service is unreachable
 
 A `block` guardrail that cannot be evaluated at all (service down, no URL
-configured, malformed response) **fails closed**: the request is rejected with a
-`502` rather than forwarded unchecked. A `monitor` guardrail fails open, since it
-was never enforcing.
+configured, malformed response) **fails closed**: input it cannot read is
+refused with a `502` rather than forwarded unchecked, and an answer with a `403`.
+A tool result it cannot read is withheld instead, as a flagged one is, with a
+message saying it could not be checked, and a tool call Otari would run is
+skipped. A `monitor` guardrail fails open, since it was never enforcing.
 
-A mandated entry whose endpoint fails its safety check counts as unevaluable
-too, and takes the same two paths. That covers a host that has stopped
-resolving, so an organization's endpoint going away is an outage of that entry
-rather than a refusal of every request scoped to it. A `url` you send in the
-request body is different: it is yours to fix, so a URL that fails the check is
-a `400` naming what was wrong with it.
+A service that answers with no verdict (`valid: null`) has not evaluated the
+input either, so a `block` guardrail takes the same two paths for it: the
+default refuses with the same `502`, and `on_unavailable: monitor` serves the
+request and records the check as `inconclusive`.
+
+A mandated entry whose endpoint fails its safety check (including a host that
+has stopped resolving) counts as unevaluable too, and takes the same two paths.
+A `url` sent in the request body that fails the check is a `400` naming what
+was wrong with it.
 
 `on_unavailable` sets this per entry:
 
 | `on_unavailable` | A `block` entry that cannot be evaluated |
 | --- | --- |
 | `block` (default) | Refuses the request with `502`. |
-| `monitor` | Serves the request and records the check as `unavailable`, trading enforcement for availability. |
+| `monitor` | Serves the request and records the check as `unavailable`, or `inconclusive` when the service gave no verdict, trading enforcement for availability. |
+
+A mandate that names a [definition](#definition-fields) is checked inside the
+gateway, by the client Otari built from it. When the definition is not
+available (paused, deleted, failed to build, or not yet picked up by this
+worker), the check cannot be evaluated and takes the same two paths. The caller
+is told the profile only; details stay in the gateway's log.
+
+## How the layers compose
+
+Three layers can name a guardrail: the caller's request, the caller's
+organization, and an operator's [routing policy](routing.md). They are merged by
+profile. Each layer can add or tighten a check but never weaken one: `block` beats
+`monitor`, for both `mode` and `on_unavailable`, and what a guardrail reads (`on`)
+is the union of the layers. A caller who sends `monitor` for
+a profile their organization mandates in `block` mode still gets `block`. An
+organization mandate adds to what callers send; it never replaces it.
+
+Where two layers name the same profile, the outer layer decides which check runs
+and with what arguments, so a caller cannot redirect a mandated check. The
+routing policy is outermost.
 
 ## Mandate fields
 
@@ -94,8 +169,8 @@ session, and an organization owner or admin) carry:
 | Field | Meaning |
 | --- | --- |
 | `profile` | The profile on the guardrails service. One entry per profile per organization. |
-| `mode`, `on_unavailable` | The same two settings a request-body entry has, with the same meanings. |
-| `url` | An endpoint of the organization's own. Omit it to use the deployment's `guardrails_url`. |
+| `mode`, `on`, `on_unavailable` | The same three settings a request-body entry has, with the same meanings. `on` defaults to `["input"]`. |
+| `url` | An endpoint of the organization's own, on a public address, held to the same rule as a request's `url`. Omit it to use the deployment's `guardrails_url`, which the operator sets and which may be on a private address. |
 | `definition_id` | One of the organization's own guardrail definitions, for Otari to build and run the check itself. Exclusive with `url` and `credential`, which name a service instead. An explicit `null` clears it. |
 | `credential` | Sent to that endpoint as `Authorization: Bearer`. Requires `url`, which must then be `https`, so the credential is never sent to the deployment URL, which may be a plain-http sidecar. Encrypted at rest, never returned. |
 | `validate_kwargs` | Forwarded to the guardrails service `/validate` call. A parameter whose name looks credential-shaped (it contains `key`, `secret`, `token`, `password`, `authorization` or `credential`) is read back as `***` rather than its stored value. Sending `***` back keeps what is stored, so editing the rest of an entry does not overwrite the parameter you were never shown. |
@@ -132,16 +207,17 @@ its name alone:
   "build_state": "built" }
 ```
 
-`create_kwargs` comes back in clear deliberately: the credentials were already
-taken out of it by flag, and a form has to round-trip an endpoint or a project
-id. Sending a `***` back keeps the value stored under that name, a new value
-rotates it, and a credential left out of a sent map is cleared, so editing the
-endpoint of an entry does not overwrite the key you were never shown. Omitting
-`create_kwargs` altogether leaves both columns untouched and reads neither,
-which is what lets an admin on a deployment whose `OTARI_SECRET_KEY` has moved
-still turn the guardrail off and repair it by typing the credential again. Such
-a row reports `secrets_decryptable: false` and an empty `create_secrets` rather
-than failing the whole listing.
+`create_kwargs` comes back in clear because the credentials were already taken
+out of it by the catalog's `secret` flag. On a write:
+
+- `***` keeps the credential stored under that name.
+- A new value rotates it.
+- A credential left out of a sent map is cleared.
+- Omitting `create_kwargs` altogether leaves both columns untouched and reads
+  neither. An admin can therefore still disable a definition whose credentials
+  no longer decrypt (because `OTARI_SECRET_KEY` changed) and repair it by typing
+  the credential again. Such a row reports `secrets_decryptable: false` and an
+  empty `create_secrets` rather than failing the whole listing.
 
 A write saves the row and then builds it on the worker that served it, so a
 guardrail this deployment cannot construct is still stored, and the response
@@ -149,39 +225,80 @@ says what happened.
 
 ### Which definitions are refused
 
-What may be defined is the catalog's answer and not a list Otari keeps, so the
-set the form offers and the set the store accepts cannot disagree. A definition
-is refused when its guardrail is not one this deployment can build, when an
-argument is not one that guardrail declares, when an argument is a live object
-rather than configuration (Bedrock's `boto3_session` and watsonx's `api_client`
-are the two, and the message names the arguments to use instead), and when a
-required argument that no environment variable can supply is missing. Whether a
-variable is *set* is never consulted: the process that writes the row is not
-always the process that builds the guardrail, and the row may outlive both.
+What may be defined is the catalog's answer, not a list Otari keeps. A
+definition is refused when:
 
-An argument whose value carries a scheme is checked as an address too, because
-a later step builds the guardrail from these arguments and dials it. Seven of
-the eight definable guardrails take one, spelled `endpoint`, `base_url` or
-`url`, and the check reads the value rather than the argument's name, so a
-spelling any-guardrail adds next is covered without an Otari release. It
-refuses plain `http`, an address with no host, and a host that resolves inside
-the network Otari runs in, and it looks inside a nested argument such as
-Alinia's `detection_config`. The check runs at the write and not on every
-request: the guardrail owns the socket it dials, so a later lookup would report
-something Otari could not act on. Two things follow. An endpoint that arrives
-from an environment variable (`ALINIA_ENDPOINT`, `CONTENT_SAFETY_ENDPOINT`,
-`WATSONX_URL`) is never checked, the same carve-out the required-argument rule
-makes, and that address is the operator's own rather than an organization
-admin's. And an operator who has set `OTARI_MCP_ALLOW_PRIVATE_HOSTS=true` has
-turned the private-address half of this check off as well: one flag covers
-every address this gateway is asked to dial.
+- its guardrail is not one this deployment can build;
+- an argument is not one that guardrail declares;
+- an argument is a live object rather than configuration (Bedrock's
+  `boto3_session` and watsonx's `api_client`; the message names the arguments
+  to use instead);
+- a required argument that no environment variable can supply is missing.
+  Whether the variable is *set* is never consulted, because the process that
+  writes the row is not always the one that builds the guardrail.
 
-Two guardrails the catalog lists cannot be defined this way. `bedrock_guardrails`
-needs both AWS keys, because without them boto3 falls back to the instance role
-of the host Otari runs on, which is the operator's identity rather than the
-organization's. And `any_llm` is refused outright: it takes no credential of its
-own, so it would judge text by calling an LLM on whatever key the deployment's
-environment holds, with nothing metering the call and nothing refunding it.
+Any argument whose value carries a scheme (an `endpoint`, `base_url` or `url`,
+including inside a nested argument such as Alinia's `detection_config`) is
+checked as an address at write time. It refuses plain `http`, an address with
+no host, and a host that resolves to anything but a public address, loopback
+included. No setting relaxes it. For `watsonx_guardian` and `openai_moderation`,
+Otari also checks the address on every request and connects to the address it
+checked, following no redirect.
+
+The other guardrails that take an address open their connection in the
+vendor's own library, which follows redirects, so their address must be on the
+vendor's own hosts:
+
+| Guardrail | Hosts an endpoint may name |
+| --- | --- |
+| `lakera_guard` | `api.lakera.ai`, `eu.api.lakera.ai`, `us.api.lakera.ai`, `ap-southeast-1.api.lakera.ai` |
+| `patronus` | `api.patronus.ai` |
+| `azure_content_safety`, `azure_prompt_shields` | a subdomain of `cognitiveservices.azure.com` (your resource's endpoint) |
+| `alinia` | none: Alinia publishes no API host, so leave the endpoint out to use the operator's `ALINIA_ENDPOINT` |
+
+A definition that names its own address must carry its own credentials too
+(`api_key`, and for watsonx a `project_id` or `space_id`), each as non-empty
+text. Otherwise the guardrail would read the operator's environment variable
+and send the operator's key to that address, so such a definition is refused.
+A credential sent as anything but text (`false`, `0`, a list) is refused on any
+definition.
+
+An address's host must be an IP address or plain letters, digits, dots and
+hyphens, and the URL may hold no user information, backslash, whitespace or
+control character, since the vendor libraries could read such a URL as a
+different host.
+
+These rules run when a definition is saved and again whenever its guardrail is
+built, so a definition saved before them stops running. Its `build_state` reads
+`failed` and `build_refusal` names the rule and the argument. Neither covers an endpoint supplied by an environment variable
+(`ALINIA_ENDPOINT`, `CONTENT_SAFETY_ENDPOINT`, `WATSONX_URL`), which is the
+operator's own.
+
+Two guardrails the catalog lists cannot be defined this way:
+
+- `bedrock_guardrails` needs both AWS keys; without them boto3 would fall back
+  to the instance role of the host Otari runs on, the operator's identity.
+- `any_llm` is refused outright: it takes no credential of its own, so it would
+  call an LLM on the deployment's environment key, unmetered.
+
+## How Otari builds a definition
+
+Otari builds every enabled definition when it starts and keeps it ready in
+memory, so a request never waits for its client to be built. A hosted-API
+guardrail still waits for the vendor's verdict on every check.
+
+- **A write rebuilds the definition** on the worker that served it, and the
+  response reports the outcome. Other workers pick up changes within about
+  thirty seconds.
+- **A failed build is not retried** until the definition changes, since retrying
+  a wrong credential cannot help. A build that only timed out is retried.
+- **Errors never expose credentials.** The log names the guardrail, the
+  definition's id and the error type only.
+- **A missing vendor SDK fails the build.** A definition can save and then fail
+  to build when an install left out an SDK the
+  [catalog](#the-guardrail-catalog) needs, such as a plain `pip install` that
+  skipped `any-guardrail`'s extras. The log shows the full `ImportError`, naming
+  the extra to install.
 
 ## Telling whether a definition is running
 
@@ -198,19 +315,14 @@ A read of a definition carries `build_state`:
 deployment-wide answer here: with several workers or replicas, a read taken
 seconds after a write can say `pending` on one and `built` on the next, and both
 are true. Treat a lasting `pending` as worth a second look rather than as a
-failure, and `failed` as the one to act on.
-
-This is the field that keeps `enabled: true` honest. Without it a definition
-with a mistyped credential saves, reports nothing wrong, and refuses every
-request in the scope of any mandate that names it.
+failure, and `failed` as the one to act on. `built` does not prove the vendor
+accepts the credential: some guardrails reach the vendor only when they check.
 
 ## Which profiles exist, and what they take
 
 `GET /api/v1/tool-settings/guardrails/profiles` lists the profiles the deployment's
 guardrails service has actually built, with the `validate_kwargs` each one
-accepts. It drives the dashboard's guardrail form, so an entry is configured by
-picking a profile and filling in typed fields rather than by naming a profile
-from memory and hand-writing a dict.
+accepts. The dashboard's guardrail form is built from it.
 
 The profiles come from the service's own `GET /profiles`, which reports each
 profile's name and the `any-guardrail` class it was built from; the parameters
@@ -258,8 +370,11 @@ unavailable state. Any signed-in user and any API key can read it. What it
 answers is a property of the installed library, identical on every deployment
 of the same build, and a parameter's environment variable is named without
 saying whether it is set.
-[Which guardrails Otari can run itself](guardrails.md#which-guardrails-otari-can-run-itself)
-explains what it leaves out.
+
+It lists only the [any-guardrail](https://github.com/mozilla-ai/any-guardrail)
+guardrails that call a hosted API. A guardrail that runs model weights is left
+out, even if it also offers a hosted API, because a saved definition has no way
+to choose that API.
 
 ## What a guardrails service answers
 

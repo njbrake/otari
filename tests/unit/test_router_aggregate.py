@@ -14,7 +14,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute, iter_route_contexts
 
 from gateway.api.main import _register_contributed_routers, _register_core_routers, register_routers
-from gateway.api.routes import otlp
+from gateway.api.routes import otlp, retired_root
 from gateway.container import build_container
 from gateway.core.config import API_ROOT, OTLP_ROOT, GatewayConfig
 
@@ -67,16 +67,17 @@ def test_a_prefix_on_the_aggregate_moves_every_route() -> None:
     assert prefixed == Counter({(f"/probe{path}", method): count for (path, method), count in plain.items()})
 
 
-def test_register_routers_hands_the_app_the_aggregate_and_the_otlp_sibling() -> None:
+def test_register_routers_hands_the_app_the_aggregate_and_its_siblings() -> None:
     app = FastAPI()
     app.state.container = build_container(None)
     app.state.enabled_features = ()
 
     register_routers(app, _gateway_config())
 
-    otlp_only = FastAPI()
-    otlp_only.include_router(otlp.router, prefix=OTLP_ROOT)
-    assert _operations(app) == _mounted_on(APIRouter(prefix=API_ROOT)) + _operations(otlp_only)
+    siblings = FastAPI()
+    siblings.include_router(otlp.router, prefix=OTLP_ROOT)
+    siblings.include_router(retired_root.router)
+    assert _operations(app) == _mounted_on(APIRouter(prefix=API_ROOT)) + _operations(siblings)
 
 
 def _mount_order(config: GatewayConfig) -> list[str]:

@@ -358,17 +358,6 @@ def test_failover_serves_the_next_candidate_and_bills_it_once(client: TestClient
     assert served[0]["request_group_id"] == absorbed[0]["request_group_id"]
     assert served[0]["request_group_id"] is not None
 
-    # Both record the name the caller sent and the request id they were given, so the
-    # id in the caller's log finds the whole plan.
-    assert served[0]["requested_model"] == absorbed[0]["requested_model"] == "fast"
-    assert served[0]["request_id"] == absorbed[0]["request_id"] == resp.headers["Otari-Request-ID"]
-    # The serving row counts the attempt it recovered from; listed without absorbed
-    # rows, the request is one row.
-    assert served[0]["absorbed_attempts"] == 1
-    assert absorbed[0]["absorbed_attempts"] == 0
-    folded = client.get(f"{API_ROOT}/usage", params={"include_absorbed": "false"}, headers=HEADERS).json()
-    assert [(r["id"], r["absorbed_attempts"]) for r in folded] == [(served[0]["id"], 1)]
-
 
 def test_a_local_adapter_fault_still_fails_over(client: TestClient) -> None:
     """A fault no retry of the same candidate fixes can still be one the next candidate does not have."""
@@ -1687,11 +1676,14 @@ def test_a_policy_guardrail_is_handed_to_the_guardrail_runner(guarded_client: Te
     _create_user(guarded_client)
     seen: list[Any] = []
 
-    async def capture(guardrails: Any, text: str, **kwargs: Any) -> None:
+    async def capture(guardrails: Any, text: str, **kwargs: Any) -> Any:
+        from gateway.services.guardrails import GuardrailVerdict
+
         seen.append(guardrails)
+        return GuardrailVerdict()
 
     with (
-        patch("gateway.api.routes._pipeline.apply_input_guardrails", new=capture),
+        patch("gateway.api.routes._guardrails.run_input_guardrails", new=capture),
         patch("gateway.api.routes.chat.acompletion", new=AsyncMock(return_value=_completion("gpt-5-mini"))),
     ):
         resp = guarded_client.post(
@@ -1711,11 +1703,14 @@ def test_a_caller_cannot_weaken_a_policy_guardrail_over_the_wire(guarded_client:
     _create_user(guarded_client)
     seen: list[Any] = []
 
-    async def capture(guardrails: Any, text: str, **kwargs: Any) -> None:
+    async def capture(guardrails: Any, text: str, **kwargs: Any) -> Any:
+        from gateway.services.guardrails import GuardrailVerdict
+
         seen.append(guardrails)
+        return GuardrailVerdict()
 
     with (
-        patch("gateway.api.routes._pipeline.apply_input_guardrails", new=capture),
+        patch("gateway.api.routes._guardrails.run_input_guardrails", new=capture),
         patch("gateway.api.routes.chat.acompletion", new=AsyncMock(return_value=_completion("gpt-5-mini"))),
     ):
         resp = guarded_client.post(
@@ -1748,6 +1743,7 @@ def test_a_blocking_policy_guardrail_refuses_the_request(guarded_client: TestCli
         credentials: Any = None,
         mandated: Any = None,
         in_process: Any = None,
+        unsafe: Any = None,
     ) -> Any:
         from gateway.services.guardrails import GuardrailResult, GuardrailVerdict
 
@@ -1756,7 +1752,7 @@ def test_a_blocking_policy_guardrail_refuses_the_request(guarded_client: TestCli
         )
 
     with (
-        patch("gateway.api.routes._helpers.run_input_guardrails", new=flagged),
+        patch("gateway.api.routes._guardrails.run_input_guardrails", new=flagged),
         patch("gateway.api.routes.chat.acompletion", new=provider),
     ):
         resp = guarded_client.post(
@@ -1820,8 +1816,7 @@ def test_a_streamed_fallover_correlates_both_of_its_rows(client: TestClient) -> 
         return chunks()
 
     with patch("gateway.api.routes.chat.acompletion", new=flaky_stream):
-        resp = _chat(client, "fast", stream=True)
-        assert resp.status_code == 200
+        assert _chat(client, "fast", stream=True).status_code == 200
 
     rows = _usage_rows(client)
     served = [r for r in rows if r["status"] == "success"]
@@ -1831,8 +1826,6 @@ def test_a_streamed_fallover_correlates_both_of_its_rows(client: TestClient) -> 
     assert served[0]["attempt_position"] == 2
     assert served[0]["request_group_id"] is not None
     assert served[0]["request_group_id"] == absorbed[0]["request_group_id"]
-    assert served[0]["requested_model"] == absorbed[0]["requested_model"] == "fast"
-    assert served[0]["request_id"] == absorbed[0]["request_id"] == resp.headers["Otari-Request-ID"]
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
@@ -1908,6 +1901,74 @@ def test_responses_endpoint_fails_over(client: TestClient) -> None:
     assert resp.status_code == 200, resp.text
     assert calls == ["openai:gpt-5-mini", "anthropic:claude-haiku-4-5"]
     assert _served_by(resp) == ("anthropic", "claude-haiku-4-5", "2", "true")
+
+
+# Each format's reasoning hint, as a request carries it and as the provider call is sent it.
+_REASONING_HINTS: dict[str, tuple[dict[str, Any], str]] = {
+    "chat": ({"reasoning_effort": "low"}, "reasoning_effort"),
+    "responses": ({"reasoning": {"effort": "low"}}, "reasoning"),
+    "messages": ({"thinking": {"type": "enabled", "budget_tokens": 2048}}, "thinking"),
+    "messages-effort": ({"output_config": {"effort": "low"}}, "output_format"),
+}
+
+
+@pytest.mark.parametrize("endpoint", list(_REASONING_HINTS))
+def test_a_fallback_that_does_not_reason_is_sent_no_reasoning_hint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    """The hint is the caller's for the head, and a fallback with nothing to tune would only fail over it."""
+    from gateway.api.routes import _pipeline
+    from gateway.types.models_dev import parse_catalog
+
+    catalog = parse_catalog(
+        {
+            "openai": {"models": {"gpt-5-mini": {"reasoning": True}}},
+            "anthropic": {"models": {"claude-haiku-4-5": {"reasoning": False}}},
+        }
+    )
+    monkeypatch.setattr(_pipeline, "cached_models_dev_catalog", lambda: catalog)
+    _create_user(client)
+    hint, field = _REASONING_HINTS[endpoint]
+    sent: list[dict[str, Any]] = []
+
+    async def flaky(**kwargs: Any) -> Any:
+        sent.append(kwargs)
+        if kwargs["model"] in ("openai:gpt-5-mini", "gpt-5-mini"):
+            raise _http_error(503)
+        if endpoint.startswith("messages"):
+            return _message_response()
+        if endpoint == "responses":
+            from any_llm.types.responses import Response as ProviderResponse
+
+            return ProviderResponse.model_construct(
+                id="resp-1", object="response", created_at=0, model="claude-haiku-4-5", output=[], usage=None
+            )
+        return _completion("claude-haiku-4-5")
+
+    if endpoint.startswith("messages"):
+        body = {
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"user_id": "test-user"},
+        }
+        with patch("gateway.api.routes.messages.amessages", new=flaky):
+            resp = client.post(f"{API_ROOT}/messages", json={"model": "fast", **body, **hint}, headers=HEADERS)
+    elif endpoint == "responses":
+        with (
+            patch("gateway.api.routes.responses.aresponses", new=flaky),
+            patch("gateway.services.inference._responses_bridge.aresponses_via_chat_completions", new=flaky),
+        ):
+            resp = client.post(
+                f"{API_ROOT}/responses",
+                json={"model": "fast", "input": "hi", "user": "test-user", **hint},
+                headers=HEADERS,
+            )
+    else:
+        with patch("gateway.api.routes.chat.acompletion", new=flaky):
+            resp = _chat(client, "fast", **hint)
+
+    assert resp.status_code == 200, resp.text
+    assert [field in kwargs for kwargs in sent] == [True, False]
 
 
 # ---------------------------------------------------------------------------

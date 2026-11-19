@@ -1,5 +1,4 @@
-import type { ReactNode } from "react"
-import { Skeleton } from "@/design-system/feedback/Skeleton"
+import type { CSSProperties, ReactNode } from "react"
 import { type Severity, SeverityMark } from "./SeverityMark"
 
 export function KpiCell({
@@ -9,7 +8,6 @@ export function KpiCell({
   subline,
   delta,
   graphic,
-  isLoading = false,
 }: {
   label: string
   value: string
@@ -20,14 +18,9 @@ export function KpiCell({
    * whether the number is missing or zero, and the empty state is simply the
    * case where every cell has something to say.
    */
-  subline?: ReactNode
+  subline?: string
   delta?: ReactNode
   graphic?: ReactNode
-  /**
-   * The read behind the value has not answered: the value and the line under it
-   * hold their space as skeletons rather than showing a figure nobody has read.
-   */
-  isLoading?: boolean
 }) {
   return (
     // `grid-rows-subgrid` over `row-span-4` is what keeps the five values on one
@@ -49,69 +42,63 @@ export function KpiCell({
     // beside it (218px at 1280, since the track shrinks and the string does
     // not). Bounding the column is what makes the truncation and the
     // sparkline's `w-full` mean anything.
-    <div
-      aria-busy={isLoading || undefined}
-      className="grid row-span-4 min-w-0 grid-rows-subgrid grid-cols-[minmax(0,1fr)] gap-1.5 border-border px-7 py-[1.125rem]"
-    >
+    //
+    // The rule between cells belongs to a cell with a neighbor on its right,
+    // so it comes off the last cell of each row, at every column count. On a
+    // phone the left lane starts flush with the page column, the right lane
+    // sits 16px off the rule, and an odd last cell takes the whole row.
+    <div className="@container grid row-span-4 min-w-0 grid-rows-subgrid grid-cols-[minmax(0,1fr)] gap-1.5 border-border px-7 py-[1.125rem] not-last:border-r max-sm:px-4 max-sm:odd:pl-0 max-sm:even:pr-0 max-sm:even:border-r-0 max-sm:last:odd:col-span-2 max-sm:last:odd:pr-0 sm:max-xl:[&:nth-child(3n)]:border-r-0">
       <span className="flex items-end text-overline">{label}</span>
       {/* 400, deliberately, where the rest of the page's emphasis is 550: at
           30px the size is already the hierarchy, and a heavier numeral here
-          would out-weigh the page title above it. */}
-      <span className="text-mono-figure font-normal text-foreground">
-        {isLoading ? (
-          <>
-            <Skeleton className="h-[1lh] w-32" />
-            <span className="sr-only">Loading</span>
-          </>
-        ) : (
-          value
-        )}
+          would out-weigh the page title above it. One line, so a figure and its
+          unit ("15.85 s") never part. */}
+      <span
+        className="otari-kpi-figure text-mono-figure font-normal text-nowrap text-foreground"
+        style={{ "--figure-chars": value.length } as CSSProperties}
+      >
+        {value}
       </span>
-      {/* One line, always present, so no cell is shorter than its neighbors,
-          and never wrapped, which would undo the subgrid's shared baseline.
-          Most-judged to least: a severity, then the comparison, then the raw
-          fact. The severity and the delta hold their width; the subline is the
-          only thing that gives, and it truncates, because its facts also live
-          in the breakdown tables while a delta lives nowhere else. */}
-      <span className="flex min-h-[1.125rem] items-center gap-2 text-xs text-nowrap text-muted">
-        {isLoading ? (
-          <Skeleton className="h-3 w-24" />
-        ) : (
-          <>
-            {severity ? <SeverityMark severity={severity} /> : null}
-            {severity && delta ? <Separator /> : null}
-            {delta}
-            {(severity || delta) && subline ? <Separator /> : null}
-            {subline ? (
-              <span
-                className="min-w-0 truncate"
-                title={typeof subline === "string" ? subline : undefined}
-              >
-                {subline}
-              </span>
-            ) : null}
-          </>
-        )}
+      {/* One line, always present, so no cell is shorter than its neighbors.
+          A severity, a subline and a delta all share it where a cell has more
+          than one: dropping any of them to make room would lose information the
+          strip is there to carry, and a cell with a spare line would break the
+          shared baseline the subgrid buys. */}
+      {/* Most-judged to least, left to right: a severity, then the comparison,
+          then the raw fact. The severity and the delta hold their width; the
+          subline is the only thing that gives, and it truncates, because its
+          facts also live in the breakdown tables while a delta lives nowhere
+          else. On a desk the line never wraps. On a phone, where a half-width
+          cell leaves the subline a few characters, it takes a line of its own
+          instead; the subgrid gives that height to every cell in the strip's
+          row, so their baselines still line up. */}
+      <span className="flex min-h-[1.125rem] items-center gap-2 text-xs text-nowrap text-muted max-sm:flex-wrap max-sm:content-start max-sm:gap-y-0.5">
+        {severity ? <SeverityMark severity={severity} /> : null}
+        {severity && delta ? <Separator /> : null}
+        {delta}
+        {(severity || delta) && subline ? (
+          <Separator className="max-sm:hidden" />
+        ) : null}
+        {subline ? (
+          <span className="min-w-0 truncate max-sm:basis-full" title={subline}>
+            {subline}
+          </span>
+        ) : null}
       </span>
       {/* Reserved rather than conditional: an absent sparkline must not make one
           cell shorter than the four beside it. Dropped in the empty state by
           the caller passing none to any cell, which shortens the whole strip. */}
-      {/* At least the sparkline's height, and as tall as a graphic that says
-          more (a split with its legend): the subgrid gives every cell in the
-          row the tallest one's height, so the baselines still line up. */}
       {graphic ? (
-        <span className="flex min-h-10 items-center">
-          {isLoading ? <Skeleton className="h-2 w-full" /> : graphic}
-        </span>
+        <span className="flex h-10 items-center">{graphic}</span>
       ) : null}
     </div>
   )
 }
 
 /** The middot between two things sharing the line under a value. */
-function Separator() {
+function Separator({ className }: { className?: string }) {
   return (
-    <span aria-hidden className="shrink-0 text-subtle">
+    <span aria-hidden className={`shrink-0 text-subtle ${className ?? ""}`}>
       ·
     </span>
   )

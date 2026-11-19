@@ -5,8 +5,6 @@
 // and justified on purpose: a type that could come from the spec and does not is
 // a type that will drift from the API without anyone noticing.
 
-import type { UsageChannel } from "./index"
-
 // ---------------------------------------------------------------------------
 // Routing policy bodies.
 //
@@ -68,6 +66,8 @@ export interface PolicyGuardrail {
   /** Required: the per-request field defaults to "monitor", so an omitted mode
    *  here would look like a mandate and behave as shadow mode. */
   mode: "block" | "monitor"
+  /** What it reads; the gateway's default is the input alone. */
+  on?: ("input" | "tool_results" | "tool_calls" | "output")[]
   on_unavailable?: "block" | "monitor"
   url?: string | null
 }
@@ -115,6 +115,9 @@ export interface UsageFilters {
   // analytics previous-period query so its window does not overlap the current one.
   end_date?: string
   status?: string
+  // One HTTP status a request was answered with ("403"), for a link that names
+  // the failures it counted rather than every error.
+  status_code?: string
   // The three entity filters accept several values on every usage endpoint: they go
   // on the wire as repeated query params and match any of them, so one chart can
   // compare a handful of models / users / keys and the request log can be scoped to
@@ -139,34 +142,6 @@ export interface UsageFilters {
   // and pinning it to the two built-ins forced a cast at the one call site that
   // drills into a named tool.
   tool?: string
-  // Budget participation: false scopes to imported rows (the bulk-op target set).
-  counts_toward_budget?: boolean
-  // Free-text search over model, requested name, session, key name and member;
-  // a pasted request id matches that request exactly.
-  q?: string
-  // The names the caller sent (a model, a routing policy or an alias).
-  requested_model?: string[]
-  // false lists each routed request once, as the row that settled it, with its
-  // earlier failed attempts counted on that row. The list and count only.
-  include_absorbed?: boolean
-  // The inverse of the entity filters above: rows matching none of these.
-  exclude_model?: string[]
-  exclude_user_id?: string[]
-  exclude_api_key_id?: string[]
-  exclude_source?: string[]
-  exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[]
-  policy_name?: string[]
-  exclude_policy_name?: string[]
-  // true: only requests a routing policy served; false: only direct ones.
-  routed?: boolean
-  // How requests reached the log, as the server's channel breakdown names it.
-  channel?: UsageChannel[]
-  exclude_channel?: UsageChannel[]
-  // Rows with no key, no billed user, or no session.
-  is_null?: ("api_key_id" | "user_id" | "source_label")[]
-  tokens_gt?: number
-  cost_gt?: number
-  latency_ms_gt?: number
 }
 
 /** Which tool/guardrail service a settings test targets. A path parameter in the

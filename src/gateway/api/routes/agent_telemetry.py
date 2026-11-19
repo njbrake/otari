@@ -16,7 +16,7 @@ the port.
 """
 
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -24,15 +24,8 @@ from pydantic import BaseModel
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import TelemetryStoragePortDep, get_db, require_deployment_operator
-
-# The window, bucket-grid, and fold conventions are the usage reads': a summary read
-# from both endpoints has to describe the same window the same way, so they share
-# one implementation rather than two that drift.
-from gateway.api.routes._usage_common import refuse_wide_grid
-from gateway.core.series import SERIES_TOP_N, dense_series
-from gateway.core.sql import BUCKET_FORMATS, MAX_FILTER_VALUES, bucket_expr, canonical_bucket, dialect_name, match_any
-from gateway.core.usage_filters import request_count, resolve_window
+from gateway.api.deps import TelemetryStoragePortDep, UsageServiceDep, get_db, require_deployment_operator
+from gateway.core.sql import MAX_FILTER_VALUES, bucket_expr, canonical_bucket, dialect_name, match_any
 from gateway.models.usage import UsageLog
 from gateway.ports.telemetry_storage_port import (
     BehaviorCounts,
@@ -40,7 +33,7 @@ from gateway.ports.telemetry_storage_port import (
     TelemetryScanTooLargeError,
     TelemetryStoragePort,
 )
-from gateway.schemas.usage import Bucket
+from gateway.schemas.usage_and_telemetry import Bucket
 from gateway.services.agent_telemetry_admin_service import (
     AgentTelemetryDeleteRequest,
     AgentTelemetryDeleteResult,
@@ -54,6 +47,18 @@ from gateway.services.agent_telemetry_service import (
     METRIC_PULL_REQUESTS,
     compute_series_increment,
     series_point_increments,
+)
+
+# The window, bucket-grid, and fold conventions are the usage summary's: a summary
+# read from both endpoints has to describe the same window the same way, so they
+# share one implementation rather than two that drift.
+from gateway.services.usage_and_telemetry import (
+    MAX_SERIES_POINTS,
+    SERIES_TOP_N,
+    UsageFilters,
+    UsageScope,
+    dense_series,
+    resolve_window,
 )
 
 router = APIRouter(
@@ -283,7 +288,9 @@ def _aware(timestamp: datetime) -> datetime:
 
 def _bucket_key(timestamp: datetime, bucket: Bucket) -> str:
     """The canonical UTC bucket a point falls in, matching the SQL bucket grid."""
-    return _aware(timestamp).astimezone(UTC).strftime(BUCKET_FORMATS[bucket])
+    utc = _aware(timestamp).astimezone(UTC)
+    fmt = "%Y-%m-%dT%H:00:00Z" if bucket == "hour" else "%Y-%m-%dT00:00:00Z"
+    return utc.strftime(fmt)
 
 
 def _ratio(numerator: float, denominator: float) -> float | None:
@@ -370,6 +377,7 @@ def _fold_behavior(counts: BehaviorCounts) -> AgentTelemetryBehavior:
 async def agent_telemetry_summary(
     db: Annotated[AsyncSession, Depends(get_db)],
     storage: TelemetryStoragePortDep,
+    usage_service: UsageServiceDep,
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
     user_id: _UserFilter = None,
@@ -412,10 +420,14 @@ async def agent_telemetry_summary(
     # Requests, not rows, the same way /api/v1/usage/summary counts them: a routed
     # request writes one row per recovered attempt, and counting those would
     # deflate the error rate against a request volume the Usage page never shows.
-    usage_row = (
-        await db.execute(select(func.coalesce(func.sum(UsageLog.cost), 0.0), request_count()).where(*usage_conditions))
-    ).one()
-    usage = AgentTelemetryUsage(cost=float(usage_row[0]), requests=int(usage_row[1]))
+    # Every workspace, as the telemetry storage read beside it covers.
+    cost, requests = await usage_service.cost_and_requests(
+        UsageFilters(
+            start_date=start, end_date=end, user_id=user_id, api_key_id=api_key_id, source_label=session_label
+        ),
+        UsageScope(workspaces=None),
+    )
+    usage = AgentTelemetryUsage(cost=cost, requests=requests)
 
     outcomes = AgentTelemetryOutcomes(
         commits=outcome_totals.get(METRIC_COMMITS, 0.0),
@@ -548,7 +560,12 @@ async def agent_telemetry_series(
     so it charts telemetry volume rather than cost. Master-key only.
     """
     start, end = resolve_window(start_date, end_date)
-    refuse_wide_grid(start, end, bucket)
+    step = timedelta(hours=1) if bucket == "hour" else timedelta(days=1)
+    if (end - start) / step > MAX_SERIES_POINTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"window spans more than {MAX_SERIES_POINTS} {bucket} buckets; use bucket=day or narrow the range",
+        )
     scope = _scope(start_date=start, end_date=end, user_id=user_id, api_key_id=api_key_id, name=name)
     counts = await storage.grouped_row_counts(filters=scope, group_by=group_by, bucket=bucket, top_n=SERIES_TOP_N)
 

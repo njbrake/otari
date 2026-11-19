@@ -16,6 +16,7 @@ from gateway.log_config import logger
 from gateway.models.pricing import (
     MODEL_KIND,
     OPERATOR_ORIGIN,
+    SEED_ORIGIN,
     ModelPricing,
     OrganizationModelPricing,
     PriceSource,
@@ -96,6 +97,19 @@ def default_pricing_enabled() -> bool:
 # because a provider added in the dashboard rewrites ``config.providers`` while
 # the worker runs.
 _provider_type_resolver: Callable[[str], str | None] | None = None
+
+
+# The hosted provider an instance name is a region of (``tokenhub@sg`` ->
+# ``tokenhub``), whose price a region with none of its own settles at.
+# Registered at startup, as above.
+_region_parent: Callable[[str], str | None] | None = None
+
+
+def configure_region_parents(resolver: Callable[[str], str | None] | None) -> None:
+    """Register the lookup from a hosted provider region's name to its provider's."""
+
+    global _region_parent
+    _region_parent = resolver
 
 
 def configure_provider_types(resolver: Callable[[str], str | None] | None) -> None:
@@ -274,6 +288,7 @@ def override_as_model_pricing(override: OrganizationModelPricing) -> ModelPricin
         pricing_tiers=override.pricing_tiers or [],
         unit=override.unit or "token",
         rates=override.rates,
+        origin=override.origin,
     )
 
 
@@ -440,9 +455,19 @@ def pricing_key_forms(model_key: str) -> list[str]:
     ``provider/model``. Settlement, an organization override and the catalog all
     offer the same forms in the same order, so a rate one of them finds cannot be
     a rate another misses.
+
+    A key naming one region of a hosted provider (``tokenhub@sg:model``) also
+    offers its provider's forms after its own, so a region with no rate of its
+    own settles at the provider's.
     """
     instance, separator, model = model_key.partition(":")
-    return [model_key, f"{instance}/{model}"] if separator else [model_key]
+    if not separator:
+        return [model_key]
+    forms = [model_key, f"{instance}/{model}"]
+    parent = _region_parent(instance) if _region_parent is not None else None
+    if parent is not None:
+        forms += [f"{parent}:{model}", f"{parent}/{model}"]
+    return forms
 
 
 def legacy_tool_price_keys(config: GatewayConfig) -> set[str]:
@@ -768,6 +793,16 @@ class ResolvedPricing(NamedTuple):
     source: PriceSource
     reference: str | None = None
     effective_at: datetime | None = None
+
+
+def is_estimated_rate(resolved: ResolvedPricing) -> bool:
+    """Whether nobody chose ``resolved``: a models.dev default, or a rate seeded from one.
+
+    Such a rate is one headline price for the model, so a charge the provider
+    states for the call is the better figure, as on an aggregator whose price
+    moves with the upstream it routes to.
+    """
+    return resolved.source == "defaults" or resolved.pricing.origin == SEED_ORIGIN
 
 
 class PricingProvenance(NamedTuple):
@@ -1192,7 +1227,9 @@ def _first_tool_rate(
                 rate_key, flat_request_cost(deployment[form]), "deployment", old_key=_is_old_key(rate_key, form[0])
             )
     if model_search_rate is not None and any(is_provider_web_search_key(key) for key in lookup.rate_keys):
-        return ToolRate(lookup.rate_keys[0], model_search_rate.unit_rate, model_search_rate.source)
+        return ToolRate(
+            lookup.rate_keys[0], model_search_rate.unit_rate, model_search_rate.source, rules=model_search_rate.rules
+        )
     if default_pricing_enabled():
         for rate_key in lookup.rate_keys:
             list_price = PROVIDER_TOOL_LIST_PRICES.get(rate_key) if isinstance(rate_key, str) else None

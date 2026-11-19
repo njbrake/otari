@@ -25,9 +25,11 @@ export interface ComposerProps {
   isBusy: boolean
   tools: PlaygroundTools | undefined
   isWebSearchOn: boolean
+  isWebFetchOn: boolean
   isCodeExecutionOn: boolean
   selectedMcpIds: string[]
   toggleWebSearch: (isOn: boolean) => void
+  toggleWebFetch: (isOn: boolean) => void
   toggleCodeExecution: (isOn: boolean) => void
   toggleMcpServer: (id: string, isOn: boolean) => void
   /** False where the deployment serves no uploads, which hides the control. */
@@ -57,9 +59,11 @@ export function PlaygroundComposer({
   isBusy,
   tools,
   isWebSearchOn,
+  isWebFetchOn,
   isCodeExecutionOn,
   selectedMcpIds,
   toggleWebSearch,
+  toggleWebFetch,
   toggleCodeExecution,
   toggleMcpServer,
   canAttachFiles,
@@ -80,10 +84,12 @@ export function PlaygroundComposer({
       <div className="otari-composer flex flex-col gap-2 px-3 pt-3 pb-2 has-[textarea:focus-visible]:otari-focus-ring">
         <ActiveToolChips
           isWebSearchOn={isWebSearchOn}
+          isWebFetchOn={isWebFetchOn}
           isCodeExecutionOn={isCodeExecutionOn}
           selectedMcpIds={selectedMcpIds}
           tools={tools}
           onToggleWebSearch={toggleWebSearch}
+          onToggleWebFetch={toggleWebFetch}
           onToggleCodeExecution={toggleCodeExecution}
           onToggleMcpServer={toggleMcpServer}
         />
@@ -137,22 +143,18 @@ export function PlaygroundComposer({
           <ToolsMenu
             tools={tools}
             isWebSearchOn={isWebSearchOn}
+            isWebFetchOn={isWebFetchOn}
             isCodeExecutionOn={isCodeExecutionOn}
             selectedMcpIds={selectedMcpIds}
             onToggleWebSearch={toggleWebSearch}
+            onToggleWebFetch={toggleWebFetch}
             onToggleCodeExecution={toggleCodeExecution}
             onToggleMcpServer={toggleMcpServer}
             isDisabled={isBusy}
           />
           <div className="min-w-0">{modelPicker}</div>
-          {/* The key hint only where a keyboard is likely; a missing model is
-              said at every pointer, since it is why sending is disabled. */}
           {hint ? (
-            <span
-              className={`ml-auto hidden pr-2 text-caption ${
-                missingModel ? "lg:block" : "lg:pointer-fine:block"
-              }`}
-            >
+            <span className="ml-auto hidden pr-2 text-caption lg:block">
               {hint}
             </span>
           ) : null}

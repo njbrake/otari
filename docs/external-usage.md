@@ -1,114 +1,52 @@
-# Importing external usage
+# Import usage from outside Otari
 
-Otari can record usage that it did not proxy, such as subscription-backed coding
-agents or another instrumented application. Imported events appear in the
-dashboard's Overview with their source and an API-equivalent cost estimate.
+Usage that does not go through Otari, such as a coding agent on a subscription or
+an app that calls a provider directly, can still be recorded. It then shows in
+**Sessions** beside your routed traffic, with what the same usage would cost
+on the API.
 
-Importing works on a gateway you run, not on otari.ai today: it needs a
-budget-exempt API key (or the master key), and only a deployment's operator has
-either. A key created on otari.ai's **API keys** page is always budget-enforced,
-so the endpoints on this page refuse it. To record a client's usage on
-otari.ai, route its requests through Otari instead.
+Importing works on a gateway you run, not on otari.ai today. To record a client's
+usage on otari.ai, route its requests through Otari instead.
 
-## Enforcement boundary
+## Create an import key
 
-Imported usage is retrospective. It is never reserved against a budget, never
-updates the enforcement ledger, and never blocks live traffic.
+Imported usage is recorded after the fact: it never counts toward a budget and
+never blocks a request. So it is sent with a key that is exempt from budgets,
+which only the deployment's operator can create.
 
-An API key used for import must therefore be budget-exempt. The deployment's
-operator creates one: with **Exempt from budget** in the deployment view's key
-form, or `exclude_from_budget: true` on `POST /api/v1/keys`. A member's own key
-form has no such option, so that a member cannot exempt their own spend. Keep
-importer keys separate from inference keys: the same flag also exempts live
-traffic through that key from budget and pricing enforcement.
+1. Signed in as the operator, open **API keys** and click **Create API key**.
+2. Name the key for the importer, and open **More options**.
+3. Under **Access**, open **Advanced scopes**, check **Send OpenTelemetry
+   data** and **Report usage observed elsewhere**, and clear **Call models**.
+   Those are the two [scopes](api-keys.md#scopes) importing needs,
+   `telemetry:write` and `usage:write`, and no model calls.
+4. Tick **Exempt from budget**.
+5. Click **Create API key** and copy the key.
 
-If a session already routes through Otari, do not also export its telemetry to
-Otari. The proxied and imported events cannot be correlated reliably, so cost
-analytics would count the session twice.
+Through the API, the same key is
+`{"key_name": "importer", "scopes": ["telemetry:write", "usage:write"], "exclude_from_budget": true}`
+on `POST /api/v1/keys`.
 
-## Authentication and attribution
+Use the key for importing only, and do not give it `inference:run`: the exemption
+also applies to any request sent with it. And do not import usage you also route through Otari, or it is
+counted twice.
 
-`POST /api/v1/usage/external-events` accepts either:
+## Send usage
 
-- A budget-exempt API key. Events bind to that key's user and workspace.
-- The master key. The batch or each event must name an existing user; the
-  default workspace supplies organization context.
+Pick the way that matches where the usage comes from.
 
-Prefer a dedicated API key for each importer. It limits attribution mistakes and
-keeps the master key out of collectors.
+### Claude Code and Codex
 
-## Backfill Claude Code from local transcripts
+They send their usage as they run once pointed at Otari; see the
+[Claude Code](claude-code.md) and
+[Codex](codex.md) guides. For Claude Code sessions from before that,
+`otari import claude-code` reads the transcripts already on disk; see
+[Backfill history from local transcripts](claude-code.md#backfill-history-from-local-transcripts).
 
-For Claude Code specifically, the bundled `otari import claude-code` reads the
-transcripts already on disk and posts them here, which is how history from before
-any exporter was configured gets in. See
-[Use with Claude Code](use-with-claude-code.md#backfill-history-from-local-transcripts).
+### OpenTelemetry
 
-## Import normalized events
-
-```bash
-curl "$OTARI_URL/api/v1/usage/external-events" \
-  -H "Authorization: Bearer $OTARI_IMPORT_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "source": "claude_code",
-    "events": [{
-      "source_event_id": "req_01ABC",
-      "timestamp": "2026-07-22T12:34:56Z",
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-6",
-      "input_tokens": 1200,
-      "output_tokens": 450,
-      "cache_read_tokens": 8000,
-      "session_label": "project:otari"
-    }]
-  }'
-```
-
-The batch contains a source, up to 1,000 events, and an optional default
-`user_id`. Each event supports:
-
-| Field | Purpose |
-| --- | --- |
-| `source_event_id` | Required upstream ID and idempotency key with `source`. |
-| `timestamp` | Required event time used to select effective pricing. |
-| `provider`, `model` | Required pricing selector. |
-| `status` | `success` or `error`; defaults to success. |
-| token fields | Input, output, cache read, cache write, and one-hour cache write. |
-| `cache_tokens_in_prompt` | Marks cache tokens as a subset of input for OpenAI-shaped counts. |
-| `duration_ms` | Recorded request latency. |
-| `session_label` | Optional session or project attribution. |
-| `user_id` | Optional per-event override when the credential may name users. |
-
-The endpoint rejects prompt, completion, tool input, and tool output fields.
-Only metadata and numeric usage are accepted. Use the generated OpenAPI document
-for the exact schema and validation limits.
-
-Rows are unique on `(source, source_event_id)`. Replaying a batch reports
-duplicates without creating new usage rows. When the database cannot take a
-batch right away (another import of the same events is still writing, or the
-database is unreachable), this endpoint and the OTLP endpoints below answer
-`503` with `Retry-After`. Send the batch again: the events it already stored
-come back as duplicates.
-
-## OpenTelemetry
-
-Otari accepts OTLP over HTTP:
-
-```text
-POST /otlp/v1/traces    GenAI spans
-POST /otlp/v1/logs      GenAI log events and recognized coding-agent events
-POST /otlp/v1/metrics   content-free coding-agent outcome metrics
-```
-
-Protobuf and JSON are accepted, with optional gzip. gRPC is not. Authenticate
-with a budget-exempt API key in the Authorization header; the master key is
-refused because OTLP records do not carry trustworthy user attribution. Any
-other key is refused for an export that carries usage, and the spans of one
-that carries none are not kept, so spans alone need the budget-exempt key too.
-
-For a standard OTLP exporter, with your gateway's URL in place of
-`http://localhost:8000`:
+An app instrumented with the OpenTelemetry GenAI conventions exports to your
+gateway's URL plus `/otlp`:
 
 ```bash
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
@@ -116,118 +54,54 @@ export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:8000/otlp"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $OTARI_IMPORT_KEY"
 ```
 
-The endpoint is the Otari origin plus `/otlp`; the exporter appends the signal
-path itself.
+Its spans also show as [sessions](sessions.md). What Otari reads from them is in
+[OpenTelemetry](external-usage-reference.md#opentelemetry).
 
-Otari reads the OpenTelemetry GenAI provider, model, response ID, input-token,
-output-token, and cache-token attributes, and records usage from the spans that
-carry tokens. The conventions count cached tokens inside the input tokens, but
-some instrumentation reports them on top, so Otari reads OpenLLMetry's
-Anthropic spans as counting them in and OpenLIT's as counting them on top. From
-any other emitter, cached tokens that outnumber the input tokens are read as
-reported on top of them. Cache writes are read from
-`gen_ai.usage.cache_write.input_tokens` or
-`gen_ai.usage.cache_creation.input_tokens`, and the share Anthropic bills at
-the one-hour rate from
-`anthropic.usage.cache_creation.ephemeral_1h_input_tokens` where it is sent.
-Prompt, response, and tool content is never stored. The spans are
-also kept on the exporting key's agent trace: how they are grouped into sessions,
-and the per-export limits, are in
-[Agent traces](traces.md#instrumented-agents).
+### The Claude API
 
-### Claude Platform and the Claude SDKs
-
-The Claude API exports a span for each Messages API request, model request and
-tool use, and each Managed Agents turn, to an OTLP destination added in the
-Claude Console ([Use OpenTelemetry with the Claude API](https://platform.claude.com/docs/en/manage-claude/opentelemetry/api)).
-Otari can be that destination:
+The Claude API can export spans for Messages API requests and Managed Agents to
+an OTLP destination you add in the Claude Console
+([Use OpenTelemetry with the Claude API](https://platform.claude.com/docs/en/manage-claude/opentelemetry/api)).
+Add Otari as one:
 
 | Console field | Value |
 | --- | --- |
 | Provider | Custom |
 | OTLP endpoint URL | Your gateway's public HTTPS URL plus `/otlp` |
-| Request headers | `Authorization`: `Bearer <budget-exempt Otari API key>` |
+| Request headers | `Authorization`: `Bearer <your import key>` |
 | Content mode | Metadata only |
 
-The Claude API delivers only to a public hostname over HTTPS on port 443 and
-treats a redirect as fatal, so the URL must reach Otari directly. Full content
-gains nothing here, since Otari keeps no prompt or response, and its larger
-spans can push an export past the 8 MiB request limit. Every span of the
-destination binds to the one key's user, so to keep Claude workspaces apart,
-add one destination per workspace, each with its own key, and set its
-**Workspaces** to **Selected** with only that workspace. The Claude API sends a
-workspace's spans to every destination that covers it, so two destinations left
-on **All** would each book the same usage under a different key.
+To keep Claude workspaces apart, add one destination per workspace, each with its
+own key; see [Claude Platform](external-usage-reference.md#claude-platform).
 
-Spans from the Claude Platform and from the Claude SDKs (instrumentation scope
-`com.anthropic.*`) are recorded under the source `claude_platform`, and each
-token is booked once even though a request repeats its usage on several spans:
+### Anything else
 
-- A Messages API request is booked from its `anthropic.messages.create` span,
-  keyed by the response id, at the model that served it, with its cache reads
-  and cache writes, and a second row for its compactions' tokens. The 1-hour
-  share of its cache writes is kept as its own count and bills at twice the
-  input rate ([Cache and tiered pricing](configuration.md#cache-and-tiered-pricing)),
-  except from a streamed request's SDK span, which splits out only the writes
-  made before the first output token, so all of its writes bill at the
-  cache-write rate. When the SDK and the API both export the request, it is
-  booked once. In one export it is booked from the span that splits out the
-  1-hour writes, or failing that from the one reporting more tokens; across
-  exports, from whichever arrives first.
-- A Managed Agents session is booked from its `anthropic.model_request` spans,
-  labeled with the session id, which also groups the session's threads into one
-  agent trace.
-- Outcome evaluation spans name no model, so their tokens are not booked.
+Send token counts to `POST /api/v1/usage/external-events`, up to 1,000 events a
+batch:
 
-The Claude API's delivery is best effort, so these rows estimate spend rather
-than reconcile it; the Claude Usage API is the complete record.
+```bash
+curl "$OTARI_URL/api/v1/usage/external-events" \
+  -H "Authorization: Bearer $OTARI_IMPORT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "my_app",
+    "events": [{
+      "source_event_id": "req_01ABC",
+      "timestamp": "2026-07-22T12:34:56Z",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "input_tokens": 1200,
+      "output_tokens": 450
+    }]
+  }'
+```
 
-Claude Code and Codex emit recognizable usage events on the logs signal. Their
-tool behavior and outcome counters can also populate content-free agent
-telemetry when `capture_agent_telemetry` is enabled. See the client-specific
-setup:
+Sending a batch again is safe: events already stored are skipped. Every field is
+in [Event fields](external-usage-reference.md#event-fields).
 
-- [Use with Claude Code](use-with-claude-code.md)
-- [Use with Codex](use-with-codex.md)
+## See what you imported
 
-## Pricing
-
-Each accepted event is priced at the effective rate at its timestamp:
-
-1. The importing key's organization override
-2. Deployment pricing
-3. The enabled default-pricing catalog
-
-An unpriced event is still stored with `cost: null`. `require_pricing` does not
-apply because imported usage is not enforceable.
-
-Idempotent replay does not recalculate cost, and later price changes do not
-modify existing rows. Use the usage repricing API when historical rows must be
-updated.
-
-Imported cost is an estimate based on configured API rates, not an invoice or a
-subscription charge. Cache pricing is only as accurate as the token fields the
-source exports.
-
-## Reading imported usage
-
-Use the normal usage APIs and filter on `source`, `api_key_id`, user, model,
-or session label. On the Overview, Requests identifies imported rows and Usage
-separates priced and unpriced totals.
-
-Imported rows do not appear in budget-consumption gauges because those gauges
-read the enforcement ledger.
-
-## Retention
-
-Imported rows and agent telemetry are kept indefinitely by default. Set
-`telemetry_retention_days` (`OTARI_TELEMETRY_RETENTION_DAYS`) to have a
-background sweep delete both once they are older than that many days. It runs
-every six hours. Usage the gateway served itself is never deleted, budget-exempt
-traffic included.
-
-## Related documentation
-
-- [API reference](api-reference.md)
-- [Configuration](configuration.md)
-- [Access control](access-control.md)
+In **Sessions**, the **Requests** view marks imported rows by their source.
+Their cost is an estimate at API rates, not what a subscription charged, and an
+event with no price is kept without a cost. Budget gauges leave imported usage out. How each
+event is priced is in [Pricing](external-usage-reference.md#pricing).

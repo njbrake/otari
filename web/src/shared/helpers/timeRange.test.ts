@@ -4,11 +4,13 @@ import {
   ACTIVITY_PRESETS,
   bucketDurationMs,
   bucketForWindow,
+  bucketIndexRange,
   DAY_S,
   findPreset,
   formatWindowLabel,
   HOUR_S,
   isoAgo,
+  rangeFromBuckets,
   USAGE_PRESETS,
 } from "./timeRange"
 
@@ -50,9 +52,82 @@ describe("bucketForWindow / bucketDurationMs", () => {
   })
 
   it("reports the bucket duration", () => {
-    expect(bucketDurationMs("5min")).toBe(5 * 60 * 1000)
     expect(bucketDurationMs("hour")).toBe(HOUR_S * 1000)
     expect(bucketDurationMs("day")).toBe(DAY_S * 1000)
+  })
+})
+
+describe("rangeFromBuckets", () => {
+  const starts = [
+    "2026-07-01T00:00:00Z",
+    "2026-07-02T00:00:00Z",
+    "2026-07-03T00:00:00Z",
+    "2026-07-04T00:00:00Z",
+  ]
+
+  it("spans from the first picked bucket to the exclusive end of the last", () => {
+    const r = rangeFromBuckets(starts, 1, 2, "day")
+    expect(r).toEqual({
+      startIso: "2026-07-02T00:00:00.000Z",
+      endIso: "2026-07-04T00:00:00.000Z",
+    })
+  })
+
+  it("is order-independent and clamps to the series bounds", () => {
+    const r = rangeFromBuckets(starts, 9, -3, "day")
+    expect(r).toEqual({
+      startIso: "2026-07-01T00:00:00.000Z",
+      endIso: "2026-07-05T00:00:00.000Z",
+    })
+  })
+
+  it("returns null for an empty series", () => {
+    expect(rangeFromBuckets([], 0, 0, "day")).toBeNull()
+  })
+})
+
+describe("bucketIndexRange", () => {
+  const starts = [
+    "2026-07-01T00:00:00Z",
+    "2026-07-02T00:00:00Z",
+    "2026-07-03T00:00:00Z",
+    "2026-07-04T00:00:00Z",
+    "2026-07-05T00:00:00Z",
+  ]
+
+  it("spans the whole series when the window covers it (or is absent)", () => {
+    expect(bucketIndexRange(starts, undefined, undefined)).toEqual({
+      startIndex: 0,
+      endIndex: 4,
+    })
+    expect(
+      bucketIndexRange(starts, "2026-06-01T00:00:00Z", "2026-08-01T00:00:00Z"),
+    ).toEqual({
+      startIndex: 0,
+      endIndex: 4,
+    })
+  })
+
+  it("locates a sub-window by its bucket boundaries", () => {
+    // Jul 2 .. Jul 4 exclusive -> buckets index 1 (Jul 2) through 2 (Jul 3).
+    expect(
+      bucketIndexRange(starts, "2026-07-02T00:00:00Z", "2026-07-04T00:00:00Z"),
+    ).toEqual({
+      startIndex: 1,
+      endIndex: 2,
+    })
+  })
+
+  it("clamps an inverted or empty window and handles an empty series", () => {
+    const r = bucketIndexRange(
+      starts,
+      "2026-07-04T00:00:00Z",
+      "2026-07-02T00:00:00Z",
+    )
+    expect(r.endIndex).toBeGreaterThanOrEqual(r.startIndex)
+    expect(
+      bucketIndexRange([], "2026-07-01T00:00:00Z", "2026-07-02T00:00:00Z"),
+    ).toEqual({ startIndex: 0, endIndex: 0 })
   })
 })
 

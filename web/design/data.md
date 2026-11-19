@@ -38,9 +38,14 @@ column with id `actions` sits beside it, and every other column is a label and v
 line. Selection, `onRowAction` and `renderDetail` carry over; sorting and resize do not.
 Without it the grid stays and scrolls sideways.
 
-A white body on the page canvas, ruled by hairlines. The header is the accent tint
-(`--color-primary-subtle`) set in the `text-overline` role, so it never outweighs
-the rows it labels.
+No fill on the body: the rows sit on the page canvas, ruled by hairlines, and a
+pinned column takes the canvas color so a scrolled cell passes under it without a
+seam. The header is set in the `text-overline` role, so it never outweighs the
+rows it labels.
+
+In the card layout an `align: "end"` cell is shrunk to its content, so its figure
+starts in the card's value lane with the others rather than at the screen's right
+edge.
 
 ```tsx
 // Correct
@@ -64,13 +69,6 @@ the rows it labels.
 // sort and resize, and it will not pick up the .otari-table rules.
 <table className="w-full">…</table>
 ```
-
-One table is the exception, and its own header says why: Activity's log
-(`features/activity/ActivityTable.tsx`) needs group rows spanning several
-columns, attempts nested under the request they belong to, and headers that
-hold a filter menu beside the sort, none of which a react-aria grid expresses.
-It keeps the three row states below by hand. Reaching for it elsewhere needs the
-same kind of reason.
 
 Row states, and the only three:
 
@@ -126,8 +124,9 @@ tracks horizontal scroll so a first column can pin, and the per-page class is wh
 `otari-keys-table`, `otari-models-table`, `otari-providers-table`,
 `otari-routing-table`, `otari-domains-table`, `otari-members-table`,
 `otari-provider-keys-table`, `otari-offered-models-table`,
-`otari-workspaces-table`, `otari-accounts-table`,
-`otari-budgets-table`, `otari-mcp-table`, `otari-offerings-table`. Inventing one
+`otari-workspaces-table`, `otari-accounts-table`, `otari-activity-table`,
+`otari-budgets-table`, `otari-mcp-table`, `otari-offerings-table`,
+`otari-sessions-table`, `otari-rules-table`, `otari-spend-table`. Inventing one
 at the call site compiles and styles nothing.
 
 A new page adds its class to `src/styles/globals.css`, beside the others, and the

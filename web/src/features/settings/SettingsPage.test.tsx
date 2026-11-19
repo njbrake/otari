@@ -214,7 +214,6 @@ function storedProvider(name: string, decryptable = true): HostedProvider {
     api_key_last4: "1234",
     decryptable,
     serves_unlisted_models: false,
-    session_affinity: false,
     zero_data_retention: false,
     shadows_config: false,
     source: "database",
@@ -805,47 +804,6 @@ describe("SettingsPage", () => {
     expect(
       screen.getByRole("textbox", { name: "vision_describe_model" }),
     ).toHaveValue("ollama/qwen2-vl")
-  })
-
-  // `matches` per query, so each test says which device it is standing in for.
-  function stubMedia(matching: (query: string) => boolean) {
-    vi.spyOn(window, "matchMedia").mockImplementation(
-      (query: string) =>
-        ({
-          matches: matching(query),
-          media: query,
-          onchange: null,
-          addEventListener: () => undefined,
-          removeEventListener: () => undefined,
-          addListener: () => undefined,
-          removeListener: () => undefined,
-          dispatchEvent: () => false,
-        }) as MediaQueryList,
-    )
-  }
-
-  it("offers the / shortcut in the search placeholder at a desk with a mouse", async () => {
-    stubMedia((query) => query === "(pointer: fine)")
-    mockApi()
-
-    renderWithClient(<SettingsPage />)
-    await screen.findByText(/Version 1.2.3/)
-
-    expect(
-      screen.getByRole("searchbox", { name: "Search settings" }),
-    ).toHaveAttribute("placeholder", "Search settings (press / to focus)…")
-  })
-
-  it("drops the shortcut hint on a touch screen and on a phone", async () => {
-    stubMedia((query) => query.includes("max-width: 767px"))
-    mockApi()
-
-    renderWithClient(<SettingsPage />)
-    await screen.findByText(/Version 1.2.3/)
-
-    expect(
-      screen.getByRole("searchbox", { name: "Search settings" }),
-    ).toHaveAttribute("placeholder", "Search settings…")
   })
 
   it("shows an empty state when nothing matches the search", async () => {

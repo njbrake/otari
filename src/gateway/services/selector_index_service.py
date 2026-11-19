@@ -130,6 +130,7 @@ def models_by_identity(
     *,
     organization_id: uuid.UUID | None = None,
     alias_targets: Set[str] = frozenset(),
+    slug_providers: Mapping[str, str] | None = None,
 ) -> list[ModelObject]:
     """Fold a flat listing into one row per model, keyed by catalog id, sorted by id.
 
@@ -142,6 +143,10 @@ def models_by_identity(
     An offering whose canonical key is in ``alias_targets`` still ranks, since
     the catalog id reaches it, but a model offered only by alias targets gets
     no row: the alias stands in for it.
+
+    ``slug_providers`` maps the viewer's key slugs to their provider, as
+    :func:`seed_for` takes it. Without it an offering on an organization's key
+    is folded under an id the index never built, which no request can call.
     """
     names: dict[str, ModelObject] = {}
     offerings: dict[str, ModelObject] = {}
@@ -150,7 +155,7 @@ def models_by_identity(
             names[obj.id] = obj
         else:
             offerings[obj.id] = obj
-    seeds = [offering_seed(config, catalog, offerings[selector])[0] for selector in sorted(offerings)]
+    seeds = [offering_seed(config, catalog, offerings[selector], slug_providers)[0] for selector in sorted(offerings)]
     rows = dict(names)
     for identity in group_offerings(seeds).values():
         if identity.id in rows:
@@ -283,6 +288,13 @@ async def _organization_views(
     return views
 
 
+# Builds overlap (the refresher's tick, each hosted write's), so each takes a
+# number as it starts and publishes only if no later-started build has
+# published: an older snapshot never replaces a newer index.
+_builds_started = 0
+_build_published = 0
+
+
 async def rebuild_selector_index(
     db: AsyncSession, config: GatewayConfig, *, model_provider: ModelProviderPort | None = None, fetch: bool = False
 ) -> None:
@@ -308,6 +320,9 @@ async def rebuild_selector_index(
     dial even while ``model_cache_ttl_seconds`` is 0, whose whole meaning is that
     the reads do their own dialing.
     """
+    global _builds_started, _build_published
+    _builds_started += 1
+    build = _builds_started
     merged = await build_merged_catalog(
         db,
         config,
@@ -329,12 +344,16 @@ async def rebuild_selector_index(
     grouped = group_offerings(seeds).values()
     identities = _identities(grouped)
     organizations = await _organization_views(db, config, catalog, rows, seeds)
+    workspace_organization = await workspace_organizations(db) if organizations else {}
+    if build < _build_published:
+        return
+    _build_published = build
     set_selector_index(
         build_selector_index(
             rows,
             identities,
             organizations=organizations,
-            workspace_organization=await workspace_organizations(db) if organizations else {},
+            workspace_organization=workspace_organization,
             names=_names(grouped),
         )
     )
@@ -350,10 +369,10 @@ async def run_selector_index_refresher(
 ) -> None:
     """Keep the selector index current with discovery, pricing and providers.
 
-    Rebuilt on a short fixed interval rather than hooked into every writer that
-    could change it (a price set, a provider added, a discovery tick): the
-    build is one catalog read, and a spelling that lags a minute behind a
-    change is a far smaller hazard than one hook missed.
+    Rebuilt on a short fixed interval, so a writer nothing hooks (a price set,
+    a discovery tick) lags at most a minute. The hosted-provider routes also
+    rebuild once their write commits, since an operator who switches a model on
+    sends a request by its catalog id next.
 
     ``resolve_model_provider`` hands each tick the hosted port for its session
     and Unit of Work, the way a request resolves it; the composition root is

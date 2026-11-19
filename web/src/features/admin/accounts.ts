@@ -10,7 +10,7 @@
  * both protected rows.
  */
 
-import type { DeploymentUser, User } from "@/client"
+import type { DeploymentUser } from "@/client"
 
 /**
  * Why deactivating this account, or taking its operator access, is refused.
@@ -51,6 +51,23 @@ export function passwordLinkBlockedReason(
   return undefined
 }
 
+/**
+ * Why this account cannot be handed the bootstrap operator role, or `undefined` when it can.
+ *
+ * The ones the row shows. The gateway also requires a password and a verified,
+ * unblocked address, which the row does not carry, and says so when it refuses.
+ */
+export function bootstrapHandoverBlockedReason(
+  account: DeploymentUser,
+): string | undefined {
+  if (account.is_bootstrap_operator)
+    return "This is already the bootstrap operator"
+  if (!account.is_active) return "Reactivate this account first"
+  if (!account.is_superuser) return "Make this account an operator first"
+  if (!account.email) return "This account has no email address to sign in with"
+  return undefined
+}
+
 /** How the account is named in a row, a control's label, and a confirmation. */
 export function accountLabel(account: DeploymentUser): string {
   return account.full_name?.trim() || account.email || account.id
@@ -72,42 +89,4 @@ export function organizationSummary(account: DeploymentUser): string {
         : `${organization.name} (${organization.role}, ${organization.status})`,
     )
     .join(", ")
-}
-
-/**
- * Why generating a password for this account is refused.
- *
- * `undefined` when it is allowed. The server refuses the same two, so the
- * control is disabled with the reason rather than offered and then failed.
- */
-export function passwordUnavailableReason(
-  account: DeploymentUser,
-): string | undefined {
-  if (account.is_self) {
-    return "Change your own password from your account page"
-  }
-  if (!account.email) {
-    return "This account has no email address to sign in with"
-  }
-  return undefined
-}
-
-/**
- * The user records that can be merged into this account's own.
- *
- * Leaves out the account's own record, every other account's (the server refuses
- * to retire a sign-in account's user), and the per-key virtual users.
- */
-export function mergeCandidates(
-  account: DeploymentUser,
-  users: readonly User[],
-  accounts: readonly DeploymentUser[],
-): User[] {
-  const accountIds = new Set(accounts.map((row) => row.id))
-  return users.filter(
-    (user) =>
-      user.user_id !== account.id &&
-      !accountIds.has(user.user_id) &&
-      !user.user_id.startsWith("apikey-"),
-  )
 }

@@ -36,6 +36,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from _alembic_support import parent_of
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -80,22 +81,6 @@ _DEFINITIONS_TABLE = "organization_guardrail_definitions"
 _MANDATES_TABLE = "organization_guardrails"
 _MANDATES_BACKEND_CHECK = "ck_organization_guardrails_single_backend"
 _MANDATES_DEFINITION_FK = "fk_organization_guardrails_definition"
-
-
-def _parent_of(revision: str) -> str:
-    """The revision immediately below ``revision``, read from the chain itself.
-
-    Deliberately derived rather than written down. This pair of revisions sits at
-    the end of the chain, so every migration that lands on ``main`` while the
-    branch is open re-points the lower one's ``down_revision``, and a hardcoded
-    constant here is a second place to remember. Reading it back means the
-    downgrade targets below follow the re-point on their own, and the test keeps
-    asserting what it means ("roll back to just before this revision") rather
-    than a literal that goes stale.
-    """
-    parent = ScriptDirectory.from_config(_alembic_config("sqlite://")).get_revision(revision).down_revision
-    assert isinstance(parent, str), f"{revision} should have exactly one parent, got {parent!r}"
-    return parent
 
 
 _TOKEN_REVISION = "db8fbf901ee0"
@@ -825,7 +810,7 @@ def test_the_widening_round_trips(sqlite_at_head: tuple[Config, Engine]) -> None
     """
     config, engine = sqlite_at_head
 
-    command.downgrade(config, _parent_of(_ALIAS_WIDEN_REVISION))
+    command.downgrade(config, parent_of(_ALIAS_WIDEN_REVISION, alembic_dir=_ALEMBIC_DIR))
 
     inspector = inspect(engine)
     for table in ("model_aliases", "routing_policies"):
@@ -1145,7 +1130,7 @@ def test_the_guardrail_definitions_revision_round_trips(sqlite_at_head: tuple[Co
     over to collide with.
     """
     config, engine = sqlite_at_head
-    parent = _parent_of(_GUARDRAIL_DEFINITIONS_REVISION)
+    parent = parent_of(_GUARDRAIL_DEFINITIONS_REVISION, alembic_dir=_ALEMBIC_DIR)
 
     command.downgrade(config, parent)
 
@@ -1168,47 +1153,3 @@ def test_the_guardrail_definitions_revision_round_trips(sqlite_at_head: tuple[Co
     assert _DEFINITIONS_TABLE in set(inspector.get_table_names())
     assert "definition_id" in {column["name"] for column in inspector.get_columns(_MANDATES_TABLE)}
     assert _MANDATES_DEFINITION_FK in {fk["name"] for fk in inspector.get_foreign_keys(_MANDATES_TABLE)}
-
-
-_MEMBER_TOTALS_REVISION = "a9c3e5f7b1d2"
-
-
-def test_a_workspace_from_before_the_member_totals_column_keeps_its_totals(tmp_path: Path) -> None:
-    """Existing workspaces read the server default, and the downgrade drops the column and nothing else."""
-    database_url = f"sqlite:///{tmp_path / 'member-totals.db'}"
-    config = _alembic_config(database_url)
-    before = _parent_of(_MEMBER_TOTALS_REVISION)
-    command.upgrade(config, before)
-    engine = create_engine(database_url)
-    organization_id, workspace_id = uuid.uuid4().hex, uuid.uuid4().hex
-    try:
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "INSERT INTO organization (id, name, slug, created_at) VALUES (:id, 'Acme', 'acme', '2026-01-01')"
-                ),
-                {"id": organization_id},
-            )
-            conn.execute(
-                text(
-                    "INSERT INTO workspace (id, name, organization_id, activation_classification, created_at) "
-                    "VALUES (:id, 'Team', :org, 'eligible', '2026-01-01')"
-                ),
-                {"id": workspace_id, "org": organization_id},
-            )
-
-        command.upgrade(config, _MEMBER_TOTALS_REVISION)
-        with engine.connect() as conn:
-            shown = conn.execute(
-                text("SELECT members_see_workspace_totals FROM workspace WHERE id = :id"), {"id": workspace_id}
-            ).scalar_one()
-        assert bool(shown) is False
-
-        command.downgrade(config, before)
-        inspector = inspect(engine)
-        assert "members_see_workspace_totals" not in {column["name"] for column in inspector.get_columns("workspace")}
-        checks = {check["name"] for check in inspector.get_check_constraints("workspace")}
-        assert "check_workspace_activation_classification" in checks
-        command.upgrade(config, "head")
-    finally:
-        engine.dispose()

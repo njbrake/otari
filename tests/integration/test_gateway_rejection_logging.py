@@ -101,9 +101,6 @@ def test_model_not_allowed_for_key_is_recorded(client: TestClient, master_key_he
     # failures and successes group together in the activity log and its filter.
     assert row["model"] == "gpt-4o"
     assert row["provider"] == "openai"
-    # And the selector as the caller wrote it, with the request id minted before the gate.
-    assert row["requested_model"] == "openai:gpt-4o"
-    assert row["request_id"] is not None
 
     # The dashboard's "N failed in the last hour" signal reads the count scoped to
     # gateway traffic; a gate that logs must show up there or the alarm undercounts.
@@ -335,9 +332,6 @@ def test_passthrough_model_not_allowed_is_recorded(client: TestClient, master_ke
     assert row["model"] == "text-embedding-3-small"
     assert row["provider"] == "openai"
     assert "not permitted" in row["error_message"]
-    # Pass-through records the selector as sent, and the request id it answered with.
-    assert row["requested_model"] == "openai:text-embedding-3-small"
-    assert row["request_id"] == resp.headers["Otari-Request-ID"]
 
 
 def test_passthrough_user_key_mismatch_is_recorded(client: TestClient, master_key_header: dict[str, str]) -> None:

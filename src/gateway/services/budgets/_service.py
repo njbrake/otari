@@ -1,7 +1,10 @@
 import asyncio
 import uuid
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import datetime
+from decimal import Decimal
+
+from fastapi import BackgroundTasks
 
 from gateway.core.database import DATABASE_ERRORS, describe_database_error
 from gateway.core.settings.api_keys import ApiKeyConfig
@@ -14,8 +17,9 @@ from gateway.exceptions.budget_exceptions import (
 )
 from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
-from gateway.models.budgets import Budget, ScopedBudget, ScopeType
+from gateway.models.budgets import SCOPE_API_TOKEN, Budget, ScopedBudget, ScopeType
 from gateway.models.tenancy import User
+from gateway.ports.growth_signal_port import GrowthAction, GrowthActivationEvent, GrowthSignalPort
 from gateway.rate_limit import BudgetMinuteLimits
 from gateway.repositories.budgets import BudgetRepositories
 from gateway.schemas.budgets import (
@@ -24,6 +28,7 @@ from gateway.schemas.budgets import (
     EndUserBudgetPublic,
     EndUserPublic,
     KeyBudgetPublic,
+    KeyEndUsersPublic,
     OrganizationBudgetCreate,
     OrganizationBudgetPublic,
     OrganizationBudgetsPublic,
@@ -36,7 +41,6 @@ from gateway.schemas.budgets import (
     WorkspaceMemberBudgetPolicyCreate,
     WorkspaceMemberBudgetPolicyPublic,
     WorkspaceMemberBudgetPolicyUpdate,
-    WorkspaceSpendPublic,
 )
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets._declared import attach_key_ceiling
@@ -53,8 +57,7 @@ from gateway.services.budgets._reservation_moves import (
 )
 from gateway.services.budgets._reservations import EstimateInputs, ReservationHandle, _normalize_strategy
 from gateway.services.budgets._scopes import ScopeOwnership
-from gateway.services.budgets._workspace_surface import _WorkspaceSurface
-from gateway.services.organizations import UserAccess, WorkspaceVisibilityService
+from gateway.services.organizations import UserAccess
 from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.types.attempt import Attempt
@@ -73,7 +76,6 @@ class BudgetService:
         organizations: OrganizationService,
         api_keys: ApiKeyService,
         workspace_access: WorkspaceAccess,
-        visibility: WorkspaceVisibilityService,
         *,
         users: UserAccess,
     ) -> None:
@@ -84,12 +86,25 @@ class BudgetService:
         self._organizations = organizations
         self._scopes = ScopeOwnership(organizations, api_keys)
         self._organization = _OrganizationSurface(repositories, self._scopes, organizations)
-        self._workspace = _WorkspaceSurface(repositories, workspace_access, visibility)
         self._end_users = _EndUsers(repositories)
         self._deployment = _DeploymentSurface(repositories)
         self._member_policies = _MemberPolicies(repositories, organizations, workspace_access)
         self._moves = _ReservationMoves(repositories)
         self._key_limits = _KeyLimits(repositories, organizations, users)
+
+    async def cap_app_key(self, *, key_id: str, workspace_id: uuid.UUID, name: str, max_budget: Decimal) -> None:
+        """Cap an OAuth app key at the lifetime spending limit its person approved.
+
+        The budget belongs to the key's organization, so its managers see it beside their own.
+        """
+        async with self._uow:
+            organization_id = await self._organizations.get_organization_id_for_workspace(workspace_id)
+            budget_id = await self._budgets.add_lifetime_cap(
+                organization_id=organization_id, name=name, max_budget=max_budget
+            )
+            await self._repositories.ceilings.add_scope_ceiling_if_absent(
+                scope_type=SCOPE_API_TOKEN, scope_id=key_id, budget_id=budget_id, period_start=None, period_end=None
+            )
 
     async def list_deployment_budgets(self, organization_id: uuid.UUID, *, skip: int, limit: int) -> list[Budget]:
         """A page of the budgets the deployment owns and the operator's organization owns."""
@@ -197,11 +212,38 @@ class BudgetService:
             return await self._member_policies.create_policy(user=user, workspace_id=workspace_id, request=request)
 
     async def create_organization_budget(
-        self, *, user: User, request: OrganizationBudgetCreate
+        self,
+        *,
+        user: User,
+        request: OrganizationBudgetCreate,
+        growth: GrowthSignalPort | None = None,
+        background_tasks: BackgroundTasks | None = None,
     ) -> OrganizationBudgetPublic:
-        """Create a budget owned by the caller's organization."""
+        """Create a budget owned by the caller's organization.
+
+        With ``growth``, the budget is reported as ``BUDGET_CREATED`` once it
+        commits, and the organization's first as ``BUDGET_RULE_SET`` too.
+        """
         async with self._uow:
-            return await self._organization.create_budget(user=user, request=request)
+            budget = await self._organization.create_budget(user=user, request=request)
+            first = await self._budgets.count_by_organization(budget.organization_id) == 1
+        if growth is None or background_tasks is None:
+            return budget
+        await growth.record_action(
+            background_tasks=background_tasks,
+            action=GrowthAction.BUDGET_CREATED,
+            user_id=user.id,
+            email=user.email,
+            organization_id=budget.organization_id,
+        )
+        if first and user.email is not None:
+            await growth.record_activation(
+                background_tasks=background_tasks,
+                event=GrowthActivationEvent.BUDGET_RULE_SET,
+                user_id=user.id,
+                email=user.email,
+            )
+        return budget
 
     async def create_organization_ceiling(
         self, *, user: User, request: OrganizationScopedBudgetCreate
@@ -296,11 +338,17 @@ class BudgetService:
         return listed
 
     async def key_budget(self, api_key: APIKey, *, strategy: str | None) -> KeyBudgetPublic:
-        """What a key may still spend, and every cap that decides it; none when no budget gates the key."""
-        if api_key.exclude_from_budget or _normalize_strategy(strategy) == "disabled":
-            return KeyBudgetPublic(budgets_enforced=False, remaining_usd=None, limits=[])
+        """What a key may still spend, and every cap that decides it; none when no budget gates the key.
+
+        A service key's end-user cap holds whether or not budgets do, so it is reported either way.
+        """
         async with self._uow:
-            return await self._key_limits.read(api_key)
+            end_users = await self._end_users.seats(api_key) if api_key.is_service_key else None
+            if api_key.exclude_from_budget or _normalize_strategy(strategy) == "disabled":
+                found = KeyBudgetPublic(budgets_enforced=False, remaining_usd=None, limits=[])
+            else:
+                found = await self._key_limits.read(api_key)
+        return found.model_copy(update={"end_users": end_users})
 
     async def minute_limits(self, user_id: str, *, strategy: str | None) -> BudgetMinuteLimits | None:
         """The user's own budget and its per-minute limits, or None when the user is on none or budgets are disabled."""
@@ -317,8 +365,11 @@ class BudgetService:
         *,
         estimate_inputs: EstimateInputs | None,
         price_of: PricingLookup,
+        ceiling_instance: str | None = None,
     ) -> None:
         """Hold ``handle`` on the ceilings of ``attempt``'s provider, at ``attempt``'s estimate, before it is sent.
+
+        ``ceiling_instance`` names that provider where it is not ``attempt``'s own instance.
 
         A ceiling both providers have grows to that estimate when it holds less, because a fallback's hold only grows.
         A ceiling only ``attempt``'s provider has takes what the others then hold.
@@ -330,7 +381,9 @@ class BudgetService:
             SpendCeilingExceededError: a ceiling on every provider has no room.
         Either way ``handle`` holds what it held before.
         """
-        move = await self._moves.plan(handle, attempt, estimate_inputs=estimate_inputs, price_of=price_of)
+        move = await self._moves.plan(
+            handle, attempt, estimate_inputs=estimate_inputs, price_of=price_of, ceiling_instance=ceiling_instance
+        )
         if move is None:
             return
         try:
@@ -423,6 +476,11 @@ class BudgetService:
         async with self._uow:
             return await self._end_users.count(api_key, external_id=external_id, budget_id=budget_id, blocked=blocked)
 
+    async def end_user_seats(self, *, api_key: APIKey) -> KeyEndUsersPublic:
+        """How many end users the service key's ``max_end_users`` counts, and the cap itself."""
+        async with self._uow:
+            return await self._end_users.seats(api_key)
+
     async def list_end_user_budgets(self, *, api_key: APIKey) -> list[EndUserBudgetPublic]:
         """Return the budgets the key may put its end users on, with how many of its owner's end users each holds."""
         async with self._uow:
@@ -455,15 +513,6 @@ class BudgetService:
         """Relabel a ceiling inside the caller's organization, or point it at another budget the organization owns."""
         async with self._uow:
             return await self._organization.update_ceiling(user=user, ceiling_id=ceiling_id, request=request)
-
-    async def workspace_spend(self, *, user: User, workspace_id: uuid.UUID) -> WorkspaceSpendPublic | None:
-        """Return the workspace's own spend ceiling for any member of it, or None when it has none.
-
-        A member who does not manage the workspace reads its spend only as a share
-        of the cap while the workspace keeps its totals from members.
-        """
-        async with self._uow:
-            return await self._workspace.spend(user=user, workspace_id=workspace_id, now=datetime.now(UTC))
 
     async def _move_landed(self, handle: ReservationHandle, move: ReservationMove) -> bool:
         """Report whether a move whose commit did not report success landed, or False when that cannot be told."""

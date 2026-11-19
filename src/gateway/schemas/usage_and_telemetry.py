@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from gateway.core.sql import utc_iso
 from gateway.models.money import as_float
-from gateway.models.usage import SERVED_HERE_SLUG, UsageLog
+from gateway.models.usage import SERVED_HERE_SLUG, StreamCutBy, UsageLog
 
 # The meter namespace inside ``UsageLog.billing_meters``. Tool meters are nested
 # under one reserved key rather than sitting flat next to the token meters:
@@ -53,7 +53,9 @@ class TokenChargeLine(_OpenShape):
 
     ``rate_per_million`` is the discriminator: its presence (rather than
     ``unit_rate``) is what tells a reader, and a renderer, which unit convention
-    applies. See ``gateway.services.pricing_service``.
+    applies. See ``gateway.services.pricing_service``. A line whose price an
+    override or a multiplier changed also carries ``rules``: each one's
+    condition, in the order they applied.
     """
 
     meter: str = Field(description="What was metered, e.g. 'input' or 'cache_read'.")
@@ -66,7 +68,8 @@ class UnitChargeLine(_OpenShape):
     """A charge line billed per call, for gateway-run tools and per-request routes.
 
     ``unit_rate`` is the discriminator, in the same sense as
-    :class:`TokenChargeLine`'s ``rate_per_million``.
+    :class:`TokenChargeLine`'s ``rate_per_million``. A line whose price an
+    override or a multiplier changed also carries ``rules``, as a token line does.
     """
 
     meter: str = Field(description="What was metered, e.g. 'request' or 'web_search_calls'.")
@@ -205,6 +208,14 @@ class UsageEntry(BaseModel):
     timestamp: str
     model: str
     provider: str | None
+    data_location: str | None = Field(
+        default=None,
+        description=(
+            "Where the hosted provider or region that served the request declared it keeps request data when the "
+            "row was written: an ISO 3166-1 alpha-2 code, EU or GLOBAL. Null where the deployment did not serve it "
+            "or nothing was declared."
+        ),
+    )
     endpoint: str
     prompt_tokens: int | None
     completion_tokens: int | None
@@ -245,6 +256,8 @@ class UsageEntry(BaseModel):
     attempt_position: int | None = None
     attempt_count: int | None = None
     request_group_id: str | None = None
+    # Who ended a stream before it completed, "provider" or "client"; null for any other row.
+    stream_cut_by: StreamCutBy | None = None
 
     @classmethod
     def from_model(
@@ -263,6 +276,7 @@ class UsageEntry(BaseModel):
             timestamp=utc_iso(log.timestamp),
             model=log.model,
             provider=log.provider,
+            data_location=log.data_location,
             endpoint=log.endpoint,
             source=log.source,
             source_label=log.source_label,
@@ -289,6 +303,7 @@ class UsageEntry(BaseModel):
             attempt_position=log.attempt_position,
             attempt_count=log.attempt_count,
             request_group_id=log.request_group_id,
+            stream_cut_by=log.stream_cut_by,
         )
 
 
@@ -305,12 +320,19 @@ class RequestSettlement(BaseModel):
     the describe call, all sharing the ``Otari-Request-ID`` the caller was sent as
     their ``request_group_id``, so this is the request's whole bill rather than one
     attempt's. ``cost_usd`` uses the inline ``usage.cost_usd`` format and is null
-    when no row was priced.
+    when no row was priced. ``tool_cost_usd`` is the part of it that is per-call
+    tool charges, in the same format, for a completion (Chat Completions,
+    Messages, Responses); it is null where ``cost_usd`` is, for any other kind
+    of request, and where a priced row does not record it (written before the
+    gateway did, or where looking up its tools' prices failed). ``status`` is
+    ``error`` if any row is an error, and ``incomplete`` for a stream the client
+    abandoned before the provider reported any usage.
     """
 
     request_id: str
-    status: Literal["success", "error"]
+    status: Literal["success", "error", "incomplete"]
     cost_usd: str | None
+    tool_cost_usd: str | None
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
@@ -360,11 +382,18 @@ class UsageGroupRow(BaseModel):
 
     key: str | None
     # Display name for an opaque key (a user's alias, an API key's name), resolved
-    # in the same GROUP BY. Only ever set for the ``user`` and ``api_key``
-    # dimensions, and null there too when the entity has no label or is gone; a
-    # client falls back to ``key``. Its purpose is to let a client build a user or
-    # key filter from this breakdown alone, rather than reading both whole tables.
+    # in the same GROUP BY. Set for the ``user`` and ``api_key`` dimensions, and
+    # null there too when the entity has no label or is gone; a client falls back
+    # to ``key``. Its purpose is to let a client build a user or key filter from
+    # this breakdown alone, rather than reading both whole tables. A ``model`` row
+    # carries the model's name, the same on every spelling of one model.
     label: str | None = None
+    # A ``model`` row's grouping key, shared by every spelling of one model:
+    # providers name one model differently (``accounts/fireworks/models/glm-5p3``,
+    # ``zai-org/GLM-5.3``) and usage records the spelling sent. The rows stay one
+    # per spelling, since ``key`` is what a model filter matches; this is what lets
+    # a client show them as one. Null on every other dimension and on the fold.
+    model_group: str | None = None
     cost: float
     tokens: int
     requests: int

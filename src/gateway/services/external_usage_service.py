@@ -16,6 +16,7 @@ a second row. The endpoint accepts only metadata and numeric token counts; promp
 completions, and tool payloads are rejected by the request schema, not stored.
 """
 
+import functools
 import re
 import uuid
 from collections.abc import Mapping
@@ -45,6 +46,7 @@ from gateway.models.api_keys import APIKey
 from gateway.models.pricing import MODEL_KIND, ModelPricing
 from gateway.models.usage import SERVED_HERE_SLUG, UsageLog
 from gateway.models.users import User
+from gateway.services.pricing import AppliedRate, PriceFacts, apply_rules
 from gateway.services.pricing_service import (
     OverridePeriod,
     default_model_pricing,
@@ -61,11 +63,6 @@ from gateway.services.workspace_scope import organization_for_workspace_id, reso
 # list is chunked to stay under SQLite's default variable limit (999).
 from otari_agent.usage_import import MAX_EVENTS_PER_BATCH as MAX_EVENTS_PER_BATCH
 
-# Rows per INSERT statement. A batch is bounded by MAX_EVENTS_PER_BATCH and each
-# row binds around two dozen parameters, so one statement for a whole batch would
-# approach the driver's parameter ceiling; chunking stays well inside it without
-# giving up the single round trip per chunk.
-_INSERT_CHUNK = 200
 _MAX_ERRORS = 100
 _IN_CHUNK = 500
 # Slug pattern for a source: keep provenance identifiers boring so they are safe to
@@ -378,11 +375,21 @@ class PricedEvent:
     rates: Mapping[str, Decimal]
 
 
-def _rates(pricing: ModelPricing, usage: BillableUsage) -> dict[str, Decimal]:
+def _priced_at(pricing: ModelPricing, usage: BillableUsage, at: datetime) -> AppliedRate:
+    """``pricing`` at the rules an imported event meets: its context and its own time.
+
+    An event does not say whether it carried a video or ran over a websocket,
+    so a rule on either is skipped.
+    """
+    facts = PriceFacts(context=usage.total_input_tokens, at=at, input_video=None, websocket=None)
+    return apply_rules(pricing, facts)
+
+
+def _rates(pricing: ModelPricing, usage: BillableUsage, at: datetime) -> dict[str, Decimal]:
     if priced_per_request(pricing):
         return {}
     try:
-        rates = effective_rates(pricing, usage.total_input_tokens)
+        rates = effective_rates(_priced_at(pricing, usage, at).rate, usage.total_input_tokens)
     except ValueError:
         return {}
     cache_read, cache_write = rates.cache_read_price_per_million, rates.cache_write_price_per_million
@@ -589,7 +596,10 @@ def _build_row(
     meters: dict[str, int] | None = None
     breakdown: list[ChargeLine] | None = None
     if pricing is not None:
-        cost, meters, breakdown = price_billable_usage(pricing, _build_usage(event))
+        usage = _build_usage(event)
+        applied = _priced_at(pricing, usage, event.timestamp)
+        cost, meters, lines = price_billable_usage(applied.rate, usage)
+        breakdown = applied.explain(lines)
     return UsageLog(
         workspace_id=workspace_id,
         api_key_id=api_key_id,
@@ -628,66 +638,47 @@ async def _insert_rows(
     rows: list[UsageLog],
     result: ExternalIngestResult,
 ) -> None:
-    """Commit new rows, counting the ones a concurrent import already landed as duplicates.
+    """Commit new rows; a row whose ``(source, source_event_id)`` exists is a duplicate.
 
-    One statement per chunk, and a collision on ``(source, source_event_id)`` is
-    not an error in it: the events are idempotent by that key, so a row another
-    writer landed first is a row that is already correct. The statement reports
-    the ids it inserted and the rest of the chunk is the duplicates.
-
-    That the collision is not an error is the point, and not only for tidiness.
-    A batch that raises one has to be taken apart and retried, and every round
-    trip of that is time the transaction holds the locks it already took, with
-    the importer of the same events waiting behind them. Two exporters resending
-    the same batch is the ordinary case here rather than the rare one: it is what
-    an OTLP exporter does when an export takes too long.
+    One ``ON CONFLICT DO NOTHING`` insert, so a batch repeating events that an
+    earlier or concurrent import stored needs no rollback and retry. Any other
+    refusal (an API key deleted mid-import, say) fails the whole statement, so the
+    batch falls back to row-at-a-time inserts and only the refused rows are lost.
     """
     if not rows:
         return
-    for start in range(0, len(rows), _INSERT_CHUNK):
-        chunk = rows[start : start + _INSERT_CHUNK]
-        try:
-            inserted = len(
-                await insert_ignoring_duplicates(
-                    db,
-                    chunk,
-                    conflict=(UsageLog.source, UsageLog.source_event_id),
-                    returning=UsageLog.id,
-                    lock_timeout_ms=INGEST_LOCK_TIMEOUT_MS,
-                )
-            )
-            await db.commit()
-        except IntegrityError:
-            # Not the idempotency key, which the statement above absorbs: some
-            # other constraint, such as an API key deleted since the batch was
-            # priced. One refused row must not cost the rest of the chunk, so
-            # that chunk alone degrades to a row at a time.
-            await db.rollback()
-            await _insert_one_at_a_time(db, source, chunk, result)
-            continue
-        result.accepted += inserted
-        result.duplicate += len(chunk) - inserted
+    insert = functools.partial(
+        insert_ignoring_duplicates,
+        conflict=(UsageLog.source, UsageLog.source_event_id),
+        returning=UsageLog.source_event_id,
+        lock_timeout_ms=INGEST_LOCK_TIMEOUT_MS,
+    )
+    try:
+        inserted = await insert(db, rows)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+    else:
+        result.accepted += len(inserted)
+        result.duplicate += len(rows) - len(inserted)
+        return
 
-
-async def _insert_one_at_a_time(
-    db: AsyncSession,
-    source: str,
-    rows: list[UsageLog],
-    result: ExternalIngestResult,
-) -> None:
-    """Salvage a chunk that a constraint other than the idempotency key refused."""
     refused = 0
     for row in rows:
-        db.add(row)
         try:
+            inserted = await insert(db, [row])
             await db.commit()
-            result.accepted += 1
         except IntegrityError:
             await db.rollback()
-            result.duplicate += 1
             refused += 1
+            # Reported as a duplicate: nothing the submitter could fix by
+            # sending it again.
+            result.duplicate += 1
+        else:
+            result.accepted += len(inserted)
+            result.duplicate += 1 - len(inserted)
     if refused:
-        logger.warning("external usage: %d events refused row-at-a-time for source=%s", refused, source)
+        logger.warning("external usage: %d events refused by the database for source=%s", refused, source)
 
 
 async def ingest_external_events(
@@ -805,7 +796,7 @@ async def ingest_external_events(
                     event.timestamp,
                     row.cost,
                     request.source,
-                    _rates(pricing, _build_usage(event)) if pricing is not None else {},
+                    _rates(pricing, _build_usage(event), event.timestamp) if pricing is not None else {},
                 )
             )
 

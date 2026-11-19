@@ -49,7 +49,7 @@ describe("PageIntro", () => {
     ).toHaveClass("pb-5")
   })
 
-  it("stacks in a narrow content pane and turns into a row in a wide one", () => {
+  it("stacks on a narrow viewport and turns into a row above it", () => {
     const { container } = render(
       <PageIntro
         title="API keys"
@@ -57,30 +57,27 @@ describe("PageIntro", () => {
       />,
     )
     expect([...header(container).classList]).toContain("flex-col")
-    // A container query, not a viewport breakpoint: beside a tablet's rail the
-    // pane is narrower than the viewport says.
-    expect([...header(container).classList]).toContain("@2xl:flex-row")
-    expect([...header(container).classList]).toContain("@2xl:items-start")
-    expect([...header(container).classList]).not.toContain("sm:flex-row")
+    expect([...header(container).classList]).toContain("sm:flex-row")
+    expect([...header(container).classList]).toContain("sm:items-start")
   })
 
-  it("describes the page when given a description", () => {
-    render(<PageIntro title="API keys">Keys authenticate requests.</PageIntro>)
-    const description = screen.getByText("Keys authenticate requests.")
-    expect(description.tagName).toBe("P")
-    expect([...description.classList]).toContain("text-muted")
+  it("sets a detail line under the title when given one", () => {
+    render(<PageIntro title="Wei Zhang" detail="Admin · wei@example.com" />)
+    const detail = screen.getByText("Admin · wei@example.com")
+    expect(detail.tagName).toBe("P")
+    expect([...detail.classList]).toContain("text-muted")
   })
 
   it("renders no paragraph at all when there is nothing to say", () => {
     // Not an empty one: a blank `p` still occupies its margin and pushes the
-    // first rule down on exactly the pages with no description.
+    // first rule down on every page without a detail line.
     const { container } = render(<PageIntro title="API keys" />)
     expect(container.querySelector("p")).toBeNull()
   })
 
-  it("holds the title and description to a measure", () => {
-    render(<PageIntro title="API keys">Keys authenticate requests.</PageIntro>)
-    const column = screen.getByText("Keys authenticate requests.")
+  it("holds the title and its detail to a measure", () => {
+    render(<PageIntro title="Wei Zhang" detail="Admin · wei@example.com" />)
+    const column = screen.getByText("Admin · wei@example.com")
       .parentElement as HTMLElement
     expect([...column.classList]).toContain("max-w-[38.75rem]")
   })
@@ -90,9 +87,7 @@ describe("PageIntro", () => {
       <PageIntro
         title="API keys"
         action={<button type="button">New key</button>}
-      >
-        Keys authenticate requests.
-      </PageIntro>,
+      />,
     )
     const action = screen.getByRole("button", { name: "New key" })
       .parentElement as HTMLElement

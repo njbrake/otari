@@ -27,6 +27,7 @@ import {
   workspaceProviderKeyOverride,
 } from "@/tests/fixtures"
 import { withRouter } from "@/tests/router"
+import { getRowMenuItem, pressRowAction } from "@/tests/rowMenu"
 
 interface Request {
   url: string
@@ -186,7 +187,7 @@ describe("WorkspacesPage", () => {
     expect(await screen.findByText("Production")).toBeInTheDocument()
     expect(screen.queryByRole("grid")).not.toBeInTheDocument()
     expect(
-      screen.getAllByRole("button", { name: "Delete" })[0],
+      await getRowMenuItem(userEvent.setup(), "Delete…"),
     ).toBeInTheDocument()
   })
 
@@ -280,6 +281,22 @@ describe("WorkspacesPage", () => {
     // Nothing typed, so Escape closes rather than arming the guard.
     await user.keyboard("{Escape}")
     await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it("names a workspace with no default budget as having none", async () => {
+    mockApi({
+      budgets: [budget({ budget_id: "bud-team", name: "Team standard" })],
+    })
+    const user = userEvent.setup()
+    renderPage(<WorkspacesPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Create workspace" }),
+    )
+
+    expect(
+      screen.getByRole("button", { name: /Default member budget/ }),
+    ).toHaveTextContent("No default")
   })
 
   it("guards a chosen default budget on the way out, with nothing typed", async () => {
@@ -433,8 +450,8 @@ describe("WorkspacesPage", () => {
     const user = userEvent.setup()
     renderPage(<WorkspacesPage />)
 
-    const deletes = await screen.findAllByRole("button", { name: "Delete" })
-    await user.click(deletes[0])
+    await screen.findByText("Bravo")
+    await pressRowAction(user, "Delete…")
     await user.click(screen.getByRole("button", { name: "Delete workspace" }))
 
     const remove = requests.find((request) => request.method === "DELETE")
@@ -449,11 +466,11 @@ describe("WorkspacesPage", () => {
     mockApi({})
     renderPage(<WorkspacesPage />)
 
-    const remove = await screen.findByRole("button", {
-      name: /^Delete Default Workspace \(/,
-    })
-    expect(remove).toBeDisabled()
-    expect(remove).toHaveAccessibleName(/keeps at least one workspace/)
+    const remove = await getRowMenuItem(
+      userEvent.setup(),
+      /^Delete….*keeps at least one workspace/,
+    )
+    expect(remove).toHaveAttribute("aria-disabled", "true")
   })
 
   it("denies a non-manager every write control on this page", async () => {
@@ -470,7 +487,10 @@ describe("WorkspacesPage", () => {
     expect(
       screen.queryByRole("button", { name: "Create workspace" }),
     ).toBeNull()
-    expect(screen.getAllByRole("button", { name: "Delete" })[0]).toBeDisabled()
+    expect(await getRowMenuItem(userEvent.setup(), /^Delete…/)).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    )
   })
 
   it("links each workspace's name to its own page", async () => {

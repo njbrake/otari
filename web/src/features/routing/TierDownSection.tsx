@@ -6,6 +6,7 @@ import { Field } from "@/design-system/forms/Field"
 import { FieldAction } from "@/design-system/forms/FieldAction"
 import { ControlField } from "@/design-system/forms/FieldMessages"
 import { ModelComboBox } from "@/features/models/ModelComboBox"
+import { useNarrowingWorkspace } from "@/shared/hooks/SelectedWorkspace"
 
 import type { TierDown } from "./policyDraft"
 import { SectionRow } from "./SectionRow"
@@ -18,6 +19,7 @@ export function TierDownSection({
   tierDowns: TierDown[]
   onChange: (next: TierDown[]) => void
 }) {
+  const workspaceId = useNarrowingWorkspace()
   const update = (index: number, patch: Partial<TierDown>) =>
     onChange(
       tierDowns.map((tier, i) => (i === index ? { ...tier, ...patch } : tier)),
@@ -58,6 +60,7 @@ export function TierDownSection({
           />
           <div className="min-w-56 flex-1">
             <ModelComboBox
+              workspaceId={workspaceId}
               source="catalog"
               label="Use instead"
               value={tier.target}
@@ -79,28 +82,21 @@ export function TierDownSection({
           </FieldAction>
         </SectionRow>
       ))}
-      {/* Several, saved highest threshold first (`buildSpec`), so each one
-          is reachable however they were entered. */}
-      <div>
-        <Button
-          variant="ghost"
-          onPress={() =>
-            onChange([
-              ...tierDowns,
-              {
-                threshold: Math.min(
-                  95,
-                  Math.max(80, ...tierDowns.map((tier) => tier.threshold + 5)),
-                ),
-                target: "",
-              },
-            ])
-          }
-        >
-          <FiPlus aria-hidden />
-          {tierDowns.length === 0 ? "Add a tier" : "Add another tier"}
-        </Button>
-      </div>
+      {/* One at a time: the first matching entry wins, so a second, higher
+          threshold behind a lower one would never fire. */}
+      {tierDowns.length > 0 ? null : (
+        <div>
+          <Button
+            variant="ghost"
+            onPress={() =>
+              onChange([...tierDowns, { threshold: 80, target: "" }])
+            }
+          >
+            <FiPlus aria-hidden />
+            Add a tier-down
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

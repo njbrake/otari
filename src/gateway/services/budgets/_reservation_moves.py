@@ -85,14 +85,17 @@ class _ReservationMoves:
         *,
         estimate_inputs: EstimateInputs | None,
         price_of: PricingLookup,
+        ceiling_instance: str | None = None,
     ) -> ReservationMove | None:
         """Return what moving ``handle`` onto ``attempt``'s ceilings changes, or None when it changes nothing.
 
         A fallback chain's holds only grow, so a ceiling holds the larger of its hold and ``attempt``'s estimate.
+        ``ceiling_instance`` names the provider whose ceilings bind ``attempt`` where that is not its own
+        instance: a hosted provider's region is held to its provider's.
         """
         if not handle.counts_toward_budget or handle.strategy == "disabled":
             return None
-        target = get_provider_ceilings(handle.scope_ceilings, attempt.instance)
+        target = get_provider_ceilings(handle.scope_ceilings, ceiling_instance or attempt.instance)
         if not target and not handle.scoped_budgets:
             return None
         pricing: ModelPricing | None = None
@@ -104,6 +107,7 @@ class _ReservationMoves:
                 max_output_tokens=estimate_inputs.max_output_tokens,
                 default_output_tokens=estimate_inputs.default_output_tokens,
                 cache_write_ttl=estimate_inputs.cache_write_ttl,
+                facts=estimate_inputs.facts,
             )
         else:
             amount = handle.scoped_estimate if handle.scoped_budgets else handle.estimate
@@ -127,10 +131,8 @@ class _ReservationMoves:
         unchanged = tuple(ceiling.scoped_budget_id for ceiling in target) == handle.scoped_budget_ids
         if unchanged and held.amount <= handle.scoped_estimate:
             return None
-        # A free request that holds no dollars is not gated on them, and on ceilings that cap no count holds nothing.
+        # A free request that holds no dollars is not gated on them, but still holds its ceilings for its tools to grow.
         free = is_free_pricing(pricing) and held.amount == ZERO
-        if free and not any(to_applicable_budget(ceiling).caps_counts for ceiling in target):
-            return None
         target_ids = {ceiling.scoped_budget_id for ceiling in target}
         held_ids = set(handle.scoped_budget_ids)
         return ReservationMove(
@@ -157,7 +159,6 @@ class _ReservationMoves:
         """
         if handle.reservation_id is not None and not await self._reservations.lock_active(handle.reservation_id):
             return MoveOutcome(reclaimed=True)
-        await self._ceilings.defer_commit_flush()
         await self._ceilings.lock(
             sorted(
                 [ceiling.scoped_budget_id for ceiling in move.added]

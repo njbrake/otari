@@ -38,7 +38,7 @@ does not commit.
 
 Completion requests follow this order:
 
-1. Extract and verify the API key or master key in `api/deps.py`.
+1. Extract and verify the API key or master key in `api/deps/`.
 2. Resolve the billed user, workspace, and organization.
 3. Compile routing into an attempt plan.
 4. Resolve pricing and reserve applicable budgets.
@@ -107,11 +107,10 @@ Tenant lookups include the tenant predicate and return 404 for a foreign ID.
 Client filters may narrow the server-derived scope and never widen it. A tenant
 that needs a deployment-wide route gets a separately scoped endpoint, as
 organization usage does for reads and `/api/v1/organizations/me/keys`
-(`organization_keys.py`) does for writes; do not loosen the original route.
-That key surface derives a member's owner as well as their scope, takes a
-`user_id` only from an organization owner or admin naming an active member,
-never mints or hands a manager a budget-exempt or service key, and refuses a
-viewer's key writes through the same contributor check.
+(`organization_keys.py`) does for writes; do not loosen the original route. A
+member's key surface derives its owner as well as its scope, so it takes no
+`user_id`, mints nothing budget-exempt, and refuses a viewer's key writes
+through the same contributor check.
 
 The API key determines the billed workspace. Client `user`, workspace, or
 organization fields cannot move billing or credential resolution.
@@ -161,15 +160,8 @@ later ceiling refuses.
 
 `services/budgets/_ledger.py` gives each request's holds one identity.
 Settlement claims that row before changing counters, making duplicate release a
-no-op. Never commit a row before the holds it records: the per-user hold and
-its row commit in one transaction, and the scoped holds commit before both. A
-top-up grows the existing row rather than creating a second independently
-expiring hold. The sweep also clamps a counter untouched for the reservation
-TTL down to the sum of its active rows, which returns a hold whose row never
-landed. A transaction that moves a hold on a user's row or a ceiling's calls
-`defer_commit_flush` (`core/sql.py`, or the method of that name on
-`ScopedBudgetRepository`) before its first write, so its row lock does not last
-as long as a slow WAL flush.
+no-op. Write the ledger after the holds it records; a top-up grows the existing
+row rather than creating a second independently expiring hold.
 
 Every exit after reservation must settle or refund, including cancellation,
 client disconnect, tool failure, and provider error. Preserve the sweeper and
@@ -268,11 +260,38 @@ budgets and dials them only through the pinned, no-redirect client in
 `_owned_endpoint_network.py`. Their `api_base` is a tenant's, so it is held to
 public addresses whatever `provider_allow_private_hosts` says.
 
+An organization's provider key (`services/tenancy/org_provider_key_service.py`)
+is held the same way. Its `api_base` is refused at write unless it reaches
+public addresses and its provider is in `TENANT_ENDPOINT_PROVIDERS`
+(`core/provider_params.py`), the SDKs that take an injected client;
+`get_provider_kwargs` then hands that SDK the pinned client on every dispatch,
+and the key's model discovery dials through it too. Its `client_args` are held
+to `tenant_client_args_allowed`, refused at write and dropped from a row
+stored before, because other names reach the SDK constructor and can choose
+the destination, the transport, the headers or an ambient credential.
+
 Provider resolution asks `ModelProviderPort` for a deployment-owned credential
 only after local and tenant BYO sources fail. The core adapter answers from the
 deployment's hosted providers (`services/providers`, the `hosted_providers`
 tables, `/api/v1/hosted-providers`), built on the request's Unit of Work. A
 hosted credential must never move ahead of BYO or leave its trusted gateway.
+A vendor switched off on a hosted provider (`hosted_provider_disabled_vendors`,
+vendor read by `_hosted_vendors.vendor_of`) is refused in both
+`HostedProviderRuntime.resolve` and `serveable_models`, so dispatch and the
+catalog agree; change one and change the other.
+
+A hosted provider with regions (`hosted_provider_regions`, `_hosted_regions.py`)
+answers the port with its first enabled region and the rest as the
+credential's `alternates`. The gateway side narrows them, in order, to the
+workspace's data locations (`narrow_to_workspace_locations` in
+`hosted_credential_for`) and then to the request's country
+(`ensure_hosted_country`). An overlay adapter that returns no alternates keeps
+its behavior while the workspace lists no data locations; for a workspace that
+does, its credential must declare a `data_location` on the list or it is
+refused. A region is addressed as `<name>@<slug>`, resolved from the region
+rows and never by splitting a name (`get_serving`, `HostedRegionIndex`), since
+a provider named before regions may hold `@`: it is the instance a request
+settles under, and a pricing key that falls back to its provider's.
 
 A provider's own SDK variable (`OPENAI_API_KEY`) is never a credential: a key
 reaches a call only from the kwargs `get_provider_kwargs` builds (an entry's
@@ -290,6 +309,10 @@ tenant.
 Features import `Mailer`, ask `can_send_links` before offering a mail-only
 flow, and inspect the `MailDelivery` returned by `send`. They do not select
 transports or catch transport exceptions.
+
+A send that no person watches, such as a background worker's, asks
+`can_deliver_links` instead. It is false for the console transport, which shows
+an email to the deployment operator and delivers it to nobody.
 
 Mail is optional. A flow with a manual fallback, such as invitations, continues
 and returns the link. A flow with no fallback is hidden or refuses before doing
@@ -369,11 +392,9 @@ where one exists.
 ## Usage filters
 
 Usage list, count, series, and bulk mutation must share filter semantics through
-`core/sql.py`, `core/usage_filters.py` (`entity_conditions`, which the read filters
-in `routes/_usage_common.py` and `UsageSelection` both build from, and
-`UsageRefinements`, which `UsageSelection` inherits), and the usage services.
-Every visible filter belongs on `UsageSelection` with the same scalar-or-list
-shape and `MAX_FILTER_VALUES` bound.
+`core/sql.py` and the usage services. Every visible filter belongs on
+`UsageSelection` with the same scalar-or-list shape and
+`MAX_FILTER_VALUES` bound.
 
 Bulk mutation re-derives rows from the submitted filters. It never trusts a
 count calculated earlier by the dashboard. Imported-only guards do not replace
@@ -388,7 +409,7 @@ scope and not only its filter set. Nothing else narrows it, and
 ## Agent Guardrails
 
 `otari_agent.domain` (in the `otari-agent` workspace member, `cli/`) evaluates
-a caller-submitted `.otari-guardrails.yml` policy against caller-submitted evidence.
+a caller-submitted policy (composed from the files under `.otari/guardrails/`) against caller-submitted evidence.
 Everything under it is pure: no filesystem, network, subprocess, or clock
 access. Otari never reads a caller's repository itself. It lives beside the CLI
 rather than in the gateway so `otari hook` installs without the server;
@@ -399,7 +420,7 @@ process, needing no running gateway and no credential, and the Hook Server
 (`POST /api/v1/hooks/check`, `routes/hooks.py`) calls the same function for a
 caller that wants a gateway to evaluate over HTTP. Otari ships no such caller;
 the route's rework is tracked in #1699. See
-[docs/agent-guardrails.md](../../docs/agent-guardrails.md).
+[cli/docs/agent-guardrails.md](../../cli/docs/agent-guardrails.md).
 
 ## Logging
 

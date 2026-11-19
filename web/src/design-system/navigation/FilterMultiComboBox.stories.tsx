@@ -35,9 +35,8 @@ const MODELS = [
  * remaining options, so a run of selections is one gesture. Picked options drop
  * out of the list.
  *
- * Removal deliberately lives with the page's applied-filter chips, not a second
- * chip row here, so the applied set stays visible whether or not the picker is
- * open.
+ * Removal deliberately lives with the page's `FilterChips`, not a second chip row
+ * here, so the applied set stays visible whether or not the picker is open.
  */
 export const Empty: Story = {
   render: () => {
@@ -183,39 +182,6 @@ export const CappedList: Story = {
           40 options, maxVisible 5. The list shows five until the query narrows
           it.
         </p>
-      </div>
-    )
-  },
-}
-
-/**
- * `onSearchChange` hands the typed text to the caller, whose `options` are then
- * a server's matches for it and are shown as given, unfiltered here: a key found
- * by its fingerprint would not survive a second match on its name. The search is
- * faked here by matching the provider, which no label shows on its own row.
- */
-export const ServerSearch: Story = {
-  render: () => {
-    const [values, setValues] = useState<string[]>([])
-    const [search, setSearch] = useState("")
-    const term = search.trim().toLowerCase()
-    const options = MODELS.filter((option) =>
-      option.value.split(":")[0].startsWith(term),
-    ).map((option) => ({
-      value: option.value,
-      label: option.value.split(":")[1],
-    }))
-    return (
-      <div className="flex w-[20rem] flex-col gap-3">
-        <FilterMultiComboBox
-          label="Models"
-          values={values}
-          onChange={setValues}
-          options={options}
-          onSearchChange={setSearch}
-          placeholder="All models"
-        />
-        <p className="text-caption">Type a provider, such as "anthropic".</p>
       </div>
     )
   },

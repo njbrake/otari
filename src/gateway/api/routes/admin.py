@@ -15,14 +15,18 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import CurrentIdentity, IdentityServiceDep, TraceServiceDep, get_db, verify_master_key
+from gateway.api.deps import (
+    CurrentIdentity,
+    DeploymentUserServiceDep,
+    IdentityServiceDep,
+    TraceServiceDep,
+    verify_master_key,
+)
 from gateway.core.surface import Surface
 from gateway.exceptions.identity_exceptions import DeploymentAdministrationUnavailableError
 from gateway.models.tenancy import (
     DeploymentAdminAccessPublic,
-    DeploymentUserPasswordPublic,
     DeploymentUserPublic,
     DeploymentUsersPublic,
     DeploymentUserUpdateRequest,
@@ -32,9 +36,9 @@ from gateway.schemas.identity import (
     BlockedEmailCreateRequest,
     BlockedEmailPublic,
     BlockedEmailsPublic,
+    BootstrapHandoverRequest,
     PasswordLinkPublic,
 )
-from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 
 # Auth on the router for the reason `routes/organizations.py` declares it there:
 # every handler happens to take an identity today, and one that did not would be
@@ -48,14 +52,6 @@ router = APIRouter(
 )
 
 SURFACE = Surface("admin")
-
-
-def get_deployment_user_service(db: Annotated[AsyncSession, Depends(get_db)]) -> DeploymentUserService:
-    """Build the deployment user service on the request's session."""
-    return DeploymentUserService(db)
-
-
-DeploymentUserServiceDep = Annotated[DeploymentUserService, Depends(get_deployment_user_service)]
 
 
 async def require_deployment_administration(
@@ -79,7 +75,10 @@ async def get_administration_access(
     the same thing without one. It publishes only the caller's own standing,
     which they could establish by trying an endpoint anyway.
     """
-    return DeploymentAdminAccessPublic(granted=await service.has_administration_access(current_identity))
+    return DeploymentAdminAccessPublic(
+        granted=await service.has_administration_access(current_identity),
+        is_bootstrap_operator=await service.is_bootstrap_operator(current_identity),
+    )
 
 
 @router.get("/users")
@@ -135,21 +134,41 @@ async def update_deployment_user(
     return updated
 
 
-@router.post("/users/{user_id}/password")
-async def generate_deployment_user_password(
-    service: DeploymentUserServiceDep,
+@router.post(
+    "/users/{user_id}/bootstrap-operator",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_deployment_administration)],
+)
+async def hand_over_bootstrap_operator(
+    identities: IdentityServiceDep,
     current_identity: CurrentIdentity,
+    master_key: Annotated[str | None, Depends(verify_master_key)],
     user_id: uuid.UUID,
-) -> DeploymentUserPasswordPublic:
-    """Replace an account's password with a generated one, and return it once.
+    body: BootstrapHandoverRequest | None = None,
+) -> None:
+    """Make another operator the deployment's bootstrap operator.
 
-    For a deployment with no mail, where a member added or invited by address has
-    no other way to get a password: the operator hands this one over. The account
-    signs in with its address and this password straight away, its dashboard
-    sessions end, and only the hash is stored. Refused for the caller's own
-    account and for an account with no email address.
+    The bootstrap operator is the account the master key acts as: master-key sign-in
+    and requests carrying the master key resolve to it, and it cannot be deactivated or
+    lose operator access. Only the current bootstrap operator, or a request carrying the
+    master key, may hand the role on, and from a dashboard session it takes the caller's
+    ``current_password``. The previous bootstrap operator stays an operator, which the new
+    one may remove afterwards.
+
+    Refused with 400 when the caller is another operator, when the current password is
+    missing or wrong, for a session whose account has no password, and for a target that
+    is the caller, deactivated, not an operator, or without an unblocked email address that
+    is verified rather than only vouched for, and a password.
+
+    The master key keeps working and now acts as the new bootstrap operator, including
+    resetting their password, so rotate it when whoever held it should no longer.
     """
-    return await service.generate_password(actor=current_identity, user_id=user_id)
+    await identities.hand_over_bootstrap_operator(
+        actor=current_identity,
+        user_id=user_id,
+        current_password=body.current_password if body is not None else None,
+        by_master_key=master_key is not None,
+    )
 
 
 @router.post(
@@ -157,7 +176,11 @@ async def generate_deployment_user_password(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_deployment_administration)],
 )
-async def issue_password_link(identities: IdentityServiceDep, user_id: uuid.UUID) -> PasswordLinkPublic:
+async def issue_password_link(
+    identities: IdentityServiceDep,
+    master_key: Annotated[str | None, Depends(verify_master_key)],
+    user_id: uuid.UUID,
+) -> PasswordLinkPublic:
     """Give an account a single-use link that sets its password, for someone who cannot sign in.
 
     Where this deployment can mail links, the link goes to the account's address and is not returned, the
@@ -168,9 +191,10 @@ async def issue_password_link(identities: IdentityServiceDep, user_id: uuid.UUID
 
     Refused with 409 for a deactivated account, one with no address, one that has no password and signs in
     with a provider or a passkey (its owner adds a password once signed in), and, where open_signup is
-    disabled, an unverified address no organization still has as a member or invitee.
+    disabled, an unverified address no organization still has as a member or invitee. The bootstrap operator's
+    account is refused too unless the request carries the master key.
     """
-    link = await identities.issue_password_link(user_id)
+    link = await identities.issue_password_link(account_id=user_id, by_master_key=master_key is not None)
     return PasswordLinkPublic(mail_sent=link.mail_sent, link=link.link, expires_at=link.expires_at)
 
 

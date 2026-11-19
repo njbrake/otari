@@ -11,7 +11,14 @@ import type {
 import { PublicCatalogPage } from "@/features/models/PublicCatalogPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
+import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import { bootstrap } from "@/tests/fixtures"
+import { recordEvent, resetTelemetrySpy } from "@/tests/telemetry"
+
+vi.mock("@/shared/telemetry/overlayTelemetry", async () => {
+  const { telemetrySpy } = await import("@/tests/telemetry")
+  return { useTelemetry: vi.fn(() => telemetrySpy) }
+})
 
 const GLM: CatalogModelSummary = {
   id: "z-ai/glm-5.3",
@@ -45,6 +52,7 @@ const GLM: CatalogModelSummary = {
   price_sources: ["defaults", "deployment"],
   unpriced_count: 0,
   discovered: true,
+  price_unit: "token",
   min_input_price_per_million: 0.5,
   min_output_price_per_million: 2,
 }
@@ -150,7 +158,7 @@ function renderPage(
 describe("PublicCatalogPage", () => {
   afterEach(() => {
     vi.restoreAllMocks()
-    window.location.hash = ""
+    window.history.replaceState(null, "", "/")
   })
 
   it("lists the catalog for a visitor and nothing to edit", async () => {
@@ -161,7 +169,7 @@ describe("PublicCatalogPage", () => {
     // A plain hash link, since there is no router ahead of the session.
     expect(
       within(list).getByRole("link", { name: "Z.ai: GLM-5.3" }),
-    ).toHaveAttribute("href", "#/models/z-ai/glm-5.3")
+    ).toHaveAttribute("href", "/models/z-ai/glm-5.3")
     expect(screen.getByText(/cheapest offering/)).toBeInTheDocument()
     // A visitor has no organization to ask about, and asking would be a 401.
     expect(
@@ -173,7 +181,11 @@ describe("PublicCatalogPage", () => {
 
   it("opens filtered on the list a link names", async () => {
     const fetchMock = mockApi()
-    window.location.hash = "#/models?provider=mistral&provider=nebius&q=glm"
+    window.history.replaceState(
+      null,
+      "",
+      "/models?provider=mistral&provider=nebius&q=glm",
+    )
     renderPage()
 
     await screen.findByRole("list", { name: "Models" })
@@ -208,7 +220,7 @@ describe("PublicCatalogPage", () => {
     expect(screen.queryByText(/Your effective price/)).toBeNull()
     expect(screen.getByRole("link", { name: "← Models" })).toHaveAttribute(
       "href",
-      "#/models",
+      "/models",
     )
   })
 
@@ -217,9 +229,24 @@ describe("PublicCatalogPage", () => {
     renderPage("z-ai/glm-5.3")
 
     const use = await screen.findByRole("link", { name: "Use this model" })
-    expect(use).toHaveAttribute("href", "#/")
+    expect(use).toHaveAttribute("href", "/")
     // No drawer for a visitor: there is no key to send its request with.
     expect(screen.queryByRole("button", { name: "Use this model" })).toBeNull()
+  })
+
+  it("records a visitor's press as one made before signing in", async () => {
+    resetTelemetrySpy()
+    mockApi()
+    renderPage("z-ai/glm-5.3", true)
+
+    await userEvent.click(
+      await screen.findByRole("link", { name: "Use this model" }),
+    )
+
+    expect(recordEvent).toHaveBeenCalledExactlyOnceWith(
+      TELEMETRY_EVENTS.USE_MODEL_CLICKED,
+      { model: "z-ai/glm-5.3", signed_in: false },
+    )
   })
 
   it("starts an account from Use this model at signup where it is open", async () => {
@@ -228,7 +255,7 @@ describe("PublicCatalogPage", () => {
 
     expect(
       await screen.findByRole("link", { name: "Use this model" }),
-    ).toHaveAttribute("href", "#/signup")
+    ).toHaveAttribute("href", "/signup")
   })
 
   it("carries the site's navbar, and the logo goes back to the catalog without a site", async () => {
@@ -237,11 +264,11 @@ describe("PublicCatalogPage", () => {
 
     const nav = screen.getByRole("navigation", { name: "Site" })
     const models = within(nav).getByRole("link", { name: "Models" })
-    expect(models).toHaveAttribute("href", "#/models")
+    expect(models).toHaveAttribute("href", "/models")
     expect(models).toHaveAttribute("aria-current", "page")
     expect(within(nav).getByRole("link", { name: "Log in" })).toHaveAttribute(
       "href",
-      "#/",
+      "/",
     )
     expect(
       within(nav).getByRole("link", { name: "Documentation" }),
@@ -254,7 +281,7 @@ describe("PublicCatalogPage", () => {
     expect(within(nav).queryByRole("link", { name: "Sign up" })).toBeNull()
     expect(screen.getByRole("link", { name: "Otari home" })).toHaveAttribute(
       "href",
-      "#/models",
+      "/models",
     )
     await screen.findByRole("list", { name: "Models" })
   })
@@ -273,7 +300,7 @@ describe("PublicCatalogPage", () => {
     const nav = screen.getByRole("navigation", { name: "Site" })
     expect(within(nav).getByRole("link", { name: "Sign up" })).toHaveAttribute(
       "href",
-      "#/signup",
+      "/signup",
     )
     expect(
       within(nav).getByRole("link", { name: "Documentation" }),

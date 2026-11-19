@@ -7,16 +7,21 @@ deployment paid for. The check at admission
 looks the same rows up the same way, so a request it admits settles priced. The
 lookup needs the request's database session, so the caller makes it; this
 module says which rows to look up, which requests skip the check, and what the
-refusal says.
+refusal says, as well as the refusal of a tool the organization's funds cannot pay for.
 """
 
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.settings.tools import BUILTIN_FETCH, effective_fetch_instances, effective_search_instances
-from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME
+from gateway.exceptions import TenancyError
+from gateway.exceptions.tools_exceptions import WebAccessRefusedError
+from gateway.models.tools import ResolvedWebSearchConfig
+from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME, code_execution_rate_keys
+from gateway.services.tools._declarations import Tool
 from gateway.services.tools._registry import BUILTIN_TOOLS
-from gateway.services.tools._web_admission import AdmittedWebTools, enrichment_for
+from gateway.services.tools._web_admission import AdmittedWebTools, DeclaredWebTools, admit_web_access, enrichment_for
 from gateway.services.tools._web_names import WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME
 from gateway.services.tools._web_search import InLoopSearch, ResolvedFetch, resolve_fetch, resolve_in_loop_search
 from gateway.types.tool_charges import (
@@ -44,10 +49,28 @@ class PricedTool:
     deployment_paid: bool
     enrichment: bool = False
 
+    @property
+    def type(self) -> Tool:
+        """The ``tools[]`` type a request declares the tool by."""
+        return _TOOL_TYPES[self.name]
+
+
+_TOOL_TYPES = {
+    CODE_EXECUTION_TOOL_NAME: Tool.CODE_EXECUTION,
+    WEB_FETCH_TOOL_NAME: Tool.WEB_FETCH,
+    WEB_SEARCH_TOOL_NAME: Tool.WEB_SEARCH,
+}
+_TOOL_NAMES = {tool: name for name, tool in _TOOL_TYPES.items()}
+
 
 def _on_its_own_row(name: str, *, deployment_paid: bool) -> PricedTool:
     """A tool whose calls are recorded with no label, so ``otari:<tool>`` prices them, as the old backend's are."""
     return PricedTool(name, None, (gateway_tool_pricing_key(name),), deployment_paid)
+
+
+def _priced_code_execution(image: str | None) -> PricedTool:
+    """Code execution in ``image``: the environment's own row, then ``otari:code_execution``, on the deployment."""
+    return PricedTool(CODE_EXECUTION_TOOL_NAME, None, code_execution_rate_keys(image), True)
 
 
 def _priced_search(in_loop: InLoopSearch | None, *, on_credential: bool) -> PricedTool:
@@ -79,16 +102,20 @@ def _priced_enrichment(enrichment: ResolvedFetch | None) -> PricedTool | None:
     )
 
 
-def admitted_tools(*, code_execution: bool, web: AdmittedWebTools) -> list[PricedTool]:
+def admitted_tools(
+    *, code_execution: bool, web: AdmittedWebTools, code_execution_image: str | None = None
+) -> list[PricedTool]:
     """The gateway-run tools one admitted request may call, in the registry's order, a search's pages after it.
 
-    MCP tools are not among them: they run on a caller's server, so neither the
-    deployment's prices nor its account are involved.
+    ``code_execution_image`` is the environment the sandbox runs, whose own price
+    is read before ``otari:code_execution``. MCP tools are not among them: they
+    run on a caller's server, so neither the deployment's prices nor its account
+    are involved.
     """
     used: dict[str, list[PricedTool]] = {}
     if code_execution:
         # The sandbox is the deployment's, whichever backend runs it.
-        used[CODE_EXECUTION_TOOL_NAME] = [_on_its_own_row(CODE_EXECUTION_TOOL_NAME, deployment_paid=True)]
+        used[CODE_EXECUTION_TOOL_NAME] = [_priced_code_execution(code_execution_image)]
     if web.search_tool_entry is not None:
         search = _priced_search(web.in_loop_search, on_credential=web.search_credential is not None)
         pages = _priced_enrichment(web.enrichment)
@@ -98,8 +125,49 @@ def admitted_tools(*, code_execution: bool, web: AdmittedWebTools) -> list[Price
     return [priced for tool in BUILTIN_TOOLS for priced in used.get(tool.name, ())]
 
 
+def _deployment_paid_web_tools(config: GatewayConfig, policy: ResolvedWebSearchConfig | None) -> frozenset[Tool]:
+    """The web tools a request under ``policy`` declaring one alone would run on the deployment's account.
+
+    Each is admitted as the request path admits it, its search's pages included.
+    One that admission refuses is left out: it is unavailable on other grounds.
+    """
+    declarations = (
+        DeclaredWebTools(fetch_tool_entry=None, remaining_user_tools=None, search_tool_entry={"type": Tool.WEB_SEARCH}),
+        DeclaredWebTools(fetch_tool_entry={"type": Tool.WEB_FETCH}, remaining_user_tools=None, search_tool_entry=None),
+    )
+    paid: set[Tool] = set()
+    for declared in declarations:
+        try:
+            web = admit_web_access(declared, policy=policy, config=config)
+        except (TenancyError, WebAccessRefusedError):
+            continue
+        paid.update(tool.type for tool in admitted_tools(code_execution=False, web=web) if tool.deployment_paid)
+    return frozenset(paid)
+
+
+async def unfunded_tools(
+    config: GatewayConfig,
+    policy: ResolvedWebSearchConfig | None,
+    funded: Callable[[frozenset[str]], Awaitable[bool]],
+) -> frozenset[Tool]:
+    """The gateway tools a request would be refused for want of funds, each asked of ``funded`` by pricing key.
+
+    The sandbox is always the deployment's; a web tool counts only where
+    ``policy`` would run it on the deployment's account.
+    """
+    paid = sorted(_deployment_paid_web_tools(config, policy) | {Tool.CODE_EXECUTION})
+    return frozenset(
+        [tool for tool in paid if not await funded(frozenset({gateway_tool_pricing_key(_TOOL_NAMES[tool])}))]
+    )
+
+
 def tools_to_price(
-    *, code_execution: bool, web: AdmittedWebTools, require_pricing: bool, budget_exempt: bool
+    *,
+    code_execution: bool,
+    web: AdmittedWebTools,
+    require_pricing: bool,
+    budget_exempt: bool,
+    code_execution_image: str | None = None,
 ) -> list[PricedTool]:
     """The tools one admitted request runs that ``require_pricing`` checks, in the registry's order.
 
@@ -112,7 +180,11 @@ def tools_to_price(
     """
     if not require_pricing or budget_exempt:
         return []
-    return [tool for tool in admitted_tools(code_execution=code_execution, web=web) if tool.rate_keys]
+    return [
+        tool
+        for tool in admitted_tools(code_execution=code_execution, web=web, code_execution_image=code_execution_image)
+        if tool.rate_keys
+    ]
 
 
 def configured_tools_to_price(config: GatewayConfig) -> list[PricedTool]:
@@ -132,6 +204,8 @@ def configured_tools_to_price(config: GatewayConfig) -> list[PricedTool]:
                 priced.append(pages)
         elif tool.name == WEB_FETCH_TOOL_NAME:
             priced.append(_priced_fetch(resolve_fetch(config, None, requested=None, for_search=None)))
+        elif tool.name == CODE_EXECUTION_TOOL_NAME:
+            priced.append(_priced_code_execution(config.effective_sandbox_image()))
         else:
             priced.append(_on_its_own_row(tool.name, deployment_paid=True))
     return priced
@@ -160,12 +234,15 @@ def deployment_tool_rate_keys(config: GatewayConfig) -> list[InstanceRateKey]:
 def unpriced_tool_detail(name: str, rate_key: RateKey | None = None, *, enrichment: bool = False) -> str:
     """The refusal of a request that would run ``name`` with no price, naming ``rate_key``, the row that prices it.
 
-    With no ``rate_key``, it names the tool's ``otari:<tool>`` row. With
+    With no ``rate_key``, it names the tool's ``otari:<tool>`` row, as it does
+    for code execution, whose ``otari:code_execution`` row prices every environment. With
     ``enrichment``, the row is the fetch tool's that reads ``name``'s pages.
     ``price_per_call`` is offered for a tool a ``config.yml`` entry can declare,
     which ``builtin_fetch`` is not.
     """
-    row = describe_rate_key(rate_key if rate_key is not None else gateway_tool_pricing_key(name))
+    if rate_key is None or name == CODE_EXECUTION_TOOL_NAME:
+        rate_key = gateway_tool_pricing_key(name)
+    row = describe_rate_key(rate_key)
     page = "Code execution pricing" if name == CODE_EXECUTION_TOOL_NAME else "Web search pricing"
     where = (
         f"POST {API_ROOT}/pricing, the dashboard's {page} page, or price_per_call on its entry in config.yml"
@@ -182,4 +259,22 @@ def unpriced_tool_detail(name: str, rate_key: RateKey | None = None, *, enrichme
         "require_pricing enabled, so it will not run work it cannot bill. Set a "
         f"per-request price for {row} ({where}), or set require_pricing to false to serve it unpriced."
         + (" With web_search_extract set to false, a search reads no page." if enrichment else "")
+    )
+
+
+def unfunded_tool_detail(names: Sequence[str], funds_detail: str, *, declared: bool) -> str:
+    """The refusal of gateway tools the deployment's account runs, for an organization with no funds to pay for them.
+
+    ``funds_detail`` is the billing port's refusal, which says what the
+    organization has. Naming the tools is what tells this refusal from a model's,
+    which carries the same code. ``declared`` says the request put the tools in
+    ``tools[]``, so leaving them out is a way past the refusal.
+    """
+    quoted = [f"'{name}'" for name in names]
+    one = len(names) == 1
+    listed = quoted[0] if one else f"{', '.join(quoted[:-1])} and {quoted[-1]}"
+    remedy = f"Add funds, or leave {'it' if one else 'them'} out of tools[]." if declared else "Add funds to run it."
+    return (
+        f"{funds_detail} The gateway tool{'' if one else 's'} {listed} {'runs' if one else 'run'} on this "
+        f"deployment's account, which this organization's funds pay for. {remedy}"
     )

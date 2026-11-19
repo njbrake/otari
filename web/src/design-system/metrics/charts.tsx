@@ -157,17 +157,54 @@ function toIndex(state: ChartMouseState | null | undefined): number | null {
   return typeof index === "number" && Number.isFinite(index) ? index : null
 }
 
+/** A press on the plot: the bucket it started on, the one it is over, and whether it has left the first. */
+export interface ChartDrag {
+  start: number
+  end: number
+  moved: boolean
+}
+
+/**
+ * The buckets a press selects when it ends, as `[lo, hi]`, or `[]` for none.
+ *
+ * A mouse release selects even the one bucket it started on, which is a click.
+ * Leaving the plot mid-press selects only a dragged range. A touch selects only
+ * after crossing a bucket, because a finger that lands on the plot to scroll the
+ * page is not a choice.
+ */
+export function releasedSelection(
+  drag: ChartDrag | undefined,
+  how: "release" | "leave" | "touch",
+  last: number,
+): number[] {
+  if (!drag) return []
+  // Clamped: the indices came from an earlier render's tooltip state, and a
+  // background refetch landing mid-drag can shrink the series under them.
+  const clamp = (index: number) =>
+    Math.min(Math.max(index, 0), Math.max(last, 0))
+  const lo = clamp(Math.min(drag.start, drag.end))
+  const hi = clamp(Math.max(drag.start, drag.end))
+  if (how === "leave" && lo === hi) return []
+  if (how === "touch" && !drag.moved) return []
+  return [lo, hi]
+}
+
+// A compatibility mouse event follows a tap by a few hundred milliseconds; one
+// inside this span of a touch is that echo, not a mouse.
+const TOUCH_ECHO_MS = 1000
+
 // A single-or-stacked bar trend over time with the industry-standard time
 // selection: press and drag across the plot to select a bucket range (a live
 // highlight tracks the pointer via recharts' own event coordinates, so axis
-// margins never need pixel math), release to commit. A drag that never leaves
-// its starting bucket is treated as a click and ignored, so hovering and
-// clicking never zoom by accident. Releasing outside the plot commits the
-// selection dragged so far.
+// margins never need pixel math), release to commit. A click is a selection of
+// the one bucket under it, so a bar narrows the view to its own span. Hovering
+// never selects, and the rest of what a release commits is `releasedSelection`.
 //
-// The y-axis is optional (a compact strip omits it; the caller's caption carries
-// the peak); stacked segments get a hairline surface stroke so adjacent fills
-// always show their boundary.
+// The y-axis is optional (the compact Activity strip omits it; the caller's
+// caption carries the peak); stacked segments get a hairline surface stroke so
+// adjacent fills always show their boundary. `window` dims buckets outside the
+// active sub-window in place, which is how the Activity strip shows a zoomed
+// selection inside its full extent.
 export function TrendChart({
   data,
   series,
@@ -186,6 +223,7 @@ export function TrendChart({
   // For counts: no "0.5 sessions" tick.
   integerY = false,
   onSelectRange,
+  window: windowRange,
 }: {
   data: StackedPoint[]
   series: SeriesDef[]
@@ -199,16 +237,18 @@ export function TrendChart({
   yTickCount?: number
   integerY?: boolean
   onSelectRange?: (startIndex: number, endIndex: number) => void
+  window?: { startIndex: number; endIndex: number }
 }) {
-  const [drag, setDrag] = useState<{ start: number; end: number }>()
+  const [drag, setDrag] = useState<ChartDrag>()
   // Mirror for the commit handlers: mouseup can fire before the last
   // mousemove's setState has re-rendered, and committing from the stale closure
   // would snap to the previous bucket.
   const dragRef = useRef(drag)
-  const setDragBoth = (next?: { start: number; end: number }) => {
+  const setDragBoth = (next?: ChartDrag) => {
     dragRef.current = next
     setDrag(next)
   }
+  const lastTouchRef = useRef(0)
 
   // Series indices arrive from tooltip state and props computed against
   // whatever length the data had at capture time; clamp every dereference so a
@@ -217,59 +257,69 @@ export function TrendChart({
   const clampIndex = (index: number) =>
     Math.min(Math.max(index, 0), Math.max(last, 0))
 
-  const commit = () => {
-    const range = dragRef.current
-    setDragBoth(undefined)
-    if (!range || !onSelectRange || range.start === range.end) return
-    // Clamped: the indices were captured from a previous render's tooltip
-    // state, and a background refetch landing mid-drag can shrink the series
-    // under them.
-    const lo = clampIndex(Math.min(range.start, range.end))
-    const hi = clampIndex(Math.max(range.start, range.end))
-    if (lo === hi) return
-    onSelectRange(lo, hi)
+  const begin = (index: number | null) => {
+    if (index !== null) setDragBoth({ start: index, end: index, moved: false })
   }
+  const extend = (index: number | null) => {
+    const current = dragRef.current
+    if (current && index !== null)
+      setDragBoth({
+        start: current.start,
+        end: index,
+        moved: current.moved || index !== current.start,
+      })
+  }
+  const commit = (how: "release" | "leave" | "touch") => {
+    const picked = releasedSelection(dragRef.current, how, last)
+    setDragBoth(undefined)
+    if (picked.length === 2 && onSelectRange)
+      onSelectRange(picked[0], picked[1])
+  }
+  const isTouchEcho = () => Date.now() - lastTouchRef.current < TOUCH_ECHO_MS
 
   const isSelectable = Boolean(onSelectRange) && data.length > 1
+  const dimmed =
+    windowRange && data.length > 0
+      ? {
+          startIndex: clampIndex(windowRange.startIndex),
+          endIndex: clampIndex(windowRange.endIndex),
+        }
+      : null
+  const showDimming =
+    dimmed !== null && (dimmed.startIndex > 0 || dimmed.endIndex < last)
 
   return (
     // A static chart is an image to AT; one that owns drag selection is not
     // (role="img" would hide the interaction entirely), so it presents as a
     // labeled group instead. Keyboard equivalents live with the callers
-    // (presets, zoom buttons).
+    // (presets, zoom buttons, the Activity pan rail).
     // biome-ignore lint/a11y/useAriaPropsSupportedByRole: both roles this switches between support aria-label; the rule cannot evaluate the condition
     <div
       role={isSelectable ? "group" : "img"}
       aria-label={ariaLabel}
       className={`w-full touch-pan-y select-none ${isSelectable ? "cursor-crosshair" : ""}`}
+      // A touch the browser takes back for a scroll selects nothing.
+      onTouchCancel={() => setDragBoth(undefined)}
     >
       <ResponsiveContainer width="100%" height={height}>
         <BarChart
           data={data}
           margin={{ top: 4, right: 0, left: 0, bottom: 0 }}
           onMouseDown={(state) => {
-            if (!isSelectable) return
-            const index = toIndex(state)
-            if (index !== null) setDragBoth({ start: index, end: index })
+            if (isSelectable && !isTouchEcho()) begin(toIndex(state))
           }}
-          onMouseMove={(state) => {
-            const index = toIndex(state)
-            if (dragRef.current && index !== null)
-              setDragBoth({ ...dragRef.current, end: index })
-          }}
-          onMouseUp={commit}
-          onMouseLeave={commit}
+          onMouseMove={(state) => extend(toIndex(state))}
+          onMouseUp={() => commit("release")}
+          onMouseLeave={() => commit("leave")}
           onTouchStart={(state) => {
-            if (!isSelectable) return
-            const index = toIndex(state)
-            if (index !== null) setDragBoth({ start: index, end: index })
+            lastTouchRef.current = Date.now()
+            if (isSelectable) begin(toIndex(state))
           }}
-          onTouchMove={(state) => {
-            const index = toIndex(state)
-            if (dragRef.current && index !== null)
-              setDragBoth({ ...dragRef.current, end: index })
+          onTouchMove={(state) => extend(toIndex(state))}
+          onTouchEnd={() => {
+            lastTouchRef.current = Date.now()
+            commit("touch")
           }}
-          onTouchEnd={commit}
         >
           <XAxis
             dataKey="x"
@@ -319,6 +369,27 @@ export function TrendChart({
               isAnimationActive={false}
             />
           ))}
+          {/* Out-of-window dimming (start side, then end side), under the drag
+              highlight. ReferenceArea x-bounds are category values, so the
+              shading stays glued to its buckets across resizes. */}
+          {showDimming && dimmed && dimmed.startIndex > 0 ? (
+            <ReferenceArea
+              x1={data[0].x}
+              x2={data[dimmed.startIndex - 1].x}
+              fill="var(--color-surface-muted)"
+              fillOpacity={0.75}
+              stroke="none"
+            />
+          ) : null}
+          {showDimming && dimmed && dimmed.endIndex < last ? (
+            <ReferenceArea
+              x1={data[dimmed.endIndex + 1].x}
+              x2={data[data.length - 1].x}
+              fill="var(--color-surface-muted)"
+              fillOpacity={0.75}
+              stroke="none"
+            />
+          ) : null}
           {drag && clampIndex(drag.start) !== clampIndex(drag.end) ? (
             <ReferenceArea
               x1={data[clampIndex(Math.min(drag.start, drag.end))].x}

@@ -22,8 +22,8 @@ from gateway.services.providers._hosted_catalog_update import (
 )
 from gateway.services.providers._hosted_credentials import last4, normalize_api_base, public_api_base
 from gateway.services.providers._hosted_name_index import (
+    HostedRegionIndex,
     hosted_implementation,
-    hosted_session_affinity,
     load_hosted_names_at_startup,
     reset_hosted_name_index,
     run_hosted_name_refresher,
@@ -48,7 +48,19 @@ from gateway.services.providers._missing_credential import (
     unpriced_model_refusal,
 )
 from gateway.services.providers._org_provider_model_service import OrgProviderModelService
-from gateway.services.providers._owned_endpoint_network import owned_endpoint_http_client, owned_endpoint_sdk_client
+from gateway.services.providers._owned_endpoint_network import (
+    OwnedEndpointHttpx2Transport,
+    OwnedEndpointSyncTransport,
+    OwnedEndpointTransport,
+    owned_endpoint_http_client,
+    owned_endpoint_sdk_client,
+)
+from gateway.services.providers._platform_connect import (
+    PLATFORM_PROVIDER_NAME,
+    PlatformClient,
+    PlatformConnectService,
+    new_platform_connect_rate_limiter,
+)
 from gateway.services.providers._provider_clients import (
     acompletion,
     amessages,
@@ -81,11 +93,18 @@ __all__ = [
     "CountryNotServedError",
     "HostedCatalogUpdate",
     "HostedProviderService",
+    "HostedRegionIndex",
     "HostedSources",
     "LiveByoPairs",
     "OrganizationExists",
     "OrgProviderModelService",
     "OwnedEndpoint",
+    "OwnedEndpointHttpx2Transport",
+    "OwnedEndpointSyncTransport",
+    "OwnedEndpointTransport",
+    "PLATFORM_PROVIDER_NAME",
+    "PlatformClient",
+    "PlatformConnectService",
     "PriceUpdates",
     "ProviderEndpointService",
     "ResolvedHostedProvider",
@@ -102,7 +121,6 @@ __all__ = [
     "ensure_provider_country",
     "hosted_credential_for",
     "hosted_implementation",
-    "hosted_session_affinity",
     "last4",
     "hosted_models_for",
     "load_hosted_names_at_startup",
@@ -110,6 +128,7 @@ __all__ = [
     "load_workspace_hosted_access_at_startup",
     "missing_provider_credential",
     "narrow_hosted_models",
+    "new_platform_connect_rate_limiter",
     "normalize_api_base",
     "organization_to_serve",
     "owned_endpoint_http_client",

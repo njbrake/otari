@@ -42,6 +42,7 @@ from gateway.api.routes import (
     moderations,
     rerank,
     responses,
+    retired_root,
     search,
     videos,
 )
@@ -101,6 +102,8 @@ def test_every_mounted_route_is_under_a_root_or_frozen(gateway_app: FastAPI) -> 
             _under(p, API_ROOT)
             or _under(p, OTLP_ROOT)
             or p in FROZEN_ROOT_PATHS
+            # Refused, not served: it answers only with a pointer to API_ROOT.
+            or _under(p, retired_root.RETIRED_ROOT)
             or p in SHELL_PATHS
             or p.startswith(SHELL_MOUNTS)
         )

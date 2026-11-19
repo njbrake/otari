@@ -15,12 +15,13 @@ parameter the way `workspaces.py` does, unlike the organization surface's
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
 from gateway.api.deps import (
     CurrentIdentity,
     OrgProviderKeyServiceDep,
     OrgProviderModelServiceDep,
+    PersonGrowthSignalPortDep,
     verify_master_key,
 )
 from gateway.api.routes.organizations import Message
@@ -42,6 +43,7 @@ from gateway.schemas.providers import (
     WorkspaceProviderModelRestrictionRequest,
     WorkspaceProviderModelRestrictionsPublic,
 )
+from gateway.types.model_type import OfferedModelType
 
 # Auth is declared on the router, not left to arrive through `CurrentIdentity`:
 # see organizations.py/workspaces.py for the same note.
@@ -88,6 +90,8 @@ async def create_org_provider_key(
     models: OrgProviderModelServiceDep,
     current_identity: CurrentIdentity,
     body: OrgProviderKeyCreateRequest,
+    growth: PersonGrowthSignalPortDep,
+    background_tasks: BackgroundTasks,
 ) -> OrgProviderKeyPublic:
     """Create a provider key in the caller's organization. Organization owners and admins only.
 
@@ -99,7 +103,9 @@ async def create_org_provider_key(
     name. The response is the key either way; the models are read back through
     ``GET /{key_id}/models``.
     """
-    return await models.add_provider_key(user=current_identity, request=body)
+    return await models.add_provider_key(
+        user=current_identity, request=body, growth=growth, background_tasks=background_tasks
+    )
 
 
 @org_router.patch("/{key_id}")
@@ -140,12 +146,15 @@ async def restore_org_provider_key(
 
 @org_router.delete("/{key_id}")
 async def delete_org_provider_key(
-    service: OrgProviderKeyServiceDep,
+    models: OrgProviderModelServiceDep,
     current_identity: CurrentIdentity,
     key_id: uuid.UUID,
 ) -> Message:
-    """Permanently delete an archived key. Organization owners and admins only."""
-    await service.delete_key_for_user(user=current_identity, key_id=key_id)
+    """Permanently delete an archived key. Organization owners and admins only.
+
+    The model details the organization set under the key's prefix go with its last key there.
+    """
+    await models.delete_key(user=current_identity, key_id=key_id)
     return Message(message="Provider key deleted")
 
 
@@ -196,13 +205,33 @@ async def list_org_provider_key_models(
     key_id: uuid.UUID,
     skip: Annotated[int, Query(ge=0, description="Number of records to skip")] = 0,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum number of records to return")] = 500,
+    model_type: Annotated[
+        OfferedModelType | None,
+        Query(alias="type", description="Only models of this kind; `unknown` for those no source names a kind for"),
+    ] = None,
+    search: Annotated[
+        str | None,
+        Query(max_length=200, description="Only models whose name contains this text, case-insensitively"),
+    ] = None,
+    enabled: Annotated[
+        bool | None,
+        Query(description="Only models served (`true`) or only models withheld (`false`)"),
+    ] = None,
 ) -> OrgProviderKeyModelsPublic:
     """List the models offered on one key, each with the rate it currently serves at.
 
     Organization owners and admins only. ``count`` is the total rather than the
     page length, so a client knows whether another page is owed.
     """
-    return await service.list_models(user=current_identity, key_id=key_id, skip=skip, limit=limit)
+    return await service.list_models(
+        user=current_identity,
+        key_id=key_id,
+        skip=skip,
+        limit=limit,
+        model_type=model_type,
+        search=search,
+        enabled=enabled,
+    )
 
 
 @org_router.post("/{key_id}/models", status_code=status.HTTP_201_CREATED)

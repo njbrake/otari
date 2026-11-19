@@ -19,7 +19,9 @@ land and is not reproducible on demand.
 """
 
 import asyncio
+import logging
 from collections.abc import Callable, Coroutine
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,8 @@ from pydantic import ValidationError
 from gateway import main as gateway_main
 from gateway.container import build_container
 from gateway.core.config import GatewayConfig
+from gateway.core.database import dispose_db
+from gateway.log_config import logger as gateway_logger
 from gateway.main import (
     _LIFESPAN_WORKERS,
     _REFRESHER_STOP_TIMEOUT_SECONDS,
@@ -37,6 +41,8 @@ from gateway.main import (
     _start_lifespan_workers,
     _stop_refreshers,
 )
+from gateway.services.organizations import ExpiredInvitationCleanup, InvitationDelivery
+from gateway.services.tools import AttachedMcpServerIndex
 
 
 async def _absorbs_cancellation() -> None:
@@ -173,6 +179,57 @@ async def test_lifespan_shutdown_completes_despite_a_stuck_refresher(
         pass
 
 
+@pytest.mark.asyncio
+async def test_a_cache_reset_that_raises_does_not_stop_the_rest_of_shutdown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The next reset still runs, the engine is still disposed, and the failure is logged."""
+    reset: list[str] = []
+    disposed: list[bool] = []
+
+    def explodes() -> None:
+        raise RuntimeError("reset blew up")
+
+    first, second, *rest = _LIFESPAN_WORKERS
+    workers = (
+        replace(first, reset=explodes),
+        replace(second, reset=lambda: reset.append(second.name)),
+        *rest,
+    )
+    monkeypatch.setattr(gateway_main, "_LIFESPAN_WORKERS", workers)
+
+    async def recording_dispose_db() -> None:
+        disposed.append(True)
+        await dispose_db()
+
+    monkeypatch.setattr(gateway_main, "dispose_db", recording_dispose_db)
+    config = GatewayConfig(
+        database_url=f"sqlite:///{tmp_path / 'lifespan.db'}",
+        master_key="sk-test-master",
+    )
+    app = FastAPI()
+    app.state.config = config
+    app.state.enabled_features = ()
+    app.state.container = build_container(config=config)
+
+    # The gateway logger does not propagate, so caplog sees it only with its handler attached.
+    gateway_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger="gateway")
+    try:
+        async with _create_lifespan()(app):
+            pass
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+
+    assert reset == [second.name]
+    assert disposed == [True]
+    failures = [r for r in caplog.records if r.getMessage() == f"{first.name} cache reset failed at shutdown"]
+    assert len(failures) == 1
+    assert failures[0].exc_info is not None
+
+
 def _recording_refresher(name: str, started: list[str]) -> Callable[..., Coroutine[Any, Any, None]]:
     """A stand-in refresher that records when it is called, not when it is awaited.
 
@@ -200,6 +257,11 @@ async def _started_worker_names(config: GatewayConfig, monkeypatch: pytest.Monke
     for attribute in dir(gateway_main):
         if attribute.startswith("run_"):
             monkeypatch.setattr(gateway_main, attribute, _recording_refresher(attribute, called))
+    monkeypatch.setattr(InvitationDelivery, "poll", _recording_refresher("InvitationDelivery.poll", called))
+    monkeypatch.setattr(ExpiredInvitationCleanup, "poll", _recording_refresher("ExpiredInvitationCleanup.poll", called))
+    monkeypatch.setattr(
+        AttachedMcpServerIndex, "run_refresher", _recording_refresher("AttachedMcpServerIndex.run_refresher", called)
+    )
 
     workers = _start_lifespan_workers(config, build_container(config=config))
     for task, _worker in workers:
@@ -216,14 +278,7 @@ def _full_config(**overrides: Any) -> GatewayConfig:
     gated on a setting this config leaves unset would look like a worker the
     change under test dropped.
     """
-    settings: dict[str, Any] = {
-        "master_key": "sk-test-master",
-        "sandbox_url": "http://sandbox:8080",
-        "telemetry_retention_days": 90,
-        # The rollup refresh runs on PostgreSQL alone; nothing here connects to it.
-        "database_url": "postgresql://otari@localhost/otari",
-    }
-    return GatewayConfig(**{**settings, **overrides})
+    return GatewayConfig(master_key="sk-test-master", sandbox_url="http://sandbox:8080", **overrides)
 
 
 @pytest.mark.asyncio
@@ -271,18 +326,10 @@ async def test_the_file_sweeper_stops_with_files_or_its_interval(
 
 
 @pytest.mark.asyncio
-async def test_the_telemetry_retention_sweep_is_off_without_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Retention is opt-in, and leaving it off must not drop any other worker."""
-    names, _called = await _started_worker_names(_full_config(telemetry_retention_days=0), monkeypatch)
-
-    assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "telemetry retention sweep"]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "config",
     [
-        _full_config(sandbox_url=None),
+        GatewayConfig(master_key="sk-test-master"),
         _full_config(sandbox_container_idle_ttl_sec=0),
     ],
 )
@@ -294,21 +341,6 @@ async def test_the_container_sweeper_stops_without_a_sandbox_or_without_reuse(
 
     assert "sandbox container sweep" not in names
     assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "sandbox container sweep"]
-
-
-@pytest.mark.asyncio
-async def test_the_usage_rollup_refresh_runs_on_postgresql_alone(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No trigger marks an hour outside PostgreSQL, so there is nothing to rebuild."""
-    names, _called = await _started_worker_names(_full_config(database_url="sqlite:///./otari.db"), monkeypatch)
-
-    assert "usage rollup refresh" not in names
-    assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "usage rollup refresh"]
-
-
-def test_the_usage_rollup_refresh_cannot_be_turned_off() -> None:
-    """Only a rebuild removes the marks a write leaves, so with none they would pile up."""
-    with pytest.raises(ValidationError):
-        _full_config(usage_rollup_refresh_interval_sec=0)
 
 
 @pytest.mark.asyncio

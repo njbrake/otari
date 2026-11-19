@@ -28,7 +28,7 @@ hang off it.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 from pydantic import BaseModel, Field
 
 from gateway.api.deps import (
@@ -36,7 +36,9 @@ from gateway.api.deps import (
     IdentityServiceDep,
     InvitationMailLimitDep,
     MembershipOrganizationServiceDep,
+    OIDCConnectionServiceDep,
     OrganizationDomainServiceDep,
+    PersonGrowthSignalPortDep,
     get_config,
     verify_master_key,
 )
@@ -55,6 +57,7 @@ from gateway.models.tenancy import (
     CallerOrganizationMembershipsPublic,
     InviteOrganizationMemberRequest,
     InviteOrganizationMemberResultPublic,
+    Organization,
     OrganizationCreateRequest,
     OrganizationDomainCreateRequest,
     OrganizationDomainPublic,
@@ -134,9 +137,10 @@ async def create_organization(
 async def get_active_organization_context(
     service: MembershipOrganizationServiceDep,
     current_identity: CurrentIdentity,
+    connections: OIDCConnectionServiceDep,
 ) -> OrganizationMembershipContextPublic:
     """Get the caller's active organization and their standing in it."""
-    return await service.get_active_membership_context_for_user(current_identity)
+    return await service.get_active_membership_context_for_user(current_identity, sso_enforcement=connections)
 
 
 @router.patch("/me")
@@ -172,6 +176,7 @@ async def update_active_organization(
 async def delete_active_organization(
     service: MembershipOrganizationServiceDep,
     current_identity: CurrentIdentity,
+    connections: OIDCConnectionServiceDep,
 ) -> OrganizationMembershipContextPublic:
     """Delete the caller's active organization, if it has no usage, and move the caller out of it.
 
@@ -181,15 +186,18 @@ async def delete_active_organization(
     whose workspaces still hold usage, API keys, aliases or routing policies, so
     a deletion never takes spend history with it.
 
-    Answers with the caller's context in the organization they are moved to,
-    their oldest other one.
+    Answers with the caller's context in the organization they are moved to: the
+    oldest of their other memberships that admits them. One requiring sign-in
+    through its own connection admits a member who holds a link to it, and the
+    account its enforcement exempts, and nobody else.
     """
-    return await service.delete_active_organization_for_user(user=current_identity)
+    return await service.delete_active_organization_for_user(user=current_identity, sso_enforcement=connections)
 
 
 @router.get("/me/memberships")
 async def list_caller_organization_memberships(
     service: MembershipOrganizationServiceDep,
+    connections: OIDCConnectionServiceDep,
     current_identity: CurrentIdentity,
     skip: Annotated[int, Query(ge=0, description="Number of records to skip")] = 0,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum number of records to return")] = 100,
@@ -200,18 +208,24 @@ async def list_caller_organization_memberships(
     organizations: this is what an organization switcher renders, and one row
     carries ``is_active_organization`` so it can mark the current one. Not to be
     confused with ``GET /me/members``, which is the active organization's
-    roster.
+    memberships. An organization whose own SSO enforcement refuses the caller is left off.
     """
+
+    async def blocked(organization: Organization) -> bool:
+        return await connections.blocks_membership(user=current_identity, organization=organization)
+
     return await service.list_organization_memberships_for_user(
         user=current_identity,
         skip=skip,
         limit=limit,
+        blocked=blocked,
     )
 
 
 @router.post("/me/switch")
 async def switch_active_organization(
     service: MembershipOrganizationServiceDep,
+    connections: OIDCConnectionServiceDep,
     current_identity: CurrentIdentity,
     body: SwitchActiveOrganizationRequest,
 ) -> OrganizationMembershipContextPublic:
@@ -221,11 +235,16 @@ async def switch_active_organization(
     This changes which organization every later request is scoped to, so
     workspaces, keys, budgets and usage all follow it. Answers 404 for an
     organization the caller holds no active membership in, whether or not it
-    exists.
+    exists, and for one whose own SSO enforcement refuses the caller.
     """
+
+    async def blocked(organization: Organization) -> bool:
+        return await connections.blocks_membership(user=current_identity, organization=organization)
+
     return await service.switch_active_organization_for_user(
         user=current_identity,
         organization_id=body.organization_id,
+        blocked=blocked,
     )
 
 
@@ -263,6 +282,7 @@ async def create_active_organization_member(
     current_identity: CurrentIdentity,
     body: ActiveOrganizationMemberCreateRequest,
     identities: IdentityServiceDep,
+    config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> ActiveOrganizationMemberCreateResultPublic:
     """Add a member to the caller's active organization, by email address.
 
@@ -273,24 +293,36 @@ async def create_active_organization_member(
     GitHub sign-in; on a deployment with no mail and no provider it waits for
     an operator's password link, so invite it instead
     (``POST /me/member-invitations``), whose link can set its first password.
+
+    On a deployment with ``open_signup`` on, only a deployment operator may add
+    members this way (403 for anyone else, who invites instead). An address at an
+    email domain another organization has verified is refused with 409.
     """
     return await service.create_active_organization_member_for_user(
-        user=current_identity, request=body, blocked_addresses=identities
+        user=current_identity, request=body, blocked_addresses=identities, open_signup=config.open_signup
     )
 
 
 @router.patch("/me/members/{organization_member_id}")
 async def update_active_organization_member(
     service: MembershipOrganizationServiceDep,
+    connections: OIDCConnectionServiceDep,
     current_identity: CurrentIdentity,
     organization_member_id: uuid.UUID,
     body: ActiveOrganizationMemberUpdateRequest,
+    config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> ActiveOrganizationMemberPublic:
-    """Change a member's role or status. Organization owners and admins only."""
+    """Change a member's role or status. Organization owners and admins only.
+
+    On a deployment with ``open_signup`` on, only a deployment operator may make
+    active a member who never accepted an invitation (403 for anyone else).
+    """
     return await service.update_active_organization_member_for_user(
         user=current_identity,
         organization_member_id=organization_member_id,
         request=body,
+        sso_enforcement=connections,
+        open_signup=config.open_signup,
     )
 
 
@@ -395,6 +427,8 @@ async def invite_active_organization_member(
     mail_limit: InvitationMailLimitDep,
     body: InviteOrganizationMemberRequest,
     identities: IdentityServiceDep,
+    growth: PersonGrowthSignalPortDep,
+    background_tasks: BackgroundTasks,
 ) -> InviteOrganizationMemberResultPublic:
     """Invite an address to the caller's active organization by email.
 
@@ -403,9 +437,11 @@ async def invite_active_organization_member(
     once the recipient accepts (``POST /api/v1/invitations/accept``). When the
     email did not go out (``mail_sent`` is false: mail is not configured, the
     send failed, or the invitation mail limit was reached), the response
-    carries the accept link so the caller can share it themselves. An address
-    whose invitation is still pending is refused; reissue that invitation to
-    send a new link.
+    carries the accept link so the caller can share it themselves, except under
+    ``open_signup`` to a caller who is not a deployment operator, whose invitee
+    accepts from their pending invitations once signed in. An address whose
+    invitation is still pending is refused; reissue that invitation to send a
+    new link.
     """
     return await service.invite_active_organization_member_for_user(
         user=current_identity,
@@ -413,6 +449,8 @@ async def invite_active_organization_member(
         config=config,
         mail_limit=mail_limit,
         blocked_addresses=identities,
+        growth=growth,
+        background_tasks=background_tasks,
     )
 
 
@@ -424,6 +462,8 @@ async def bulk_invite_active_organization_members(
     mail_limit: InvitationMailLimitDep,
     body: BulkInviteOrganizationMembersRequest,
     identities: IdentityServiceDep,
+    growth: PersonGrowthSignalPortDep,
+    background_tasks: BackgroundTasks,
 ) -> BulkInviteOrganizationMembersResultPublic:
     """Invite several addresses to the caller's active organization at once.
 
@@ -432,7 +472,8 @@ async def bulk_invite_active_organization_members(
     would check it, and an address that is refused lands in ``failed`` with the
     reason rather than failing the request, so the answer is 200 even when some
     or all were refused. Each invited entry carries its own ``mail_sent``, and
-    its accept link when that is false.
+    its accept link when that is false, on the terms ``POST /me/member-invitations``
+    returns one.
     """
     return await service.invite_active_organization_members_for_user(
         user=current_identity,
@@ -440,6 +481,8 @@ async def bulk_invite_active_organization_members(
         config=config,
         mail_limit=mail_limit,
         blocked_addresses=identities,
+        growth=growth,
+        background_tasks=background_tasks,
     )
 
 
@@ -455,8 +498,9 @@ async def reissue_active_organization_member_invitation(
     """Give a pending or expired invitation a new accept link. Organization owners and admins only.
 
     The old link stops working. The new one is emailed as an invitation is, and
-    returned in ``accept_link`` when it was not, so a lost link can be
-    recovered whether or not the deployment sends mail.
+    returned in ``accept_link`` when it was not, on the terms
+    ``POST /me/member-invitations`` returns one. Where the link was neither emailed
+    nor returned, the invitee accepts from their pending invitations once signed in.
     """
     return await service.reissue_organization_member_invitation_for_user(
         user=current_identity,
@@ -512,11 +556,10 @@ async def create_active_organization_domain(
 ) -> OrganizationDomainPublic:
     """Claim an email domain for the caller's organization. Owners and admins only.
 
-    The claim lands unverified and does nothing until ``POST
-    /me/domains/{id}/verify`` finds the record in ``verification_record``
-    published at the domain's apex. A public email provider is refused outright,
-    and a domain another organization already claims answers 409 without saying
-    who holds it.
+    The claim starts unverified and does nothing.
+    ``POST /me/domains/{id}/verify`` verifies it by finding the record in ``verification_record`` at the domain's apex.
+    Verifying is refused while another organization has a current proof of the same domain.
+    A public email provider is refused, and so is a domain this organization has already claimed.
     """
     return await service.create_domain_for_user(user=current_identity, request=body)
 

@@ -4,10 +4,9 @@ import type { ReactElement } from "react"
 import { vi } from "vitest"
 
 import type {
-  ApiKey,
   AutomaticFallback,
   CatalogModelSummary,
-  NameTraffic,
+  ExplainPolicyResponse,
   OrganizationContext,
   OrganizationMember,
   PolicySpec,
@@ -51,14 +50,6 @@ export const CHAIN: PolicySpec = {
 export const UNKNOWN_ROUTER: PolicySpec = {
   select: [
     { router: "cheapest", candidates: ["openai:gpt-5-nano", "openai:gpt-5"] },
-    { default: "openai:gpt-5" },
-  ],
-}
-
-// A pool with no weights, as a spill-over router keeps one.
-export const SPILL_OVER: PolicySpec = {
-  select: [
-    { router: "priority", candidates: ["openai:gpt-5-nano", "openai:gpt-5"] },
     { default: "openai:gpt-5" },
   ],
 }
@@ -107,6 +98,30 @@ export const MEMBERS = [
   }),
 ]
 
+/** A plan with one candidate and one left out, what explain answers by default. */
+export const EXPLAINED: ExplainPolicyResponse = {
+  name: "fast",
+  selection_reason: "default",
+  is_dynamic: false,
+  candidates: [
+    {
+      position: 1,
+      instance: "openai",
+      model: "gpt-5-mini",
+      selection_reason: "default",
+      dispatch_model: "openai:gpt-5-mini",
+    },
+  ],
+  dropped: [
+    {
+      selector: "anthropic:claude-haiku-4-5",
+      reason: "not_allowed",
+      detail: "is not in allowed_models for this caller",
+    },
+  ],
+  guardrails: [],
+}
+
 export function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -153,14 +168,8 @@ export function mockApi(
     catalog?: CatalogModelSummary[]
     // What /api/v1/organizations/me/automatic-fallbacks answers.
     fallbacks?: AutomaticFallback[]
-    // What /api/v1/organizations/me/routing-policies/traffic answers.
-    traffic?: NameTraffic[]
-    // The caller's keys, for the key filter and the Sent by names.
-    keys?: ApiKey[]
-    // Whether the workspace lets members create their own policies.
-    membersCreatePolicies?: boolean
-    // The selectors the pricing check reports as having no price.
-    unpriced?: string[]
+    // What either surface's policy explain answers.
+    explain?: ExplainPolicyResponse
   } = {},
 ) {
   let list = [...policies]
@@ -179,58 +188,25 @@ export function mockApi(
       calls.push({ url, method, body })
 
       if (
-        url.includes(`${API_ROOT}/organizations/me/routing-policies/traffic`)
+        url.endsWith(`${API_ROOT}/organizations/me/routing-policies/explain`) ||
+        url.endsWith(`${API_ROOT}/routing/policies/explain`)
       ) {
-        return jsonResponse({ window_days: 30, names: opts.traffic ?? [] })
-      }
-      if (
-        url.includes(`${API_ROOT}/organizations/me/routing-policies/unpriced`)
-      ) {
-        const asked = new URL(url, "http://localhost").searchParams.getAll(
-          "selector",
-        )
-        return jsonResponse({
-          unpriced: asked.filter((selector) =>
-            (opts.unpriced ?? []).includes(selector),
-          ),
-        })
-      }
-      if (url.includes(`${API_ROOT}/organizations/me/routing-policies/copy`)) {
-        const source = memberList.find(
-          (item) => item.name === body.name && !item.user_id,
-        )
-        const row = policy(body.name, source?.spec ?? CHAIN, {
-          user_id: opts.context?.caller?.user_id ?? null,
-          workspace_id: body.workspace_id,
-        })
-        memberList = [...memberList, row]
-        return jsonResponse(row)
+        return jsonResponse(opts.explain ?? EXPLAINED)
       }
       if (url.includes(`${API_ROOT}/organizations/me/routing-policies`)) {
         if (method === "POST") {
-          // Keyed on name and person, like the real upsert.
-          const row = policy(body.name, body.spec, {
-            user_id: body.member_id ?? null,
-          })
+          const row = policy(body.name, body.spec)
           memberList = [
-            ...memberList.filter(
-              (item) =>
-                item.name !== row.name ||
-                (item.user_id ?? null) !== row.user_id,
-            ),
+            ...memberList.filter((item) => item.name !== row.name),
             row,
           ]
           return jsonResponse(row)
         }
         if (method === "DELETE") {
-          const parsed = new URL(url, "http://localhost")
           const name = decodeURIComponent(
-            parsed.pathname.split("/").pop() ?? "",
+            url.split("?")[0].split("/").pop() ?? "",
           )
-          const memberId = parsed.searchParams.get("member_id")
-          memberList = memberList.filter(
-            (item) => item.name !== name || (item.user_id ?? null) !== memberId,
-          )
+          memberList = memberList.filter((item) => item.name !== name)
           return new Response(null, { status: 204 })
         }
         return jsonResponse(memberList)
@@ -262,19 +238,6 @@ export function mockApi(
       if (url.includes(`${API_ROOT}/organizations/me/automatic-fallbacks`)) {
         return jsonResponse({ window_days: 30, models: opts.fallbacks ?? [] })
       }
-      if (url.includes("/visibility")) {
-        return jsonResponse({
-          members_see_workspace_totals: false,
-          members_create_policies: opts.membersCreatePolicies ?? true,
-        })
-      }
-      if (
-        url.includes(`${API_ROOT}/organizations/me/keys`) ||
-        url.includes(`${API_ROOT}/keys`)
-      ) {
-        // A bare array, like the real key list.
-        return jsonResponse(opts.keys ?? [])
-      }
       if (url.endsWith(`${API_ROOT}/organizations/me`)) {
         return jsonResponse(opts.context ?? organizationContext())
       }
@@ -284,30 +247,6 @@ export function mockApi(
       if (url.includes(`${API_ROOT}/organizations/me/members`)) {
         const members = opts.members ?? []
         return jsonResponse({ data: members, count: members.length })
-      }
-      if (url.includes(`${API_ROOT}/routing/policies/explain`)) {
-        return jsonResponse({
-          name: "fast",
-          selection_reason: "default",
-          is_dynamic: false,
-          candidates: [
-            {
-              position: 1,
-              instance: "openai",
-              model: "gpt-5-mini",
-              selection_reason: "default",
-              dispatch_model: "openai:gpt-5-mini",
-            },
-          ],
-          dropped: [
-            {
-              selector: "anthropic:claude-haiku-4-5",
-              reason: "not_allowed",
-              detail: "is not in allowed_models for this caller",
-            },
-          ],
-          guardrails: [],
-        })
       }
       if (url.includes(`${API_ROOT}/routing/policies`)) {
         if (method === "POST") {

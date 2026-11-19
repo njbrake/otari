@@ -35,7 +35,13 @@ from typing import Protocol
 
 from gateway.core.metered_pricing import to_decimal
 from gateway.models.money import MAX_USD_COST
-from gateway.types.tool_charges import PROVIDER_WEB_SEARCH_TOOL, LabelCalls, RateKey, provider_web_search_label
+from gateway.types.tool_charges import (
+    PROVIDER_WEB_SEARCH_TOOL,
+    LabelCalls,
+    RateKey,
+    gateway_tool_pricing_key,
+    provider_web_search_label,
+)
 
 # Every tool backend marks a recoverable failure by prefixing the string it hands
 # back to the model. The tool loop's own error path uses the same prefix, so this
@@ -50,8 +56,7 @@ TOOL_BUDGET_EXCEEDED_TEXT = (
 
 # Bounds on what a caller-influenced name can write into the row. An MCP server
 # can advertise any number of tools with any names; the row is JSON, not a
-# schema, so the caps are enforced here. NUL is stripped because PostgreSQL's
-# ``jsonb`` rejects ``\u0000``, which would fail the whole usage-row write.
+# schema, so the caps are enforced here.
 MAX_TOOL_NAMES = 32
 MAX_TOOL_NAME_CHARS = 64
 # Reserved rather than a plausible tool name: MCP tool names come from a
@@ -66,6 +71,16 @@ class ToolSpendGate(Protocol):
     async def admit(self, call: LabelCalls) -> bool:
         """Whether ``call``, its calls with no reported cost, fits; calls that do not must not run."""
         ...
+
+
+def _rate_keys_for(tool: str, rate_keys: tuple[RateKey, ...] | None) -> tuple[RateKey, ...] | None:
+    """The rate keys a call prices under: a name past the cap keeps its full ``otari:<tool>`` row.
+
+    The meter name is capped, but an operator prices the tool under its whole name, so a capped name would never match.
+    """
+    if rate_keys is None and len(tool) > MAX_TOOL_NAME_CHARS:
+        return (gateway_tool_pricing_key(tool),)
+    return rate_keys
 
 
 def is_tool_error(result: str) -> bool:
@@ -123,7 +138,7 @@ class ToolUsageTally:
         call = LabelCalls(
             tool=(tool or OVERFLOW_TOOL_NAME)[:MAX_TOOL_NAME_CHARS],
             label=label,
-            rate_keys=rate_keys,
+            rate_keys=_rate_keys_for(tool, rate_keys),
             calls=calls,
             unreported_calls=calls,
             reported_cost=Decimal(0),
@@ -167,7 +182,7 @@ class ToolUsageTally:
         whether the organization's funds pay for it; ``None`` reads it off the label.
         """
         key = self._record(tool, failed=False)
-        totals = self._labels.setdefault((key, label, rate_keys, deployment_paid), _LabelTotals())
+        totals = self._labels.setdefault((key, label, _rate_keys_for(tool, rate_keys), deployment_paid), _LabelTotals())
         totals.calls += 1
         reported = _usable_cost(cost)
         if reported is None:
@@ -204,7 +219,7 @@ class ToolUsageTally:
         return key
 
     def _key(self, tool: str) -> str:
-        name = ((tool or "").replace("\x00", "") or OVERFLOW_TOOL_NAME)[:MAX_TOOL_NAME_CHARS]
+        name = (tool or OVERFLOW_TOOL_NAME)[:MAX_TOOL_NAME_CHARS]
         if name in self._counts:
             return name
         if len(self._counts) >= MAX_TOOL_NAMES:

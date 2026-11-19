@@ -8,7 +8,6 @@ import pytest
 from gateway.core.config import GatewayConfig
 from gateway.services import alias_service
 from gateway.services.alias_service import (
-    alias_names_in,
     all_alias_names,
     cached_aliases,
     effective_aliases,
@@ -225,17 +224,3 @@ def test_reset_clears_the_user_layer_too() -> None:
     reset_alias_cache()
     assert cached_aliases("alice", workspace_id=DEFAULT) == {}
     assert resolve_effective_alias(CONFIG, "mine", "alice", workspace_id=DEFAULT) is None
-
-
-def test_a_workspaces_names_are_its_own_and_its_users_plus_the_configured_ones() -> None:
-    _prime({"shared": "anthropic:claude-haiku-4"}, {"u-sam": {"sams": "anthropic:claude-opus-4"}})
-    _prime(
-        {"elsewhere": "anthropic:claude-haiku-4"},
-        {"u-kim": {"kims": "anthropic:claude-opus-4"}},
-        workspace_id=OTHER,
-    )
-
-    assert alias_names_in(CONFIG, DEFAULT) == {"configalias", "shared", "sams"}
-    # Another workspace's names, user-scoped or not, never count here.
-    assert alias_names_in(CONFIG, OTHER) == {"configalias", "elsewhere", "kims"}
-    assert all_alias_names(CONFIG) == {"configalias", "shared", "sams", "elsewhere", "kims"}

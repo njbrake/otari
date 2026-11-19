@@ -8,7 +8,7 @@ import type { OrganizationContext } from "@/client"
 import { RoutingPage } from "@/features/routing/RoutingPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
-import { apiKey, bootstrap, organizationContext } from "@/tests/fixtures"
+import { bootstrap, organizationContext } from "@/tests/fixtures"
 import { withRouter } from "@/tests/router"
 import {
   ADMIN_WORKSPACE,
@@ -19,9 +19,15 @@ import {
   policy,
   renderInWorkspace,
   renderPage,
-  SPILL_OVER,
+  UNKNOWN_ROUTER,
   WEIGHTED,
 } from "@/tests/routing"
+import {
+  findRowMenuItem,
+  getRowMenuItem,
+  pressRowAction,
+  rowMenuItemNames,
+} from "@/tests/rowMenu"
 
 // The list. Creating a policy is in RoutingPage.create.test.tsx, and a
 // policy's own page in PolicyDetailPage.test.tsx.
@@ -31,15 +37,12 @@ afterEach(() => {
 })
 
 /**
- * The page's own create action, scoped to the heading's header: once the
- * dialog is open its submit says "Create policy" too.
+ * The page's own create action, the first of its name: it leads the view,
+ * above the empty state's, and once the dialog is open its submit says
+ * "Create policy" too.
  */
-const createTrigger = async () => {
-  const heading = await screen.findByRole("heading", { name: "Routing" })
-  const header = heading.closest("header")
-  if (!header) throw new Error("PageIntro's header is gone")
-  return within(header).findByRole("button", { name: "Create policy" })
-}
+const createTrigger = async () =>
+  (await screen.findAllByRole("button", { name: "Create policy" }))[0]
 
 /** Where a row's Edit or View lands: the policy's page, with its scope. */
 function PolicyProbe() {
@@ -55,19 +58,6 @@ function PolicyProbe() {
 
 const POLICY_PAGE = [{ path: "/routing/$name", element: <PolicyProbe /> }]
 
-/** The identity id the fixtures' caller carries, which a member's own rows name. */
-const MEMBER_ID = "33333333-3333-3333-3333-333333333333"
-
-function memberContext(): OrganizationContext {
-  return organizationContext({
-    deployment_operator: false,
-    role: "member",
-    workspace_memberships: [
-      { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "member" },
-    ],
-  })
-}
-
 describe("RoutingPage", () => {
   it("lists each policy's main model, its backups and who it applies to", async () => {
     mockApi()
@@ -78,16 +68,12 @@ describe("RoutingPage", () => {
     // itself so the table makes no catalog read per row.
     expect(within(fastRow).getByText("gpt-5-mini")).toBeInTheDocument()
     expect(within(fastRow).getByText("OpenAI")).toBeInTheDocument()
-    // The model then its backups, in order, so a fallback is visible without
+    // The backups are spelled out in order, so a fallback is visible without
     // opening the policy.
-    const order = within(fastRow).getByRole("list", { name: "Tried in order" })
-    const steps = within(order).getAllByRole("listitem")
-    expect(steps).toHaveLength(2)
-    expect(steps[0]).toHaveTextContent("gpt-5-mini OpenAI")
-    expect(steps[1]).toHaveTextContent("claude-haiku-4-5 Anthropic")
-    expect(
-      within(fastRow).getByText("Everyone in this workspace"),
-    ).toBeInTheDocument()
+    const backups = within(fastRow).getByRole("list", { name: "Backups" })
+    expect(within(backups).getAllByRole("listitem")).toHaveLength(1)
+    expect(backups).toHaveTextContent("claude-haiku-4-5 · Anthropic")
+    expect(within(fastRow).getByText("Every caller")).toBeInTheDocument()
   })
 
   it("says a policy has no backups rather than leaving the cell empty", async () => {
@@ -95,12 +81,10 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("solo")).closest("tr")!
-    expect(within(row).getByText("No backup")).toBeInTheDocument()
+    expect(within(row).getByText("None")).toBeInTheDocument()
     expect(
-      within(
-        within(row).getByRole("list", { name: "Tried in order" }),
-      ).getAllByRole("listitem"),
-    ).toHaveLength(1)
+      within(row).queryByRole("list", { name: "Backups" }),
+    ).not.toBeInTheDocument()
   })
 
   it("marks a policy that decides per request, since it has no single target", async () => {
@@ -117,23 +101,16 @@ describe("RoutingPage", () => {
   })
 
   it("does not offer to edit or delete a policy that lives in config.yml", async () => {
+    const user = userEvent.setup()
     mockApi()
     renderPage(<RoutingPage />)
 
     const autoRow = (await screen.findByText("auto")).closest("tr")!
-    expect(
-      within(autoRow).getByText("Set in deployment config"),
-    ).toBeInTheDocument()
-    expect(
-      within(autoRow).queryByRole("button", { name: "Edit" }),
-    ).not.toBeInTheDocument()
-    expect(
-      within(autoRow).queryByRole("button", { name: "Delete" }),
-    ).not.toBeInTheDocument()
+    expect(within(autoRow).getByText("set in config.yml")).toBeInTheDocument()
+    expect(await findRowMenuItem(user, /^Edit(?: |$)/, autoRow)).toBeNull()
+    expect(await findRowMenuItem(user, /^Delete(?: |$)/, autoRow)).toBeNull()
     // Its page still opens, read-only.
-    expect(
-      within(autoRow).getByRole("button", { name: "View" }),
-    ).toBeInTheDocument()
+    expect(await getRowMenuItem(user, "View auto", autoRow)).toBeInTheDocument()
   })
 
   it("keeps the page's create action visible while the dialog is open", async () => {
@@ -175,7 +152,7 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />, "/routing", POLICY_PAGE)
 
     const row = (await screen.findByText("fast")).closest("tr")!
-    await user.click(within(row).getByRole("button", { name: "Edit" }))
+    await pressRowAction(user, "Edit fast", row)
     expect(await screen.findByText("Policy page for fast")).toBeInTheDocument()
   })
 
@@ -187,14 +164,15 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />, "/routing", POLICY_PAGE)
 
     const row = (await screen.findByText("cheap")).closest("tr")!
-    await user.click(within(row).getByRole("button", { name: "Edit" }))
+    await pressRowAction(user, "Edit cheap", row)
     expect(
       await screen.findByText("Policy page for cheap as u-bob"),
     ).toBeInTheDocument()
   })
 
   it("does not offer Edit for a policy the form would silently truncate", async () => {
-    // The editor models a `budget_used_pct.gte` and a `user_id` condition. Offering Edit on a
+    const user = userEvent.setup()
+    // The editor models only a `budget_used_pct.gte` condition. Offering Edit on a
     // policy built through the API with anything else would drop it on save, which
     // is worse than not offering the button.
     mockApi([
@@ -208,19 +186,15 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("api-authored")).closest("tr")!
-    expect(
-      within(row).queryByRole("button", { name: "Edit" }),
-    ).not.toBeInTheDocument()
-    expect(
-      within(row).getByRole("button", { name: "View" }),
-    ).toBeInTheDocument()
+    const names = await rowMenuItemNames(user, row)
+    expect(names.some((name) => /^Edit(?: |$)/.test(name))).toBe(false)
+    expect(names).toContain("View api-authored")
     // Delete stays available: removing a policy is never lossy.
-    expect(
-      within(row).getByRole("button", { name: "Delete" }),
-    ).toBeInTheDocument()
+    expect(names).toContain("Delete api-authored")
   })
 
   it("lists stored aliases alongside policies, so nothing is unmanageable", async () => {
+    const user = userEvent.setup()
     // Aliases were folded into this page. If they were not listed here they would
     // be invisible and undeletable from the dashboard, since the Aliases tab is gone.
     mockApi([], "http://guardrails:8000", [
@@ -236,9 +210,7 @@ describe("RoutingPage", () => {
     const row = (await screen.findByText("legacy")).closest("tr")!
     expect(within(row).getByText("gpt-4o-mini")).toBeInTheDocument()
     expect(within(row).getByText("alias")).toBeInTheDocument()
-    expect(
-      within(row).getByRole("button", { name: "Delete" }),
-    ).toBeInTheDocument()
+    expect(await getRowMenuItem(user, "Delete legacy", row)).toBeInTheDocument()
   })
 
   it("names the policy in a confirm dialog before deleting it", async () => {
@@ -251,7 +223,7 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("fast")).closest("tr")!
-    await user.click(within(row).getByRole("button", { name: "Delete" }))
+    await pressRowAction(user, "Delete fast", row)
 
     const dialog = await screen.findByRole("alertdialog")
     expect(within(dialog).getByText(/^fast stops resolving/)).toBeVisible()
@@ -273,7 +245,7 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("fast")).closest("tr")!
-    await user.click(within(row).getByRole("button", { name: "Delete" }))
+    await pressRowAction(user, "Delete fast", row)
     const dialog = await screen.findByRole("alertdialog")
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
 
@@ -291,7 +263,7 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("fast")).closest("tr")!
-    await user.click(within(row).getByRole("button", { name: "Delete" }))
+    await pressRowAction(user, "Delete fast", row)
     const dialog = await screen.findByRole("alertdialog")
     await user.click(
       within(dialog).getByRole("button", { name: "Delete policy" }),
@@ -311,7 +283,7 @@ describe("RoutingPage", () => {
     // so without clearing it on close the second row opens already reporting a
     // failure that was about the first.
     mockApi(
-      [policy("fast", CHAIN), policy("smart", SPILL_OVER)],
+      [policy("fast", CHAIN), policy("smart", UNKNOWN_ROUTER)],
       undefined,
       [],
       {
@@ -322,7 +294,7 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const fast = (await screen.findByText("fast")).closest("tr")!
-    await user.click(within(fast).getByRole("button", { name: "Delete" }))
+    await pressRowAction(user, "Delete fast", fast)
     const first = await screen.findByRole("alertdialog")
     await user.click(
       within(first).getByRole("button", { name: "Delete policy" }),
@@ -331,7 +303,7 @@ describe("RoutingPage", () => {
     await user.click(within(first).getByRole("button", { name: "Cancel" }))
 
     const smart = screen.getByText("smart").closest("tr")!
-    await user.click(within(smart).getByRole("button", { name: "Delete" }))
+    await pressRowAction(user, "Delete smart", smart)
 
     const second = await screen.findByRole("alertdialog")
     expect(within(second).getByText(/^smart stops resolving/)).toBeVisible()
@@ -351,7 +323,7 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("legacy")).closest("tr")!
-    await user.click(within(row).getByRole("button", { name: "Delete" }))
+    await pressRowAction(user, "Delete legacy", row)
     await user.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", {
         name: "Delete alias",
@@ -363,6 +335,18 @@ describe("RoutingPage", () => {
     // An alias still lives in model_aliases; deleting it as a policy would 404 and
     // leave the row in place.
     expect(deletes[0].url).toContain(`${API_ROOT}/aliases/legacy`)
+  })
+
+  it("summarizes an unknown router's policy by its pool under the neutral label", async () => {
+    // The gateway has no such backend, so the policy serves its default target;
+    // the row names the pool and that default rather than a router kind.
+    mockApi([policy("smart", UNKNOWN_ROUTER, { is_dynamic: true })])
+    renderPage(<RoutingPage />)
+
+    const row = (await screen.findByText("smart")).closest("tr")!
+    expect(
+      within(row).getByText(/Routed . 2 candidates, gpt-5 · OpenAI by default/),
+    ).toBeInTheDocument()
   })
 
   it("summarises a weighted policy by its split, not by its pool size", async () => {
@@ -378,9 +362,7 @@ describe("RoutingPage", () => {
     ).toBeInTheDocument()
   })
 
-  it("names a router backend it does not know without claiming it learns", async () => {
-    // Only "knn" learns. Labelling every other backend "Learned" would make the table
-    // lie about the first backend added after this line was written.
+  it("names a router backend it does not know with the neutral label", async () => {
     mockApi([
       policy("future", {
         select: [
@@ -396,10 +378,19 @@ describe("RoutingPage", () => {
 
     const row = (await screen.findByText("future")).closest("tr")!
     expect(within(row).getByText("ROUTED")).toBeInTheDocument()
-    expect(within(row).queryByText("Learned")).not.toBeInTheDocument()
+  })
+
+  it("offers Edit for a weighted policy", async () => {
+    const user = userEvent.setup()
+    mockApi([policy("balanced", WEIGHTED, { is_dynamic: true })])
+    renderPage(<RoutingPage />)
+
+    const row = (await screen.findByText("balanced")).closest("tr")!
+    expect(await getRowMenuItem(user, "Edit balanced", row)).toBeInTheDocument()
   })
 
   it("does not offer Edit for a weighted policy with no split to show", async () => {
+    const user = userEvent.setup()
     // The form would have to invent the shares, and the API refuses such a spec
     // anyway, so this one is only reachable as an older or hand-written document.
     mockApi([
@@ -416,12 +407,11 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("legacy")).closest("tr")!
-    expect(
-      within(row).queryByRole("button", { name: "Edit" }),
-    ).not.toBeInTheDocument()
+    expect(await findRowMenuItem(user, /^Edit(?: |$)/, row)).toBeNull()
   })
 
   it("does not offer Edit for a router backend the form cannot write", async () => {
+    const user = userEvent.setup()
     mockApi([
       policy("future", {
         select: [
@@ -436,12 +426,24 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("future")).closest("tr")!
-    expect(
-      within(row).queryByRole("button", { name: "Edit" }),
-    ).not.toBeInTheDocument()
+    expect(await findRowMenuItem(user, /^Edit(?: |$)/, row)).toBeNull()
   })
 
+  it.each(["stored", "config"] as const)(
+    "shows an unknown router's policy from %s read-only",
+    async (source) => {
+      const user = userEvent.setup()
+      mockApi([policy("smart", UNKNOWN_ROUTER, { is_dynamic: true, source })])
+      renderPage(<RoutingPage />)
+
+      const row = (await screen.findByText("smart")).closest("tr")!
+      expect(await getRowMenuItem(user, "View smart", row)).toBeInTheDocument()
+      expect(await findRowMenuItem(user, /^Edit(?: |$)/, row)).toBeNull()
+    },
+  )
+
   it("refuses to edit a policy whose router sits before its conditions", async () => {
+    const user = userEvent.setup()
     // Selection is order-sensitive server-side and the form always re-emits
     // conditions first, so editing this spec would silently change what it does.
     mockApi([
@@ -462,15 +464,14 @@ describe("RoutingPage", () => {
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("api-authored")).closest("tr")!
+    expect(await findRowMenuItem(user, /^Edit(?: |$)/, row)).toBeNull()
     expect(
-      within(row).queryByRole("button", { name: "Edit" }),
-    ).not.toBeInTheDocument()
-    expect(
-      within(row).getByRole("button", { name: "View" }),
+      await getRowMenuItem(user, "View api-authored", row),
     ).toBeInTheDocument()
   })
 
   it("lists the tenant-scoped policies read-only for a non-operator", async () => {
+    const user = userEvent.setup()
     // The member half of otari-ai#1942: the page reads
     // /v1/organizations/me/routing-policies and offers nothing that writes.
     mockApi([], null, [], {
@@ -487,17 +488,8 @@ describe("RoutingPage", () => {
     expect(
       screen.queryByRole("button", { name: "New policy" }),
     ).not.toBeInTheDocument()
-    expect(
-      within(row).queryByRole("button", { name: "Edit" }),
-    ).not.toBeInTheDocument()
-    expect(
-      within(row).queryByRole("button", { name: "Delete" }),
-    ).not.toBeInTheDocument()
-    // The Examples panel reads the operator-only /v1/routing/status, so its
-    // opener goes with the rest of the actions column.
-    expect(
-      within(row).queryByRole("button", { name: "Examples" }),
-    ).not.toBeInTheDocument()
+    expect(await findRowMenuItem(user, /^Edit(?: |$)/, row)).toBeNull()
+    expect(await findRowMenuItem(user, /^Delete(?: |$)/, row)).toBeNull()
   })
 
   it("keeps cached operator rows out of a member's table", async () => {
@@ -628,8 +620,7 @@ describe("RoutingPage scoped to the selected workspace", () => {
     const listed = calls.filter(
       (call) =>
         call.method === "GET" &&
-        call.url.includes(`${API_ROOT}/routing/policies`) &&
-        !call.url.includes("/traffic"),
+        call.url.includes(`${API_ROOT}/routing/policies`),
     )
     expect(listed.length).toBeGreaterThan(0)
     for (const call of listed) {
@@ -645,12 +636,10 @@ describe("RoutingPage scoped to the selected workspace", () => {
     renderInWorkspace(<RoutingPage />)
 
     await screen.findByText("tenant-fast")
-    console.log("CALLS", calls.map((c) => c.url).join("\n"))
     const listed = calls.filter(
       (call) =>
         call.method === "GET" &&
-        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`) &&
-        !call.url.includes("/traffic"),
+        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
     )
     expect(listed.length).toBeGreaterThan(0)
     for (const call of listed) {
@@ -670,7 +659,7 @@ describe("RoutingPage scoped to the selected workspace", () => {
     renderInWorkspace(<RoutingPage />)
 
     await screen.findByText("doomed")
-    await user.click(screen.getByRole("button", { name: "Delete" }))
+    await pressRowAction(user, "Delete doomed")
     await user.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", {
         name: "Delete policy",
@@ -696,7 +685,7 @@ describe("RoutingPage for an organization admin", () => {
     renderInWorkspace(<RoutingPage />)
 
     await screen.findByText("doomed")
-    await user.click(screen.getByRole("button", { name: "Delete" }))
+    await pressRowAction(user, "Delete doomed")
     await user.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", {
         name: "Delete policy",
@@ -708,28 +697,6 @@ describe("RoutingPage for an organization admin", () => {
       `${API_ROOT}/organizations/me/routing-policies/`,
     )
     expect(deleted?.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
-  })
-
-  it("deletes a member's own policy, not the shared one of that name", async () => {
-    const MEMBER = "88888888-8888-8888-8888-888888888888"
-    const { calls } = mockApi([], null, [], {
-      context: adminContext(),
-      memberPolicies: [policy("theirs", CHAIN, { user_id: MEMBER })],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<RoutingPage />)
-
-    await screen.findByText("theirs")
-    await user.click(screen.getByRole("button", { name: "Delete" }))
-    await user.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: "Delete policy",
-      }),
-    )
-
-    const deleted = calls.find((call) => call.method === "DELETE")
-    expect(deleted?.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
-    expect(deleted?.url).toContain(`member_id=${MEMBER}`)
   })
 
   it("lists the tenant-scoped aliases beside the policies", async () => {
@@ -770,7 +737,7 @@ describe("RoutingPage for an organization admin", () => {
     renderInWorkspace(<RoutingPage />)
 
     await screen.findByText("doomed-alias")
-    await user.click(screen.getByRole("button", { name: "Delete" }))
+    await pressRowAction(user, "Delete doomed-alias")
     await user.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", {
         name: "Delete alias",
@@ -783,6 +750,7 @@ describe("RoutingPage for an organization admin", () => {
   })
 
   it("withholds the write affordances from an admin in no workspace", async () => {
+    const user = userEvent.setup()
     // The switcher is seeded from the caller's own memberships, so an admin who
     // joined none has no workspace to scope a write to and gets the read-only
     // page rather than a form whose only outcome is a 422.
@@ -799,158 +767,20 @@ describe("RoutingPage for an organization admin", () => {
     expect(
       screen.queryByRole("button", { name: "New policy" }),
     ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Delete" }),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Make my own version" }),
-    ).not.toBeInTheDocument()
-  })
-
-  it("splits a member's own policies from the shared ones, and says which wins", async () => {
-    mockApi([], null, [], {
-      context: memberContext(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-        policy("fast", CHAIN, {
-          user_id: MEMBER_ID,
-          workspace_id: ADMIN_WORKSPACE,
-        }),
-      ],
-    })
-    renderInWorkspace(<RoutingPage />)
-
-    const own = await screen.findByRole("grid", { name: "Your policies" })
-    const shared = screen.getByRole("grid", { name: "Shared policies" })
-    expect(
-      await within(own).findByText("Your version of a shared policy"),
-    ).toBeInTheDocument()
-    expect(within(shared).getByText("Using your version")).toBeInTheDocument()
-    // Their own is theirs to change; the shared one is the admins'.
-    expect(
-      within(own).getByRole("button", { name: "Delete" }),
-    ).toBeInTheDocument()
-    expect(
-      within(shared).queryByRole("button", { name: "Delete" }),
-    ).not.toBeInTheDocument()
-    // Already has a version of it, so no second copy is offered.
-    expect(
-      within(shared).queryByRole("button", { name: "Make my own version" }),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: "New policy" }),
-    ).toBeInTheDocument()
-  })
-
-  it("makes a member's own version of a shared policy and opens it", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: memberContext(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-      ],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<RoutingPage />, "/routing", POLICY_PAGE)
-
-    const shared = await screen.findByRole("grid", { name: "Shared policies" })
-    await user.click(
-      await within(shared).findByRole("button", {
-        name: "Make my own version",
-      }),
-    )
-    expect(
-      await screen.findByText(`Policy page for fast as ${MEMBER_ID}`),
-    ).toBeInTheDocument()
-    const copy = calls.find((call) => call.url.endsWith("/copy"))
-    expect(copy?.body).toEqual({ name: "fast", workspace_id: ADMIN_WORKSPACE })
-  })
-
-  it("deletes a member's own policy by their identity, not the shared one", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: memberContext(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-        policy("fast", CHAIN, {
-          user_id: MEMBER_ID,
-          workspace_id: ADMIN_WORKSPACE,
-        }),
-      ],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<RoutingPage />)
-
-    const own = await screen.findByRole("grid", { name: "Your policies" })
-    await user.click(await within(own).findByRole("button", { name: "Delete" }))
-    const dialog = await screen.findByRole("alertdialog")
-    expect(dialog).toHaveTextContent("go back to the shared policy")
-    await user.click(
-      within(dialog).getByRole("button", { name: "Delete policy" }),
-    )
-    const deleted = calls.find((call) => call.method === "DELETE")
-    expect(deleted?.url).toContain(`member_id=${MEMBER_ID}`)
-    expect(deleted?.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
-  })
-
-  it("shows who sent each name and how often, and narrows to one key", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: adminContext(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-        policy("idle", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-      ],
-      keys: [
-        apiKey({ id: "key-ci", key_name: "ci" }),
-        apiKey({ id: "key-laptop", key_name: "laptop" }),
-      ],
-      traffic: [
-        {
-          workspace_id: ADMIN_WORKSPACE,
-          name: "fast",
-          user_id: null,
-          requests: 1234,
-          sent_by: [
-            { api_key_id: "key-ci", requests: 1000 },
-            { api_key_id: "key-laptop", requests: 234 },
-          ],
-          steps: [],
-        },
-      ],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<RoutingPage />)
-
-    const fastRow = (await screen.findByText("fast")).closest("tr")!
-    expect(await within(fastRow).findByText("1,234")).toBeInTheDocument()
-    // Busiest first, by the names the caller's own key list gives them.
-    expect(await within(fastRow).findByText("ci,")).toBeInTheDocument()
-    expect(within(fastRow).getByText("laptop")).toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: /Sent by key/ }))
-    await user.click(await screen.findByRole("option", { name: "laptop" }))
-    // The filter goes to the server, which counts what that key sent alone.
-    await vi.waitFor(() =>
-      expect(
-        calls.some(
-          (call) =>
-            call.url.includes("/routing-policies/traffic") &&
-            call.url.includes("api_key_id=key-laptop"),
-        ),
-      ).toBe(true),
-    )
-    expect(
-      calls.some(
-        (call) =>
-          call.url.includes("/automatic-fallbacks") &&
-          call.url.includes("api_key_id=key-laptop"),
-      ),
-    ).toBe(true)
+    expect(await findRowMenuItem(user, /^Delete(?: |$)/)).toBeNull()
   })
 
   it("still withholds the write affordances from a member", async () => {
+    const user = userEvent.setup()
     mockApi([], null, [], {
-      context: memberContext(),
+      context: organizationContext({
+        deployment_operator: false,
+        role: "member",
+        workspace_memberships: [
+          { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "member" },
+        ],
+      }),
       memberPolicies: [policy("mine", CHAIN)],
-      membersCreatePolicies: false,
     })
     renderInWorkspace(<RoutingPage />)
 
@@ -958,151 +788,7 @@ describe("RoutingPage for an organization admin", () => {
     expect(
       screen.queryByRole("button", { name: "New policy" }),
     ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Delete" }),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Make my own version" }),
-    ).not.toBeInTheDocument()
-  })
-
-  it("splits a member's own policies from the shared ones, and says which wins", async () => {
-    mockApi([], null, [], {
-      context: memberContext(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-        policy("fast", CHAIN, {
-          user_id: MEMBER_ID,
-          workspace_id: ADMIN_WORKSPACE,
-        }),
-      ],
-    })
-    renderInWorkspace(<RoutingPage />)
-
-    const own = await screen.findByRole("grid", { name: "Your policies" })
-    const shared = screen.getByRole("grid", { name: "Shared policies" })
-    expect(
-      await within(own).findByText("Your version of a shared policy"),
-    ).toBeInTheDocument()
-    expect(within(shared).getByText("Using your version")).toBeInTheDocument()
-    // Their own is theirs to change; the shared one is the admins'.
-    expect(
-      within(own).getByRole("button", { name: "Delete" }),
-    ).toBeInTheDocument()
-    expect(
-      within(shared).queryByRole("button", { name: "Delete" }),
-    ).not.toBeInTheDocument()
-    // Already has a version of it, so no second copy is offered.
-    expect(
-      within(shared).queryByRole("button", { name: "Make my own version" }),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: "New policy" }),
-    ).toBeInTheDocument()
-  })
-
-  it("makes a member's own version of a shared policy and opens it", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: memberContext(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-      ],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<RoutingPage />, "/routing", POLICY_PAGE)
-
-    const shared = await screen.findByRole("grid", { name: "Shared policies" })
-    await user.click(
-      await within(shared).findByRole("button", {
-        name: "Make my own version",
-      }),
-    )
-    expect(
-      await screen.findByText(`Policy page for fast as ${MEMBER_ID}`),
-    ).toBeInTheDocument()
-    const copy = calls.find((call) => call.url.endsWith("/copy"))
-    expect(copy?.body).toEqual({ name: "fast", workspace_id: ADMIN_WORKSPACE })
-  })
-
-  it("deletes a member's own policy by their identity, not the shared one", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: memberContext(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-        policy("fast", CHAIN, {
-          user_id: MEMBER_ID,
-          workspace_id: ADMIN_WORKSPACE,
-        }),
-      ],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<RoutingPage />)
-
-    const own = await screen.findByRole("grid", { name: "Your policies" })
-    await user.click(await within(own).findByRole("button", { name: "Delete" }))
-    const dialog = await screen.findByRole("alertdialog")
-    expect(dialog).toHaveTextContent("go back to the shared policy")
-    await user.click(
-      within(dialog).getByRole("button", { name: "Delete policy" }),
-    )
-    const deleted = calls.find((call) => call.method === "DELETE")
-    expect(deleted?.url).toContain(`member_id=${MEMBER_ID}`)
-    expect(deleted?.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
-  })
-
-  it("shows who sent each name and how often, and narrows to one key", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: adminContext(),
-      memberPolicies: [
-        policy("fast", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-        policy("idle", CHAIN, { workspace_id: ADMIN_WORKSPACE }),
-      ],
-      keys: [
-        apiKey({ id: "key-ci", key_name: "ci" }),
-        apiKey({ id: "key-laptop", key_name: "laptop" }),
-      ],
-      traffic: [
-        {
-          workspace_id: ADMIN_WORKSPACE,
-          name: "fast",
-          user_id: null,
-          requests: 1234,
-          sent_by: [
-            { api_key_id: "key-ci", requests: 1000 },
-            { api_key_id: "key-laptop", requests: 234 },
-          ],
-          steps: [],
-        },
-      ],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<RoutingPage />)
-
-    const fastRow = (await screen.findByText("fast")).closest("tr")!
-    expect(await within(fastRow).findByText("1,234")).toBeInTheDocument()
-    // Busiest first, by the names the caller's own key list gives them.
-    expect(await within(fastRow).findByText("ci,")).toBeInTheDocument()
-    expect(within(fastRow).getByText("laptop")).toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: /Sent by key/ }))
-    await user.click(await screen.findByRole("option", { name: "laptop" }))
-    // The filter goes to the server, which counts what that key sent alone.
-    await vi.waitFor(() =>
-      expect(
-        calls.some(
-          (call) =>
-            call.url.includes("/routing-policies/traffic") &&
-            call.url.includes("api_key_id=key-laptop"),
-        ),
-      ).toBe(true),
-    )
-    expect(
-      calls.some(
-        (call) =>
-          call.url.includes("/automatic-fallbacks") &&
-          call.url.includes("api_key_id=key-laptop"),
-      ),
-    ).toBe(true)
+    expect(await findRowMenuItem(user, /^Delete(?: |$)/)).toBeNull()
   })
 
   it("lists the automatic fallbacks the gateway reports, in its order", async () => {
@@ -1110,37 +796,38 @@ describe("RoutingPage for an organization admin", () => {
       fallbacks: [
         {
           id: "anthropic/claude-sonnet-5.5",
-          sent_by: [],
-          pinned_keys: [],
           name: "Claude Sonnet 5.5",
           offerings: [
             {
               selector: "bedrock:anthropic.claude-sonnet-5-5",
               provider: "bedrock",
               provider_type: "bedrock",
+              input_price: 3,
               own_tools: [],
               otari_tools: ["web_search"],
-              input_price: null,
             },
             {
               selector: "anthropic:claude-sonnet-5-5",
               provider: "anthropic",
               provider_type: "anthropic",
+              input_price: 3,
               own_tools: ["web_search"],
               otari_tools: [],
-              input_price: null,
             },
           ],
           requests: 12,
           fell_back: 2,
           pinned: 0,
           pinned_provider: null,
+          pinned_keys: [],
         },
       ],
     })
     renderPage(<RoutingPage />)
 
-    const row = (await screen.findByText("Claude Sonnet 5.5")).closest("tr")!
+    const row = (
+      await screen.findByText("anthropic/claude-sonnet-5.5")
+    ).closest("tr")!
     // The server's order, not the catalog's: Bedrock is tried first here.
     const bedrock = within(row).getByText("Bedrock")
     const anthropic = within(row).getByText("Anthropic")

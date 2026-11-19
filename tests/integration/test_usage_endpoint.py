@@ -343,6 +343,7 @@ def test_list_usage_response_shape(
         "timestamp": timestamp.isoformat(),
         "model": "gpt-4o",
         "provider": "openai",
+        "data_location": None,
         "endpoint": "/custom",
         "prompt_tokens": 42,
         "completion_tokens": 7,
@@ -374,11 +375,8 @@ def test_list_usage_response_shape(
         "attempt_position": None,
         "attempt_count": None,
         "request_group_id": None,
-        # Written before either was recorded, and not a routed request.
-        "requested_model": None,
-        "request_id": None,
-        "ttft_ms": None,
-        "absorbed_attempts": 0,
+        # Null because no stream was cut.
+        "stream_cut_by": None,
     }
 
 
@@ -676,5 +674,5 @@ def test_summary_breakdowns_carry_labels_for_opaque_keys(
     assert user_row["label"] == "Grace Hopper"
     key_row = next(r for r in body["by_api_key"] if r["key"] == key.id)
     assert key_row["label"] == "Nightly batch"
-    # A dimension whose key already reads as its own name carries no label.
-    assert all(row["label"] is None for row in body["by_model"])
+    # A model is labeled with its name, which every spelling of it shares.
+    assert [(row["key"], row["label"]) for row in body["by_model"]] == [("gpt-4", "gpt-4")]

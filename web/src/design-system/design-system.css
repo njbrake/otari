@@ -120,6 +120,15 @@
   outline-offset: 2px;
 }
 
+/* The same ring drawn inside its control, for one that sits in a track that
+ * scrolls: `Segmented`'s track is `overflow-x-auto`, which clips on both axes,
+ * so a ring 2px outside a segment kept only the slivers between its
+ * neighbors. */
+@utility otari-focus-ring-inset {
+  outline: 2px solid var(--focus-ring-ink, var(--color-focus));
+  outline-offset: -4px;
+}
+
 /* The checkbox's touch target, which is four times the area of the box it
  * draws. 16px drawn, 40px targeted, 44px on a coarse pointer, carried by a
  * pseudo-element so the box does not grow and no row changes height.
@@ -197,22 +206,13 @@
   }
 }
 
-/* Every field's phone size: 16px, because iOS zooms the page when a field
-   under 16px takes focus, and the zoom stays after the keyboard goes. Every
-   field rather than a place's: a toolbar search, a pager's page number and a
-   dialog's field all sat at 14px and each zoomed. The element is named so this
-   outranks `.otari-machine-field`, which sets a smaller size at one class. */
+/* A settings row's phone size, the one part of it that is not a height: 16px,
+   because iOS zooms the page when a field under 16px takes focus and a
+   full-width field is the one shape where that zoom has nowhere to go. The
+   height is declared on the place above; its phone override is below. */
 @media (max-width: 767px) {
-  input.input,
-  textarea.input,
-  textarea.textarea,
-  input.search-field__input {
+  .otari-settings .input {
     font-size: var(--text-base);
-  }
-  /* HeroUI draws the search box at 36px whatever the place, so on a phone it
-     sat 8px short of the 44px button beside it and under the touch floor. */
-  .search-field__group {
-    height: 2.75rem;
   }
 }
 
@@ -306,16 +306,6 @@
 .otari-dialog--lg {
   width: 40rem;
 }
-/* The one size that is about the body's shape rather than its length: a frame
- * whose content is two columns side by side, where `lg` leaves the second one
- * too narrow to hold its own controls. `ShareDialog` is the case, and it is the
- * reason this exists rather than a call site widening itself: a width spelled
- * on the dialog loses to the unlayered `.modal__dialog` rule above, so the only
- * class that can win is one in this family. */
-.otari-form-dialog--xl,
-.otari-dialog--xl {
-  width: 58rem;
-}
 
 /* A field fills this dialog. `Field` and `SecretField` cap themselves at
  * `max-w-md`, which is right on a page (a 448px measure under a 620px column
@@ -389,7 +379,9 @@
     flex-direction: column;
     align-items: stretch;
     gap: 0.5rem;
-    padding: 0.75rem 1rem 1rem;
+    /* The sheet's own 24px inset, the one its header and body keep at this
+       width, so the stacked buttons share the fields' edges. */
+    padding: 0.75rem 1.5rem 1rem;
   }
   .otari-form-dialog__actions,
   .otari-dialog__actions {
@@ -501,9 +493,14 @@
    This said `--color-border` and all sixteen per-table classes overrode it to
    `--color-border-subtle`, so the base was simply the wrong value: sixteen
    consumers and no exceptions is not a default worth keeping. Moved here, and
-   the copies are gone. Must stay in step with the row rule below. */
+   the copies are gone. Must stay in step with the row rule below.
+
+   No fill either, data.md's rest state. HeroUI paints every cell
+   `bg-surface`, and a pinned column sets the page ground so scrolled cells
+   pass under it, so with that fill one row read as two colors. */
 .otari-table .table__row .table__cell {
   border-color: var(--color-border-subtle);
+  background-color: transparent;
 }
 
 /* Aliasing `--separator` is not enough for the row. HeroUI draws a bottom
@@ -516,8 +513,23 @@
   border-color: var(--color-border-subtle);
 }
 
-.otari-table .table__row:hover .table__cell {
-  background-color: var(--color-surface-muted);
+/* Behind a hover-capable pointer only: a tap fakes `:hover` and holds it on
+   the row until the next tap elsewhere, which reads as a selection. */
+@media (hover: hover) {
+  .otari-table .table__row:hover .table__cell {
+    background-color: var(--color-surface-muted);
+  }
+}
+
+/* data.md's selected ground, the one a phone card takes. An image rather than
+   a color, so the translucent tint layers over the hover fill instead of
+   replacing it. HeroUI's own (`bg-surface/10`) does not show on the page
+   ground. */
+.otari-table .table__row[data-selected="true"] .table__cell {
+  background-image: linear-gradient(
+    var(--color-primary-subtle),
+    var(--color-primary-subtle)
+  );
 }
 
 /* Let the text in a row be highlighted with the mouse (issue #478). Two things
@@ -598,6 +610,28 @@
   left: calc(50% + var(--rail-width, 0px) / 2);
   width: calc(100% - var(--rail-width, 0px) - 2rem);
 }
+/* A KPI figure that would overrun its cell shrinks to fit it, and one that
+ * fits keeps the role's 30px. Fira Code's figures advance 0.6em, so
+ * `--figure-chars` of them fill the cell's content width (the cell is the
+ * container) at the size below; `KpiCell` sets the count from the value. */
+.otari-kpi-figure {
+  font-size: min(1.875rem, calc(100cqi / (var(--figure-chars, 1) * 0.6)));
+}
+
+/* While the bar is up, the end of the page scrolls clear of it: the bar is
+ * fixed to the viewport, so nothing in flow makes room for it. The space goes
+ * after the content rather than before it, so no row moves when a selection
+ * starts, and is sized to the bar and its 16px offset at each width. */
+main:has(.otari-bulk-bar)::after {
+  content: "";
+  display: block;
+  height: 4.5rem;
+}
+@media (max-width: 639px) {
+  main:has(.otari-bulk-bar)::after {
+    height: 8.5rem;
+  }
+}
 /* Animates `translate`, not `transform`: the bar centers itself with Tailwind's
  * `-translate-x-1/2`, which under Tailwind v4 sets the `translate` property, and
  * a `transform` here would compose with it into a -100% offset for the length of
@@ -674,51 +708,7 @@
   }
 }
 
-/* The page's loading bar (`LoadingBar`): a segment crossing a 2px track laid
- * over the top bar's bottom rule. The fade-in waits 200ms, so a read that
- * answers sooner never paints it; the segment is 30% of the track, so it
- * travels from -100% to 333% of its own width to cross the whole of it. */
-.otari-loading-bar {
-  position: absolute;
-  inset-inline: 0;
-  bottom: -1px;
-  height: 2px;
-  overflow: hidden;
-  pointer-events: none;
-  opacity: 0;
-  animation: otari-loading-bar-in 150ms ease-out 200ms forwards;
-}
-.otari-loading-bar::after {
-  content: "";
-  position: absolute;
-  inset-block: 0;
-  left: 0;
-  width: 30%;
-  background: var(--color-primary);
-  animation: otari-loading-bar-sweep 1.4s ease-in-out infinite;
-}
-@keyframes otari-loading-bar-in {
-  to {
-    opacity: 1;
-  }
-}
-@keyframes otari-loading-bar-sweep {
-  from {
-    translate: -100% 0;
-  }
-  to {
-    translate: 333% 0;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  /* A still, faint bar across the whole edge: the page still says it is
-     waiting, with nothing moving. */
-  .otari-loading-bar::after {
-    animation: none;
-    width: 100%;
-    opacity: 0.5;
-  }
   .otari-detail-reveal {
     animation: none;
     grid-template-rows: 1fr;
@@ -748,4 +738,62 @@
   .drawer__dialog.otari-side-panel {
     width: 100vw;
   }
+}
+
+/* A row's three-dot menu (`actions/RowMenu`, and `actions/RowAction`'s lane,
+ * which draws the same one). HeroUI has no prop for the trigger's size or the
+ * menu's density, and each item holds a glyph, a label and a sentence under it.
+ * Destructive items come last, set apart by a rule. */
+.otari-row-menu-trigger {
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+@media (hover: hover) {
+  .otari-row-menu-trigger:hover {
+    color: var(--color-text);
+    background: var(--color-surface-muted);
+  }
+}
+/* Inset, because the trigger ends the row, where an outward ring would be
+   clipped by the table's own overflow. */
+.otari-row-menu-trigger[data-focus-visible],
+.otari-row-menu-trigger[aria-expanded="true"] {
+  outline: 2px solid var(--focus-ring-ink, var(--color-focus));
+  outline-offset: -2px;
+}
+@media (min-width: 48rem) and (pointer: fine) {
+  .otari-row-menu-trigger {
+    width: 2rem;
+    height: 2rem;
+  }
+}
+.otari-row-menu {
+  width: 19rem;
+  max-width: calc(100vw - 2rem);
+}
+.otari-row-menu .dropdown__menu {
+  padding: 0;
+}
+.otari-row-menu .menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  padding: 0.625rem 0.75rem;
+  color: var(--color-text-muted);
+}
+.otari-row-menu .menu-item[data-focused],
+.otari-row-menu .menu-item[data-hovered] {
+  background: var(--color-surface-muted);
+}
+.otari-row-menu
+  .menu-item:not(.otari-row-menu-danger)
+  + .otari-row-menu-danger {
+  border-top: 1px solid var(--color-border-subtle);
 }

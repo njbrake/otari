@@ -11,25 +11,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.api.deps import (
     ApiKeyServiceDep,
     CallerOrganization,
+    McpConnectionServiceDep,
     TelemetryStoragePortDep,
     TraceServiceDep,
     get_config,
     get_db,
-    get_unit_of_work,
     require_deployment_operator,
 )
 from gateway.api.routes._helpers import database_error, erase_user_records
 from gateway.core.config import GatewayConfig
 from gateway.core.database import DATABASE_ERRORS
 from gateway.core.surface import Surface
-from gateway.core.unit_of_work import UnitOfWork
-from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import Budget
 from gateway.models.money import as_float
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
-from gateway.repositories.tenancy import UserMergeRepository
 from gateway.repositories.users_repository import (
     UserFilter,
     count_users,
@@ -37,13 +34,9 @@ from gateway.repositories.users_repository import (
     lock_live_users,
     page_users,
 )
-from gateway.services.alias_service import refresh_alias_cache
 from gateway.services.budgets import budget_window
 from gateway.services.model_access import revoke_user_mcp_grants, validate_allowed_models, validate_allowed_tools
 from gateway.services.organizations import AccessLists
-from gateway.services.policy_store import refresh_policy_cache
-from gateway.services.providers import refresh_provider_endpoint_cache
-from gateway.services.tenancy.user_merge import SameUserMergeError, UserMergeError, merge_users
 
 router = APIRouter(
     prefix="/users",
@@ -138,21 +131,6 @@ class UpdateUserRequest(BaseModel):
     allowed_models: list[str] | None = None
     allowed_tools: list[str] | None = None
     metadata: dict[str, Any] | None = None
-
-
-class MergeUserRequest(BaseModel):
-    """Request model for merging another user into this one."""
-
-    source_user_id: str = Field(
-        description="The user whose keys, usage and per-user state move onto this one. It is retired afterwards."
-    )
-
-
-class MergeUserResponse(BaseModel):
-    """The user after the merge, and the rows moved per table."""
-
-    user: UserResponse
-    moved: dict[str, int]
 
 
 class UsageLogResponse(BaseModel):
@@ -458,6 +436,7 @@ async def delete_user(
     storage: TelemetryStoragePortDep,
     traces: TraceServiceDep,
     organization_id: CallerOrganization,
+    connections: McpConnectionServiceDep,
 ) -> None:
     """Delete a user in the caller's organization, and erase their telemetry and agent traces."""
     user = await _load_user_in_organization(db, user_id, organization_id)
@@ -469,7 +448,11 @@ async def delete_user(
 
     # After the erasure, which commits, so the lock is held by the transaction that removes the user's grants and
     # marks them deleted: a grant to this user committing meanwhile waits for it and is then refused.
-    await lock_live_users(db, [user_id])
+    if user_id not in await lock_live_users(db, [user_id]):
+        # Another delete of this user held the lock first and has already revoked their
+        # grants and recorded when they were deleted. Erasure is idempotent and the
+        # answer is the same, so the first deletion's time is left as the one that stands.
+        return
     await db.execute(
         update(APIKey)
         .where(APIKey.user_id == user_id)
@@ -480,61 +463,11 @@ async def delete_user(
     user.deleted_at = datetime.now(UTC)
 
     try:
-        await db.commit()
+        # Its block commits the deletion staged above with the connections it removes, and asks the
+        # authorization servers to end them only once that has committed.
+        await connections.end_for_deleted_user(user_id)
     except DATABASE_ERRORS as exc:
-        await db.rollback()
         raise database_error("delete user", exc) from None
-
-
-@router.post("/{user_id}/merge")
-async def merge_user(
-    user_id: str,
-    request: MergeUserRequest,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
-    organization_id: CallerOrganization,
-) -> MergeUserResponse:
-    """Merge another user in the caller's organization into this one.
-
-    Moves the source user's API keys, usage history, telemetry, files, batches,
-    budget resets and reservations, per-user aliases, routing policies and
-    provider endpoints, routing memory, and the end users its service keys bill
-    onto this user, adds its spend, token and request counters to this user's,
-    and soft-deletes it. This user keeps its budget, model access and blocked
-    flag. Refused with 409 when the source is a sign-in account's own user, has a
-    budget reservation in flight, holds a per-user alias, policy or provider
-    endpoint whose name this user already uses in the same workspace, or bills an
-    end user under an id this user's keys also bill.
-    """
-    target = await _load_user_in_organization(db, user_id, organization_id)
-    source = await _load_user_in_organization(db, request.source_user_id, organization_id)
-    try:
-        moved = await merge_users(uow, UserMergeRepository(db), source=source, target=target)
-    except SameUserMergeError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
-    except UserMergeError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
-    except DATABASE_ERRORS as exc:
-        raise database_error("merge users", exc) from None
-    await _refresh_caches_after_merge(db, uow, moved)
-    return MergeUserResponse(user=UserResponse.from_model(target), moved=moved)
-
-
-async def _refresh_caches_after_merge(db: AsyncSession, uow: UnitOfWork, moved: dict[str, int]) -> None:
-    """Reload the per-user alias, policy and provider endpoint caches a merge changed.
-
-    The merge is committed, so a refresh failure is logged rather than raised;
-    other workers converge on their next background refresh.
-    """
-    try:
-        if moved.get("model_aliases"):
-            await refresh_alias_cache(db)
-        if moved.get("routing_policies"):
-            await refresh_policy_cache(db)
-        if moved.get("provider_endpoints"):
-            await refresh_provider_endpoint_cache(uow)
-    except DATABASE_ERRORS:
-        logger.warning("Cache refresh failed after merging users; converges on the next background refresh")
 
 
 @router.get("/{user_id}/usage")

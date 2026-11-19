@@ -28,13 +28,11 @@ import {
   useTestHostedProvider,
   useUpdateHostedProvider,
 } from "@/shared/api/hostedProviders"
+import { DataLocationField } from "./DataLocationField"
 import { movesToAnotherOrigin } from "./endpointOrigin"
-
+import { PolicyUrlFields } from "./PolicyUrlFields"
+import { policyUrlError, policyUrlValue } from "./policyUrls"
 import { ServesUnlistedModelsField } from "./ServesUnlistedModelsField"
-import {
-  SessionAffinityField,
-  supportsSessionAffinity,
-} from "./SessionAffinityField"
 import { SupportedCountriesField } from "./SupportedCountriesField"
 import { formatCountries, parseCountries } from "./supportedCountries"
 
@@ -56,9 +54,11 @@ interface EditDraft {
   /** Typed secrets already stored, so blank means "keep it", not "clear it". */
   redacted: string[]
   servesUnlistedModels: boolean
-  sessionAffinity: boolean
   supportedCountries: string
+  dataLocation: string
   zeroDataRetention: boolean
+  termsUrl: string
+  privacyUrl: string
 }
 
 function draftFrom(provider: HostedProvider): EditDraft {
@@ -73,9 +73,11 @@ function draftFrom(provider: HostedProvider): EditDraft {
     clientArgs: formatClientArgs(rest),
     redacted,
     servesUnlistedModels: provider.serves_unlisted_models,
-    sessionAffinity: provider.session_affinity,
     supportedCountries: formatCountries(provider.supported_countries),
+    dataLocation: provider.data_location ?? "",
     zeroDataRetention: provider.zero_data_retention,
+    termsUrl: provider.terms_url ?? "",
+    privacyUrl: provider.privacy_url ?? "",
   }
 }
 
@@ -91,6 +93,9 @@ export function EditHostedProviderForm({
   const update = useUpdateHostedProvider()
   const test = useTestHostedProvider()
   const [draft, setDraft] = useState<EditDraft>(() => draftFrom(provider))
+  // What the dialog opened on, so a refresh that lands while it is open is not
+  // read as the operator's edit and written back over.
+  const [opened] = useState(() => draftFrom(provider))
 
   const spec = credentialSpecFor(provider.provider)
   const identity =
@@ -119,6 +124,8 @@ export function EditHostedProviderForm({
   const canSubmit =
     parsedClientArgs.ok &&
     countries.ok &&
+    policyUrlError(draft.termsUrl) === undefined &&
+    policyUrlError(draft.privacyUrl) === undefined &&
     Object.keys(credentialErrors).length === 0 &&
     !needsKey
 
@@ -162,13 +169,22 @@ export function EditHostedProviderForm({
           ...(draft.servesUnlistedModels === provider.serves_unlisted_models
             ? {}
             : { serves_unlisted_models: draft.servesUnlistedModels }),
-          ...(draft.sessionAffinity === provider.session_affinity
-            ? {}
-            : { session_affinity: draft.sessionAffinity }),
           ...(draft.zeroDataRetention === provider.zero_data_retention
             ? {}
             : { zero_data_retention: draft.zeroDataRetention }),
           ...(countriesChanged ? { supported_countries: countries.value } : {}),
+          // Sent only when changed; cleared is null, undeclared.
+          ...(draft.dataLocation === opened.dataLocation
+            ? {}
+            : { data_location: draft.dataLocation || null }),
+          // Sent only when changed; blank clears the link.
+          ...(policyUrlValue(draft.termsUrl) === (provider.terms_url ?? null)
+            ? {}
+            : { terms_url: policyUrlValue(draft.termsUrl) }),
+          ...(policyUrlValue(draft.privacyUrl) ===
+          (provider.privacy_url ?? null)
+            ? {}
+            : { privacy_url: policyUrlValue(draft.privacyUrl) }),
         },
       },
       { onSuccess: onClose },
@@ -222,26 +238,28 @@ export function EditHostedProviderForm({
           setDraft({ ...draft, servesUnlistedModels })
         }
       />
-      {supportsSessionAffinity(provider.provider) ? (
-        <SessionAffinityField
-          isSelected={draft.sessionAffinity}
-          onChange={(sessionAffinity) =>
-            setDraft({ ...draft, sessionAffinity })
-          }
-        />
-      ) : null}
       <ZeroDataRetentionField
         isSelected={draft.zeroDataRetention}
         onChange={(zeroDataRetention) =>
           setDraft({ ...draft, zeroDataRetention })
         }
       />
+      <DataLocationField
+        value={draft.dataLocation}
+        onChange={(dataLocation) => setDraft({ ...draft, dataLocation })}
+      />
       <SupportedCountriesField
         value={draft.supportedCountries}
         parsed={countries}
         onChange={(supportedCountries) =>
-          setDraft({ ...draft, supportedCountries })
+          setDraft((current) => ({ ...current, supportedCountries }))
         }
+      />
+      <PolicyUrlFields
+        termsUrl={draft.termsUrl}
+        privacyUrl={draft.privacyUrl}
+        onTermsUrlChange={(termsUrl) => setDraft({ ...draft, termsUrl })}
+        onPrivacyUrlChange={(privacyUrl) => setDraft({ ...draft, privacyUrl })}
       />
       <ProviderCredentialFields
         provider={provider.provider}

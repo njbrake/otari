@@ -23,6 +23,8 @@ from gateway.models.usage import UsageLog
 from gateway.models.users import User
 from gateway.services.tenancy.provisioning_service import BOOTSTRAP_IDENTITY_KEY
 
+from .conftest import ALL_KEY_SCOPES
+
 _SRC = "claude_code"
 _MODEL_KEY = "anthropic:claude-sonnet-4-6"
 
@@ -143,6 +145,7 @@ def _make_key(
     which is what lets a test import as an organization other than the default.
     """
     body: dict[str, Any] = {
+        "scopes": ALL_KEY_SCOPES,
         "key_name": f"importer-{user_id}",
         "user_id": user_id,
         "exclude_from_budget": exclude_from_budget,
@@ -360,22 +363,6 @@ def test_idempotent_resubmit(client: TestClient, master_key_header: dict[str, st
     assert second.json() == {"accepted": 0, "duplicate": 1, "rejected": 0, "errors": []}
 
     assert db_session.query(UsageLog).filter(UsageLog.source_event_id == "req_dup").count() == 1
-
-
-def test_a_batch_mixing_a_stored_event_and_a_fresh_one_keeps_the_fresh_one(
-    client: TestClient, master_key_header: dict[str, str], db_session: Session
-) -> None:
-    """One insert absorbs the stored event as a duplicate and still lands the new one."""
-    _seed_user(client, master_key_header)
-    _seed_pricing(client, master_key_header)
-    assert _post(client, master_key_header, [_event("req_raced")]).json()["accepted"] == 1
-
-    mixed = _post(client, master_key_header, [_event("req_raced"), _event("req_fresh")])
-
-    assert mixed.status_code == 200, mixed.text
-    assert mixed.json() == {"accepted": 1, "duplicate": 1, "rejected": 0, "errors": []}
-    assert db_session.query(UsageLog).filter(UsageLog.source_event_id == "req_raced").count() == 1
-    assert db_session.query(UsageLog).filter(UsageLog.source_event_id == "req_fresh").count() == 1
 
 
 def test_resubmit_held_by_an_uncommitted_write_gets_a_retryable_503(

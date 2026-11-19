@@ -1,5 +1,3 @@
-import { formatNumber } from "@/design-system/helpers/format"
-
 // These three are re-exported rather than defined here: they carry no product
 // vocabulary, so components in the design system need them, and that layer may
 // not import this one. This module stays the single formatter module a page
@@ -148,116 +146,6 @@ export function formatDateTime(iso: string | null | undefined): string {
   return date.toLocaleString()
 }
 
-// ---------- the gateway's clock ----------
-//
-// A request log reads in UTC, the clock its charts bucket by, whatever zone the
-// browser is in. Each takes an ISO string or epoch milliseconds, and hands back
-// a value that is not a date as it came, as `formatDateTime` does.
-
-function readUtc(value: string | number): Date | undefined {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? undefined : date
-}
-
-const utc = (options: Intl.DateTimeFormatOptions) =>
-  new Intl.DateTimeFormat("en-US", { timeZone: "UTC", ...options })
-const UTC_CLOCK = utc({ hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
-const UTC_CLOCK_SECONDS = utc({
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hourCycle: "h23",
-})
-const UTC_MONTH = utc({ month: "short" })
-const UTC_MONTH_NAME = utc({ month: "long" })
-const UTC_MONTH_YEAR = utc({ month: "long", year: "numeric" })
-const UTC_DAY = utc({ month: "short", day: "numeric" })
-const UTC_DATE = utc({ year: "numeric", month: "2-digit", day: "2-digit" })
-const UTC_WEEKDAY_HOUR = utc({
-  weekday: "short",
-  hour: "2-digit",
-  hourCycle: "h23",
-})
-
-/** A formatter's fields by name, for a layout no locale writes (ISO dates, "Sun 12h"). */
-function fieldsOf(
-  format: Intl.DateTimeFormat,
-  date: Date,
-): Partial<Record<Intl.DateTimeFormatPartTypes, string>> {
-  return Object.fromEntries(
-    format.formatToParts(date).map((part) => [part.type, part.value]),
-  )
-}
-
-/** "15:31", or "15:31:07" with seconds. */
-export function formatUtcTime(
-  value: string | number,
-  withSeconds = false,
-): string {
-  const date = readUtc(value)
-  if (!date) return String(value)
-  return (withSeconds ? UTC_CLOCK_SECONDS : UTC_CLOCK).format(date)
-}
-
-/** "Sep". */
-export function formatUtcMonth(value: string | number): string {
-  const date = readUtc(value)
-  return date ? UTC_MONTH.format(date) : String(value)
-}
-
-/** "September". */
-export function formatUtcMonthName(value: string | number): string {
-  const date = readUtc(value)
-  return date ? UTC_MONTH_NAME.format(date) : String(value)
-}
-
-/** "September 2026". */
-export function formatUtcMonthYear(value: string | number): string {
-  const date = readUtc(value)
-  return date ? UTC_MONTH_YEAR.format(date) : String(value)
-}
-
-/** "Sep 27". */
-export function formatUtcDay(value: string | number): string {
-  const date = readUtc(value)
-  return date ? UTC_DAY.format(date) : String(value)
-}
-
-/** "Sep 27 15:31", a window's bound. */
-export function formatUtcMinute(value: string | number): string {
-  return readUtc(value)
-    ? `${formatUtcDay(value)} ${formatUtcTime(value)}`
-    : String(value)
-}
-
-/** "2026-09-27 15:31:07 UTC", one request's moment in full. */
-export function formatUtcDateTime(value: string | number): string {
-  const date = readUtc(value)
-  if (!date) return String(value)
-  const { year, month, day } = fieldsOf(UTC_DATE, date)
-  return `${year}-${month}-${day} ${UTC_CLOCK_SECONDS.format(date)} UTC`
-}
-
-/** "Sun 12h", a half-day on a week's chart. */
-export function formatUtcWeekdayHour(value: string | number): string {
-  const date = readUtc(value)
-  if (!date) return String(value)
-  const { weekday, hour } = fieldsOf(UTC_WEEKDAY_HOUR, date)
-  return `${weekday} ${hour}h`
-}
-
-const compact = new Intl.NumberFormat("en-US", { notation: "compact" })
-
-/** A round threshold, compactly: 500000 -> "500K". */
-export function formatCompact(value: number): string {
-  return compact.format(value)
-}
-
-/** A duration in whole-ish seconds, for a threshold: 10000 -> "10 s". */
-export function formatSeconds(ms: number): string {
-  return `${formatNumber(ms / 1000)} s`
-}
-
 // A date and a time to the minute, where the seconds are noise.
 export function formatDateTimeMinutes(iso: string | null | undefined): string {
   if (!iso) {
@@ -331,8 +219,7 @@ const usdWhole = new Intl.NumberFormat("en-US", {
 
 // Dollars set as a headline rather than read off a table. From $100 up the cents
 // are receipt detail: they add two of the widest glyphs on the line to carry a
-// precision nobody checks at a glance, and on the share card that width comes
-// straight out of the type size. Below $100 they still say something, since the
+// precision nobody checks at a glance. Below $100 they still say something, since the
 // difference between $4.10 and $4.99 is a quarter of the number.
 export function formatUsdHeadline(value: number): string {
   return Math.abs(value) >= 100
@@ -340,83 +227,11 @@ export function formatUsdHeadline(value: number): string {
     : usdCompact.format(value)
 }
 
-/** A limit as it was set: "$1,000" or "$25", with cents only where it has them. */
-export function formatUsdLimit(value: number): string {
-  return Number.isInteger(value)
-    ? usdWhole.format(value)
-    : usdCompact.format(value)
-}
+const wholeCount = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
 
-const usdAxis = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  notation: "compact",
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 1,
-})
-const usdAxisCents = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-})
-const usdAxisMills = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 3,
-  maximumFractionDigits: 3,
-})
-
-/**
- * Dollars on a chart's axis, where a tick says a size rather than a sum, at
- * the precision its steps need: "$200" and "$1.5K" for whole-dollar steps,
- * "$0.05" for cents, "$0.005" below a cent, and as many places as a step
- * finer than that takes, so no two ticks read alike.
- */
-export function formatUsdAxis(value: number, step = 1): string {
-  if (step >= 1) return usdAxis.format(value)
-  if (step >= 0.01) return usdAxisCents.format(value)
-  if (step >= 0.001) return usdAxisMills.format(value)
-  const digits = Math.min(20, -Math.floor(Math.log10(step)))
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  }).format(value)
-}
-
-const multiple = new Intl.NumberFormat("en-US", {
-  minimumFractionDigits: 1,
-  maximumFractionDigits: 1,
-})
-
-/** How many times one figure is another: "3.9×". */
-export function formatMultiple(ratio: number): string {
-  return `${multiple.format(ratio)}×`
-}
-
-const hours = new Intl.NumberFormat("en-US", {
-  style: "unit",
-  unit: "hour",
-  unitDisplay: "narrow",
-})
-const minutes = new Intl.NumberFormat("en-US", {
-  style: "unit",
-  unit: "minute",
-  unitDisplay: "narrow",
-})
-
-/** How long something lasted, to the minute: "6h 40m", "55m", "<1m". */
-export function formatDuration(ms: number): string {
-  const total = Math.floor(ms / 60_000)
-  if (total < 1) return `<${minutes.format(1)}`
-  const wholeHours = Math.floor(total / 60)
-  const rest = total % 60
-  if (wholeHours === 0) return minutes.format(rest)
-  return rest === 0
-    ? hours.format(wholeHours)
-    : `${hours.format(wholeHours)} ${minutes.format(rest)}`
+/** A count in full, grouped: 24,108. */
+export function formatCount(value: number): string {
+  return wholeCount.format(value)
 }
 
 // Compact token counts for aggregate tiles: 12.4M / 84.2k / 512.

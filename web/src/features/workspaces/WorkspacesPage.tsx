@@ -400,11 +400,14 @@ export function WorkspacesPage() {
         cell: (workspace) => (
           <div className="flex flex-col gap-0.5">
             {/* The workspace's own page, where its settings, members and
-                access live. */}
+                access live. On a touch screen the target grows to 44px by
+                padding it gives straight back, so the row keeps its pitch;
+                `relative` keeps the description after it from covering the
+                lower half. */}
             <Link
               to="/workspaces/$workspaceId"
               params={{ workspaceId: workspace.id }}
-              className="text-body text-link hover:text-link-hover"
+              className="relative text-body text-link hover:text-link-hover pointer-coarse:-my-3 pointer-coarse:py-3"
             >
               {workspace.name}
             </Link>
@@ -476,7 +479,8 @@ export function WorkspacesPage() {
                 tech, and `RowAction` repeats it on a `title` for the pointer. */}
             <RowAction
               icon={FiTrash2}
-              label="Delete"
+              label="Delete…"
+              isDestructive
               ariaLabel={
                 isOnlyWorkspace
                   ? `Delete ${workspace.name} (${LAST_WORKSPACE_REASON})`
@@ -518,10 +522,7 @@ export function WorkspacesPage() {
             </Button>
           )
         }
-      >
-        The scopes inside this organization that work is grouped into. Each one
-        carries its own members and roles.
-      </PageIntro>
+      />
 
       {/* `remove.error` is deliberately absent: the confirm dialog renders that
           mutation's error itself, and listing it here too paints the same

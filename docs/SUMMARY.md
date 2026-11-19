@@ -4,71 +4,62 @@
 
 * [What is Otari?](index.md)
 * [Quickstart](quickstart.md)
+* [Integrations](integrations.md)
 
-## Learn
+## What you can do
 
-* [Organizations and workspaces](workspaces.md)
-* [Provider keys](provider-keys.md)
-* [Budgets](budgets.md)
-* [Billing](billing.md)
-
-## How-to Guides
-
-* [Manage workspaces](manage-workspaces.md)
-* [Invite and manage organization members](invite-and-manage-organization-members.md)
-* [Manage provider keys](manage-provider-keys.md)
-* [Rotate a provider key](rotate-a-provider-key.md)
-* [Set a budget and ceiling](set-a-budget-and-ceiling.md)
-* [Create a multi-provider routing](create-a-multi-provider-routing.md)
-* [Manage guardrails](manage-guardrails.md)
-
-## Tools
-
-* [Configure web search](configure-web-search.md)
-* [Configure code execution](configure-code-execution.md)
-* [Add an MCP server](add-an-mcp-server.md)
-* [Control access to an MCP server](control-access-to-an-mcp-server.md)
-
-## Integrations
-
-* [Framework integrations](framework-integrations.md)
-
-## Playground
-
-* [Playground](playground.md)
+* [Build](build.md)
+* [Observe](observe.md)
+* [Control](control.md)
+* [Organize](organize.md)
 
 # Guides
 
-## Organizations and access
+## Build
 
+* [Playground](playground.md)
+* [Web search](web-search.md)
+* [Code execution](code-execution.md)
+* [MCP servers](mcp-servers.md)
+* [Connect your account to an MCP server](connect-your-account-to-an-mcp-server.md)
+* [Connect an MCP server on a private network](connect-a-private-mcp-server.md)
+
+## Integrations
+
+* [Claude Code](claude-code.md)
+* [Codex](codex.md)
+* [Junie](junie.md)
+* [opencode](opencode.md)
+* [pi](pi.md)
+* [oh-my-pi](oh-my-pi.md)
+* [Hermes Agent](hermes.md)
+* [Pydantic AI](pydantic-ai.md)
+* [LangChain](langchain.md)
+* [LangGraph](langgraph.md)
+
+## Observe
+
+* [Review usage and requests](review-usage-and-requests.md)
+* [Sessions](sessions.md)
+* [Import usage from outside Otari](external-usage.md)
+
+## Control
+
+* [Budgets](budgets.md)
 * [Access control](access-control.md)
-* [Members and invitations](members.md)
 * [API keys](api-keys.md)
+* [Set a budget and ceiling](set-a-budget-and-ceiling.md)
+* [Create a multi-provider routing](create-a-multi-provider-routing.md)
+* [Configure guardrails](configure-guardrails.md)
 * [Track spend per end user](end-users.md)
 
-## Dashboard
+## Organize
 
-* [Admin dashboard](dashboard.md)
-
-## Agents and frameworks
-
-* [Use with Claude Code](use-with-claude-code.md)
-* [Use with Codex](use-with-codex.md)
-* [Use with Junie](use-with-junie.md)
-* [Use with opencode](use-with-opencode.md)
-* [Use with Pydantic AI](use-with-pydantic-ai.md)
-* [Use with LangChain](use-with-langchain.md)
-* [Use with LangGraph](use-with-langgraph.md)
-
-## Guardrails
-
-* [Inference Guardrails](guardrails.md)
-* [Agent Guardrails](agent-guardrails.md)
-
-## Observability
-
-* [Agent traces](traces.md)
-* [Importing external usage](external-usage.md)
+* [Organizations and workspaces](workspaces.md)
+* [Model providers](model-providers.md)
+* [Billing](billing.md)
+* [Manage workspaces](manage-workspaces.md)
+* [Members and invitations](members.md)
 
 # Self-Hosting
 
@@ -76,12 +67,16 @@
 * [Deployment](deployment.md)
 * [Configuration](configuration.md)
 * [Sign-in and accounts](sign-in.md)
+* [OAuth apps](oauth-apps.md)
+* [Single sign-on](sso.md)
 * [Run the dashboard](run-the-dashboard.md)
 
 ## Providers
 
+* [Connect otari.ai](providers/otari-ai.md)
 * [Connect OpenAI](providers/openai.md)
 * [Connect Gemini](providers/gemini.md)
+* [Connect Azure OpenAI](providers/azureopenai.md)
 * [Connect a llama.cpp server](providers/llamacpp.md)
 * [Use with a ChatGPT subscription](chatgpt-subscription.md)
 * [Hosted providers and BYO credentials](hosted-providers.md)
@@ -91,7 +86,8 @@
 
 * [Workload identity](workload-identity.md)
 * [Health checks](health-checks.md)
-* [Run the guardrails service](guardrails-service.md)
+* [MCP server catalog](mcp-catalog.md)
+* [Update check](update-check.md)
 * [Store agent traces](trace-storage.md)
 * [Service keys on a deployment you run](operator-service-keys.md)
 
@@ -103,15 +99,21 @@
 
 * [Models](models.md)
 * [Routing policies](routing.md)
+* [Sessions reference](sessions-reference.md)
+* [External usage reference](external-usage-reference.md)
+* [Budget enforcement](budget-enforcement.md)
 * [Built-in tools](tools.md)
 * [MCP](mcp.md)
 * [Files](files.md)
-* [Inference Guardrails reference](guardrails-reference.md)
-
-## Agent Guardrails
-
-* [Agent Guardrails reference](agent-guardrails-reference.md)
+* [Guardrails reference](guardrails-reference.md)
 
 ## Protocols
 
 * [Code-execution protocol](code-execution-protocol.md)
+* [Platform connect protocol](platform-connect-protocol.md)
+
+# Privacy
+
+* [Data Collection](privacy/data-collection.md)
+* [Agent Session Content](privacy/agent-session-content.md)
+* [Zero Data Retention](privacy/zdr.md)

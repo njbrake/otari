@@ -1,20 +1,7 @@
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  RouterProvider,
-  useRouter,
-} from "@tanstack/react-router"
+import { useLocation } from "@tanstack/react-router"
 import { act, renderHook } from "@testing-library/react"
-import type { ReactNode } from "react"
 import { describe, expect, it } from "vitest"
 
-import {
-  parseSearch,
-  stringifySearch,
-  validateSearch,
-} from "@/shared/helpers/search"
 import { flushRouter, withRouter } from "@/tests/router"
 
 import { useUrlState } from "./urlState"
@@ -137,156 +124,63 @@ describe("useUrlState.patch with arrays", () => {
   })
 })
 
-const PAGE_DEFAULTS = { request: "", model: "" } as const
+describe("useUrlState with untracked keys", () => {
+  const PEEK_DEFAULTS = { peek: "", span: "" } as const
+  const UNTRACKED = ["span"] as const
 
-// The hook and the router it drives, on a page with somewhere else to go.
-async function pageFor(url: string, previous: string[] = []) {
-  const { result } = renderHook(
-    () => ({ url: useUrlState(PAGE_DEFAULTS), router: useRouter() }),
-    {
-      wrapper: withRouter({
-        url,
-        previous,
-        routes: [{ path: "/keys", element: null }],
-      }),
-    },
-  )
-  await flushRouter()
-  return result
-}
-
-describe("useUrlState once its page is left", () => {
-  it("drops a patch that lands after the location moved to another page", async () => {
-    const result = await pageFor("/activity?model=gpt-4o")
-    // Held from the page's last render, the way a timer, an effect or a close
-    // handler holds it while the next page is already showing.
-    const { url, router } = result.current
-
-    await act(async () => {
-      await router.navigate({ to: "/keys", search: { tab: "active" } })
-    })
-    await act(async () => {
-      url.patch({ request: "", model: "claude-sonnet-5" })
-    })
-
-    expect(router.state.location.href).toBe("/keys?tab=active")
-  })
-})
-
-describe("useUrlState on an index route", () => {
-  it("writes, though its match ends in a slash the location does not", async () => {
-    // A layout with an index page, as `/models` is: the page's match is
-    // `/models/` while the location the browser holds is `/models`.
-    const slot: { current: ReactNode } = { current: null }
-    const rootRoute = createRootRoute({ validateSearch })
-    const layout = createRoute({
-      getParentRoute: () => rootRoute,
-      path: "/models",
-    })
-    const index = createRoute({
-      getParentRoute: () => layout,
-      path: "/",
-      component: () => <>{slot.current}</>,
-    })
-    const router = createRouter({
-      routeTree: rootRoute.addChildren([layout.addChildren([index])]),
-      history: createMemoryHistory({ initialEntries: ["/models"] }),
-      parseSearch,
-      stringifySearch,
-    })
-    const { result } = renderHook(() => useUrlState(PAGE_DEFAULTS), {
-      wrapper: ({ children }: { children: ReactNode }) => {
-        slot.current = children
-        return <RouterProvider router={router} />
+  async function countedState(url: string) {
+    let renders = 0
+    const { result } = renderHook(
+      () => {
+        renders += 1
+        return useUrlState(PEEK_DEFAULTS, { untracked: UNTRACKED })
       },
-    })
-    await flushRouter()
-
-    await act(async () => {
-      result.current.patch({ model: "gpt-4o" })
-    })
-
-    expect(router.state.location.href).toBe("/models?model=gpt-4o")
-  })
-})
-
-describe("useUrlState.patch with push", () => {
-  it("adds an entry that going back closes, rather than leaving the page", async () => {
-    const result = await pageFor("/activity?model=gpt-4o", ["/keys"])
-
-    await act(async () => {
-      result.current.url.patch({ request: "a" }, { push: true })
-    })
-    expect(result.current.url.get("request")).toBe("a")
-
-    await act(async () => {
-      result.current.router.history.back()
-    })
-    await flushRouter()
-    expect(result.current.router.state.location.href).toBe(
-      "/activity?model=gpt-4o",
+      { wrapper: withRouter({ url }) },
     )
+    await flushRouter()
+    return { result, renders: () => renders }
+  }
+
+  it("reads an untracked key from the URL it starts on", async () => {
+    const { result } = await countedState("/?peek=t-1&span=s-1")
+    expect(result.current.get("span")).toBe("s-1")
   })
 
-  it("is undone by back(), which steps back over the entry it added", async () => {
-    const result = await pageFor("/activity?model=gpt-4o", ["/keys"])
+  it("writes an untracked key without re-rendering, and reads it at the next tracked change", async () => {
+    const { result, renders } = await countedState("/?peek=t-1")
+    const before = renders()
 
     await act(async () => {
-      result.current.url.patch({ request: "a" }, { push: true })
+      result.current.patch({ span: "s-2" })
     })
-    // Stepping to another request rewrites the entry rather than adding one.
+    expect(renders()).toBe(before)
+
     await act(async () => {
-      result.current.url.patch({ request: "b" })
+      result.current.patch({ peek: "t-2" })
     })
-    // Twice, as an overlay's own Escape and the page's can both ask.
-    await act(async () => {
-      result.current.url.back({ request: "" })
-      result.current.url.back({ request: "" })
-    })
-    await flushRouter()
-    expect(result.current.router.state.location.href).toBe(
-      "/activity?model=gpt-4o",
+    expect(renders()).toBeGreaterThan(before)
+    expect(result.current.get("peek")).toBe("t-2")
+    expect(result.current.get("span")).toBe("s-2")
+  })
+
+  it("keeps an untracked key's current value when a tracked key is patched", async () => {
+    const { result } = renderHook(
+      () => ({
+        url: useUrlState(PEEK_DEFAULTS, { untracked: UNTRACKED }),
+        searchStr: useLocation({ select: (location) => location.searchStr }),
+      }),
+      { wrapper: withRouter({ url: "/?peek=t-1" }) },
     )
-
-    // The entry behind is still the page before it: one more step back leaves.
-    await act(async () => {
-      result.current.router.history.back()
-    })
     await flushRouter()
-    expect(result.current.router.state.location.pathname).toBe("/keys")
-  })
-
-  it("falls back to a patch once the URL has moved on since the push", async () => {
-    const result = await pageFor("/activity", ["/keys"])
 
     await act(async () => {
-      result.current.url.patch({ request: "a" }, { push: true })
+      result.current.url.patch({ span: "s-2" })
     })
     await act(async () => {
-      result.current.url.patch({ model: "gpt-4o" })
+      result.current.url.patch({ peek: "t-2" })
     })
-    await act(async () => {
-      result.current.url.back({ request: "" })
-    })
-    await flushRouter()
-    // Going back would have dropped the filter set since, so it stays.
-    expect(result.current.router.state.location.href).toBe(
-      "/activity?model=gpt-4o",
-    )
-  })
-
-  it("patches in place where nothing was pushed, as a linked request is", async () => {
-    const result = await pageFor("/activity?request=a", ["/keys"])
-
-    await act(async () => {
-      result.current.url.back({ request: "" })
-    })
-    await flushRouter()
-    expect(result.current.router.state.location.href).toBe("/activity")
-    await act(async () => {
-      result.current.router.history.back()
-    })
-    await flushRouter()
-    expect(result.current.router.state.location.pathname).toBe("/keys")
+    const params = new URLSearchParams(result.current.searchStr)
+    expect(params.get("peek")).toBe("t-2")
+    expect(params.get("span")).toBe("s-2")
   })
 })

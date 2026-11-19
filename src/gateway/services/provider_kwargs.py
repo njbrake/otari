@@ -72,11 +72,7 @@ if TYPE_CHECKING:
 
 # Keys that describe an instance to otari but are not credentials any-llm
 # understands, so they must be stripped before the provider call.
-_INSTANCE_META_KEYS = ("provider_type", "models", "session_affinity", "max_retries", "messages_api", "request_fields")
-
-# Baseten routes requests carrying the same value to the same replica, which is
-# what makes its automatic prefix cache hit reliably.
-SESSION_AFFINITY_HEADER = "x-session-affinity"
+_INSTANCE_META_KEYS = ("provider_type", "models", "max_retries", "messages_api", "request_fields")
 
 # How long a Bedrock client waits for the next byte of a response. botocore's
 # default of 60s fails a stream whose model goes quiet for a minute, which a model
@@ -271,23 +267,6 @@ def credential_ladder_exhausted(provider: LLMProvider, kwargs: dict[str, Any], *
     return not (declared and _needs_no_key(provider))
 
 
-def otari_gateway_origin(api_base: Any) -> Any:
-    """An ``otari`` instance's ``api_base`` with a trailing API root (or bare ``/v1``) removed.
-
-    Fork-only stopgap. any-llm 1.29 appends the API root to the origin itself and
-    raises on a base that already carries it, which is how an instance configured
-    for any-llm 1.27 (``https://api.otari.ai`` plus the root) is spelled. Stripping
-    the root reaches the URL that spelling reached before.
-    """
-    if not isinstance(api_base, str):
-        return api_base
-    trimmed = api_base.rstrip("/")
-    for suffix in (API_ROOT, "/v1"):
-        if trimmed.endswith(suffix):
-            return trimmed.removesuffix(suffix)
-    return api_base
-
-
 def _needs_no_key(provider: LLMProvider) -> bool:
     """Whether any-llm calls ``provider`` with no key: a keyless local backend or an ambient-credential provider."""
     if provider.value in KEYLESS_SELF_HOSTED_PROVIDERS or provider.value in AMBIENT_CREDENTIAL_PROVIDERS:
@@ -339,8 +318,12 @@ class HostedLookup:
     own_name_only: bool
 
     def accepts(self, response_provider: str, instance: str) -> bool:
-        """Whether a hosted answer for ``response_provider`` may serve the ``instance`` candidate."""
-        return not self.own_name_only or response_provider == instance
+        """Whether a hosted answer for ``response_provider`` may serve the ``instance`` candidate.
+
+        A region of the provider (``ollama@eu``) answers for the provider's own
+        name; a candidate that already names a region takes that region alone.
+        """
+        return not self.own_name_only or response_provider == instance or _region_parent(response_provider) == instance
 
 
 def hosted_lookup(provider: LLMProvider) -> HostedLookup:
@@ -369,25 +352,25 @@ def _no_hosted_names(_name: str) -> str | None:
 _hosted_names: Callable[[str], str | None] = _no_hosted_names
 
 
+def _no_region_parent(_name: str) -> str | None:
+    return None
+
+
+# The hosted provider a name is a region of, registered by the composition root
+# as the hosted names are.
+_region_parent: Callable[[str], str | None] = _no_region_parent
+
+
+def configure_region_parents(resolver: Callable[[str], str | None] | None) -> None:
+    """Register the lookup from a hosted provider region's name to its provider's; None unregisters it."""
+    global _region_parent  # noqa: PLW0603
+    _region_parent = resolver or _no_region_parent
+
+
 def configure_hosted_names(resolver: Callable[[str], str | None] | None) -> None:
     """Register the lookup from a hosted provider's name to its implementation; None unregisters it."""
     global _hosted_names  # noqa: PLW0603
     _hosted_names = resolver or _no_hosted_names
-
-
-def _no_hosted_session_affinity(_name: str) -> bool:
-    return False
-
-
-# Whether a hosted provider opted into session affinity, registered at startup
-# beside ``_hosted_names`` and for the same reason.
-_hosted_session_affinity: Callable[[str], bool] = _no_hosted_session_affinity
-
-
-def configure_hosted_session_affinity(resolver: Callable[[str], bool] | None) -> None:
-    """Register the lookup of a hosted provider's session affinity setting; None unregisters it."""
-    global _hosted_session_affinity  # noqa: PLW0603
-    _hosted_session_affinity = resolver or _no_hosted_session_affinity
 
 
 def uncredentialed_env_names(config: GatewayConfig, instance: str, entry: Mapping[str, Any]) -> tuple[str, ...] | None:
@@ -587,10 +570,12 @@ def get_provider_kwargs(
     lookup = instance if instance is not None else provider.value
     kwargs: dict[str, Any] = {}
     raw_config = config.providers.get(lookup)
+    tenant_endpoint = False
     if raw_config is None and workspace_id is not None:
         # A slug names one key of its own; any other instance reads the provider's.
         named = lookup if cached_org_slug_provider(workspace_id, lookup) is not None else provider.value
         raw_config = cached_org_provider_kwargs(workspace_id, named)
+        tenant_endpoint = raw_config is not None and bool(raw_config.get("api_base"))
     if raw_config is not None:
         provider_config = {k: v for k, v in raw_config.items() if k not in _INSTANCE_META_KEYS}
 
@@ -614,9 +599,6 @@ def get_provider_kwargs(
             kwargs = {k: v for k, v in provider_config.items() if k != "client_args"}
             if "client_args" in provider_config:
                 kwargs["client_args"] = provider_config["client_args"]
-
-    if provider == LLMProvider.OTARI and kwargs.get("api_base"):
-        kwargs["api_base"] = otari_gateway_origin(kwargs["api_base"])
 
     # boto3 reads AWS_DEFAULT_REGION, while some AWS runtimes expose only AWS_REGION.
     if provider == LLMProvider.BEDROCK:
@@ -642,34 +624,19 @@ def get_provider_kwargs(
     if placeholder is not None:
         kwargs["api_key"] = placeholder
 
+    if tenant_endpoint:
+        # An organization chose this address, so the SDK dials it only through
+        # the client that checks it is public on every request and connects to
+        # the address it checked. Imported here: the providers package imports
+        # this module through model discovery.
+        from gateway.services.providers import owned_endpoint_sdk_client
+
+        kwargs["client_args"] = {
+            **(kwargs.get("client_args") or {}),
+            "http_client": owned_endpoint_sdk_client(provider),
+        }
+
     return kwargs
-
-
-def with_session_affinity(call_kwargs: dict[str, Any], config: GatewayConfig, instance: str) -> dict[str, Any]:
-    """Send the call's prompt cache key upstream as ``x-session-affinity`` when ``instance`` opts in.
-
-    Reads ``prompt_cache_key`` from the merged call kwargs, where the route has
-    already replaced the caller's key with its identity-scoped hash, so the raw
-    caller value never reaches the header. A call with no key, or an instance
-    without ``session_affinity: true``, is returned unchanged. A ``providers:``
-    entry answers for its name, as it is served ahead of a hosted provider of
-    the same name; otherwise the hosted provider's own setting does.
-
-    The header goes on the client (``client_args.default_headers``) rather than
-    in ``extra_headers``: any-llm's ``aresponses`` validates its kwargs strictly
-    and rejects ``extra_headers``, and any-llm builds a client per call, so a
-    client default is still per request.
-    """
-    key = call_kwargs.get("prompt_cache_key")
-    if not isinstance(key, str) or not key:
-        return call_kwargs
-    entry = config.providers.get(instance)
-    opted = entry.get("session_affinity") is True if isinstance(entry, dict) else _hosted_session_affinity(instance)
-    if not opted:
-        return call_kwargs
-    client_args = dict(call_kwargs.get("client_args") or {})
-    client_args["default_headers"] = {**(client_args.get("default_headers") or {}), SESSION_AFFINITY_HEADER: key}
-    return {**call_kwargs, "client_args": client_args}
 
 
 def _client_retries_set(provider: LLMProvider, client_args: Mapping[str, Any]) -> bool:

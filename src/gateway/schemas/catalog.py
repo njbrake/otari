@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from gateway.models.pricing import PriceSource
 from gateway.types.model_type import ModelType
+from gateway.types.price_unit import PriceUnit
 
 
 class CatalogCapabilities(BaseModel):
@@ -71,9 +72,18 @@ class CatalogModelSummary(BaseModel):
     )
     unpriced_count: int = Field(description="How many offerings carry no price for this caller.")
     discovered: bool = Field(description="Whether any offering was discovered from its provider.")
+    price_unit: PriceUnit | None = Field(
+        default=None,
+        description=(
+            "What the cheapest prices are per: the unit every priced offering is priced in. Null where no "
+            "offering is priced, or where offerings are priced in different units, which leaves both null."
+        ),
+    )
     min_input_price_per_million: float | None = Field(
         default=None,
-        description="The cheapest offering's, at the comparison context where one was asked for.",
+        description=(
+            "The cheapest offering's, per million of `price_unit`, at the comparison context where one was asked for."
+        ),
     )
     min_output_price_per_million: float | None = None
 
@@ -100,7 +110,11 @@ class CatalogQuery(BaseModel):
     search: str | None = Field(
         default=None,
         max_length=200,
-        description="Case-insensitive text in a model's name, vendor, id, selectors, or provider instances.",
+        description=(
+            "Case-insensitive words, each in a model's name, vendor, id, or a selector's last path segment; "
+            "a pasted selector, or part of one with a colon or slash, matches too. "
+            "Provider instances are the `provider` filter's."
+        ),
     )
     workspace_id: uuid.UUID | None = Field(
         default=None,
@@ -131,7 +145,10 @@ class CatalogQuery(BaseModel):
         default=None,
         ge=0,
         allow_inf_nan=False,
-        description="Maximum cheapest input price per million tokens; unpriced models do not match.",
+        description=(
+            "Maximum cheapest input price per million tokens; unpriced models, and models priced in another "
+            "unit, do not match."
+        ),
     )
     pricing: Literal["all", "custom", "default", "priced", "unpriced"] = "all"
     source: Literal["all", "discovered", "custom"] = "all"
@@ -171,3 +188,80 @@ class CatalogPage(BaseModel):
     count: int
     models: list[CatalogModelSummary]
     facets: CatalogFacets | None = None
+
+
+ModelInputModality = Literal["text", "image", "audio", "video", "pdf"]
+
+_MAX_TOKENS = 2**31 - 1
+
+
+class ModelMetadataOverrideRequest(BaseModel):
+    """What to say about a model in place of its server and models.dev. A null field is not overridden."""
+
+    context_window: int | None = Field(default=None, gt=0, le=_MAX_TOKENS)
+    max_output_tokens: int | None = Field(default=None, gt=0, le=_MAX_TOKENS)
+    tool_call: bool | None = Field(default=None, description="Whether the model calls tools: `tools`, `tool_choice`.")
+    reasoning: bool | None = Field(default=None, description="Whether the model reasons: `reasoning`.")
+    structured_output: bool | None = Field(
+        default=None,
+        description="Whether the model takes `response_format`. Never offered where Otari cannot send it.",
+    )
+    input_modalities: list[ModelInputModality] | None = Field(
+        default=None, min_length=1, max_length=5, description="What the model reads; `text` unless it says otherwise."
+    )
+
+
+class ModelMetadataOverridePublic(ModelMetadataOverrideRequest):
+    """An override as stored, under the selector it describes."""
+
+    selector: str = Field(description="The `provider:model` the override describes.")
+
+
+class CatalogProviderSummary(BaseModel):
+    """One provider instance offering at least one model the caller may see."""
+
+    name: str = Field(description="The instance name a selector starts with, such as `fireworks` or `openai-eu`.")
+    provider: str = Field(description="The any-llm implementation behind the instance.")
+    display_name: str = Field(
+        description=(
+            "models.dev's name for the implementation, with the instance name after it where the two differ; "
+            "the instance name where models.dev does not know it."
+        )
+    )
+    model_count: int = Field(description="Catalog models the caller may see that this instance offers.")
+    terms_url: str | None = Field(default=None, description="The provider's terms of service; null where none is set.")
+    privacy_url: str | None = Field(default=None, description="The provider's privacy policy; null where none is set.")
+
+
+class CatalogProvidersResponse(BaseModel):
+    count: int = Field(description="Providers the caller may see, before paging.")
+    providers: list[CatalogProviderSummary] = Field(description="The requested page, sorted by display name.")
+
+
+class CatalogProviderModel(BaseModel):
+    """One catalog model as one provider instance offers it."""
+
+    id: str = Field(description="The catalog id, the one `GET /catalog/models/{id}` takes.")
+    name: str
+    vendor: str | None
+    price_unit: PriceUnit | None = Field(
+        default=None,
+        description="What the prices are per. Null where nothing on this instance prices the model.",
+    )
+    input_price: float | None = Field(
+        default=None,
+        description=(
+            "This instance's input rate for the caller, in USD per million of `price_unit`, as the catalog's "
+            "`min_input_price_per_million` is. The cheapest where the instance offers the model more than once."
+        ),
+    )
+    output_price: float | None = Field(
+        default=None, description="This instance's output rate for the caller, in the same unit as `input_price`."
+    )
+    context_length: int | None = Field(default=None, description="The largest context window this instance serves.")
+
+
+class CatalogProviderDetail(CatalogProviderSummary):
+    """One provider instance and a page of the models it offers the caller, sorted by name."""
+
+    models: list[CatalogProviderModel] = Field(description="The requested page; `model_count` is the total.")

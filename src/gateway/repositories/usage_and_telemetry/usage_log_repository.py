@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Never, cast
 
-from sqlalchemy import ColumnElement, Select, and_, case, false, func, null, or_, select, true
+from sqlalchemy import ColumnElement, Select, and_, case, false, func, null, or_, select, update
 
 from gateway.core.metered_pricing import ChargeLine
 from gateway.core.sql import bucket_expr, canonical_bucket, dialect_name, match_any, utc_bound
@@ -49,6 +49,7 @@ def new_usage_row(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     total_tokens: int | None = None,
+    deployment_paid: bool = False,
 ) -> UsageLog:
     """A new usage row holding these values, with a fresh id and the current time."""
     return UsageLog(
@@ -70,6 +71,7 @@ def new_usage_row(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
+        deployment_paid=deployment_paid,
     )
 
 
@@ -134,30 +136,8 @@ class ServedTraffic:
     model: str
     policy_name: str | None
     api_key_id: str | None
-    """The key that sent them, where the reader may see whose rows they are; None otherwise."""
     requests: int
     fell_back: int
-
-
-@dataclass(frozen=True)
-class NameAttempts:
-    """The attempts made in one workspace for one name sent, by one owner and key, at one step of the plan."""
-
-    workspace_id: uuid.UUID
-    name: str
-    user_id: str | None
-    api_key_id: str | None
-    position: int
-    status: str
-    attempts: int
-
-
-def _readable(everyone_in: Collection[uuid.UUID] | None, own_user_id: str | None) -> ColumnElement[bool]:
-    """Rows a reader may see as someone's: every row in a workspace of ``everyone_in`` (None: all), else their own."""
-    if everyone_in is None:
-        return true()
-    mine = UsageLog.user_id == own_user_id if own_user_id is not None else false()
-    return or_(UsageLog.workspace_id.in_(sorted(everyone_in)), mine) if everyone_in else mine
 
 
 @dataclass(frozen=True)
@@ -213,6 +193,10 @@ class RequestRows:
     total_tokens: int
     served: int
     errors: int
+    incomplete: int
+    tool_cost: Decimal | None
+    # Priced rows that recorded how much of their cost is tool charges.
+    tool_costed_rows: int
 
 
 # The columns a breakdown can group by, named by the summary's dimension vocabulary.
@@ -453,33 +437,42 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         self.db.add(row)
         await self.db.flush()
 
-    async def served_traffic(
-        self,
-        *,
-        workspace_ids: Collection[uuid.UUID],
-        since: datetime,
-        everyone_in: Collection[uuid.UUID] | None = None,
-        own_user_id: str | None = None,
-        api_key_ids: Collection[str] | None = None,
-    ) -> list[ServedTraffic]:
-        """The requests served here since ``since`` in these workspaces, grouped by name sent, offering and key.
+    async def reassign_owner(self, user_ids: Collection[str], to_user_id: str) -> None:
+        """Stage moving these users' rows onto ``to_user_id``, without the fields that could name a person.
 
-        One grouped read. Imported usage is left out, because it was never served
-        here. A row's key is reported only where the reader may see whose it is
-        (``everyone_in``, else ``own_user_id``'s own). ``api_key_ids`` narrows to
-        those keys' rows, and only to ones the reader may see as someone's.
+        The caller's tags, the session label, the provider-facing end-user
+        identifier and the upstream error text are cleared; the counts and costs stay.
+        """
+        if not user_ids:
+            return
+        await self.db.execute(
+            update(UsageLog)
+            .where(UsageLog.user_id.in_(list(user_ids)))
+            .values(user_id=to_user_id, tags=None, source_label=None, safety_identifier=None, error_message=None)
+            .execution_options(synchronize_session=False)
+        )
+
+    async def add_many(self, rows: list[UsageLog]) -> None:
+        """Stage usage rows together in the current transaction."""
+        if not rows:
+            return
+        self.db.add_all(rows)
+        await self.db.flush()
+
+    async def served_traffic(self, *, workspace_ids: Collection[uuid.UUID], since: datetime) -> list[ServedTraffic]:
+        """The requests served here since ``since`` in these workspaces, by name sent, offering reached and key.
+
+        One grouped read. Imported usage is left out, because it was never served here.
         """
         if not workspace_ids:
             return []
-        readable = _readable(everyone_in, own_user_id)
-        key = case((readable, UsageLog.api_key_id), else_=None)
         fell_back = func.sum(case((and_(UsageLog.status == "success", UsageLog.attempt_position > 1), 1), else_=0))
         stmt = (
             select(
                 UsageLog.provider,
                 UsageLog.model,
                 UsageLog.policy_name,
-                key.label("api_key_id"),
+                UsageLog.api_key_id,
                 func.count().label("requests"),
                 func.coalesce(fell_back, 0).label("fell_back"),
             )
@@ -489,10 +482,8 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 UsageLog.status.in_(_REQUEST_STATUSES),
                 UsageLog.timestamp >= since,
             )
-            .group_by(UsageLog.provider, UsageLog.model, UsageLog.policy_name, key)
+            .group_by(UsageLog.provider, UsageLog.model, UsageLog.policy_name, UsageLog.api_key_id)
         )
-        if api_key_ids is not None:
-            stmt = stmt.where(UsageLog.api_key_id.in_(sorted(api_key_ids)), readable)
         return [
             ServedTraffic(
                 provider=row.provider,
@@ -501,67 +492,6 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 api_key_id=row.api_key_id,
                 requests=int(row.requests),
                 fell_back=int(row.fell_back),
-            )
-            for row in (await self.db.execute(stmt)).all()
-        ]
-
-    async def name_attempts(
-        self,
-        *,
-        workspace_ids: Collection[uuid.UUID],
-        since: datetime,
-        names: Collection[str],
-        everyone_in: Collection[uuid.UUID] | None,
-        own_user_id: str | None,
-        api_key_ids: Collection[str] | None = None,
-    ) -> list[NameAttempts]:
-        """The attempts made here since ``since`` for these names sent, by workspace, owner, key, step and outcome.
-
-        Only rows the reader may see as someone's (``everyone_in``, else
-        ``own_user_id``'s own), narrowed to ``api_key_ids`` when given. A row with
-        no step recorded is the first step. Imported usage is left out.
-        """
-        if not workspace_ids or not names:
-            return []
-        position = func.coalesce(UsageLog.attempt_position, 1)
-        stmt = (
-            select(
-                UsageLog.workspace_id,
-                UsageLog.requested_model,
-                UsageLog.user_id,
-                UsageLog.api_key_id,
-                position.label("position"),
-                UsageLog.status,
-                func.count().label("attempts"),
-            )
-            .where(
-                UsageLog.workspace_id.in_(sorted(workspace_ids)),
-                UsageLog.requested_model.in_(sorted(names)),
-                UsageLog.source == SERVED_HERE_SLUG,
-                UsageLog.status.in_((*_REQUEST_STATUSES, "absorbed")),
-                UsageLog.timestamp >= since,
-                _readable(everyone_in, own_user_id),
-            )
-            .group_by(
-                UsageLog.workspace_id,
-                UsageLog.requested_model,
-                UsageLog.user_id,
-                UsageLog.api_key_id,
-                position,
-                UsageLog.status,
-            )
-        )
-        if api_key_ids is not None:
-            stmt = stmt.where(UsageLog.api_key_id.in_(sorted(api_key_ids)))
-        return [
-            NameAttempts(
-                workspace_id=row.workspace_id,
-                name=row.requested_model,
-                user_id=row.user_id,
-                api_key_id=row.api_key_id,
-                position=int(row.position),
-                status=row.status,
-                attempts=int(row.attempts),
             )
             for row in (await self.db.execute(stmt)).all()
         ]
@@ -601,6 +531,9 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             # call runs and is the only one with no latency, so it settles nothing.
             func.count(case(((UsageLog.status == "success") & UsageLog.latency_ms.is_not(None), 1))),
             func.count(case((UsageLog.status == "error", 1))),
+            func.count(case((UsageLog.status == "incomplete", 1))),
+            func.sum(UsageLog.tool_cost),
+            func.count(case((UsageLog.cost.is_not(None) & UsageLog.tool_cost.is_not(None), 1))),
         ).where(*conditions)
         row = (await self.db.execute(stmt)).one()
         return RequestRows(
@@ -612,6 +545,9 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             total_tokens=int(row[5] or 0),
             served=int(row[6]),
             errors=int(row[7]),
+            incomplete=int(row[8]),
+            tool_cost=row[9],
+            tool_costed_rows=int(row[10]),
         )
 
     async def cost_and_requests(self, filters: UsageFilters, scope: UsageScope) -> tuple[float, int]:

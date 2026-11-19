@@ -28,7 +28,6 @@ from gateway.repositories.tenancy.organization_guardrail_definition_repository i
 )
 from gateway.repositories.tenancy.organization_member_repository import OrganizationMemberRepository
 from gateway.repositories.tenancy.organization_repository import OrganizationRepository
-from gateway.repositories.tenancy.user_merge_repository import UserMergeRepository
 from gateway.repositories.tenancy.user_repository import UserRepository, user_alphabetical_order
 from gateway.repositories.tenancy.workspace_repository import (
     WorkspaceMemberRepository,
@@ -44,7 +43,6 @@ __all__ = [
     "OrganizationGuardrailDefinitionRepository",
     "OrganizationMemberRepository",
     "OrganizationRepository",
-    "UserMergeRepository",
     "UserRepository",
     "WorkspaceMemberRepository",
     "WorkspaceProviderKeyOverrideRepository",

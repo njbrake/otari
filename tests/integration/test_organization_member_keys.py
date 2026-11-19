@@ -32,7 +32,7 @@ from sqlmodel import col
 from gateway.adapters.api_key_format_adapter import DefaultApiKeyFormatAdapter
 from gateway.auth.models import hash_key
 from gateway.core.config import API_KEY_HEADER, API_ROOT
-from gateway.models.api_keys import SERVICE_KEY_OWNER_ID_PREFIX, APIKey
+from gateway.models.api_keys import SERVICE_KEY_OWNER_ID_PREFIX, APIKey, DisabledReason
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.models.users import User as BillingUser
 from gateway.services.api_keys import DEFAULT_ORGANIZATION_MAX_END_USERS
@@ -651,40 +651,6 @@ def test_the_workspace_filter_narrows_and_never_widens(client: TestClient, world
     assert listed == []
 
 
-def test_a_search_narrows_within_the_callers_keys_and_never_widens(client: TestClient, world: _World) -> None:
-    """A colleague's key and another organization's key match the term and stay out of reach."""
-    code, mine = _create(client, world, "alpha_member", {"key_name": "shared-term mine"})
-    assert code == status.HTTP_200_OK
-    code, other = _create(client, world, "alpha_member", {"key_name": "unrelated"})
-    assert code == status.HTTP_200_OK
-    code, colleagues = _create(client, world, "alpha_colleague", {"key_name": "shared-term theirs"})
-    assert code == status.HTTP_200_OK
-    code, betas = _create(client, world, "beta_owner", {"key_name": "shared-term beta"})
-    assert code == status.HTTP_200_OK
-
-    code, listed = _request(client, world, "alpha_member", "GET", f"{_PREFIX}?search=SHARED-term")
-    assert code == status.HTTP_200_OK, listed
-    assert [row["id"] for row in listed] == [mine["id"]]
-
-    # Even by id, which is how the dashboard names a key it was handed.
-    for foreign in (colleagues, betas):
-        code, listed = _request(client, world, "alpha_member", "GET", f"{_PREFIX}?search={foreign['id']}")
-        assert code == status.HTTP_200_OK
-        assert listed == []
-    code, listed = _request(client, world, "alpha_member", "GET", f"{_PREFIX}?search={other['id']}")
-    assert code == status.HTTP_200_OK
-    assert [row["id"] for row in listed] == [other["id"]]
-
-    # The deployment-wide surface narrows within the operator's organization the
-    # same way: alpha's keys, whoever owns them, and never beta's.
-    code, listed = _request(client, world, "alpha_operator", "GET", f"{API_ROOT}/keys?search=shared-term")
-    assert code == status.HTTP_200_OK, listed
-    assert {row["id"] for row in listed} == {mine["id"], colleagues["id"]}
-    code, listed = _request(client, world, "alpha_operator", "GET", f"{API_ROOT}/keys?search={betas['id']}")
-    assert code == status.HTTP_200_OK
-    assert listed == []
-
-
 # =============================================================================
 # Acting on a key: the owner predicate on every load
 # =============================================================================
@@ -786,14 +752,12 @@ def test_an_update_cannot_exempt_the_key_from_budget(client: TestClient, world: 
     assert [key["exclude_from_budget"] for key in listed if key["id"] == created["id"]] == [False]
 
 
-def test_a_create_cannot_name_an_owner_or_exempt_itself(client: TestClient, world: _World) -> None:
-    """A member naming an owner is refused, and the exemption field of the operator body is refused, not dropped."""
-    code, _ = _create(
-        client, world, "alpha_member", {"key_name": "escalation", "user_id": str(world.users["alpha_colleague"])}
-    )
-    assert code == status.HTTP_403_FORBIDDEN
-
-    code, body = _create(client, world, "alpha_member", {"key_name": "escalation", "exclude_from_budget": True})
+@pytest.mark.parametrize("field", [{"user_id": "somebody-else"}, {"exclude_from_budget": True}])
+def test_a_create_cannot_name_an_owner_or_exempt_itself(
+    client: TestClient, world: _World, field: dict[str, Any]
+) -> None:
+    """The escalation fields of the operator body are refused here, not silently dropped."""
+    code, body = _create(client, world, "alpha_member", {"key_name": "escalation", **field})
     assert code == status.HTTP_422_UNPROCESSABLE_CONTENT, body
     code, listed = _request(client, world, "alpha_member", "GET", _PREFIX)
     assert code == status.HTTP_200_OK
@@ -907,7 +871,7 @@ def test_a_member_made_a_workspace_viewer_loses_only_the_keys_they_minted(
     assert code == status.HTTP_200_OK, body
 
     assert _key_row(db_session_factory, minted["id"]).is_active is False
-    assert _key_row(db_session_factory, minted["id"]).operator_disabled is False
+    assert _key_row(db_session_factory, minted["id"]).disabled_reason is None
     assert _key_row(db_session_factory, issued).is_active is True
     assert _key_row(db_session_factory, legacy).is_active is True
 
@@ -965,7 +929,7 @@ def test_removing_someone_from_the_organization_switches_off_every_key_billed_to
     for key_id in (minted["id"], issued, off["id"]):
         row = _key_row(db_session_factory, key_id)
         assert row.is_active is False
-        assert row.operator_disabled is True
+        assert row.disabled_reason is DisabledReason.OPERATOR
     assert _key_row(db_session_factory, theirs["id"]).is_active is True
 
 
@@ -977,7 +941,7 @@ def test_a_key_an_operator_switched_off_stays_off_for_its_owner(client: TestClie
         client, world, "alpha_operator", "PATCH", f"{API_ROOT}/keys/{minted['id']}", json={"is_active": False}
     )
     assert code == status.HTTP_200_OK, body
-    assert body["operator_disabled"] is True
+    assert body["disabled_reason"] == DisabledReason.OPERATOR
 
     code, body = _request(client, world, "alpha_member", "PATCH", f"{_PREFIX}/{minted['id']}", json={"is_active": True})
     assert code == status.HTTP_403_FORBIDDEN, body
@@ -996,13 +960,97 @@ def test_a_key_an_operator_switched_off_stays_off_for_its_owner(client: TestClie
         client, world, "alpha_operator", "PATCH", f"{API_ROOT}/keys/{minted['id']}", json={"is_active": True}
     )
     assert code == status.HTTP_200_OK, body
-    assert body["operator_disabled"] is False
+    assert body["disabled_reason"] is None
     code, body = _request(
         client, world, "alpha_member", "PATCH", f"{_PREFIX}/{minted['id']}", json={"is_active": False}
     )
     assert code == status.HTTP_200_OK, body
     code, body = _request(client, world, "alpha_member", "PATCH", f"{_PREFIX}/{minted['id']}", json={"is_active": True})
     assert code == status.HTTP_200_OK, body
+
+
+def _revoke(db_session_factory: Callable[[], Session], key_id: str) -> None:
+    """Revoke the key directly, as no request revokes one yet."""
+    session = db_session_factory()
+    try:
+        row = session.get(APIKey, key_id)
+        assert row is not None
+        row.is_active = False
+        row.disabled_reason = DisabledReason.REVOKED
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_a_revoked_key_refuses_an_operator_too(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """No caller enables a revoked key, and a disable is refused too, which would weaken the reason."""
+    code, minted = _create(client, world, "alpha_member", {"key_name": "mine"})
+    assert code == status.HTTP_200_OK, minted
+    _revoke(db_session_factory, minted["id"])
+    path = f"{API_ROOT}/keys/{minted['id']}"
+
+    code, body = _request(client, world, "alpha_operator", "PATCH", path, json={"is_active": True})
+    assert code == status.HTTP_403_FORBIDDEN, body
+    assert "operator" not in body["detail"]
+    assert "cannot be enabled again" in body["detail"]
+
+    code, body = _request(client, world, "alpha_operator", "PATCH", path, json={"is_active": False})
+    assert code == status.HTTP_403_FORBIDDEN, body
+
+    # A refusal changes nothing else sent with it, and leaves the reason as it was.
+    code, body = _request(client, world, "alpha_operator", "PATCH", path, json={"is_active": True, "key_name": "y"})
+    assert code == status.HTTP_403_FORBIDDEN, body
+    row = _key_row(db_session_factory, minted["id"])
+    assert (row.is_active, row.disabled_reason, row.key_name) == (False, DisabledReason.REVOKED, "mine")
+
+
+def test_a_revoked_key_refuses_its_owner_without_naming_an_operator(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """The owner is refused either way, and the detail says who can clear the reason rather than who set it."""
+    code, mine = _create(client, world, "alpha_member", {"key_name": "mine"})
+    assert code == status.HTTP_200_OK, mine
+    code, held = _create(client, world, "alpha_member", {"key_name": "held"})
+    assert code == status.HTTP_200_OK, held
+    _revoke(db_session_factory, mine["id"])
+    code, body = _request(
+        client, world, "alpha_operator", "PATCH", f"{API_ROOT}/keys/{held['id']}", json={"is_active": False}
+    )
+    assert code == status.HTTP_200_OK, body
+
+    code, body = _request(client, world, "alpha_member", "PATCH", f"{_PREFIX}/{mine['id']}", json={"is_active": True})
+    assert code == status.HTTP_403_FORBIDDEN, body
+    assert "operator" not in body["detail"]
+    assert "cannot be enabled again" in body["detail"]
+
+    code, body = _request(client, world, "alpha_member", "PATCH", f"{_PREFIX}/{held['id']}", json={"is_active": True})
+    assert code == status.HTTP_403_FORBIDDEN, body
+    assert "operator" in body["detail"]
+    assert "cannot be enabled again" not in body["detail"]
+
+    assert _key_row(db_session_factory, mine["id"]).disabled_reason is DisabledReason.REVOKED
+
+
+def test_losing_the_organization_does_not_weaken_a_revocation(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """The bulk disable records its reason on a key with none, and keeps a reason it cannot clear."""
+    code, revoked = _create(client, world, "alpha_member", {"key_name": "revoked"})
+    assert code == status.HTTP_200_OK, revoked
+    code, plain = _create(client, world, "alpha_member", {"key_name": "plain"})
+    assert code == status.HTTP_200_OK, plain
+    _revoke(db_session_factory, revoked["id"])
+
+    member_id = _organization_member_id(db_session_factory, world, "alpha_member")
+    code, body = _request(client, world, "alpha_owner", "DELETE", f"{API_ROOT}/organizations/me/members/{member_id}")
+    assert code in {status.HTTP_200_OK, status.HTTP_204_NO_CONTENT}, body
+
+    kept = _key_row(db_session_factory, revoked["id"])
+    assert (kept.is_active, kept.disabled_reason) == (False, DisabledReason.REVOKED)
+    switched_off = _key_row(db_session_factory, plain["id"])
+    assert (switched_off.is_active, switched_off.disabled_reason) == (False, DisabledReason.OPERATOR)
 
 
 def _operator_edit_after_the_load(
@@ -1044,7 +1092,7 @@ def test_an_operator_switch_off_landing_mid_update_is_not_overwritten(
 
     def switch_off(row: APIKey) -> None:
         row.is_active = False
-        row.operator_disabled = True
+        row.disabled_reason = DisabledReason.OPERATOR
 
     calls = _operator_edit_after_the_load(monkeypatch, db_session_factory, minted["id"], switch_off)
     code, body = _request(client, world, "alpha_member", "PATCH", f"{_PREFIX}/{minted['id']}", json={"is_active": True})
@@ -1052,7 +1100,7 @@ def test_an_operator_switch_off_landing_mid_update_is_not_overwritten(
     assert calls == [1]
     assert code == status.HTTP_403_FORBIDDEN, body
     row = _key_row(db_session_factory, minted["id"])
-    assert (row.is_active, row.operator_disabled) == (False, True)
+    assert (row.is_active, row.disabled_reason) == (False, DisabledReason.OPERATOR)
 
 
 def test_an_operator_narrowing_landing_mid_update_survives_an_unrelated_edit(
@@ -1277,3 +1325,84 @@ def test_deleting_its_budget_is_refused_while_a_key_defaults_to_it(client: TestC
     assert code == status.HTTP_200_OK, body
     code, listed = _request(client, world, "alpha_owner", "GET", _PREFIX)
     assert [row["end_user_budget_ids"] for row in listed if row["id"] == key["id"]] == [[default]]
+
+
+def test_an_owner_lists_its_end_users_and_nobody_else_reaches_them(
+    client: TestClient, world: _World, master_key_header: dict[str, str]
+) -> None:
+    client.post(
+        f"{API_ROOT}/pricing",
+        json={"model_key": MODEL_NAME, "input_price_per_million": 1.0, "output_price_per_million": 1.0},
+        headers=master_key_header,
+    )
+    budget_id = _org_budget(client, world, request_limit=5)
+    key = _service_key(client, world, budget_id)
+    for user in ("alice", "bob"):
+        assert _chat(client, key["key"], user).status_code == status.HTTP_200_OK
+
+    client.cookies.set(SESSION_COOKIE_NAME, world.sessions["alpha_owner"])
+    try:
+        response = client.get(f"{_PREFIX}/{key['id']}/end-users", params={"include_total": "true", "limit": 1})
+    finally:
+        client.cookies.clear()
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.headers["Otari-Total-Count"] == "2"
+    assert [row["external_id"] for row in response.json()] == ["alice"]
+
+    code, one = _request(client, world, "alpha_operator", "GET", f"{_PREFIX}/{key['id']}/end-users?external_id=bob")
+    assert code == status.HTTP_200_OK, one
+    assert [(row["external_id"], row["budget_id"]) for row in one] == [("bob", budget_id)]
+
+    code, counted = _request(client, world, "alpha_owner", "GET", f"{_PREFIX}/{key['id']}/end-user-count")
+    assert code == status.HTTP_200_OK, counted
+    assert counted == {"count": 2, "max_end_users": DEFAULT_ORGANIZATION_MAX_END_USERS}
+
+    for who in ("alpha_member", "beta_owner"):
+        code, body = _request(client, world, who, "GET", f"{_PREFIX}/{key['id']}/end-users")
+        assert code == status.HTTP_404_NOT_FOUND, (who, body)
+        code, body = _request(client, world, who, "GET", f"{_PREFIX}/{key['id']}/end-user-count")
+        assert code == status.HTTP_404_NOT_FOUND, (who, body)
+
+
+# =============================================================================
+# Scopes: the same rules on the member surface
+# =============================================================================
+
+
+def test_a_member_key_gets_the_default_scopes_unless_it_names_its_own(client: TestClient, world: _World) -> None:
+    code, plain = _create(client, world, "alpha_member", {"key_name": "plain"})
+    assert code == status.HTTP_200_OK, plain
+    code, wider = _create(
+        client, world, "alpha_member", {"key_name": "wider", "scopes": ["usage:read", "inference:run"]}
+    )
+    assert code == status.HTTP_200_OK, wider
+
+    assert plain["scopes"] == ["inference:run", "web:search", "web:fetch", "code:execute", "mcp:read", "mcp:execute"]
+    assert wider["scopes"] == ["inference:run", "usage:read"]
+
+
+def test_a_member_narrows_their_own_key(client: TestClient, world: _World) -> None:
+    code, created = _create(client, world, "alpha_member", {"key_name": "k", "scopes": ["inference:run", "usage:read"]})
+    assert code == status.HTTP_200_OK, created
+    headers = {API_KEY_HEADER: f"Bearer {created['key']}"}
+    assert client.get(f"{API_ROOT}/key/budget", headers=headers).status_code == status.HTTP_200_OK
+
+    code, updated = _request(
+        client, world, "alpha_member", "PATCH", f"{_PREFIX}/{created['id']}", json={"scopes": ["inference:run"]}
+    )
+
+    assert code == status.HTTP_200_OK, updated
+    assert updated["scopes"] == ["inference:run"]
+    assert client.get(f"{API_ROOT}/key/budget", headers=headers).status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_a_member_cannot_give_a_plain_key_an_end_user_scope(client: TestClient, world: _World) -> None:
+    code, refused = _create(client, world, "alpha_member", {"key_name": "k", "scopes": ["end-users:delete"]})
+    assert code == status.HTTP_400_BAD_REQUEST, refused
+
+    code, created = _create(client, world, "alpha_member", {"key_name": "k"})
+    assert code == status.HTTP_200_OK, created
+    code, refused = _request(
+        client, world, "alpha_member", "PATCH", f"{_PREFIX}/{created['id']}", json={"scopes": ["end-users:read"]}
+    )
+    assert code == status.HTTP_400_BAD_REQUEST, refused

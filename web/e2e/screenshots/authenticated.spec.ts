@@ -2,7 +2,13 @@ import { expect, type Page } from "@playwright/test"
 
 import { API_ROOT } from "@/shared/api/client"
 
-import { authHeaders, expectOk, gotoRoute, login } from "../helpers"
+import {
+  authHeaders,
+  expectOk,
+  gotoRoute,
+  login,
+  pressRowAction,
+} from "../helpers"
 import { captureScreenshot, test } from "./fixtures"
 
 /**
@@ -34,6 +40,48 @@ async function ensureOrgProviderKey(page: Page): Promise<void> {
   }
 }
 
+// The models the hosted provider's page draws: three vendors, so the vendor
+// rows show, and one model with no price, so the unpriced badge does too.
+const HOSTED_MODELS: ReadonlyArray<{ model: string; price?: number }> = [
+  { model: "Qwen/Qwen3.5-9B", price: 0.1 },
+  { model: "Qwen/Qwen3-Coder-480B", price: 2 },
+  { model: "deepseek-ai/DeepSeek-V3.2", price: 0.6 },
+  { model: "black-forest-labs/FLUX.1-schnell" },
+]
+
+// A hosted provider for its page to draw. Pointed at the discard port, so the
+// create's model listing fails at once and its models are added by hand.
+async function ensureHostedProvider(page: Page): Promise<void> {
+  const created = await page.request.post(`${API_ROOT}/hosted-providers`, {
+    headers: authHeaders,
+    data: {
+      provider: "openai",
+      name: "screenshot-hosted",
+      api_key: "sk-not-a-real-credential",
+      api_base: "http://127.0.0.1:9/v1",
+    },
+  })
+  if (created.status() === 409) return
+  await expectOk(created, "create hosted provider")
+  for (const { model, price } of HOSTED_MODELS) {
+    const added = await page.request.post(
+      `${API_ROOT}/hosted-providers/screenshot-hosted/models`,
+      {
+        headers: authHeaders,
+        data:
+          price === undefined
+            ? { model }
+            : {
+                model,
+                input_price_per_million: price,
+                output_price_per_million: price,
+              },
+      },
+    )
+    await expectOk(added, `offer ${model}`)
+  }
+}
+
 // One entry per destination the nav registry can reach. The matrix in
 // playwright.config.ts multiplies each of these by three viewports and both
 // themes, so adding a page here is the whole cost of covering it.
@@ -45,15 +93,18 @@ const WORKSPACE_ROUTES: ReadonlyArray<{
   readonly route: string
   readonly name: string
   readonly heading: RegExp
+  /** Creates what the page draws, where the seed holds none of it. */
+  readonly prepare?: (page: Page) => Promise<void>
 }> = [
   { route: "/", name: "overview", heading: /overview/i },
-  // Anchored on the empty conversation's own heading rather than the page
-  // title, which paints before the model list resolves; the seeded deployment
-  // serves a mock provider, so the welcome is what renders.
+  // The one page in this matrix with no page title, which is why its heading
+  // regex names the greeting instead: a chat surface heads with the composer
+  // and its own empty state, not with a title band, and the seeded deployment
+  // serves a mock provider so that state is what renders.
   {
     route: "/playground",
     name: "playground",
-    heading: /try a prompt/i,
+    heading: /what can i help with/i,
   },
   { route: "/models", name: "models", heading: /models/i },
   {
@@ -87,8 +138,10 @@ const WORKSPACE_ROUTES: ReadonlyArray<{
     name: "organization-domains",
     heading: /email domains/i,
   },
-  { route: "/usage", name: "usage", heading: /usage/i },
-  { route: "/activity", name: "activity", heading: /activity/i },
+  // The Overview's other two tabs, one baseline each ("overview" above is the
+  // first): they share the heading and the tab row, and differ below it.
+  { route: "/requests", name: "requests", heading: /overview/i },
+  { route: "/sessions", name: "sessions", heading: /overview/i },
   { route: "/tools", name: "tools", heading: /tools/i },
   // A narrowed Tools child is no longer the page above with two services
   // hidden: it heads with the tool's own status row, and its group titles drop
@@ -123,6 +176,13 @@ const WORKSPACE_ROUTES: ReadonlyArray<{
     route: "/admin/hosted-providers",
     name: "admin-hosted-providers",
     heading: /hosted providers/i,
+  },
+  {
+    route: "/admin/hosted-providers/screenshot-hosted",
+    name: "admin-hosted-provider-detail",
+    // The provider's own title, so "No hosted provider named" does not pass.
+    heading: /^screenshot-hosted$/i,
+    prepare: ensureHostedProvider,
   },
   {
     route: "/admin/recommender",
@@ -164,9 +224,10 @@ async function open(page: Page, route: string, heading: RegExp): Promise<void> {
 // page whose look changed would then take every page below it out of the run,
 // and a review would see one diff where there are five.
 test.describe("workspace rail", () => {
-  for (const { route, name, heading } of WORKSPACE_ROUTES) {
+  for (const { route, name, heading, prepare } of WORKSPACE_ROUTES) {
     test(name, async ({ page }) => {
       await login(page)
+      await prepare?.(page)
       await open(page, route, heading)
       await captureScreenshot(page, name)
     })
@@ -278,9 +339,7 @@ test.describe("organization rail", () => {
     await login(page)
     await ensureOrgProviderKey(page)
     await gotoRoute(page, "/organization/provider-keys")
-    const models = page.getByRole("button", { name: /^Models on / }).first()
-    await expect(models).toBeVisible()
-    await models.click()
+    await pressRowAction(page.getByRole("main"), /^Models on /)
     await expect(
       page.getByRole("heading", { name: /^Models on / }),
     ).toBeVisible()
@@ -297,30 +356,7 @@ test.describe("organization rail", () => {
     ).toBeVisible()
     await captureScreenshot(page, "organization-guardrails")
   })
-
-  test("organization usage", async ({ page }) => {
-    await login(page)
-    await gotoRoute(page, "/organization/usage")
-    // A link to the old organization page lands on Usage with that scope picked.
-    await expect(
-      page.getByRole("radio", { name: "Organization" }),
-    ).toBeChecked()
-    await captureScreenshot(page, "organization-usage")
-  })
 })
-
-/**
- * Open a route as a new document, so a stub registered after `login` is asked.
- *
- * `login` has already read the caller's context into the query cache, and
- * `gotoRoute` from the signed-in page changes only the hash, which is a
- * same-document navigation: without the reload the page keeps the operator
- * context it cached and never sends the request the stub answers.
- */
-async function gotoRouteFresh(page: Page, route: string): Promise<void> {
-  await gotoRoute(page, route)
-  await page.reload()
-}
 
 /**
  * The organization-admin view of Spend & budgets.
@@ -451,7 +487,7 @@ test.describe("organization member", () => {
         json: { ...context, role: "member", deployment_operator: false },
       })
     })
-    await gotoRouteFresh(page, "/members")
+    await gotoRoute(page, "/members")
     await expect(
       page.getByRole("heading", { name: /^members$/i }).first(),
     ).toBeVisible()
@@ -467,7 +503,7 @@ test.describe("organization admin", () => {
   test("organization spend and budgets", async ({ page }) => {
     await login(page)
     await stubAdminSpendView(page)
-    await gotoRouteFresh(page, "/budgets")
+    await gotoRoute(page, "/budgets")
     await expect(
       page.getByRole("heading", { name: /spend & budgets/i }).first(),
     ).toBeVisible()
@@ -494,29 +530,34 @@ test.describe("the keys page's one-time secret", () => {
     // The heading's own action, not the empty state's: the seeded database has
     // rows, so there is no empty state, and this is the placement the whole
     // change is about.
-    await page.getByRole("button", { name: "Create key" }).first().click()
+    await page
+      .getByRole("main")
+      .getByRole("button", { name: "Create API key" })
+      .first()
+      .click()
     const dialog = page.getByRole("dialog")
     await expect(dialog).toBeVisible()
     await expect(dialog.getByLabel("Name")).toBeVisible()
     await captureScreenshot(page, "keys-create-dialog")
   })
 
-  // The same dialog with its search tools and user matching unfolded, which
-  // is what makes the body scroll: header and footer pinned, content moving
-  // between them.
-  test("the create dialog, with search tools open", async ({ page }) => {
+  // The same dialog with its disclosure open, which is what makes the body
+  // scroll: header and footer pinned, content moving between them.
+  test("the create dialog, with More options open", async ({ page }) => {
     await login(page)
     await gotoRoute(page, "/keys")
     await expect(
       page.getByRole("heading", { name: /keys/i }).first(),
     ).toBeVisible()
-    await page.getByRole("button", { name: "Create key" }).first().click()
-    const dialog = page.getByRole("dialog")
-    await dialog
-      .getByRole("button", { name: /^Search tools and user matching/ })
+    await page
+      .getByRole("main")
+      .getByRole("button", { name: "Create API key" })
+      .first()
       .click()
-    await expect(dialog.getByText("Mismatched")).toBeVisible()
-    await captureScreenshot(page, "keys-create-dialog-access")
+    const dialog = page.getByRole("dialog")
+    await dialog.getByRole("button", { name: "More options" }).click()
+    await expect(dialog.getByText("Restrict this key’s models")).toBeVisible()
+    await captureScreenshot(page, "keys-create-dialog-advanced")
   })
 })
 
@@ -691,4 +732,18 @@ test.describe("the domain dialog", () => {
     await expect(dialog.getByLabel(/^Domain/)).toBeVisible()
     await captureScreenshot(page, "organization-domains-claim-dialog")
   })
+})
+
+test("OAuth app consent", async ({ page }) => {
+  await login(page)
+  // An external app's authorization redirect starts a fresh dashboard document.
+  await page.goto("about:blank")
+  await page.goto(
+    "/oauth/authorize?client_id=thunderbolt&redirect_uri=http%3A%2F%2Flocalhost%3A5199%2Foauth%2Fotari",
+  )
+  await expect(
+    page.getByRole("heading", { name: "Connect to Thunderbolt" }),
+  ).toBeVisible()
+  await expect(page.getByRole("button", { name: "Allow access" })).toBeVisible()
+  await captureScreenshot(page, "oauth-app-consent")
 })

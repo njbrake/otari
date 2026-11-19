@@ -188,24 +188,26 @@ def test_a_row_that_shadows_a_config_entry_says_the_entry_serves_again(
     assert any("config.yml declares a provider of the same name" in note for note in row["notes"])
 
 
-def test_a_provider_that_lists_nothing_still_moves_and_serves_any_model(
+def test_a_provider_that_lists_nothing_keeps_its_deployment_provider(
     client: TestClient,
     master_key_header: dict[str, str],
     db_session: Session,
     dials: list[dict[str, Any]],
     stored: Callable[..., None],
 ) -> None:
-    """A moved provider serves models it does not list, so one that lists nothing still moves."""
+    """A hosted provider serves only its roster by default, so a row whose provider lists nothing stays for review."""
     stored("openai", api_key="sk-quiet-5555", api_base="https://silent.test")
 
     [row] = _rows(client.post(PATH, headers=master_key_header)).values()
 
-    assert (row["outcome"], row["source_removed"], row["models"]) == ("migrated", True, 0)
+    assert (row["outcome"], row["source_removed"], row["models"]) == ("migrated", False, 0)
     assert "listed no models" in row["notes"][-1]
     db_session.expire_all()
-    assert db_session.execute(select(ProviderCredential)).scalars().all() == []
+    assert [credential.instance for credential in db_session.execute(select(ProviderCredential)).scalars()] == [
+        "openai"
+    ]
     [hosted] = db_session.execute(select(HostedProvider)).scalars().all()
-    assert (hosted.name, hosted.serves_unlisted_models) == ("openai", True)
+    assert (hosted.name, hosted.serves_unlisted_models) == ("openai", False)
 
 
 def test_a_name_a_hosted_provider_cannot_take_says_how_to_move_it(

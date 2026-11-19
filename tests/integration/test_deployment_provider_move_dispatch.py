@@ -126,8 +126,7 @@ def test_startup_moves_every_row_and_leaves_none_behind(
         assert db.execute(select(ProviderCredential)).scalars().all() == []
         hosted = {row.name: row for row in db.execute(select(HostedProvider)).scalars()}
     assert set(hosted) == {"my-vllm", "openai-eu"}
-    # As the stored rows did: a model a provider does not list is still served.
-    assert all(row.serves_unlisted_models for row in hosted.values())
+    assert not any(row.serves_unlisted_models for row in hosted.values())
 
 
 def test_a_row_startup_cannot_move_is_left_in_place(
@@ -183,9 +182,8 @@ def test_a_keyless_unpriced_backend_serves_every_model_it_lists(upgraded: Upgrad
 
     assert status == 200
     assert _sent_to(sent) == ("otari-no-key-required", VLLM_BASE)
-    # A moved provider serves a model it does not list, as the stored row did.
-    assert unlisted == 200
-    assert _sent_to(calls[0]) == ("otari-no-key-required", VLLM_BASE)
+    # Off by default: a model the provider does not list is refused until it is added.
+    assert (unlisted, calls) == (424, [])
 
 
 def test_a_renamed_provider_keeps_its_name_endpoint_and_key(upgraded: Upgrade) -> None:

@@ -47,7 +47,14 @@ from gateway.services.tenancy import OrganizationService, WorkspaceService
 from gateway.services.tenancy.authorization import resolve_visible_workspace_scope
 from gateway.services.tenancy.provisioning_service import DEFAULT_WORKSPACE_NAME
 
-from .tenancy_helpers import NO_BLOCKED_ADDRESSES, NO_MAIL_LIMIT, NO_TERMS, membership_writes
+from .tenancy_helpers import (
+    NO_BLOCKED_ADDRESSES,
+    NO_MAIL_LIMIT,
+    NO_SSO_ENFORCEMENT,
+    NO_TERMS,
+    membership_writes,
+    no_sso_enforcement,
+)
 
 _TEST_CONFIG = GatewayConfig()
 
@@ -201,6 +208,8 @@ async def test_an_admin_cannot_modify_an_owner(async_db: AsyncSession) -> None:
             user=admin,
             organization_member_id=target.id,
             request=ActiveOrganizationMemberUpdateRequest(role="member"),
+            sso_enforcement=NO_SSO_ENFORCEMENT,
+            open_signup=False,
         )
 
 
@@ -224,6 +233,8 @@ async def test_an_admin_cannot_promote_themselves_to_owner(async_db: AsyncSessio
             user=admin,
             organization_member_id=own.id,
             request=ActiveOrganizationMemberUpdateRequest(role="owner"),
+            sso_enforcement=NO_SSO_ENFORCEMENT,
+            open_signup=False,
         )
 
 
@@ -242,6 +253,8 @@ async def test_an_admin_cannot_promote_another_member_to_owner(async_db: AsyncSe
             user=admin,
             organization_member_id=target.id,
             request=ActiveOrganizationMemberUpdateRequest(role="owner"),
+            sso_enforcement=NO_SSO_ENFORCEMENT,
+            open_signup=False,
         )
 
 
@@ -259,6 +272,7 @@ async def test_an_admin_cannot_add_a_new_owner(async_db: AsyncSession) -> None:
         await OrganizationService(async_db, **membership_writes(async_db)).create_active_organization_member_for_user(
             user=admin,
             request=ActiveOrganizationMemberCreateRequest(email="ada@example.com", role="owner"),
+            open_signup=False,
             blocked_addresses=NO_BLOCKED_ADDRESSES,
         )
 
@@ -276,6 +290,8 @@ async def test_an_owner_can_promote_someone_to_owner(async_db: AsyncSession) -> 
         user=owner,
         organization_member_id=target.id,
         request=ActiveOrganizationMemberUpdateRequest(role="owner"),
+        sso_enforcement=NO_SSO_ENFORCEMENT,
+        open_signup=False,
     )
 
     assert updated.role == "owner"
@@ -289,6 +305,7 @@ async def test_a_plain_member_cannot_add_members(async_db: AsyncSession) -> None
         await OrganizationService(async_db, **membership_writes(async_db)).create_active_organization_member_for_user(
             user=member,
             request=ActiveOrganizationMemberCreateRequest(email="ada@example.com"),
+            open_signup=False,
             blocked_addresses=NO_BLOCKED_ADDRESSES,
         )
 
@@ -302,6 +319,7 @@ async def test_an_admin_can_add_members(async_db: AsyncSession) -> None:
     ).create_active_organization_member_for_user(
         user=admin,
         request=ActiveOrganizationMemberCreateRequest(email="ada@example.com", role="member"),
+        open_signup=False,
         blocked_addresses=NO_BLOCKED_ADDRESSES,
     )
 
@@ -319,6 +337,7 @@ async def test_an_added_member_lands_in_the_adding_organization_only(async_db: A
     result = await service.create_active_organization_member_for_user(
         user=owner,
         request=ActiveOrganizationMemberCreateRequest(email="ada@example.com"),
+        open_signup=False,
         blocked_addresses=NO_BLOCKED_ADDRESSES,
     )
 
@@ -341,6 +360,8 @@ async def test_an_owner_can_demote_another_owner(async_db: AsyncSession) -> None
         user=owner,
         organization_member_id=target.id,
         request=ActiveOrganizationMemberUpdateRequest(role="admin"),
+        sso_enforcement=NO_SSO_ENFORCEMENT,
+        open_signup=False,
     )
 
     assert updated.role == "admin"
@@ -407,7 +428,9 @@ async def test_a_suspended_membership_falls_back_to_a_live_one(async_db: AsyncSe
     assert membership is not None
     await members.update_membership(membership, {"status": "suspended"})
 
-    context = await OrganizationService(async_db, membership_listener=None).get_active_membership_context_for_user(user)
+    context = await OrganizationService(async_db, membership_listener=None).get_active_membership_context_for_user(
+        user, sso_enforcement=NO_SSO_ENFORCEMENT
+    )
 
     assert context.organization.id == live.id
     assert user.active_organization_id == live.id
@@ -422,7 +445,9 @@ async def test_an_identity_with_no_live_membership_has_no_context(async_db: Asyn
     await members.update_membership(membership, {"status": "suspended"})
 
     with pytest.raises(NoActiveOrganizationError):
-        await OrganizationService(async_db, membership_listener=None).get_active_membership_context_for_user(user)
+        await OrganizationService(async_db, membership_listener=None).get_active_membership_context_for_user(
+            user, sso_enforcement=NO_SSO_ENFORCEMENT
+        )
 
 
 # =============================================================================
@@ -472,6 +497,7 @@ async def test_switching_is_refused_for_an_organization_the_caller_only_created_
         await OrganizationService(async_db, membership_listener=None).switch_active_organization_for_user(
             user=user,
             organization_id=elsewhere.id,
+            blocked=no_sso_enforcement,
         )
     assert user.active_organization_id == organization.id
 
@@ -496,6 +522,7 @@ async def test_switching_is_refused_for_a_membership_that_is_not_active(
         await OrganizationService(async_db, membership_listener=None).switch_active_organization_for_user(
             user=user,
             organization_id=elsewhere.id,
+            blocked=no_sso_enforcement,
         )
     assert user.active_organization_id == organization.id
 
@@ -516,6 +543,7 @@ async def test_switching_carries_the_caller_workspaces_of_the_organization_moved
     context = await OrganizationService(async_db, membership_listener=None).switch_active_organization_for_user(
         user=user,
         organization_id=there.id,
+        blocked=no_sso_enforcement,
     )
 
     assert context.organization.id == there.id
@@ -558,12 +586,14 @@ async def test_accepting_an_invitation_into_a_second_organization_is_no_longer_a
         invitation.accept_link.split("token=")[1], claims=NO_TERMS, blocked_addresses=NO_BLOCKED_ADDRESSES
     )
 
-    memberships = await service.list_organization_memberships_for_user(user=invitee)
+    memberships = await service.list_organization_memberships_for_user(user=invitee, blocked=no_sso_enforcement)
     assert memberships.count == 2
     assert {row.organization.slug for row in memberships.data} == {"home", "inviting"}
     assert [row.organization.slug for row in memberships.data if row.is_active_organization] == ["home"]
 
-    context = await service.switch_active_organization_for_user(user=invitee, organization_id=inviting.id)
+    context = await service.switch_active_organization_for_user(
+        user=invitee, organization_id=inviting.id, blocked=no_sso_enforcement
+    )
     assert context.organization.id == inviting.id
 
 

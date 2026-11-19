@@ -1,6 +1,14 @@
 """The pricing domain: which meter a rate prices, what an attempt costs at it, and the models.dev default prices."""
 
 from gateway.services.pricing._deployment_pricing_service import DeploymentPricingService
+from gateway.services.pricing._price_rules import (
+    NO_FACTS,
+    AppliedRate,
+    PriceFacts,
+    ResolvedRates,
+    apply_rules,
+    resolve_rates,
+)
 from gateway.services.pricing._slot_pricing import (
     UNIT_METER,
     Quantities,
@@ -16,6 +24,7 @@ from gateway.services.pricing._tool_pricing import (
     ToolRate,
     ToolRateLookup,
     UnpricedToolLabel,
+    billed_provider_searches,
     charge_tool_calls,
     model_search_rate,
     paid_by_the_deployment,
@@ -34,13 +43,19 @@ from gateway.services.pricing._usage_pricing import (
     request_rate,
     validated_units,
 )
-from gateway.services.pricing._video_pricing import VIDEO_SECONDS, estimate_video_cost, price_video, video_rate
+from gateway.services.pricing._video_pricing import (
+    VIDEO_SECONDS,
+    charged_as_reported,
+    estimate_video_cost,
+    price_video,
+    reported_video_cost,
+    video_rate,
+)
 from gateway.services.pricing.bundled import (
     BUNDLED_SNAPSHOT_NAME,
     bundled_catalog,
     bundled_generation,
     load_bundled_index,
-    release_bundled_catalog,
 )
 from gateway.services.pricing.generations import (
     MAX_RESIDENT_GENERATIONS,
@@ -65,19 +80,23 @@ from gateway.services.pricing.models_dev_index import (
 )
 
 __all__ = [
+    "AppliedRate",
     "BUNDLED_SNAPSHOT_NAME",
     "DeploymentPricingService",
     "MAX_RATE_PER_MILLION",
     "MEASURED_UNITS",
+    "NO_FACTS",
     "ModelSearchRate",
     "MAX_RESIDENT_GENERATIONS",
     "ModelsDevPrice",
     "ModelsDevPriceIndex",
+    "PriceFacts",
     "PriceGeneration",
     "PriceTier",
     "PriceTimeline",
     "PROVIDER_TOOL_LIST_PRICES",
     "Quantities",
+    "ResolvedRates",
     "Slot",
     "ToolCharges",
     "ToolRate",
@@ -89,15 +108,17 @@ __all__ = [
     "active_generations",
     "active_timeline",
     "add_accepted_generation",
+    "apply_rules",
+    "billed_provider_searches",
     "billed_search_units",
     "bundled_catalog",
     "bundled_generation",
     "can_price",
     "charge_tool_calls",
+    "charged_as_reported",
     "current_index",
     "invalid_rate_count",
     "load_bundled_index",
-    "release_bundled_catalog",
     "model_search_rate",
     "paid_by_the_deployment",
     "parse_rate",
@@ -109,9 +130,11 @@ __all__ = [
     "price_slot",
     "price_usage",
     "price_video",
+    "reported_video_cost",
     "request_rate",
     "reset_generations",
     "resolve_as_of",
+    "resolve_rates",
     "search_rate",
     "select_generation",
     "set_accepted_generations",

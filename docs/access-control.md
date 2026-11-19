@@ -1,9 +1,8 @@
 # Access control
 
 Otari separates who runs the deployment, who signs in to the dashboard, the
-credentials workloads send, and the limits on what they spend. This page
-explains how those pieces fit together; each one has a page of its own with the
-steps and the rules.
+credentials applications send, and the limits on what they spend. This page
+shows how those pieces fit together. Each one has its own page with the steps.
 
 | Concept | What it is | Page |
 | --- | --- | --- |
@@ -15,48 +14,64 @@ steps and the rules.
 | API key | A workload credential bound to one user and one workspace | [API keys](api-keys.md) |
 | Service key and end user | A key whose requests bill the people an application serves | [Track spend per end user](end-users.md) |
 | Budget | A spend, token or request limit over a period | [Budgets](budgets.md) |
-| Provider key | The organization's credential for an upstream LLM provider | [Provider keys](provider-keys.md) |
+| Provider key | The organization's credential for an upstream LLM provider | [Model providers](model-providers.md) |
 | Operator | Runs a self-hosted deployment as a whole | [Deployment-wide account administration](sign-in.md#deployment-wide-account-administration) |
 
 ## How they relate
 
-An organization holds workspaces, and a member belongs to the organization and
-to the workspaces they were given, with one of four
-[roles](workspaces.md#roles) in each. A member signs in as an
-identity, and the user record behind that identity is what their spend is
-recorded against.
+- **People** belong to an organization and to some of its workspaces, with one
+  of four [roles](workspaces.md#roles) in each. A person signs in as an
+  identity, and their spend is recorded against the user behind it.
+- **Applications** never sign in. They send an API key, which ties each request
+  to one workspace and one user.
+- **The workspace** decides which provider keys, aliases, routing policies and
+  tools a request can use. Each stored MCP server's
+  [access list](mcp.md#server-access) decides which keys reach it.
+- **The user**, narrowed by the key, decides which models a request can reach,
+  and the user's budget is the one it spends.
+- **Provider keys** belong to the organization; applications never see them.
+- **Budgets** sit over all of it. A per-user budget limits each user on it, and
+  a spend ceiling caps an organization, a workspace, a membership or a single
+  API key. A request has to fit every budget that applies.
 
-Applications never sign in. They send an API key, and the key ties each request
-to one workspace and one user. The workspace decides which provider keys,
-aliases, routing policies and tools the request can use, and each stored MCP
-server's [access list](mcp.md#server-access) decides which keys reach it; the user, narrowed by
-the key, decides which models it can reach, and the user's budget is the one it
-spends. The provider keys
-Otari calls upstream with belong to the organization, and the application never
-sees them.
-
-Budgets sit over all of it. A per-user budget limits each user on it, and a
-scoped budget caps an organization, a workspace, a membership or a single API
-key. A request has to fit every budget that applies.
-
-Organization roles stop at their organization; on a self-hosted deployment,
+Organization roles stop at their organization. On a self-hosted deployment,
 [operators](sign-in.md#deployment-wide-account-administration) act on the whole
 deployment.
 
+## What a page shows depends on who is signed in
+
+- **Spend & budgets.** An organization owner or admin manages their
+  organization's budgets and ceilings. A deployment operator also sees the
+  deployment's own budgets and the gateway users assigned to them.
+- **API keys.** An operator manages every key in the organization and picks each
+  key's owner. A member sees only their own keys, always billed to themselves and
+  never budget-exempt. An operator, or an organization owner or admin, can cap a
+  key's spend from its create and edit forms, and the Budget column shows each
+  key's spend against its limit. Where the deployment enables it, a key's actions
+  menu offers **Workload identity…**; see
+  [Rules on a member's own key](workload-identity.md#rules-on-a-members-own-key).
+- **Home, Sessions and Routing** show an operator their active organization
+  only. What Home shows each role is in
+  [Home](review-usage-and-requests.md#home).
+- **Pages someone may not use** are left out of their menus, and opening one
+  by its address goes to Home: the organization's pages for anyone but an
+  owner or admin (**Spend & budgets** also opens to the deployment's
+  operator), the deployment's pages for anyone but its operator, the
+  workspace's guardrails for anyone but an organization owner or admin, and the
+  Playground for a viewer. A workspace's own page under **Workspaces** also
+  opens to that workspace's owner or admin.
+
 ## How a request is attributed
 
-The API key that authenticates a request determines its workspace. A caller
-cannot select another workspace with a header. The request's usage is
-recorded in that workspace and its spend billed to the key's user.
+The API key decides a request's workspace; no header can pick another. Usage is
+recorded in that workspace and spend is billed to the key's user.
 
-A client-provided `user` value never moves spend away from the key's user:
-by default a request naming another user is refused, and a key set to accept it
-still bills its own user (see [Mismatched `user` fields](api-keys.md#mismatched-user-fields)).
-The one exception is a [service key](end-users.md), which bills end users that
-belong to its own user.
+A `user` value in the request never moves spend away from the key's user. By
+default a request naming another user is refused, and a key set to accept it
+still bills its own user (see
+[Mismatched `user` fields](api-keys.md#mismatched-user-fields)). The exception
+is a [service key](end-users.md), which bills end users that belong to its own
+user.
 
-A dashboard session authorizes the management API, not inference; see
+A dashboard session works on the management API, not for inference; see
 [Dashboard sessions and identity](sign-in.md#dashboard-sessions-and-identity).
-
-The generated [OpenAPI specification](public/openapi.json) is the source of
-truth for endpoint schemas.

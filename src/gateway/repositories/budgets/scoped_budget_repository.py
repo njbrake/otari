@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped
 from sqlalchemy.sql.elements import ColumnElement
 
-from gateway.core.sql import defer_commit_flush
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.budget_exceptions import SpendCeilingAlreadyExistsError
 from gateway.models.budgets import (
@@ -161,10 +160,6 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
         await self.db.refresh(ceiling)
         return ceiling
 
-    async def clamp_holds(self, scoped_budget_id: str, values: dict[str, object]) -> None:
-        """Set these hold counters on one ceiling to the given amounts."""
-        await self._update_counters([scoped_budget_id], values)
-
     async def count_for_budget(self, budget_id: str) -> int:
         """Count the ceilings that name this budget."""
         result = await self.db.execute(
@@ -218,17 +213,6 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             )
             .execution_options(synchronize_session=False)
         )
-
-    async def for_scope(
-        self, scope_type: ScopeType, scope_id: str, provider_key_id: str | None
-    ) -> tuple[ScopedBudget, Budget] | None:
-        """Return the ceiling capping this scope for this provider, with the budget it names, or None."""
-        result = await self.db.execute(
-            select(ScopedBudget, Budget)
-            .join(Budget, Budget.budget_id == ScopedBudget.budget_id)
-            .where(_scope_match(scope_type, scope_id, provider_key_id))
-        )
-        return result.tuples().first()
 
     async def get_usage(self, scoped_budget_id: str) -> CeilingUsage | None:
         """Return this ceiling's cap, recorded use, holds and window end, or None when it no longer exists."""
@@ -472,32 +456,12 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
         )
         return list(result.all())
 
-    async def list_quiet_held(self, *, quiet_before: datetime, limit: int) -> list[str]:
-        """Return the ceilings holding anything that no write has touched since ``quiet_before``."""
-        result = await self.db.execute(
-            select(ScopedBudget.id)
-            .where(
-                or_(
-                    ScopedBudget.reserved_spend > _ZERO,
-                    ScopedBudget.reserved_tokens > 0,
-                    ScopedBudget.reserved_requests > 0,
-                ),
-                or_(ScopedBudget.updated_at.is_(None), ScopedBudget.updated_at < quiet_before),
-            )
-            .limit(limit)
-        )
-        return list(result.scalars().all())
-
     async def get_in_scopes(self, scoped_budget_id: str, scopes: ScopeIdSets) -> ScopedBudget | None:
         """Return the ceiling with this ID when it is on one of these scopes, otherwise None."""
         result = await self.db.execute(
             select(ScopedBudget).where(ScopedBudget.id == scoped_budget_id, _in_scopes(scopes))
         )
         return result.scalar_one_or_none()
-
-    async def defer_commit_flush(self) -> None:
-        """Let this transaction's commit return before its flush, for one that moves a ceiling's hold."""
-        await defer_commit_flush(self.db)
 
     async def lock(self, scoped_budget_ids: Sequence[str]) -> None:
         """Lock these ceilings until the transaction ends, in the order of their IDs."""
@@ -507,21 +471,6 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             .order_by(ScopedBudget.id)
             .with_for_update()
         )
-
-    async def lock_quiet_holds(
-        self, scoped_budget_id: str, *, quiet_before: datetime
-    ) -> tuple[Decimal, int, int] | None:
-        """Lock a ceiling still untouched since ``quiet_before`` and return its holds, or None when it was written."""
-        result = await self.db.execute(
-            select(ScopedBudget.reserved_spend, ScopedBudget.reserved_tokens, ScopedBudget.reserved_requests)
-            .where(
-                ScopedBudget.id == scoped_budget_id,
-                or_(ScopedBudget.updated_at.is_(None), ScopedBudget.updated_at < quiet_before),
-            )
-            .with_for_update()
-        )
-        row = result.tuples().one_or_none()
-        return None if row is None else (row[0], row[1], row[2])
 
     async def member_ceiling(self, member_id: uuid.UUID, provider_key_id: str | None) -> ScopedBudget | None:
         """Return the ceiling capping this membership for this provider, where None means every provider."""

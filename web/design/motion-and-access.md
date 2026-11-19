@@ -28,9 +28,14 @@ canvas the stylesheet cannot reach, so `SetupOrb` reads the preference itself
 and passes `paused`. Anything else that would animate forever is decoration. See
 [feedback.md](feedback.md).
 
-`Skeleton`'s pulse and the shell's `LoadingBar` are not exceptions to this, since
-neither runs forever: each runs only until a read answers, and each holds still
-under `prefers-reduced-motion`.
+**One transition answers the wait, on the same surface.** When the request the
+sheet is watching for arrives, a wave rises from the listening panel and carries
+the sheet into its payoff in the same frame (`setupTransition`, on the vendored
+`distortion-waves`). It plays once, because the event it reports happens once.
+The wave has 1.5s to get ready, or the payoff appears without it, and the payoff
+takes input as soon as the front has crossed it, while the color is still
+leaving its edges. Under `prefers-reduced-motion` the two faces swap at once and
+the wave's code is never loaded.
 
 ## Press
 
@@ -116,6 +121,15 @@ sees neither change.
 
 Hover is never the only channel. A hover state that carries information alone does
 not exist on a phone: pair it with a fill *and* an ink change, as the rail rows do.
+A hover rule written in plain CSS goes inside `@media (hover: hover)`, or a tap
+leaves it applied until the next tap elsewhere; Tailwind's `hover:` already is.
+
+The platform's own touch chrome is off once, in `globals.css`: no double-tap
+delay on a control, no long-press selection of a button's label, and no vertical
+overscroll on the document. HeroUI already clears the tap highlight. A field
+does not take focus by itself on a touch screen (`allowsFieldAutoFocus`, applied
+by the field primitives), because that raises the keyboard over a dialog its
+reader has not yet seen.
 
 ## Names
 

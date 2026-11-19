@@ -28,6 +28,7 @@ from gateway.api.deps import get_api_key_service, get_user_access
 from gateway.api.routes.scoped_budgets import create_scoped_budget
 from gateway.auth.models import hash_key
 from gateway.core.config import GatewayConfig
+from gateway.core.tokens import generate_token, hash_token
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.budget_exceptions import OrganizationScopeNotFoundError
 from gateway.exceptions.identity_exceptions import (
@@ -97,7 +98,6 @@ from gateway.services.tenancy.provisioning_service import (
     BOOTSTRAP_IDENTITY_KEY,
     ensure_bootstrap_identity,
 )
-from gateway.services.tenancy.tokens import generate_token, hash_token
 from gateway.services.tenancy.user_service import set_password
 from gateway.services.tenancy.workspace_activation_service import (
     ACTIVATION_KEY_NAME,
@@ -107,6 +107,7 @@ from gateway.services.tenancy.workspace_activation_service import (
 from .tenancy_helpers import (
     NO_BLOCKED_ADDRESSES,
     NO_MAIL_LIMIT,
+    NO_SSO_ENFORCEMENT,
     NO_TERMS,
     MembershipWrites,
     budget_service,
@@ -114,7 +115,6 @@ from .tenancy_helpers import (
     create_budget,
     create_member,
     membership_writes,
-    visibility_service,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -288,6 +288,7 @@ async def test_concurrent_claims_of_one_address_leave_exactly_one_holder(
             session,
             identity,
             new_password="a-real-password",
+            sso_enforcement=NO_SSO_ENFORCEMENT,
             email="contested@example.com",
         )
         # `set_password` returns None, so the racer that got through reports a
@@ -325,6 +326,7 @@ async def test_concurrent_member_adds_create_one_identity(
         ).create_active_organization_member_for_user(
             user=user,
             request=ActiveOrganizationMemberCreateRequest(email="ada@example.com"),
+            open_signup=False,
             blocked_addresses=NO_BLOCKED_ADDRESSES,
         )
 
@@ -348,6 +350,7 @@ async def test_concurrent_workspace_member_adds_conflict(
     added = await service.create_active_organization_member_for_user(
         user=owner_row,
         request=ActiveOrganizationMemberCreateRequest(email="ada@example.com"),
+        open_signup=False,
         blocked_addresses=NO_BLOCKED_ADDRESSES,
     )
     workspace_service = WorkspaceService(async_db, **membership_writes(async_db))
@@ -489,6 +492,8 @@ async def test_concurrent_demotions_cannot_strip_the_last_owner(
                 user=actor,
                 organization_member_id=target_membership_id,
                 request=ActiveOrganizationMemberUpdateRequest(role="member"),
+                sso_enforcement=NO_SSO_ENFORCEMENT,
+                open_signup=False,
             )
 
         return attempt
@@ -680,7 +685,6 @@ def _budget_service(db: AsyncSession, organizations: OrganizationService | None 
         organizations,
         get_api_key_service(uow),
         WorkspaceAccess(db, organizations),
-        visibility_service(db, uow),
         users=get_user_access(uow),
     )
 
@@ -937,6 +941,7 @@ async def test_concurrent_invites_to_a_suspended_membership_produce_one_pending_
     ).create_active_organization_member_for_user(
         user=owner_row,
         request=ActiveOrganizationMemberCreateRequest(email="grace@example.com"),
+        open_signup=False,
         blocked_addresses=NO_BLOCKED_ADDRESSES,
     )
     assert added.organization_member_id is not None
@@ -1635,6 +1640,7 @@ async def test_concurrent_resets_of_one_token_change_the_password_exactly_once(
                     token=token,
                     new_password=f"racer-password-{index}",
                     blocked_addresses=NO_BLOCKED_ADDRESSES,
+                    sso_enforcement=NO_SSO_ENFORCEMENT,
                 )
                 return index
             except Exception as exc:  # noqa: BLE001 - the outcome is the assertion
@@ -1859,6 +1865,8 @@ async def test_a_key_write_during_a_membership_change_waits_for_it_and_is_refuse
                     user=actor,
                     organization_member_id=membership.id,
                     request=ActiveOrganizationMemberUpdateRequest(role="viewer"),
+                    sso_enforcement=NO_SSO_ENFORCEMENT,
+                    open_signup=False,
                 )
 
     assert isinstance(await writing, NotAuthorizedError)

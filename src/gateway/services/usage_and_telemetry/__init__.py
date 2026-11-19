@@ -4,8 +4,9 @@
 (``services/usage_admin_service.py``) and move here when the rest of the domain does.
 """
 
-from gateway.repositories.usage_and_telemetry import NameAttempts, ServedTraffic, UsageFilters, UsageScope
-from gateway.services.usage_and_telemetry._service import TrafficReach, UsageService
+from gateway.repositories.usage_and_telemetry import ServedTraffic, UsageFilters, UsageScope
+from gateway.services.usage_and_telemetry._service import UsageService
+from gateway.services.usage_and_telemetry._video_usage_writer import VideoUsageWriter
 from gateway.services.usage_and_telemetry._window import (
     MAX_SERIES_POINTS,
     SERIES_TOP_N,
@@ -18,12 +19,11 @@ from gateway.services.usage_and_telemetry._window import (
 __all__ = [
     "MAX_SERIES_POINTS",
     "SERIES_TOP_N",
-    "NameAttempts",
     "ServedTraffic",
-    "TrafficReach",
     "UsageFilters",
     "UsageScope",
     "UsageService",
+    "VideoUsageWriter",
     "dense_series",
     "error_class_for",
     "parse_tag_filters",

@@ -14,6 +14,7 @@ from gateway.repositories.base_repository import BaseRepository
 
 if TYPE_CHECKING:
     import uuid
+    from decimal import Decimal
 
 
 class VideoJobRepository(BaseRepository[VideoJobRecord, Never, Never]):
@@ -33,6 +34,11 @@ class VideoJobRepository(BaseRepository[VideoJobRecord, Never, Never]):
         workspace_id: uuid.UUID | None,
         seconds: int | None,
         counts_toward_budget: bool,
+        resolution: str | None,
+        aspect_ratio: str | None,
+        input_video: bool | None,
+        generate_audio: bool | None,
+        created_at: datetime,
     ) -> VideoJobRecord:
         """Stage the record of a job the provider accepted."""
         record = VideoJobRecord(
@@ -44,6 +50,11 @@ class VideoJobRepository(BaseRepository[VideoJobRecord, Never, Never]):
             workspace_id=workspace_id,
             seconds=seconds,
             counts_toward_budget=counts_toward_budget,
+            resolution=resolution,
+            aspect_ratio=aspect_ratio,
+            input_video=input_video,
+            generate_audio=generate_audio,
+            created_at=created_at,
         )
         self.db.add(record)
         await self.db.flush()
@@ -71,6 +82,7 @@ class VideoJobRepository(BaseRepository[VideoJobRecord, Never, Never]):
         video_id: str,
         *,
         seconds: int | None,
+        cost: Decimal | None,
         output_url: str | None,
         output_mime_type: str | None,
         completed_at: datetime,
@@ -82,6 +94,7 @@ class VideoJobRepository(BaseRepository[VideoJobRecord, Never, Never]):
             .values(
                 completed_at=completed_at,
                 completed_seconds=seconds,
+                completed_cost=cost,
                 output_url=output_url,
                 output_mime_type=output_mime_type,
             )

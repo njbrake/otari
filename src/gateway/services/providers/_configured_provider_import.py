@@ -19,7 +19,7 @@ from gateway.services.providers._hosted_credentials import normalize_provider
 
 # What a hosted provider holds of an entry. Anything else configures the
 # instance in a way a hosted provider has no field for.
-_IMPORTED_KEYS = frozenset({"api_key", "api_base", "provider_type", "client_args", "session_affinity"})
+_IMPORTED_KEYS = frozenset({"api_key", "api_base", "provider_type", "client_args"})
 
 
 @dataclass(frozen=True)
@@ -60,10 +60,6 @@ def plan_import(name: str, entry: Mapping[str, Any], *, hosted_names: set[str]) 
             api_key=str(api_key) if api_key is not None else None,
             api_base=str(api_base) if api_base is not None else None,
             client_args=dict(client_args) if client_args is not None else None,
-            # As the entry did: a model it does not list is still served.
-            serves_unlisted_models=True,
-            # Validated at config load, for an implementation that can carry it.
-            session_affinity=entry.get("session_affinity") is True,
         )
     except ValidationError as exc:
         # Named by field, never by value: the input refused may be the key.

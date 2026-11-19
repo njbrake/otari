@@ -18,13 +18,19 @@ validation is structural, matching ``/api/v1/tool-settings`` rather than the pro
 SSRF gate: the backend this most often points at is a SearXNG sidecar on a
 private address, which a deny-private gate would refuse.
 
-``/api/v1/search-tools/providers`` is the exception, on ``catalog_router``: it lists
+``/api/v1/search-tools/providers`` is an exception, on ``catalog_router``: it lists
 the providers any-search and any-fetch serve, which is a property of the build
 rather than of this deployment, so any catalog reader may see it. What it says
 about this deployment, its tools and their inherited endpoints, only an operator
 sees.
+
+``/api/v1/search-tools/catalog`` is the other, the search counterpart of
+``GET /api/v1/models``: the tools a caller may name in ``POST /api/v1/search``,
+with what a search costs the caller's organization and nothing of their
+configuration.
 """
 
+import uuid
 from collections.abc import Mapping
 from typing import Annotated, Any
 
@@ -32,17 +38,17 @@ import httpx
 from fastapi import APIRouter, Depends, Query, Request, status
 
 from gateway.api.deps import (
-    CurrentIdentity,
-    OrganizationServiceDep,
+    SearchCatalogCallerDep,
     SearchToolServiceDep,
     SearchToolTesterDep,
     WebProviderClientDep,
     catalog_reader_operates_deployment,
+    catalog_reader_organization,
     get_config,
     require_deployment_operator,
     verify_catalog_reader,
-    verify_master_key,
 )
+from gateway.api.key_scopes import key_scope
 from gateway.api.routes._helpers import database_error
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.database import DATABASE_ERRORS
@@ -53,7 +59,7 @@ from gateway.schemas.tools import (
     CreateSearchToolRequest,
     ReencryptSearchToolsResponse,
     SearchProviderSchema,
-    SearchToolNamesResponse,
+    SearchToolCatalogResponse,
     SearchToolsResponse,
     SearchToolTestRequest,
     SearchToolTestResponse,
@@ -80,18 +86,8 @@ catalog_router = APIRouter(
     dependencies=[Depends(verify_catalog_reader)],
 )
 
-# The names alone, for an organization owner or admin filling a key's search tool
-# access list: the list above carries endpoints and key metadata that are the
-# operator's, and a name is all the access list needs. Authentication only, like
-# the rest of ``/api/v1/organizations/me``; the role is checked per request.
-tenant_router = APIRouter(
-    prefix="/organizations/me/search-tools",
-    tags=["search-tools"],
-    dependencies=[Depends(verify_master_key)],
-)
 
-
-@catalog_router.get("/providers")
+@catalog_router.get("/providers", openapi_extra=key_scope(None))
 async def list_search_providers(
     config: Annotated[GatewayConfig, Depends(get_config)],
     operates: Annotated[bool, Depends(catalog_reader_operates_deployment)],
@@ -116,6 +112,33 @@ async def list_search_providers(
     return search_provider_catalog(config, kind, operates=operates)
 
 
+@catalog_router.get("/catalog", openapi_extra=key_scope(None))
+async def list_search_tool_catalog(
+    service: SearchToolServiceDep,
+    organization_id: Annotated[uuid.UUID | None, Depends(catalog_reader_organization)],
+    caller: SearchCatalogCallerDep,
+    skip: Annotated[int, Query(ge=0, description="Number of records to skip")] = 0,
+    limit: Annotated[int, Query(ge=1, le=1000, description="Maximum number of records to return")] = 100,
+) -> SearchToolCatalogResponse:
+    """List the search tools a direct search may name, with what one search costs the caller.
+
+    Each entry is a tool ``POST /api/v1/search/{tool}`` serves, with its
+    provider, a display name, its price per search for the caller's
+    organization, and whether it is the deployment's default. Tools a direct
+    search cannot run on are left out, and no key, endpoint or option is
+    returned.
+
+    Called with an API key, a tool the key's ``allowed_tools`` does not grant is
+    left out, and the list is empty when its workspace does not allow web
+    search; ``GET /api/v1/tools`` says why. A master key or a dashboard session
+    gets the deployment's list.
+    """
+    try:
+        return await service.catalog(organization_id, caller, skip=skip, limit=limit)
+    except DATABASE_ERRORS as exc:
+        raise database_error("list the search tool catalog", exc) from None
+
+
 @router.get("")
 async def list_all_search_tools(
     service: SearchToolServiceDep,
@@ -134,31 +157,6 @@ async def list_all_search_tools(
         return await service.list_tools(kind)
     except DATABASE_ERRORS as exc:
         raise database_error("list stored search tools", exc) from None
-
-
-@tenant_router.get("")
-async def list_search_tool_names(
-    identity: CurrentIdentity,
-    organizations: OrganizationServiceDep,
-    service: SearchToolServiceDep,
-    kind: Annotated[ToolKind, Query(description="Which names to list: 'search' (the default) or 'fetch'.")] = (
-        "search"
-    ),
-) -> SearchToolNamesResponse:
-    """List the search (or fetch) instance names a key's search tool access list may name.
-
-    For an owner or admin of the caller's active organization, who sets a key's
-    access list for their members; anyone else is refused with 403. Names only:
-    no provider, endpoint or key metadata, which stay the operator's.
-    """
-    organization = await organizations.get_active_organization_for_user(identity)
-    await organizations.require_active_organization_management_access(user=identity, organization=organization)
-    try:
-        tools = await service.list_tools(kind)
-    except DATABASE_ERRORS as exc:
-        raise database_error("list stored search tools", exc) from None
-    names = {tool.name for tool in tools.config} | {tool.name for tool in tools.stored}
-    return SearchToolNamesResponse(names=sorted(names))
 
 
 @router.post("/reencrypt")

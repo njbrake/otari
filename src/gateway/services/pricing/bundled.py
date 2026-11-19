@@ -12,7 +12,6 @@ BUNDLED_SNAPSHOT_NAME = "models_dev_catalog.json"
 _META_KEY = "_meta"
 
 
-@cache
 def _load() -> tuple[datetime, ModelsDevCatalog]:
     document = json.loads(resources.files("gateway").joinpath("data", BUNDLED_SNAPSHOT_NAME).read_text("utf-8"))
     generated_at = datetime.fromisoformat(document[_META_KEY]["generated_at"]).replace(tzinfo=UTC)
@@ -32,10 +31,5 @@ def load_bundled_index() -> ModelsDevPriceIndex:
 
 
 def bundled_catalog() -> ModelsDevCatalog:
-    """The packaged catalog, read once until :func:`release_bundled_catalog` lets it go."""
+    """The packaged catalog, read from the package on each call, so it is freed with the caller's last reference."""
     return _load()[1]
-
-
-def release_bundled_catalog() -> None:
-    """Free the packaged catalog's model facts once another catalog serves them; its prices stay."""
-    _load.cache_clear()

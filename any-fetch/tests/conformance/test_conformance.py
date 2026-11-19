@@ -80,6 +80,12 @@ SCENARIOS: dict[str, dict[Case, Scenario]] = {
         "empty": Scenario(handler=_replay("tabstack", "empty")),
         "error": Scenario(handler=_replay("tabstack", "error")),
     },
+    "youdotcom": {
+        "normal": Scenario(handler=_replay("youdotcom", "normal")),
+        "empty": Scenario(handler=_replay("youdotcom", "empty")),
+        "error": Scenario(handler=_replay("youdotcom", "error")),
+        "in_body_error": Scenario({"extraction_source": "cache"}, handler=_replay("youdotcom", "in_body_error")),
+    },
 }
 
 # Seen live: the entries test_live.py marks missing_page="fails".
@@ -180,6 +186,7 @@ async def test_a_normal_answer_fills_the_envelope(provider: str) -> None:
     assert isinstance(page.content_type, str)
     assert page.error is None
     assert (page.cost is None) == (page.cost_source == "none")
+    assert (page.cost_source == "reported") == AnyFetch.get_provider_metadata(provider).reports_cost
     assert "raw=" not in repr(page)
 
 

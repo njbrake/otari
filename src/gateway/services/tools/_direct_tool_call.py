@@ -20,38 +20,46 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, NamedTuple, Protocol, TypeVar
 
-from gateway.core.config import END_USER_BUDGET_HEADER
+from gateway.core.config import COST_USD_HEADER, END_USER_BUDGET_HEADER, PRICING_SOURCE_HEADER
 from gateway.core.database import DATABASE_ERRORS, describe_database_error
-from gateway.core.error_codes import INSUFFICIENT_FUNDS, PRICING_REQUIRED, error_headers
+from gateway.core.error_codes import INSUFFICIENT_FUNDS, PRICING_REQUIRED, WEB_ACCESS_DISABLED, error_headers
 from gateway.core.metered_pricing import quantize_cost
 from gateway.exceptions import TenancyError
+from gateway.exceptions.budget_exceptions import EndUserBudgetWithoutEndUserError
 from gateway.exceptions.tools_exceptions import (
     DirectToolCallError,
     DirectToolFailedError,
     FundsCheckFailedError,
+    SearchToolSelectionError,
     WebSearchPolicyResolutionFailedError,
 )
 from gateway.log_config import logger
+from gateway.models.pricing import REPORTED_SOURCE, PriceSource, SettledSource
 from gateway.models.tools import WebTool
-from gateway.ports.billing_port import FUNDS_CHECK_UNAVAILABLE_DETAIL, InsufficientFundsError
+from gateway.ports.billing_port import FUNDS_CHECK_UNAVAILABLE_DETAIL, InsufficientFundsError, ToolUse
+from gateway.services.tools._tool_prices import unfunded_tool_detail
 from gateway.services.tools._web_access import web_access_disabled_refusal
 from gateway.services.tools._web_search import (
+    legacy_search_instance,
+    organization_key_search_instance,
     pick_direct_fetch_instance,
     pick_direct_search_instance,
     resolve_direct_fetch,
     resolve_direct_search,
+    resolve_organization_key_search,
     run_direct_fetch,
     run_direct_search,
     unpriced_direct_fetch_detail,
     unpriced_direct_search_detail,
 )
 from gateway.services.upstream_redaction import PASSTHROUGH_PROVIDER_ERROR_DETAIL, redacted_upstream_detail
+from gateway.types.tool_charges import gateway_tool_pricing_key
 
 if TYPE_CHECKING:
     import httpx
@@ -86,6 +94,13 @@ class DirectCaller:
     request_id: str
 
 
+class DirectToolRate(NamedTuple):
+    """The rate a direct tool call is held at and falls back to, and which step of the lookup order supplied it."""
+
+    unit_rate: Decimal
+    source: PriceSource
+
+
 @dataclass(frozen=True)
 class DirectToolOutcome(Generic[ResultT]):
     """A served call's response, and the headers it is answered with."""
@@ -113,7 +128,8 @@ class DirectToolCall(Generic[ResultT]):
     and ``deployment_paid`` says the deployment's account runs the call, so only
     the operator's prices count and the organization's funds are charged.
     ``unpriced_detail`` is the 402's message when ``require_pricing`` finds no
-    row for the call: the row to add, and where.
+    row for the call: the row to add, and where. ``pricing_key`` names the
+    gateway tool the funding charge pays for.
     """
 
     provider: str
@@ -121,12 +137,16 @@ class DirectToolCall(Generic[ResultT]):
     rate_keys: tuple[RateKey, ...]
     deployment_paid: bool
     unpriced_detail: str
+    pricing_key: str
     run: Callable[[], Awaitable[DirectToolResult[ResultT]]]
 
 
 @dataclass(frozen=True)
 class DirectToolUsage:
-    """One usage row of a direct tool call. A served call reports zero tokens; the others report none."""
+    """One usage row of a direct tool call. A served call reports zero tokens; the others report none.
+
+    ``deployment_paid`` marks a call the organization's funds were admitted to pay for.
+    """
 
     workspace_id: uuid.UUID
     api_key_id: str | None
@@ -144,6 +164,7 @@ class DirectToolUsage:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    deployment_paid: bool = False
 
 
 class DirectToolAccounts(Protocol):
@@ -190,7 +211,7 @@ class DirectToolLedger(Protocol):
         """The organization whose prices and funds apply to the key's calls."""
         ...
 
-    async def unit_rate(self, call: DirectToolCall[Any], *, organization_id: uuid.UUID | None) -> Decimal | None:
+    async def unit_rate(self, call: DirectToolCall[Any], *, organization_id: uuid.UUID | None) -> DirectToolRate | None:
         """The rate a call is held at and falls back to, or ``None`` when no row prices it."""
         ...
 
@@ -209,13 +230,24 @@ class DirectToolLedger(Protocol):
         ...
 
     async def admit_funding(
-        self, *, organization_id: uuid.UUID | None, api_key_id: str | None, user_id: str, request_id: str
+        self,
+        *,
+        organization_id: uuid.UUID | None,
+        api_key_id: str | None,
+        user_id: str,
+        request_id: str,
+        tool: str,
     ) -> object | None:
-        """Admit a call the deployment's account runs on the organization's funds, returning what settles it."""
+        """Admit a call of ``tool`` (its pricing key) the deployment's account runs on the organization's funds.
+
+        Returns what settles it.
+        """
         ...
 
-    async def settle_funding(self, funding: object, cost: Decimal, *, model: str, description: str) -> None:
-        """Charge the organization's funds what a settled ``cost`` owes."""
+    async def settle_funding(
+        self, funding: object, cost: Decimal, *, tools: Mapping[str, ToolUse], model: str, description: str
+    ) -> None:
+        """Charge the organization's funds what a settled ``cost`` owes, for the gateway tools ``tools`` names."""
         ...
 
     async def release(self) -> bool:
@@ -263,6 +295,13 @@ def _refusal_detail(exc: TenancyError) -> str:
     return PASSTHROUGH_PROVIDER_ERROR_DETAIL if exc.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR else exc.message
 
 
+def _inline_cost_headers(cost: Decimal, source: SettledSource | None) -> dict[str, str]:
+    """The headers a served call's settled cost rides on: both when the call was priced, neither when not."""
+    if source is None:
+        return {}
+    return {COST_USD_HEADER: f"{cost:.6f}", PRICING_SOURCE_HEADER: source}
+
+
 def _elapsed_ms(started_at: float) -> int:
     return round((time.monotonic() - started_at) * 1000)
 
@@ -293,18 +332,30 @@ class DirectToolService:
         """Run a search on the tool named, else the deployment's default; ``endpoint`` labels its usage row."""
         config = self._config
         client = self._web_client
+        stood_in: list[ToolInstance] = []
+
+        def stand_in(policy: ResolvedWebSearchConfig | None) -> ToolInstance | None:
+            """What an unnamed call with no tool to pick runs on: the organization's key, else the legacy backend."""
+            if (instance := organization_key_search_instance(policy)) is not None:
+                stood_in.append(instance)
+                return instance
+            return legacy_search_instance(config)
 
         def resolve(tool: ToolInstance, policy: ResolvedWebSearchConfig | None) -> DirectToolCall[SearchResponse]:
             # A workspace whose organization brought its own search key searches with it on a
             # call that names no tool, so its own account pays. The tool is still what the
             # request is allowlisted, rate-limited and timed out as.
-            search = resolve_direct_search(config, tool, policy, request, named=tool_name is not None)
+            if stood_in and tool is stood_in[0]:
+                search = resolve_organization_key_search(tool, policy, request)
+            else:
+                search = resolve_direct_search(config, tool, policy, request, named=tool_name is not None)
             return DirectToolCall(
                 provider=search.resolved.provider,
                 label=search.resolved.label,
                 rate_keys=search.resolved.rate_keys,
                 deployment_paid=not search.resolved.on_credential,
                 unpriced_detail=unpriced_direct_search_detail(search),
+                pricing_key=gateway_tool_pricing_key(WebTool.SEARCH.value),
                 run=lambda: run_direct_search(search, client),
             )
 
@@ -316,6 +367,11 @@ class DirectToolService:
             pick=lambda: pick_direct_search_instance(config, tool_name),
             policy_tools=(WebTool.SEARCH,),
             resolve=resolve,
+            # A named call means a deployment tool; an unnamed one may find none to pick, as
+            # on a deployment where every organization brings its own key or only the legacy
+            # settings describe a backend.
+            stand_in=stand_in if tool_name is None else None,
+            stand_in_for=(SearchToolSelectionError,),
         )
 
     async def fetch(
@@ -336,6 +392,7 @@ class DirectToolService:
                 rate_keys=fetch.resolved.rate_keys,
                 deployment_paid=not fetch.resolved.on_credential,
                 unpriced_detail=unpriced_direct_fetch_detail(fetch),
+                pricing_key=gateway_tool_pricing_key(WebTool.FETCH.value),
                 run=lambda: run_direct_fetch(fetch, client, trust_env_proxy=config.web_retrieval_trust_env_proxy),
             )
 
@@ -359,6 +416,8 @@ class DirectToolService:
         pick: Callable[[], ToolInstance],
         policy_tools: Sequence[WebTool],
         resolve: Callable[[ToolInstance, ResolvedWebSearchConfig | None], DirectToolCall[ResultT]],
+        stand_in: Callable[[ResolvedWebSearchConfig | None], ToolInstance | None] | None = None,
+        stand_in_for: tuple[type[TenancyError], ...] = (),
     ) -> DirectToolOutcome[ResultT]:
         """Pick, gate, hold, call, log and settle one direct tool call.
 
@@ -368,6 +427,9 @@ class DirectToolService:
         tools the workspace's policy is read for. ``resolve`` turns the instance
         and that policy into the call, or raises a domain error. ``kind`` is the
         tool's kind, which the key's tool list is checked for and the log lines name.
+        Where ``pick`` refuses with one of ``stand_in_for``, ``stand_in`` may answer
+        an instance from the workspace's policy instead, and the refusal stands
+        when it answers none. Any other refusal answers before the policy is read.
         """
         started_at = time.monotonic()
         request_id = caller.request_id
@@ -385,6 +447,8 @@ class DirectToolService:
             )
             if end_user_budget_id is not None:
                 headers[END_USER_BUDGET_HEADER] = end_user_budget_id
+        elif caller.end_user_budget_id:
+            raise EndUserBudgetWithoutEndUserError()
         else:
             user_id = self._accounts.billed_user(caller)
             rate_limit_headers = await self._gates.check_rate_limit(user_id)
@@ -438,18 +502,29 @@ class DirectToolService:
         # nothing to be told about. The refusal is still logged: a request the
         # gateway turned away is dropped traffic, and it belongs in Activity and in
         # the failure count, where the operator can see it.
-        try:
-            tool = pick()
-        except TenancyError as exc:
-            # No tool was resolved, so there is no provider to attribute the row to
-            # and the name is whatever the caller asked for.
-            raise await refused(
+        async def refused_pick(exc: TenancyError) -> DirectToolCallError:
+            """Record a refused pick, whose row names what the caller asked for and no provider."""
+            return await refused(
                 exc.message,
                 exc.status_code,
                 model=tool_name or _UNRESOLVED_TOOL,
                 provider=None,
                 answer=_refusal_detail(exc),
-            ) from exc
+            )
+
+        picked: ToolInstance | TenancyError
+        try:
+            picked = pick()
+        except TenancyError as exc:
+            if stand_in is None or not isinstance(exc, stand_in_for):
+                raise await refused_pick(exc) from exc
+            # Answered once the policy says whether something stands in.
+            picked = exc
+        unresolved_model, unresolved_provider = (
+            (tool_name or _UNRESOLVED_TOOL, None)
+            if isinstance(picked, TenancyError)
+            else (picked.name, picked.provider)
+        )
 
         # Resolved before the gates below, because the first of them is a question
         # about the workspace.
@@ -465,8 +540,8 @@ class DirectToolService:
             raise await refused(
                 exc.message,
                 HTTPStatus.SERVICE_UNAVAILABLE,
-                model=tool.name,
-                provider=tool.provider,
+                model=unresolved_model,
+                provider=unresolved_provider,
                 workspace_id=workspace_id,
             ) from exc
         if policy is not None and not policy.enabled:
@@ -474,10 +549,17 @@ class DirectToolService:
             raise await refused(
                 refusal.message,
                 HTTPStatus.FORBIDDEN,
-                model=tool.name,
-                provider=tool.provider,
+                model=unresolved_model,
+                provider=unresolved_provider,
                 workspace_id=workspace_id,
+                answer_headers=error_headers(WEB_ACCESS_DISABLED),
             )
+        if isinstance(picked, TenancyError):
+            standing = stand_in(policy) if stand_in is not None else None
+            if standing is None:
+                raise await refused_pick(picked) from picked
+            picked = standing
+        tool = picked
 
         try:
             call = resolve(tool, policy)
@@ -505,7 +587,7 @@ class DirectToolService:
         # organization's funds pay for it.
         organization_id = await self._ledger.organization_of(api_key_id)
         rate = await self._ledger.unit_rate(call, organization_id=organization_id)
-        unit_rate = rate if rate is not None else Decimal(0)
+        unit_rate = rate.unit_rate if rate is not None else Decimal(0)
         # After the gates above, so a call they refuse is counted by no rule, and
         # before the hold, so one the rules refuse holds no budget to refund.
         await self._gates.admit_rules(
@@ -543,11 +625,17 @@ class DirectToolService:
         if call.deployment_paid:
             try:
                 funding = await self._ledger.admit_funding(
-                    organization_id=organization_id, api_key_id=api_key_id, user_id=user_id, request_id=request_id
+                    organization_id=organization_id,
+                    api_key_id=api_key_id,
+                    user_id=user_id,
+                    request_id=request_id,
+                    tool=call.pricing_key,
                 )
             except InsufficientFundsError as exc:
                 raise await refused_after_hold(
-                    exc.public_message, HTTPStatus.PAYMENT_REQUIRED, error_headers(INSUFFICIENT_FUNDS)
+                    unfunded_tool_detail([tool.name], exc.public_message, declared=False),
+                    HTTPStatus.PAYMENT_REQUIRED,
+                    error_headers(INSUFFICIENT_FUNDS, billing_url=exc.action_url),
                 ) from exc
             except FundsCheckFailedError as exc:
                 logger.error(
@@ -570,6 +658,7 @@ class DirectToolService:
                 endpoint=endpoint,
                 latency_ms=_elapsed_ms(started_at),
                 counts_toward_budget=not budget_exempt,
+                deployment_paid=funding is not None,
                 request_group_id=request_id,
                 **fields,
             )
@@ -632,7 +721,17 @@ class DirectToolService:
         )
         if funding is not None:
             await self._ledger.settle_funding(
-                funding, cost, model=tool.name, description=f"{tool.provider}:{tool.name}"
+                funding,
+                cost,
+                tools={call.pricing_key: ToolUse(calls=1, amount=cost)},
+                model=tool.name,
+                description=f"{tool.provider}:{tool.name}",
             )
         await self._ledger.settle(hold, cost)
-        return DirectToolOutcome(result.response, {**headers, **rate_limit_headers})
+        # The body has no ``usage`` to carry the inline cost, so it rides headers, as speech's does.
+        source: SettledSource | None = (
+            REPORTED_SOURCE if result.cost is not None else rate.source if rate is not None else None
+        )
+        return DirectToolOutcome(
+            result.response, {**headers, **rate_limit_headers, **_inline_cost_headers(cost, source)}
+        )

@@ -105,7 +105,7 @@ def test_an_entry_is_copied_onto_a_hosted_provider_and_served_by_it(
     assert (sent["api_key"], sent["api_base"]) == (EU_KEY, EU_BASE)
     with db_session_factory() as db:
         row = db.execute(select(HostedProvider).where(HostedProvider.name == "openai-eu")).scalar_one()
-        assert (row.provider, row.api_base, row.serves_unlisted_models) == ("openai", EU_BASE, True)
+        assert (row.provider, row.api_base, row.serves_unlisted_models) == ("openai", EU_BASE, False)
         assert row.encrypted_api_key is not None and decrypt_secret(row.encrypted_api_key) == EU_KEY
         assert db.execute(select(ConfiguredProviderImport.name)).scalars().all() == ["openai-eu"]
 

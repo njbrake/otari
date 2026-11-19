@@ -59,6 +59,7 @@ from gateway.api.deps import (
     record_auth_failure,
 )
 from gateway.api.routes._helpers import database_error
+from gateway.core.addresses import MAX_STORED_ADDRESS_LENGTH
 from gateway.core.config import GatewayConfig
 from gateway.core.database import DATABASE_ERRORS
 from gateway.core.unit_of_work import UnitOfWork
@@ -75,7 +76,6 @@ from gateway.services.dashboard_session_service import (
 )
 from gateway.services.maintenance_mode_service import is_maintenance_mode
 from gateway.services.password_service import MAX_PASSWORD_BYTES
-from gateway.services.tenancy.email_address import MAX_EMAIL_LENGTH
 from gateway.services.tenancy.membership_listener import MembershipListener
 from gateway.services.tenancy.provisioning_service import ensure_bootstrap_identity
 from gateway.services.tenancy.user_service import authenticate, operator_has_password, report_sign_in
@@ -131,7 +131,7 @@ class CreateSessionRequest(BaseModel):
     )
     email: str | None = Field(
         default=None,
-        max_length=MAX_EMAIL_LENGTH,
+        max_length=MAX_STORED_ADDRESS_LENGTH,
         description="The identity's sign-in address.",
     )
     password: str | None = Field(
@@ -343,7 +343,7 @@ async def create_session(
         assert body.email is not None and body.password is not None  # guaranteed by the model validator
         identity = await _sign_in_with_password(body.email, body.password, request, db)
     try:
-        signed_in = await identities.sign_in(identity)
+        signed_in = await identities.sign_in(identity, asserted_email=None)
     except DATABASE_ERRORS as exc:
         raise database_error("persist a dashboard session on sign-in", exc) from None
     if body.master_key is None:

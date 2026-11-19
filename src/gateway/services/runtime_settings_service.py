@@ -10,7 +10,7 @@ Only fields that are genuinely safe to hot-change belong here: each key in
 the next model discovery / catalog lookup), so mutating ``config`` takes effect
 immediately in this worker. Startup-only fields (``host``, ``port``,
 ``database_url``, ``mode``, the ``db_pool_*`` sizing, ``rate_limit_rpm``,
-``cors_allow_origins``, ``budget_strategy``, docs/metrics toggles, the log
+``cors_allow_origins``, ``cors_inference_origins``, ``budget_strategy``, docs/metrics toggles, the log
 writer) are deliberately excluded: they are consumed once at startup, so
 mutating ``config`` alone would not change running behavior. The outbound
 network-safety gates (``mcp_allow_*``, ``web_search_allow_private_hosts``, the
@@ -34,17 +34,13 @@ of truth), not live; that is acceptable for these operator settings.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import VISION_STRATEGIES, GatewayConfig
 from gateway.core.settings.budgets import STREAM_MISSING_USAGE_POLICIES
 from gateway.core.settings.pricing import PRICING_REFRESH_POLICIES
-from gateway.core.sql import dialect_name
 from gateway.log_config import logger
 from gateway.models.platform import RuntimeSetting
 from gateway.services.pricing_service import configure_default_pricing
@@ -59,7 +55,6 @@ MODEL_DISCOVERY_TIMEOUT_SECONDS = "model_discovery_timeout_seconds"
 MODEL_DISCOVERY_NEGATIVE_TTL_SECONDS = "model_discovery_negative_ttl_seconds"
 MODELS_DEV_METADATA = "models_dev_metadata"
 MODELS_DEV_CACHE_TTL_SECONDS = "models_dev_cache_ttl_seconds"
-FILE_UNDERSTANDING_ENABLED = "file_understanding_enabled"
 VISION_STRATEGY = "vision_strategy"
 VISION_DESCRIBE_MODEL = "vision_describe_model"
 VISION_DESCRIBE_MAX_TOKENS = "vision_describe_max_tokens"
@@ -97,7 +92,6 @@ _SPECS: dict[str, _Spec] = {
     REQUIRE_PRICING: _Spec("bool"),
     REJECT_USER_MISMATCH: _Spec("bool"),
     MODELS_DEV_METADATA: _Spec("bool"),
-    FILE_UNDERSTANDING_ENABLED: _Spec("bool"),
     MODEL_CACHE_TTL_SECONDS: _Spec("int", ge=0),
     MODELS_DEV_CACHE_TTL_SECONDS: _Spec("int", ge=0),
     VISION_DESCRIBE_MAX_TOKENS: _Spec("int", gt=0),
@@ -257,24 +251,9 @@ async def stage_override(session: AsyncSession, key: str, value: SettingValue) -
     Raises ``ValueError`` if the key is not settable or the value is invalid.
     """
     normalized = validate_value(key, value)
-    await upsert_setting_row(session, key, _serialize(normalized))
+    row = await session.get(RuntimeSetting, key)
+    if row is None:
+        session.add(RuntimeSetting(key=key, value=_serialize(normalized)))
+    else:
+        row.value = _serialize(normalized)
     return normalized
-
-
-async def upsert_setting_row(session: AsyncSession, key: str, value: str) -> None:
-    """Write ``key``'s row in one statement, inserting it or replacing its value.
-
-    A read followed by an insert lets two saves of a key that has no row yet
-    both decide to insert, and the second then fails on the primary key. The
-    dashboard saves several settings at once, so that was a 500 on an ordinary
-    save. The last write wins, as it does for a key whose row already exists.
-    """
-    now = datetime.now(UTC)
-    dialect_insert = postgresql_insert if dialect_name(session) == "postgresql" else sqlite_insert
-    statement = dialect_insert(RuntimeSetting).values(key=key, value=value, updated_at=now)
-    await session.execute(
-        statement.on_conflict_do_update(
-            index_elements=[RuntimeSetting.key],
-            set_={"value": statement.excluded.value, "updated_at": now},
-        )
-    )

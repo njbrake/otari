@@ -1,26 +1,12 @@
 """ORM tables for usage rows and coding-agent telemetry."""
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
-from sqlalchemy import (
-    JSON,
-    BigInteger,
-    Boolean,
-    DateTime,
-    Double,
-    ForeignKey,
-    Index,
-    Integer,
-    Numeric,
-    String,
-    UniqueConstraint,
-    Uuid,
-    false,
-)
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, UniqueConstraint, Uuid, event, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from gateway.models.base import Base
@@ -28,6 +14,9 @@ from gateway.models.money import UsdCost
 
 # Mirrors ``gateway_usage_settlement.pricing_reference`` on the platform.
 PRICING_REFERENCE_MAX_LENGTH = 511
+
+# Who ended a stream before it completed.
+StreamCutBy = Literal["provider", "client"]
 
 # ``usage_logs.source`` on a row this gateway served itself. Any other value is usage
 # imported through the external-events or OTLP ingest, which reserves this one so an
@@ -47,14 +36,6 @@ class UsageLog(Base):
     __tablename__ = "usage_logs"
     __table_args__ = (
         Index("ix_usage_logs_user_id_timestamp", "user_id", "timestamp"),
-        # Answers whether a user has usage in an organization's workspaces, which
-        # scopes the users list (users_repository._spent_in) one probe per user.
-        Index("ix_usage_logs_user_id_workspace_id", "user_id", "workspace_id"),
-        # Every dashboard read scoped to a workspace or an organization narrows by
-        # workspace and then by a time window, newest first, with no source or
-        # status pinned, which the four-column index below cannot serve past its
-        # first column.
-        Index("ix_usage_logs_workspace_id_timestamp", "workspace_id", "timestamp"),
         # Supports the activity-log viewer's primary "show errors, newest-first"
         # query. status is low-cardinality; model is high-cardinality and left
         # unindexed on purpose.
@@ -83,29 +64,14 @@ class UsageLog(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
     # The workspace this row belongs to; see `APIKey.workspace_id` for why.
-    # No index of its own: `ix_usage_logs_workspace_id_timestamp` leads with it.
     workspace_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("workspace.id", ondelete="RESTRICT"), nullable=False
+        Uuid, ForeignKey("workspace.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     api_key_id: Mapped[str | None] = mapped_column(ForeignKey("api_keys.id", ondelete="SET NULL"), index=True)
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id", ondelete="SET NULL"), index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
 
     model: Mapped[str] = mapped_column()
-    # The model name the caller sent, before an alias or routing policy resolved
-    # it: `model` above is what served, so an aliased request ("fast") is
-    # otherwise indistinguishable from one that named its target. NULL on rows
-    # written before the column existed, on imported usage (which reports only the
-    # model that ran), on a batch's results (logged when the batch is retrieved,
-    # from the stored batch), and on side-calls no caller named (the vision
-    # describe model, a direct search). Unindexed, like `model`.
-    requested_model: Mapped[str | None] = mapped_column()
-    # The request's `Otari-Request-ID` (sent back on every response except a gateway
-    # refusal), so a request found in a client's log can be found here. Shared by
-    # every row a completion request writes. NULL on routes that mint no id
-    # (pass-through, batches, search), on imported usage, and on rows older than the
-    # column. Indexed because it is looked up on its own, with no time window.
-    request_id: Mapped[str | None] = mapped_column(index=True)
     provider: Mapped[str | None] = mapped_column()
     endpoint: Mapped[str] = mapped_column()
 
@@ -139,6 +105,11 @@ class UsageLog(Base):
     # where an overlay binds one. False for every other row, and for every row
     # written before the column existed.
     deployment_paid: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # Where the hosted provider (or region) that served the attempt declared it
+    # keeps request data, read when the row was written: a country code, ``EU``
+    # or ``GLOBAL``. Null for a row the deployment did not serve, or one served
+    # where nothing was declared.
+    data_location: Mapped[str | None] = mapped_column(String(16), default=None)
 
     prompt_tokens: Mapped[int | None] = mapped_column()
     completion_tokens: Mapped[int | None] = mapped_column()
@@ -162,14 +133,18 @@ class UsageLog(Base):
     # A default would make every historical row claim a convention nothing
     # checked, and mis-price the half that were the other one.
     cache_tokens_in_prompt: Mapped[bool | None] = mapped_column()
-    # ``jsonb`` on PostgreSQL: the usage analytics extract meters from every row in
-    # a window, and a ``json`` value is re-parsed from text on each extraction.
-    billing_meters: Mapped[dict[str, Any] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    billing_meters: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     pricing_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     # The settled amount, and the accounting truth for this row
     # (mozilla-ai/otari-ai#1751). Exact to the micro-dollar; see
     # ``models/money.py`` for what that costs on each engine.
     cost: Mapped[Decimal | None] = mapped_column(UsdCost())
+    # The part of ``cost`` that is per-call tool charges (gateway-run tools and
+    # searches the model's provider ran), so a caller can split a request's bill
+    # into tokens and tools. Zero where no tool was charged; null where ``cost``
+    # is, where looking up the tools' prices failed, and on every row written
+    # before the column existed.
+    tool_cost: Mapped[Decimal | None] = mapped_column(UsdCost())
 
     # Why ``cost`` is the amount it is, which the row cannot re-derive on its own:
     # ``pricing_source`` names the price list that settled it ("organization",
@@ -212,6 +187,13 @@ class UsageLog(Base):
     # request.
     status: Mapped[str] = mapped_column()
     error_message: Mapped[str | None] = mapped_column()
+    # Who ended a stream before it completed: "provider" (the upstream dropped it or
+    # failed after the first chunk) or "client" (the caller disconnected). Null for every other
+    # row, and for rows written before the column existed: null reads as "not cut".
+    # It lets a stream cut by the provider be listed for a refund or a report without
+    # substring-matching ``error_message``. A provider-cut row is an "error" and may carry
+    # estimated tokens and cost, billed under ``stream_missing_usage_policy`` "estimate".
+    stream_cut_by: Mapped[StreamCutBy | None] = mapped_column(String(16))
 
     # Routing attribution. All nullable: a request that named a plain model was not
     # routed through a policy, and null reads correctly as exactly that.
@@ -290,8 +272,10 @@ class UsageLog(Base):
             "billing_meters": self.billing_meters,
             "pricing_breakdown": self.pricing_breakdown,
             "cost": self.cost,
+            "tool_cost": self.tool_cost,
             "status": self.status,
             "error_message": self.error_message,
+            "stream_cut_by": self.stream_cut_by,
             "status_code": self.status_code,
             "latency_ms": self.latency_ms,
             "provider_latency_ms": self.provider_latency_ms,
@@ -301,99 +285,6 @@ class UsageLog(Base):
             "attempt_count": self.attempt_count,
             "request_group_id": self.request_group_id,
         }
-
-
-# A PostgreSQL integer array; SQLite, where the rollups are never read, keeps JSON.
-_INT_ARRAY = ARRAY(Integer).with_variant(JSON(), "sqlite")
-
-
-class UsageRollup(Base):
-    """The usage rows of one hour that share every key a usage read filters or groups by, summed.
-
-    Derived, never written by a request: the refresh rebuilds an hour from
-    ``usage_logs`` once ``UsageRollupDirtyHour`` names it, so a read can take an
-    hour's sums from here instead of every row in it. Each key column carries the
-    name of the ``usage_logs`` column it groups, so a filter over those columns
-    reads the same here.
-    """
-
-    __tablename__ = "usage_rollups"
-    __table_args__ = (
-        Index("ix_usage_rollups_workspace_id_hour", "workspace_id", "hour"),
-        # A read narrowed to one user or to one owner's keys (the Overview's own
-        # scope) finds its rollups here rather than scanning a month of them.
-        Index("ix_usage_rollups_user_id_hour", "user_id", "hour"),
-        Index("ix_usage_rollups_api_key_id_hour", "api_key_id", "hour"),
-        # A model page's usage of each offering reads one model's rollups.
-        Index("ix_usage_rollups_model_hour", "model", "hour"),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
-    hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-
-    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid)
-    model: Mapped[str] = mapped_column()
-    requested_model: Mapped[str | None] = mapped_column()
-    provider: Mapped[str | None] = mapped_column()
-    endpoint: Mapped[str] = mapped_column()
-    user_id: Mapped[str | None] = mapped_column()
-    api_key_id: Mapped[str | None] = mapped_column()
-    source: Mapped[str] = mapped_column()
-    source_label: Mapped[str | None] = mapped_column()
-    policy_name: Mapped[str | None] = mapped_column()
-    status: Mapped[str] = mapped_column()
-    status_code: Mapped[int | None] = mapped_column()
-    needs_pricing: Mapped[bool] = mapped_column(Boolean)
-
-    rows: Mapped[int] = mapped_column(BigInteger)
-    first_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    last_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    cost: Mapped[Decimal | None] = mapped_column(Numeric)
-    prompt_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    completion_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    total_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    cache_read_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    cache_write_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    cache_write_1h_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    reasoning_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    billed_input_tokens: Mapped[int] = mapped_column(BigInteger)
-    billed_output_tokens: Mapped[int] = mapped_column(BigInteger)
-    billed_cache_read_tokens: Mapped[int] = mapped_column(BigInteger)
-    billed_cache_write_tokens: Mapped[int] = mapped_column(BigInteger)
-    latency_ms: Mapped[int | None] = mapped_column(BigInteger)
-    latency_count: Mapped[int] = mapped_column(BigInteger)
-    # Every latency the rows recorded, as distinct values and how many rows took
-    # each, so a percentile over hours of them is the one their rows would give.
-    latency_values: Mapped[list[int]] = mapped_column(_INT_ARRAY)
-    latency_counts: Mapped[list[int]] = mapped_column(_INT_ARRAY)
-    # One set per gateway-run tool (``services/usage/_summary.GATEWAY_TOOL_NAMES``):
-    # the billable calls, the failed calls, the spend and the rows that ran it.
-    web_search_calls: Mapped[int | None] = mapped_column(BigInteger)
-    web_search_errors: Mapped[int | None] = mapped_column(BigInteger)
-    web_search_cost: Mapped[float | None] = mapped_column(Double)
-    web_search_rows: Mapped[int] = mapped_column(BigInteger)
-    web_fetch_calls: Mapped[int | None] = mapped_column(BigInteger)
-    web_fetch_errors: Mapped[int | None] = mapped_column(BigInteger)
-    web_fetch_cost: Mapped[float | None] = mapped_column(Double)
-    web_fetch_rows: Mapped[int] = mapped_column(BigInteger)
-    code_execution_calls: Mapped[int | None] = mapped_column(BigInteger)
-    code_execution_errors: Mapped[int | None] = mapped_column(BigInteger)
-    code_execution_cost: Mapped[float | None] = mapped_column(Double)
-    code_execution_rows: Mapped[int] = mapped_column(BigInteger)
-
-
-class UsageRollupDirtyHour(Base):
-    """An hour whose usage rows changed since ``usage_rollups`` last summed it.
-
-    Written by a trigger on ``usage_logs`` in the same transaction as the change,
-    one row per statement and hour, so an hour named here is read from the rows
-    themselves until the refresh rebuilds it and removes the marks it read.
-    """
-
-    __tablename__ = "usage_rollup_dirty_hours"
-
-    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
-    hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class AgentTelemetry(Base):
@@ -435,3 +326,27 @@ class AgentTelemetry(Base):
     temporality: Mapped[str | None] = mapped_column()
     series_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     series_key: Mapped[str | None] = mapped_column()
+
+
+# Where a hosted provider (or region) name declares it keeps request data,
+# registered by the composition root: the provider domain owns that answer.
+_data_location_of: Callable[[str], str | None] | None = None
+
+
+def configure_usage_data_location(resolver: Callable[[str], str | None] | None) -> None:
+    """Register the lookup that stamps each deployment-served row with where it was served from."""
+    global _data_location_of  # noqa: PLW0603
+    _data_location_of = resolver
+
+
+@event.listens_for(UsageLog, "init")
+def _stamp_data_location(_row: UsageLog, _args: object, kwargs: dict[str, Any]) -> None:
+    """Fill in where a deployment-served row was served from, as the row is built.
+
+    Built in the request that served it, so the registered lookup answers what
+    the serving credential declared then, and a later change to a declaration
+    never reaches the row. A row that names its location keeps it.
+    """
+    if kwargs.get("deployment_paid") and kwargs.get("provider") and "data_location" not in kwargs:
+        if _data_location_of is not None:
+            kwargs["data_location"] = _data_location_of(kwargs["provider"])

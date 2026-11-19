@@ -22,7 +22,30 @@ export const DAY_S = 86_400
 // headroom and never trips the clamp, so the preset spans what it claims to.
 export const YEAR_SPAN_S = 365 * DAY_S
 
-export interface RangePreset {
+// The bucket sizes a timeline can draw: the usage API's two, and the finer ones
+// the sessions series takes, so a short window gets bars a session can fill.
+export type ChartBucket = UsageBucket | "1m" | "5m" | "30m" | "6h"
+
+const BUCKET_S: Record<ChartBucket, number> = {
+  "1m": 60,
+  "5m": 5 * 60,
+  "30m": 30 * 60,
+  hour: HOUR_S,
+  "6h": 6 * HOUR_S,
+  day: DAY_S,
+}
+
+// How a bucket reads after "per": "Sessions / 30 min".
+export const BUCKET_LABEL: Record<ChartBucket, string> = {
+  "1m": "minute",
+  "5m": "5 min",
+  "30m": "30 min",
+  hour: "hour",
+  "6h": "6 hours",
+  day: "day",
+}
+
+export interface RangePreset<B extends ChartBucket = UsageBucket> {
   key: string
   label: string
   // A rolling lookback of this many seconds ("now minus N"). `null` is an
@@ -31,18 +54,15 @@ export interface RangePreset {
   // reads an omitted start as a 30-day *default*, so its preset list carries no
   // null: an unbounded Usage window is neither representable nor meaningful.
   seconds: number | null
-  // The grain the window's chart reads at.
-  bucket: UsageBucket
+  bucket: B
 }
 
 // Sub-day windows bucket hourly; longer ranges bucket daily. Usage adds bounded
 // long-range presets (90d, a year) in place of the old rolling "All", so the
 // page still reaches the full span the server will serve without an unbounded,
 // clock-rolling window whose total silently changes day to day.
-//
-// No hour-long preset: an aggregate chart of one hour is a single bar, and the
-// Activity page answers that question request by request.
 export const USAGE_PRESETS: RangePreset[] = [
+  { key: "1h", label: "Last hour", seconds: HOUR_S, bucket: "hour" },
   { key: "24h", label: "24h", seconds: DAY_S, bucket: "hour" },
   { key: "7d", label: "7d", seconds: 7 * DAY_S, bucket: "day" },
   { key: "30d", label: "30d", seconds: 30 * DAY_S, bucket: "day" },
@@ -54,28 +74,48 @@ export const USAGE_PRESETS: RangePreset[] = [
 export const USAGE_DEFAULT_KEY = "30d"
 
 // Activity keeps a truthful "All": the raw list endpoint applies no default and
-// no clamp, so an omitted start really is all-time there. Its chart has a bar
-// per server bucket, so each window reads at the finest grain that keeps the
-// count sensible: 12 for an hour, 288 for a day, 168 for a week, 30 for a
-// month, a year of days for everything.
+// no clamp, so an omitted start really is all-time there.
 export const ACTIVITY_PRESETS: RangePreset[] = [
-  { key: "1h", label: "1h", seconds: HOUR_S, bucket: "5min" },
-  { key: "24h", label: "24h", seconds: DAY_S, bucket: "5min" },
-  { key: "7d", label: "7d", seconds: 7 * DAY_S, bucket: "hour" },
+  { key: "1h", label: "1h", seconds: HOUR_S, bucket: "hour" },
+  { key: "24h", label: "24h", seconds: DAY_S, bucket: "hour" },
+  { key: "7d", label: "7d", seconds: 7 * DAY_S, bucket: "day" },
   { key: "30d", label: "30d", seconds: 30 * DAY_S, bucket: "day" },
   { key: "all", label: "All", seconds: null, bucket: "day" },
 ]
 
 export const ACTIVITY_DEFAULT_KEY = "24h"
 
+// A session lasts minutes to hours, so each window gets enough buckets for a
+// session to fill several (60 in an hour, 48 in a day, 28 in a week), not the
+// two hourly bars an hour would get.
+export const SESSION_PRESETS: RangePreset<ChartBucket>[] = [
+  { key: "1h", label: "1h", seconds: HOUR_S, bucket: "1m" },
+  { key: "24h", label: "24h", seconds: DAY_S, bucket: "30m" },
+  { key: "7d", label: "7d", seconds: 7 * DAY_S, bucket: "6h" },
+  { key: "30d", label: "30d", seconds: 30 * DAY_S, bucket: "day" },
+  { key: "all", label: "All", seconds: null, bucket: "day" },
+]
+
 // The sentinel key the preset row highlights while an explicit range is active
 // (drag-selected or zoomed). Not a preset itself, so it never appears in a list.
 export const CUSTOM_KEY = "custom"
 
-export function findPreset(
-  presets: RangePreset[],
+/**
+ * The start of the caller's local day, as an absolute instant: the window
+ * "today" means to a person, rather than UTC's day or the last 24 hours.
+ */
+export function localMidnightIso(now: Date = new Date()): string {
+  return new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  ).toISOString()
+}
+
+export function findPreset<B extends ChartBucket>(
+  presets: RangePreset<B>[],
   key: string,
-): RangePreset | undefined {
+): RangePreset<B> | undefined {
   return presets.find((preset) => preset.key === key)
 }
 
@@ -83,13 +123,7 @@ export function isoAgo(seconds: number, now: number = Date.now()): string {
   return new Date(now - seconds * 1000).toISOString()
 }
 
-const BUCKET_S: Record<UsageBucket, number> = {
-  "5min": 5 * 60,
-  hour: HOUR_S,
-  day: DAY_S,
-}
-
-export function bucketDurationMs(bucket: UsageBucket): number {
+export function bucketDurationMs(bucket: ChartBucket): number {
   return BUCKET_S[bucket] * 1000
 }
 
@@ -105,6 +139,60 @@ export function bucketForWindow(
   const start = new Date(startIso).getTime()
   const end = endIso ? new Date(endIso).getTime() : now
   return end - start <= DAY_S * 1000 ? "hour" : "day"
+}
+
+// The absolute window covered by buckets [i..j] of a timeline series (order of
+// i/j does not matter). Start is the first bucket's start; end is the exclusive
+// upper bound (last bucket's start plus one bucket), so the whole last bucket is
+// included. Indices are clamped to the series bounds.
+export function rangeFromBuckets(
+  starts: string[],
+  i: number,
+  j: number,
+  bucket: ChartBucket,
+): { startIso: string; endIso: string } | null {
+  if (starts.length === 0) return null
+  const lo = Math.max(0, Math.min(i, j))
+  const hi = Math.min(starts.length - 1, Math.max(i, j))
+  const startMs = new Date(starts[lo]).getTime()
+  const endMs = new Date(starts[hi]).getTime() + bucketDurationMs(bucket)
+  return {
+    startIso: new Date(startMs).toISOString(),
+    endIso: new Date(endMs).toISOString(),
+  }
+}
+
+// Map an active window onto bucket indices of a timeline (extent) series, for
+// positioning the brush slider. `startIndex` is the last bucket starting at or
+// before the window start; `endIndex` is the last bucket starting before the
+// (exclusive) window end. An absent bound extends to that end of the series.
+export function bucketIndexRange(
+  starts: string[],
+  startIso: string | undefined,
+  endIso: string | undefined,
+): { startIndex: number; endIndex: number } {
+  const n = starts.length
+  if (n === 0) return { startIndex: 0, endIndex: 0 }
+  const ms = starts.map((stamp) => new Date(stamp).getTime())
+  // No bucket matching means the window opens before the series does, which is
+  // the first bucket, so an absent match clamps to 0 rather than to -1.
+  const startMs = startIso ? new Date(startIso).getTime() : undefined
+  const endMs = endIso ? new Date(endIso).getTime() : undefined
+  const startIndex =
+    startMs === undefined
+      ? 0
+      : Math.max(
+          0,
+          ms.findLastIndex((value) => value <= startMs),
+        )
+  const endIndex =
+    endMs === undefined
+      ? n - 1
+      : Math.max(
+          0,
+          ms.findLastIndex((value) => value < endMs),
+        )
+  return { startIndex, endIndex: Math.max(startIndex, endIndex) }
 }
 
 // ---------- effective-window caption ----------

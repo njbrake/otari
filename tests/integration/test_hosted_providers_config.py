@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from gateway.api.deps import build_model_metadata_override_service
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.providers_exceptions import HostedCatalogEmptyError, HostedProviderReadOnlyError
@@ -30,7 +31,9 @@ from gateway.models.providers import HostedProvider, HostedProviderModel
 from gateway.repositories.pricing import ModelPricingRepository, OrganizationModelPricingRepository
 from gateway.repositories.providers import (
     HostedProviderModelRepository,
+    HostedProviderRegionRepository,
     HostedProviderRepository,
+    HostedProviderVendorRepository,
     ProviderEndpointRepository,
 )
 from gateway.repositories.tenancy import OrganizationRepository, OrgProviderKeyRepository
@@ -94,14 +97,17 @@ def _service(db: AsyncSession, config: GatewayConfig) -> HostedProviderService:
         uow,
         config=config,
         providers=providers,
-        sources=HostedSources(config, providers),
+        regions=HostedProviderRegionRepository(uow),
+        sources=HostedSources(config, providers, HostedProviderRegionRepository(uow)),
         models=HostedProviderModelRepository(uow),
+        vendors=HostedProviderVendorRepository(uow),
         endpoints=ProviderEndpointRepository(uow),
         pricing=DeploymentPricingService(
             uow, pricing=ModelPricingRepository(uow), overrides=OrganizationModelPricingRepository(uow)
         ),
         live_byo_pairs=OrgProviderKeyRepository(uow).live_provider_pairs,
         organization_exists=OrganizationRepository(uow).exists,
+        metadata_overrides=build_model_metadata_override_service(uow),
     )
 
 

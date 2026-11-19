@@ -169,10 +169,18 @@ PRICING_SOURCE_PATTERN = r"^[a-z_]{1,32}$"
 
 
 class SettledCost(BaseModel):
-    """An attachable settlement: a priced cost and the basis for it."""
+    """An attachable settlement: a priced cost, the basis for it, and the part of it that is tool charges."""
 
     cost_usd: str = Field(pattern=SETTLED_COST_PATTERN)
     pricing_source: str = Field(pattern=PRICING_SOURCE_PATTERN)
+    tool_cost_usd: str | None = Field(default=None, pattern=SETTLED_COST_PATTERN)
+
+    def usage_fields(self) -> dict[str, str]:
+        """The fields a response's usage object carries, leaving out a tool cost that was not settled."""
+        fields = {"cost_usd": self.cost_usd, "pricing_source": self.pricing_source}
+        if self.tool_cost_usd is not None:
+            fields["tool_cost_usd"] = self.tool_cost_usd
+        return fields
 
 
 class RerankResult(BaseModel):
@@ -309,15 +317,18 @@ class VideoGenerationRequest(BaseModel):
     prompt: str
     # An hour is far above any provider's longest video, and keeps the estimate's arithmetic in range.
     seconds: int | None = Field(default=None, ge=1, le=3600)
-    size: str | None = None
-    resolution: str | None = None
-    aspect_ratio: str | None = None
+    # A job's record keeps the resolution and aspect ratio in columns 64 characters wide.
+    size: str | None = Field(default=None, max_length=64)
+    resolution: str | None = Field(default=None, max_length=64)
+    aspect_ratio: str | None = Field(default=None, max_length=64)
     seed: int | None = None
     negative_prompt: str | None = None
     reference_images: list[str] | None = None
     reference_audios: list[str] | None = None
+    reference_videos: list[str] | None = None
     first_frame: str | None = None
     last_frame: str | None = None
+    generate_audio: bool | None = None
     user: str | None = None
 
 

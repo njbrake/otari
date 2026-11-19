@@ -17,7 +17,7 @@ tenant's.
 """
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -40,7 +40,7 @@ from gateway.exceptions.budget_exceptions import (
     OrganizationScopedBudgetNotFoundError,
     OrganizationScopeNotFoundError,
 )
-from gateway.exceptions.organizations_exceptions import NotAuthorizedError, WorkspaceNotFoundError
+from gateway.exceptions.organizations_exceptions import NotAuthorizedError
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import Budget, BudgetResetLog, ScopedBudget, WorkspaceBudgetDefault
 from gateway.models.tenancy import Organization, OrganizationMember, User, Workspace, WorkspaceMember
@@ -62,8 +62,6 @@ from gateway.schemas.budgets import (
 from gateway.services.budgets import BudgetService
 from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.organization_service import OrganizationService
-
-from .tenancy_helpers import hide_totals, share_totals, visibility_service
 
 _BUDGETS = f"{API_ROOT}/organizations/me/budgets"
 _CEILINGS = f"{API_ROOT}/organizations/me/spend-ceilings"
@@ -557,7 +555,6 @@ def _service(async_db: AsyncSession) -> BudgetService:
             async_db,
             OrganizationService(async_db, membership_listener=None),
         ),
-        visibility_service(async_db, uow),
         users=get_user_access(uow),
     )
 
@@ -1208,278 +1205,3 @@ async def test_an_unknown_scope_type_reaching_the_service_is_a_validation_error(
             scope_type="galaxy",
             scope_id=str(organization.id),
         )
-
-
-# =============================================================================
-# The workspace's own ceiling, as its members read it
-# =============================================================================
-
-
-async def _capped_workspace(
-    db: AsyncSession, *, slug: str, **budget: Any
-) -> tuple[BudgetService, User, Workspace, str]:
-    """An organization whose one workspace carries a workspace-wide ceiling, and its owner."""
-    organization = await _organization(db, slug=slug)
-    owner = await _member(db, organization, role="owner", full_name="Owner")
-    workspace = await _workspace(db, organization, name="Team", owner=owner)
-    service = _service(db)
-    created = await service.create_organization_budget(user=owner, request=_create(**budget))
-    ceiling = await service.create_organization_ceiling(
-        user=owner,
-        request=OrganizationScopedBudgetCreate(
-            scope_type="workspace", scope_id=str(workspace.id), budget_id=created.budget_id
-        ),
-    )
-    return service, owner, workspace, ceiling.id
-
-
-async def _joined(db: AsyncSession, workspace: Workspace, *, role: str = "member") -> User:
-    organization = await db.get(Organization, workspace.organization_id)
-    assert organization is not None
-    person = await _member(db, organization, role=role, full_name=f"A {role}")
-    await WorkspaceMemberRepository(db).create(workspace_id=workspace.id, user_id=person.id, role=role)
-    await db.commit()
-    return person
-
-
-async def _set_counters(db: AsyncSession, ceiling_id: str, **values: Any) -> None:
-    ceiling = await db.get(ScopedBudget, ceiling_id)
-    assert ceiling is not None
-    for name, value in values.items():
-        setattr(ceiling, name, value)
-    await db.commit()
-
-
-@pytest.mark.asyncio
-async def test_a_member_reads_the_workspace_ceiling_with_holds_in_flight(async_db: AsyncSession) -> None:
-    service, _, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-read")
-    member = await _joined(async_db, workspace)
-    await share_totals(async_db, workspace)
-    await _set_counters(async_db, ceiling_id, current_spend=Decimal("21.40"), reserved_spend=Decimal("0.60"))
-
-    spend = await service.workspace_spend(user=member, workspace_id=workspace.id)
-
-    assert spend is not None
-    assert spend.workspace_id == workspace.id
-    assert spend.max_budget == 100.0
-    assert "name" not in spend.model_dump(), "a ceiling's name is an administrator's label"
-    # What the gate enforces against: settled spend plus holds in flight.
-    assert spend.spent == pytest.approx(22.0)
-    assert spend.used_fraction == pytest.approx(0.22)
-    assert spend.period_start is not None
-    assert spend.period_end is not None
-
-
-@pytest.mark.asyncio
-async def test_a_zero_ceiling_with_anything_counted_against_it_reads_as_all_used(async_db: AsyncSession) -> None:
-    service, owner, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-zero", max_budget=0)
-    await _set_counters(async_db, ceiling_id, current_spend=Decimal("3"))
-
-    spend = await service.workspace_spend(user=owner, workspace_id=workspace.id)
-
-    assert spend is not None
-    assert (spend.max_budget, spend.used_fraction) == (0.0, 1.0)
-
-
-@pytest.mark.asyncio
-async def test_the_share_a_member_reads_is_a_whole_percent_so_it_does_not_give_the_spend_back(
-    async_db: AsyncSession,
-) -> None:
-    service, owner, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-rounded")
-    member = await _joined(async_db, workspace)
-    await _set_counters(async_db, ceiling_id, current_spend=Decimal("64.1234"))
-    await hide_totals(async_db, workspace)
-
-    hidden = await service.workspace_spend(user=member, workspace_id=workspace.id)
-    managed = await service.workspace_spend(user=owner, workspace_id=workspace.id)
-
-    assert hidden is not None and hidden.used_fraction == 0.64
-    assert managed is not None and managed.used_fraction == pytest.approx(0.641234)
-
-
-@pytest.mark.asyncio
-async def test_a_member_of_a_workspace_that_hides_its_totals_reads_the_ceiling_as_a_share(
-    async_db: AsyncSession,
-) -> None:
-    service, owner, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-hidden")
-    member = await _joined(async_db, workspace)
-    await _set_counters(async_db, ceiling_id, current_spend=Decimal("64"))
-    await hide_totals(async_db, workspace)
-
-    hidden = await service.workspace_spend(user=member, workspace_id=workspace.id)
-    managed = await service.workspace_spend(user=owner, workspace_id=workspace.id)
-
-    assert hidden is not None
-    assert (hidden.max_budget, hidden.spent) == (100.0, None)
-    assert hidden.used_fraction == pytest.approx(0.64)
-    assert hidden.period_end is not None
-    assert managed is not None
-    assert managed.spent == pytest.approx(64.0)
-    assert managed.used_fraction == pytest.approx(0.64)
-
-
-@pytest.mark.asyncio
-async def test_a_workspace_admin_reads_the_dollars_of_a_workspace_that_hides_its_totals(
-    async_db: AsyncSession,
-) -> None:
-    service, _, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-ws-admin")
-    organization = await async_db.get(Organization, workspace.organization_id)
-    assert organization is not None
-    lead = await _member(async_db, organization, role="member", full_name="Lead")
-    await WorkspaceMemberRepository(async_db).create(workspace_id=workspace.id, user_id=lead.id, role="admin")
-    await _set_counters(async_db, ceiling_id, current_spend=Decimal("10"))
-    await hide_totals(async_db, workspace)
-
-    spend = await service.workspace_spend(user=lead, workspace_id=workspace.id)
-
-    assert spend is not None
-    assert spend.spent == pytest.approx(10.0)
-
-
-@pytest.mark.asyncio
-async def test_a_closed_window_reads_as_the_fresh_one_the_gate_would_roll_to(async_db: AsyncSession) -> None:
-    """Periods roll only when a request reaches the gate, so an idle ceiling holds last month's spend."""
-    service, _, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-stale")
-    member = await _joined(async_db, workspace)
-    await share_totals(async_db, workspace)
-    await _set_counters(
-        async_db,
-        ceiling_id,
-        current_spend=Decimal("90"),
-        reserved_spend=Decimal("1.5"),
-        period_start=datetime(2020, 1, 1, tzinfo=UTC),
-        period_end=datetime(2020, 2, 1, tzinfo=UTC),
-    )
-
-    spend = await service.workspace_spend(user=member, workspace_id=workspace.id)
-
-    assert spend is not None
-    # Settled spend belongs to the closed month; holds survive a roll.
-    assert spend.spent == pytest.approx(1.5)
-    assert spend.period_start is not None
-    assert datetime.fromisoformat(spend.period_start) <= datetime.now(UTC)
-    assert spend.period_end is not None
-    assert datetime.fromisoformat(spend.period_end) > datetime.now(UTC)
-
-
-@pytest.mark.asyncio
-async def test_a_workspace_without_a_ceiling_reads_as_none(async_db: AsyncSession) -> None:
-    organization = await _organization(async_db, slug="acme-spend-none")
-    owner = await _member(async_db, organization, role="owner", full_name="Owner")
-    workspace = await _workspace(async_db, organization, name="Uncapped", owner=owner)
-
-    assert await _service(async_db).workspace_spend(user=owner, workspace_id=workspace.id) is None
-
-
-@pytest.mark.asyncio
-async def test_a_ceiling_narrowed_to_one_provider_is_not_the_workspace_ceiling(async_db: AsyncSession) -> None:
-    organization = await _organization(async_db, slug="acme-spend-provider")
-    owner = await _member(async_db, organization, role="owner", full_name="Owner")
-    workspace = await _workspace(async_db, organization, name="Team", owner=owner)
-    service = _service(async_db)
-    budget = await service.create_organization_budget(user=owner, request=_create())
-    await service.create_organization_ceiling(
-        user=owner,
-        request=OrganizationScopedBudgetCreate(
-            scope_type="workspace", scope_id=str(workspace.id), budget_id=budget.budget_id, provider_key_id="pk-1"
-        ),
-    )
-
-    assert await service.workspace_spend(user=owner, workspace_id=workspace.id) is None
-
-
-@pytest.mark.asyncio
-async def test_a_budget_that_caps_no_dollars_reads_with_no_limit(async_db: AsyncSession) -> None:
-    service, owner, workspace, _ = await _capped_workspace(
-        async_db, slug="acme-spend-tokens", max_budget=None, token_limit=1_000_000
-    )
-
-    spend = await service.workspace_spend(user=owner, workspace_id=workspace.id)
-
-    assert spend is not None
-    assert spend.max_budget is None
-    assert spend.used_fraction is None
-
-
-@pytest.mark.asyncio
-async def test_someone_outside_the_workspace_is_told_it_does_not_exist(async_db: AsyncSession) -> None:
-    service, _, workspace, _ = await _capped_workspace(async_db, slug="acme-spend-outside")
-    organization = await async_db.get(Organization, workspace.organization_id)
-    assert organization is not None
-    # In the organization, in none of its workspaces.
-    colleague = await _member(async_db, organization, role="member", full_name="Colleague")
-    stranger_org = await _organization(async_db, slug="elsewhere-spend")
-    stranger = await _member(async_db, stranger_org, role="owner", full_name="Stranger")
-
-    for outsider in (colleague, stranger):
-        with pytest.raises(WorkspaceNotFoundError):
-            await service.workspace_spend(user=outsider, workspace_id=workspace.id)
-
-
-def test_the_route_reads_a_workspace_with_no_ceiling_as_null(
-    client: TestClient, master_key_header: dict[str, str]
-) -> None:
-    workspaces = client.get(f"{API_ROOT}/workspaces", headers=master_key_header).json()
-    workspace_id = workspaces["data"][0]["id"]
-
-    response = client.get(f"{API_ROOT}/workspaces/{workspace_id}/budget", headers=master_key_header)
-
-    assert response.status_code == status.HTTP_200_OK
-    assert response.json() is None
-    unknown = client.get(f"{API_ROOT}/workspaces/{uuid.uuid4()}/budget", headers=master_key_header)
-    assert unknown.status_code == status.HTTP_404_NOT_FOUND
-
-
-@pytest.mark.asyncio
-async def test_a_closed_duration_window_reads_as_the_one_a_request_now_would_open(async_db: AsyncSession) -> None:
-    """A duration window starts with the next request, so it reads as the one a request at this moment opens."""
-    service, _, workspace, ceiling_id = await _capped_workspace(
-        async_db, slug="acme-spend-duration", reset_alignment=None, budget_duration_sec=86_400
-    )
-    member = await _joined(async_db, workspace)
-    await share_totals(async_db, workspace)
-    await _set_counters(
-        async_db,
-        ceiling_id,
-        current_spend=Decimal("40"),
-        period_start=datetime(2020, 1, 1, tzinfo=UTC),
-        period_end=datetime(2020, 1, 2, tzinfo=UTC),
-    )
-
-    before = datetime.now(UTC)
-    spend = await service.workspace_spend(user=member, workspace_id=workspace.id)
-
-    assert spend is not None
-    assert spend.spent == 0
-    assert spend.period_start is not None
-    assert spend.period_end is not None
-    start, end = datetime.fromisoformat(spend.period_start), datetime.fromisoformat(spend.period_end)
-    assert start >= before
-    assert end - start == timedelta(days=1)
-
-
-@pytest.mark.asyncio
-async def test_an_alignment_the_roll_cannot_read_keeps_the_stored_window(async_db: AsyncSession) -> None:
-    """The roll leaves such a window in place rather than guess, so the read does too."""
-    service, _, workspace, ceiling_id = await _capped_workspace(async_db, slug="acme-spend-unknown")
-    member = await _joined(async_db, workspace)
-    await share_totals(async_db, workspace)
-    ceiling = await async_db.get(ScopedBudget, ceiling_id)
-    assert ceiling is not None
-    budget = await async_db.get(Budget, ceiling.budget_id)
-    assert budget is not None
-    budget.reset_alignment = "fortnightly"
-    await _set_counters(
-        async_db,
-        ceiling_id,
-        current_spend=Decimal("12"),
-        period_start=datetime(2020, 1, 1, tzinfo=UTC),
-        period_end=datetime(2020, 2, 1, tzinfo=UTC),
-    )
-
-    spend = await service.workspace_spend(user=member, workspace_id=workspace.id)
-
-    assert spend is not None
-    assert spend.spent == pytest.approx(12.0)
-    assert spend.period_end is not None
-    assert spend.period_end.startswith("2020-02-01")

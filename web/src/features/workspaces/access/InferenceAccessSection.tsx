@@ -5,6 +5,7 @@ import type {
   WorkspaceHostedProvider,
   WorkspaceProviderKeyOverride,
 } from "@/client"
+import { Button } from "@/design-system/actions/Button"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { SearchField } from "@/design-system/forms/SearchField"
 import { Toggle } from "@/design-system/forms/Toggle"
@@ -13,9 +14,17 @@ import { SettingsGroup } from "@/design-system/layout/SettingsGroup"
 import { DisclosureRow } from "@/design-system/navigation/DisclosureRow"
 import { Segmented } from "@/design-system/navigation/Segmented"
 import {
+  dataLocationLabel,
+  refusesProvider,
+} from "@/features/hostedProviders/dataLocations"
+import {
   AccessRow,
   modelsScopeLabel,
 } from "@/features/workspaces/access/AccessRow"
+import {
+  AllowedDataLocationsDialog,
+  describeAllowedDataLocations,
+} from "@/features/workspaces/access/AllowedDataLocationsDialog"
 import { HostedModelsDialog } from "@/features/workspaces/access/HostedModelsDialog"
 import { KeyModelsDialog } from "@/features/workspaces/access/KeyModelsDialog"
 import {
@@ -68,9 +77,12 @@ function groupSummary(entries: readonly Entry[]): string {
 }
 
 /** Which row's scope is open, if any: a key by its id, or a hosted provider by its name. */
+// Tagged with the workspace it was opened in, so a dialog never outlives a
+// switch to another workspace, and a save still landing for the old one cannot
+// close a dialog opened in the new one.
 type OpenScope =
-  | { kind: "key"; id: string }
-  | { kind: "hosted"; provider: string }
+  | { kind: "key"; id: string; workspaceId: string }
+  | { kind: "hosted"; provider: string; workspaceId: string }
   | undefined
 
 /**
@@ -111,6 +123,16 @@ export function InferenceAccessSection({
   const setPolicy = useSetWorkspaceProviderPolicy()
   const requiresZeroRetention =
     policy.data?.require_zero_data_retention ?? false
+  // Its own mutation, so a failed retention write is not shown in the
+  // locations dialog, nor a failed locations save beside the switch.
+  const setLocations = useSetWorkspaceProviderPolicy()
+  const isPolicyWriting = setPolicy.isPending || setLocations.isPending
+  const allowedLocations = policy.data?.allowed_data_locations ?? null
+  const [locationsOpening, setLocationsOpening] = useState(0)
+  // The workspace the locations dialog was opened in, so it never reopens
+  // over another workspace after a switch.
+  const [locationsOpenFor, setLocationsOpenFor] = useState("")
+  const isEditingLocations = locationsOpenFor === workspaceId
   const [open, setOpen] = useState<OpenScope>()
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [query, setQuery] = useState("")
@@ -150,21 +172,41 @@ export function InferenceAccessSection({
     }
   }
 
+  // No dialog without the policy, in another workspace than it was opened in,
+  // or on a source the policy now blocks: each would save where the page says
+  // nothing may be changed.
+  const isOpenHere = open?.workspaceId === workspaceId && policy.data
+  const isUsable = (row: { zero_data_retention: boolean }) =>
+    !requiresZeroRetention || row.zero_data_retention
   const openKey =
-    open?.kind === "key"
-      ? keyRows.find((row) => row.org_provider_key_id === open.id)
+    open?.kind === "key" && isOpenHere
+      ? keyRows.find(
+          (row) => row.org_provider_key_id === open.id && isUsable(row),
+        )
       : undefined
   const openKeyRecord = openKey
     ? byId.get(openKey.org_provider_key_id)
     : undefined
+  // A hosted provider none of whose locations the workspace allows is refused
+  // as one not declared zero data retention is.
+  const isLocationRefused = (row: WorkspaceHostedProvider) =>
+    refusesProvider(allowedLocations, row.data_locations ?? [])
   const openHosted =
-    open?.kind === "hosted"
-      ? hostedRows.find((row) => row.provider === open.provider)
+    open?.kind === "hosted" && isOpenHere
+      ? hostedRows.find(
+          (row) =>
+            row.provider === open.provider &&
+            isUsable(row) &&
+            !isLocationRefused(row),
+        )
       : undefined
 
+  // Held for the policy too: until it answers, no row knows it is blocked, and
+  // a key's model dialog would offer what the workspace refuses.
   const isLoading =
     (overrides.isPending && !overrides.data) ||
-    (hosted.isPending && !hosted.data)
+    (hosted.isPending && !hosted.data) ||
+    (policy.isPending && !policy.data)
 
   // One row per provider: a provider with several sources (two keys, or a key
   // and a hosted provider) folds them under a row that opens in place.
@@ -192,7 +234,9 @@ export function InferenceAccessSection({
         name: row.provider,
         isCustomized: row.customized,
         isOff:
-          !row.enabled || (requiresZeroRetention && !row.zero_data_retention),
+          !row.enabled ||
+          (requiresZeroRetention && !row.zero_data_retention) ||
+          isLocationRefused(row),
       }),
     ),
   ]
@@ -228,7 +272,7 @@ export function InferenceAccessSection({
             body: { is_default: next },
           })
         }
-        onOpenScope={() => setOpen({ kind: "key", id: entry.id })}
+        onOpenScope={() => setOpen({ kind: "key", id: entry.id, workspaceId })}
         // A refused write is shown by its mutation's own error, in the banner.
         onReset={() => resetKey(entry.row).catch(() => undefined)}
       />
@@ -236,6 +280,7 @@ export function InferenceAccessSection({
       <HostedRow
         key={entry.id}
         row={entry.row}
+        allowedLocations={allowedLocations}
         isNested={isNested}
         hasChevronGutter={hasGroups}
         requiresZeroRetention={requiresZeroRetention}
@@ -248,7 +293,11 @@ export function InferenceAccessSection({
           })
         }
         onOpenScope={() =>
-          setOpen({ kind: "hosted", provider: entry.row.provider })
+          setOpen({
+            kind: "hosted",
+            provider: entry.row.provider,
+            workspaceId,
+          })
         }
         onReset={() =>
           resetHosted.mutate({ workspaceId, provider: entry.row.provider })
@@ -282,7 +331,7 @@ export function InferenceAccessSection({
             <Toggle
               label="Require zero data retention"
               isSelected={requiresZeroRetention}
-              isDisabled={!canManage || policy.isPending || setPolicy.isPending}
+              isDisabled={!canManage || !policy.data || isPolicyWriting}
               onChange={(next) =>
                 setPolicy.mutate({
                   workspaceId,
@@ -292,9 +341,65 @@ export function InferenceAccessSection({
             />
           }
         />
+        <SettingRow
+          label="Allowed data locations"
+          help={
+            policy.data
+              ? `${describeAllowedDataLocations(allowedLocations)}. Hosted providers serve this workspace only where they declare one of these locations.`
+              : policy.isPending
+                ? "Loading…"
+                : "Unknown until this workspace's provider policy can be read."
+          }
+          control={
+            <Button
+              size="sm"
+              className="min-h-11 md:min-h-9"
+              aria-label="Change allowed data locations"
+              isDisabled={!canManage || !policy.data || isPolicyWriting}
+              onPress={() => {
+                setLocations.reset()
+                setLocationsOpening((n) => n + 1)
+                setLocationsOpenFor(workspaceId)
+              }}
+            >
+              Change
+            </Button>
+          }
+        />
       </SettingsGroup>
+      {policy.data ? (
+        <AllowedDataLocationsDialog
+          key={`${workspaceId}:${locationsOpening}`}
+          allowed={allowedLocations}
+          providers={hostedRows}
+          providersState={
+            hosted.isError
+              ? "error"
+              : hosted.data && !hosted.isFetching
+                ? "ready"
+                : "loading"
+          }
+          isOpen={isEditingLocations}
+          onClose={() => setLocationsOpenFor("")}
+          isPending={setLocations.isPending}
+          error={setLocations.error}
+          onSave={(allowed) =>
+            setLocations.mutate(
+              { workspaceId, allowedDataLocations: allowed },
+              { onSuccess: () => setLocationsOpenFor("") },
+            )
+          }
+        />
+      ) : null}
       {isLoading ? (
         <span className="text-caption">Loading…</span>
+      ) : !policy.data ? (
+        // A failed read is not "not required": no row can say whether it is
+        // blocked, so none is offered until the policy can be read.
+        <span className="text-caption">
+          The providers are held until this workspace's data retention policy
+          can be read.
+        </span>
       ) : keyRows.length === 0 && hostedRows.length === 0 ? (
         <span className="text-caption">
           This organization holds no provider keys and the deployment hosts no
@@ -376,7 +481,7 @@ export function InferenceAccessSection({
           between writes, which must not remount the dialog mid-save. */}
       {openKey ? (
         <KeyModelsDialog
-          key={openKey.org_provider_key_id}
+          key={`${workspaceId}:${openKey.org_provider_key_id}`}
           workspaceId={workspaceId}
           keyId={openKey.org_provider_key_id}
           keyName={keyLabel(openKeyRecord, openKey.org_provider_key_id)}
@@ -389,19 +494,25 @@ export function InferenceAccessSection({
               knownProviders,
             )
           }
-          onClose={() => setOpen(undefined)}
+          onClose={() => setOpen(closeIn(workspaceId))}
         />
       ) : null}
       {openHosted ? (
         <HostedModelsDialog
-          key={openHosted.provider}
+          key={`${workspaceId}:${openHosted.provider}`}
           workspaceId={workspaceId}
           row={openHosted}
-          onClose={() => setOpen(undefined)}
+          onClose={() => setOpen(closeIn(workspaceId))}
         />
       ) : null}
     </div>
   )
+}
+
+/** Close the open dialog, unless it now belongs to another workspace. */
+function closeIn(workspaceId: string) {
+  return (open: OpenScope): OpenScope =>
+    open?.workspaceId === workspaceId ? undefined : open
 }
 
 /**
@@ -499,10 +610,23 @@ function KeyRow({
   )
 }
 
+/** Why the workspace's location list refuses a provider, or empty where it does not. */
+function locationRefusalNote(
+  allowed: readonly string[] | null,
+  locations: readonly (string | null)[],
+): string {
+  if (!refusesProvider(allowed, locations)) return ""
+  const declared = locations.filter((location) => location !== null)
+  return declared.length === 0
+    ? "Refused: location not declared"
+    : `Refused: data kept in ${declared.map(dataLocationLabel).join(", ")}`
+}
+
 function HostedRow({
   row,
   isNested,
   hasChevronGutter,
+  allowedLocations,
   requiresZeroRetention,
   isDisabled,
   onToggle,
@@ -512,13 +636,20 @@ function HostedRow({
   row: WorkspaceHostedProvider
   isNested: boolean
   hasChevronGutter: boolean
+  /** The data locations the workspace accepts; null for any. */
+  allowedLocations: readonly string[] | null
   requiresZeroRetention: boolean
   isDisabled: boolean
   onToggle: (next: boolean) => void
   onOpenScope: () => void
   onReset: () => void
 }) {
-  const isBlocked = requiresZeroRetention && !row.zero_data_retention
+  const locationNote = locationRefusalNote(
+    allowedLocations,
+    row.data_locations ?? [],
+  )
+  const isBlocked =
+    (requiresZeroRetention && !row.zero_data_retention) || locationNote !== ""
   return (
     <AccessRow
       name={row.provider}
@@ -536,7 +667,11 @@ function HostedRow({
       // could serve, so this row decides nothing until that key goes.
       note={[
         row.served_by_own_key ? "Not used, your key serves this provider" : "",
-        retentionNote(row.zero_data_retention, isBlocked),
+        retentionNote(
+          row.zero_data_retention,
+          requiresZeroRetention && !row.zero_data_retention,
+        ),
+        locationNote,
       ]
         .filter(Boolean)
         .join(" · ")}

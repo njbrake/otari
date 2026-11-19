@@ -22,6 +22,7 @@ test("the deployment bootstrap is served unauthenticated", async ({
       "health_checks",
       "hosted_providers",
       "keys",
+      "mcp_catalog",
       "models",
       "organization_guardrails",
       "organization_providers",
@@ -32,6 +33,8 @@ test("the deployment bootstrap is served unauthenticated", async ({
       "routing",
       "settings",
       "tools",
+      "traces",
+      "update_check",
       "usage",
       "users",
       "workspaces",
@@ -62,9 +65,10 @@ test("the deployment bootstrap is served unauthenticated", async ({
     passkeys_enabled: true,
     passkeys_ready: false,
     oauth_providers: [],
-    // Always off: this fork removes feedback forwarding. See
-    // docs/configuration.md#product-feedback.
-    feedback_enabled: false,
+    feedback_enabled: true,
+    // platform_url keeps its default here, so Connect otari.ai is offered;
+    // nothing is sent to it unless somebody presses Connect.
+    platform_connect: true,
     // On in e2e/otari.yml, for the workload identity spec.
     federation_member_rules: true,
     // No SMTP configured in this e2e environment, so invitations are

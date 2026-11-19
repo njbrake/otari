@@ -12,14 +12,16 @@ credential ladder, the usage row) with the estimate for the length asked for at
 the model's per-second video rate, and settles at no cost: the length is known
 only when the job completes. The first retrieval that finds the job completed
 bills it once through the video job service, which owns the length, the price
-and the claim. A model with no per-second video rate is refused before the job
-starts.
+and the claim: a job whose length nobody states is billed what the provider
+charged, else the length the estimate assumed. A model with no per-second video
+rate is refused before the job starts.
 
 A completed job is remembered on its record, so a later read answers from it
 even where the provider keeps no job to look up, as DeepInfra does.
 """
 
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Any
 
@@ -36,6 +38,7 @@ from gateway.api.deps import (
     model_provider_port_on,
     verify_api_key_or_master_key,
 )
+from gateway.api.key_scopes import key_scope
 from gateway.api.routes._helpers import country_gate_for, database_error
 from gateway.api.routes._passthrough import provider_call_failure, resolve_provider_by_name, run_passthrough
 from gateway.core.config import API_ROOT, GatewayConfig
@@ -46,6 +49,7 @@ from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
 from gateway.models.inference import VideoJobRecord
 from gateway.models.pricing import ModelPricing
+from gateway.ports.billing_port import NO_TOOLS
 from gateway.schemas.inference import (
     VideoError,
     VideoGenerationRequest,
@@ -53,12 +57,19 @@ from gateway.schemas.inference import (
     VideoJobResponse,
     VideoJobSummary,
 )
-from gateway.services.inference import VIDEO_BILLING, DeploymentCharge, VideoJobService
+from gateway.services.inference import (
+    ESTIMATED_VIDEO_SECONDS,
+    VIDEO_BILLING,
+    DeploymentCharge,
+    VideoJobService,
+    deferred_charge,
+)
 from gateway.services.log_writer import LogWriter
-from gateway.services.pricing import estimate_video_cost, video_rate
+from gateway.services.pricing import PriceFacts, estimate_video_cost, video_rate
 from gateway.services.provider_kwargs import ResolvedProvider
 from gateway.services.upstream_redaction import redact_upstream_message
 from gateway.services.workspace_scope import organization_for_workspace_id, resolve_workspace_id
+from gateway.types.key_scope import KeyScope
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
@@ -66,10 +77,6 @@ router = APIRouter(prefix="/videos", tags=["videos"])
 # completion is billed.
 USAGE_ENDPOINT = "/v1/videos"
 USAGE_ENDPOINT_COMPLETED = "/v1/videos/completed"
-
-# What the estimate assumes when the request names no length: the longest
-# default a served provider renders, so the reservation is never short.
-ESTIMATED_SECONDS = 8
 
 ConfigDep = Annotated[GatewayConfig, Depends(get_config)]
 LogWriterDep = Annotated[LogWriter, Depends(get_log_writer)]
@@ -107,7 +114,7 @@ def job_response(job: VideoJob, *, provider: str) -> VideoJobResponse:
     )
 
 
-@router.post("", response_model=VideoJobResponse)
+@router.post("", response_model=VideoJobResponse, openapi_extra=key_scope(KeyScope.INFERENCE_RUN))
 async def create_video(
     raw_request: Request,
     response: Response,
@@ -135,7 +142,7 @@ async def create_video(
     - API key without user field: Use the shared "default" user
     """
     api_key, _ = auth_result
-    estimated_seconds = request.seconds if request.seconds is not None else ESTIMATED_SECONDS
+    estimated_seconds = request.seconds if request.seconds is not None else ESTIMATED_VIDEO_SECONDS
     forward = request.model_dump(exclude_unset=True, exclude={"model", "prompt", "user"})
 
     async def call_provider(resolved: ResolvedProvider) -> VideoJob:
@@ -160,6 +167,19 @@ async def create_video(
             headers=error_headers(PRICING_REQUIRED),
         )
 
+    # A provider takes a size where it takes no resolution; a price's rules name either as the resolution.
+    resolution = request.resolution or request.size
+    # A job is billed at the rules of the time it started, which a render inside the start call outlasts.
+    started = datetime.now(UTC)
+    input_video = bool(request.reference_videos)
+    facts = PriceFacts(
+        resolution=resolution,
+        aspect_ratio=request.aspect_ratio,
+        duration=estimated_seconds,
+        at=started,
+        input_video=input_video,
+        generate_audio=request.generate_audio,
+    )
     outcome = await run_passthrough(
         endpoint=USAGE_ENDPOINT,
         raw_request=raw_request,
@@ -172,7 +192,7 @@ async def create_video(
         user=request.user,
         call_provider=call_provider,
         request_params=request.model_fields_set,
-        estimate=lambda pricing: estimate_video_cost(pricing, estimated_seconds),
+        estimate=lambda pricing: estimate_video_cost(pricing, estimated_seconds, facts=facts),
         billing=VIDEO_BILLING,
         refuse_model=refuse_model,
         refuse_unpriced=refuse_unpriced,
@@ -189,6 +209,11 @@ async def create_video(
             workspace_id=outcome.workspace_id,
             seconds=request.seconds,
             counts_toward_budget=api_key is None or not api_key.exclude_from_budget,
+            resolution=resolution,
+            aspect_ratio=request.aspect_ratio,
+            input_video=input_video,
+            generate_audio=request.generate_audio,
+            created_at=started,
         )
     except DATABASE_ERRORS as exc:
         raise database_error("Recording the video job", exc) from exc
@@ -228,15 +253,17 @@ async def _settle(
         async def charge_deployment(cost: Decimal | None) -> None:
             await deployment_charge.settle(
                 cost,
+                tools=NO_TOOLS,
                 model=record.model,
                 description=f"{record.provider}:{record.model}",
-                expects_cost=job.seconds is not None or record.seconds is not None,
+                expects_cost=True,
                 savepoint=db.begin_nested,
             )
 
     await jobs.settle_completed(
         record,
         reported_seconds=job.seconds,
+        reported_cost=job.cost,
         endpoint=USAGE_ENDPOINT_COMPLETED,
         workspace_id=workspace_id,
         organization_id=organization_id,
@@ -301,12 +328,13 @@ async def _retrieve(
     if job.status == "completed" and record.accounted_at is None:
         deployment_charge = None
         if deployment_paid and organization_id is not None:
-            deployment_charge = DeploymentCharge(
-                billing=billing_port_on(raw_request, db),
+            deployment_charge = deferred_charge(
+                billing_port_on(raw_request, db),
                 organization_id=organization_id,
                 api_key_id=record.api_key_id,
-                actor_user_id=None,
-                request_id=None,
+                creator_user_id=record.user_id,
+                provider=provider,
+                model=record.model,
             )
         await _settle(
             record,
@@ -320,7 +348,7 @@ async def _retrieve(
     return record, job, provider, kwargs
 
 
-@router.get("/{video_id}", response_model=VideoJobResponse)
+@router.get("/{video_id}", response_model=VideoJobResponse, openapi_extra=key_scope(KeyScope.INFERENCE_RUN))
 async def retrieve_video(
     video_id: str,
     raw_request: Request,
@@ -332,8 +360,10 @@ async def retrieve_video(
     """The job's status, from its record once it completed, else from the provider that runs it.
 
     The first retrieval that finds the job completed bills its length at the
-    model's per-second video price. A key reads only the jobs its user started
-    in its workspace; the master key reads any job.
+    model's per-second video price. A job whose length neither the provider
+    nor the request states is billed what the provider charged for it, else
+    the length its reservation assumed. A key reads only the jobs its user
+    started in its workspace; the master key reads any job.
     """
     record, job, _, _ = await _retrieve(
         video_id, raw_request=raw_request, auth_result=auth_result, db=db, config=config, jobs=jobs
@@ -349,6 +379,7 @@ async def retrieve_video(
         status.HTTP_409_CONFLICT: {"description": "The job has not completed"},
         status.HTTP_502_BAD_GATEWAY: {"description": "LLM provider error"},
     },
+    openapi_extra=key_scope(KeyScope.INFERENCE_RUN),
 )
 async def retrieve_video_content(
     video_id: str,
@@ -388,7 +419,7 @@ async def retrieve_video_content(
     return Response(content=content, media_type=output.mime_type)
 
 
-@router.get("", response_model=VideoJobList)
+@router.get("", response_model=VideoJobList, openapi_extra=key_scope(KeyScope.INFERENCE_RUN))
 async def list_videos(
     auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
     jobs: VideoJobServiceDep,

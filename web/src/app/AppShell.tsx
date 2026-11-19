@@ -1,5 +1,11 @@
 import { Button, cn, Disclosure, Popover } from "@heroui/react"
-import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router"
+import {
+  Link,
+  Navigate,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from "@tanstack/react-router"
 import type { MouseEvent as ReactMouseEvent } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { IconType } from "react-icons"
@@ -16,13 +22,17 @@ import { AutoUpdate } from "@/app/AutoUpdate"
 import { ConnectionStatus } from "@/app/ConnectionStatus"
 import { AccountMenu } from "@/app/nav/AccountMenu"
 import { Breadcrumbs } from "@/app/nav/Breadcrumbs"
+import { CreateKeyRailButton } from "@/app/nav/CreateKeyRailButton"
 import {
   lastLocation,
   lastRailContext,
   rememberLocation,
 } from "@/app/nav/navigationHistory"
+// Seams by their `@/…` specifiers, never relatively: those are the alias keys.
+import { MobileWalletNavSlot } from "@/app/nav/overlayMobileWalletSlot"
 import {
   DEPLOYMENT_NAV_SECTIONS,
+  DRAWER_NAV_SECTIONS,
   isPathVisible,
   NAV_SECTIONS,
   type NavContext,
@@ -31,6 +41,7 @@ import {
   navLabelForPath,
   ORG_NAV_SECTIONS,
   pageLabelForPath,
+  railPathForPath,
   visibleNavSections,
 } from "@/app/nav/registry"
 import {
@@ -39,34 +50,40 @@ import {
   navIndicatorClass,
   navRowClass,
 } from "@/app/nav/rowStyles"
+import { TeamBudget } from "@/app/nav/TeamBudget"
 import { TopBarActions } from "@/app/nav/TopBarActions"
 import type { NavItem, NavPath, NavSection } from "@/app/nav/types"
 import {
+  routeAccess,
+  useCaller,
   useNavVisibility,
+  useRouteAccess,
   useRouteVisibility,
   useSurfaceVisibility,
 } from "@/app/nav/useNavVisibility"
 import { WorkspaceSwitcher } from "@/app/nav/WorkspaceSwitcher"
 import { EntitlementResolver } from "@/app/overlayEntitlementResolver"
 import { PostSignInGate } from "@/app/overlayPostSignInGate"
+import { ShellBanner } from "@/app/overlayShellBanner"
 import { PendingPage } from "@/app/PendingPage"
 import { TelemetryIdentity } from "@/app/TelemetryIdentity"
-import { useDrawerSwipe } from "@/app/useDrawerSwipe"
-import { usePageLoading } from "@/app/usePageLoading"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
-import { LoadingBar } from "@/design-system/feedback/LoadingBar"
-import { Chip } from "@/design-system/indicators/Chip"
+import { useAdoptBrowserAvatar } from "@/features/account/avatar/avatarChoice"
+import { FeedbackDialog } from "@/features/feedback/FeedbackDialog"
+import { CreateKeyHost } from "@/features/keys/CreateKeyHost"
+import { useOpenCreateKey } from "@/features/keys/openCreateKey"
 import { PricingWarning } from "@/features/models/PricingWarning"
 import { UnpricedUsageWarning } from "@/features/models/UnpricedUsageWarning"
-import { canManage } from "@/features/organization/roles"
-import {
-  isNoOrganizationError,
-  useOrganizationContext,
-} from "@/shared/api/organizations"
+import { useCanCreateKey } from "@/features/organization/access"
+import { UpdateCheckPrompt } from "@/features/updateCheck/UpdateCheckPrompt"
+import { UpdateNotice } from "@/features/updateCheck/UpdateNotice"
+import { useSessionCaller } from "@/shared/api/auth"
+import { useOrganizationContext } from "@/shared/api/organizations"
+import { BreadcrumbLeafProvider } from "@/shared/hooks/BreadcrumbLeaf"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
+import { useDeployment } from "@/shared/hooks/useDeployment"
 import { useDocumentTitle } from "@/shared/hooks/useDocumentTitle"
 import { useEntitlements } from "@/shared/hooks/useEntitlements"
-import { useIsPhone } from "@/shared/hooks/useIsPhone"
 import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import { useTelemetry } from "@/shared/telemetry/overlayTelemetry"
 
@@ -80,6 +97,17 @@ import { useTelemetry } from "@/shared/telemetry/overlayTelemetry"
 const SIDEBAR_WIDTH = "w-[16.5rem]"
 const COLLAPSED_SIDEBAR_WIDTH = "w-[4.5rem]"
 const SIDEBAR_COLLAPSED_KEY = "otari.dashboard.sidebarCollapsed"
+
+// Below this width the sidebar's fixed footprint squashes page content, so it
+// switches to an off-canvas drawer toggled from the header. Matches Tailwind's
+// `md` breakpoint (the classes that hide the trigger and drawer chrome use `md:`).
+const MOBILE_QUERY = "(max-width: 767px)"
+
+function readIsMobile(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function")
+    return false
+  return window.matchMedia(MOBILE_QUERY).matches
+}
 
 function readStoredCollapsed(): boolean {
   if (typeof window === "undefined") return false
@@ -204,7 +232,6 @@ function useRecordNavigation(): (to: NavPath, isActive: boolean) => void {
 function NavRowLink({
   to,
   label,
-  badge,
   icon: Icon,
   isActive,
   isCollapsed,
@@ -213,7 +240,6 @@ function NavRowLink({
 }: {
   to: NavPath
   label: string
-  badge?: string
   icon?: IconType
   isActive: boolean
   isCollapsed?: boolean
@@ -233,11 +259,11 @@ function NavRowLink({
         onNavigate()
       }}
       className={`${navRowClass({ isActive, isCollapsed, isNested })} w-full`}
-      // Spelled out with a badge, which would otherwise run into the label
-      // ("Code executionBeta") in the accessible name.
-      aria-label={
-        isCollapsed ? label : badge ? `${label}, ${badge}` : undefined
-      }
+      // The row drawn selected is the one announced as current. The link's own
+      // match is exact on the path and its search, so on a detail page or an
+      // address with a query string it said nothing.
+      aria-current={isActive ? "page" : undefined}
+      aria-label={isCollapsed ? label : undefined}
       title={isCollapsed ? label : undefined}
     >
       {/* A nested row draws no glyph: the indent is what marks it as one, and
@@ -250,7 +276,6 @@ function NavRowLink({
       {isCollapsed ? null : (
         <span className="min-w-0 flex-1 truncate">{label}</span>
       )}
-      {badge && !isCollapsed ? <Chip tone="accent">{badge}</Chip> : null}
     </Link>
   )
 }
@@ -290,12 +315,12 @@ function NavGroup({
   isVisible: (item: NavItem) => boolean
   isCollapsed: boolean
 }) {
-  // A child declaring its own surface is gated on it. Without this the field
-  // was decoration: Guardrails is grouped under Routing but served by the tools
-  // surface, so a deployment without that surface kept the link and landed on
-  // the "not available here" panel.
+  // A child is gated on the entry `navItemForPath` answers for it, which
+  // carries its own surface and capability, so the row and the route cannot
+  // disagree: a child served by another surface than its group's would
+  // otherwise keep its link and land on the "not available here" panel.
   const children = (item.children ?? []).filter((child) =>
-    child.surface ? isVisible({ ...item, surface: child.surface }) : true,
+    isVisible(navItemForPath(child.to) ?? item),
   )
   const holdsCurrent = children.some((child) => child.to === currentPath)
   const [open, setOpen] = useState(holdsCurrent)
@@ -349,7 +374,6 @@ function NavGroup({
                 key={child.to}
                 to={child.to}
                 label={child.label}
-                badge={child.badge}
                 icon={child.icon}
                 isActive={currentPath === child.to}
                 onNavigate={() => {
@@ -428,7 +452,6 @@ function NavGroup({
             key={child.to}
             to={child.to}
             label={child.label}
-            badge={child.badge}
             icon={child.icon}
             isActive={currentPath === child.to}
             isNested
@@ -464,20 +487,31 @@ function NavGroup({
  * of the whole app, after a session exists (otari#789): otari.ai's signup
  * profile questions, in the build that has a signup. It is mounted here rather
  * than anywhere else because its position *is* its contract, all three
- * boundaries of it, and the module docstring is where that lives. The base
- * default renders its children unchanged, so this build shows no step at all.
+ * boundaries of it, and the module docstring is where that lives.
  */
 export function AppShell() {
   return (
     <EntitlementResolver>
       <PostSignInGate>
-        <AppShellChrome />
+        {/* The Create API key dialog, opened from any page that offers a key. */}
+        <CreateKeyHost>
+          <BreadcrumbLeafProvider>
+            <AppShellChrome />
+          </BreadcrumbLeafProvider>
+        </CreateKeyHost>
       </PostSignInGate>
     </EntitlementResolver>
   )
 }
 
 function AppShellChrome() {
+  const { feedback_enabled } = useDeployment()
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  // The rail's Create API key, which opens the dialog `CreateKeyHost` holds.
+  const canCreateKey = useCanCreateKey()
+  const openCreateKey = useOpenCreateKey()
+  const feedbackTriggerRef = useRef<HTMLButtonElement>(null)
+
   // Navigation is data: the shell renders whatever the registry declares and
   // decides visibility from the deployment and the entitlements,
   // rather than each page asking what it is running against.
@@ -486,11 +520,19 @@ function AppShellChrome() {
   const { pathname } = useLocation()
   const navigate = useNavigate()
   useDocumentTitle(pageLabelForPath(pathname))
+  // Every signed-in page, so an avatar picked before picks were stored reaches
+  // the profile on the first load, whichever page that is.
+  useAdoptBrowserAvatar()
   // A gated-off destination is still reachable by bookmark or shared URL, so the
   // shell answers those with a panel instead of a page whose every request the
   // server would refuse. An unregistered path (the guide, the 404 splat) has no
   // entry and is never gated.
   const currentItem = navItemForPath(pathname)
+  // A page the caller may not open answers as an unknown address does, by
+  // going Home. Decided once their role is known: until then the page waits,
+  // so nobody who may open it is sent away while it loads.
+  const access = useRouteAccess()(pathname)
+  const routeCaller = useCaller()
   // Through the registry's predicate rather than `isVisible(currentItem)` here,
   // so this and the rail memory cannot answer "is this destination served"
   // differently: whichever way the nested case resolves, both read it from one
@@ -529,23 +571,24 @@ function AppShellChrome() {
   // Which of the two sidebars this path belongs under. The organization context
   // is a separate rail reached from the footer, not a section inside the
   // workspace one, so the two never render together.
-  const navContext = navContextForPath(pathname)
+  // Not the rail of a page about to send its visitor Home.
+  const navContext =
+    access === "blocked" ? "workspace" : navContextForPath(pathname)
   const inOrganization = navContext === "organization"
   const inDeployment = navContext === "deployment"
   const organization = useOrganizationContext()
+  // The identity the gateway reads the shared email from, so the address the
+  // dialog offers is the one that is sent.
+  const caller = useSessionCaller()
   const { selected: selectedWorkspace } = useSelectedWorkspace()
   // True for the local operator, who owns the organization the gateway
   // provisioned for itself, and load-bearing for every account that signs in
-  // without managing it (otari-ai#1716).
-  // Fails open when the context errors rather than resolving false: Users,
-  // budgets and settings are reachable only through this entry, the routes still
-  // work by URL, and the server authorizes every request behind it regardless.
-  // Hiding the way there because one query failed strands three destinations.
-  // A 404 is not a failure but the answer that there is no organization to
-  // manage.
+  // without managing it (otari-ai#1716). The same answer that decides whether
+  // the organization's pages open, so it fails open as they do when the
+  // context read fails: hiding the way there because one query failed strands
+  // every destination behind it, and the server authorizes each request anyway.
   const managesOrganization =
-    canManage(organization.data) ||
-    (organization.isError && !isNoOrganizationError(organization.error))
+    routeAccess({ route: "/organization", params: {} }, routeCaller) === "open"
 
   // Both rails remember where you were, so the controls that cross between them
   // return you rather than resetting you. Recorded here rather than on those
@@ -579,20 +622,25 @@ function AppShellChrome() {
     ? (organizationLanding?.to ?? "/organization/members")
     : (workspaceLanding?.to ?? "/")
 
-  const rowRef = useRef<HTMLDivElement>(null)
   const asideRef = useRef<HTMLElement>(null)
   const mainRef = useRef<HTMLElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
+  // Tracks the touch that began a swipe gesture, so the end handler can
+  // measure displacement without storing intermediate move coordinates.
+  // The identifier ties the end event to the same contact that started it,
+  // so a second finger lifting does not trigger the drawer.
+  const swipeStartXRef = useRef<number | null>(null)
+  const swipeStartYRef = useRef<number | null>(null)
+  const swipeTouchIdRef = useRef<number | null>(null)
   const orgNavTriggerRef = useRef<HTMLButtonElement>(null)
   const railBackRef = useRef<HTMLButtonElement>(null)
   // Which level was last open, read on the way out when the level itself is
   // already gone from state.
   const lastMobileLevelRef = useRef<MobileLevel | null>(null)
   const accountTriggerRef = useRef<HTMLButtonElement>(null)
+  const restoreSidebarFocusRef = useRef(false)
   const [collapsed, setCollapsed] = useState<boolean>(readStoredCollapsed)
-  // Below `md` the sidebar's fixed footprint squashes page content, so it
-  // becomes an off-canvas drawer toggled from the header.
-  const isMobile = useIsPhone()
+  const [isMobile, setIsMobile] = useState<boolean>(readIsMobile)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   // The organization rail, opened as a level *inside* the drawer rather than by
   // going to a page. Mobile only, and it exists because the two rails are a
@@ -646,24 +694,40 @@ function AppShellChrome() {
   // Filtered before it is indexed, so the divider and top margin below key off
   // the first *rendered* section rather than the first registered one.
   const visibleSections = visibleNavSections(
-    RAIL_SECTIONS[railContext],
+    isMobile && railContext === "workspace"
+      ? DRAWER_NAV_SECTIONS
+      : RAIL_SECTIONS[railContext],
     isVisible,
   )
 
-  // Crossing to the desk closes the drawer, so a stale open state cannot leave
-  // a fixed overlay stranded over the desktop layout. Adjusted while
-  // rendering, so no frame draws the desk with the drawer still open. The
-  // drawer is modal, so an open one held focus, which then stays on the
-  // sidebar rather than falling to the now-hidden toggle (see below).
-  const [wasMobile, setWasMobile] = useState(isMobile)
-  const [restoreSidebarFocus, setRestoreSidebarFocus] = useState(false)
-  if (wasMobile !== isMobile) {
-    setWasMobile(isMobile)
-    if (!isMobile) {
-      setRestoreSidebarFocus(mobileNavOpen)
-      closeMobileNav()
+  // Track the mobile breakpoint so the sidebar can render as an off-canvas
+  // drawer below it and as the fixed-width rail above it. Closing the drawer when
+  // the viewport grows past the breakpoint keeps a stale open state from leaving
+  // a fixed overlay stranded over the desktop layout.
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      typeof window.matchMedia !== "function"
+    )
+      return
+    const query = window.matchMedia(MOBILE_QUERY)
+    const onChange = (event: MediaQueryListEvent) => {
+      if (!event.matches) {
+        restoreSidebarFocusRef.current =
+          asideRef.current?.contains(document.activeElement) ?? false
+        closeMobileNav()
+      }
+      setIsMobile(event.matches)
     }
-  }
+    // Safari < 14 (and some older engines) only expose the deprecated
+    // addListener/removeListener; fall back to it so the shell doesn't throw.
+    if (typeof query.addEventListener === "function") {
+      query.addEventListener("change", onChange)
+      return () => query.removeEventListener("change", onChange)
+    }
+    query.addListener(onChange)
+    return () => query.removeListener(onChange)
+  }, [closeMobileNav])
 
   // Escape closes the drawer, matching the dismissible-overlay convention. The
   // organization submenu first when it is open, so one press unwinds one level
@@ -688,8 +752,8 @@ function AppShellChrome() {
   // it to the now-hidden toggle or losing it when the submenu unmounts.
   useEffect(() => {
     if (!isMobile) {
-      if (restoreSidebarFocus) {
-        setRestoreSidebarFocus(false)
+      if (restoreSidebarFocusRef.current) {
+        restoreSidebarFocusRef.current = false
         asideRef.current?.focus()
       }
       return
@@ -699,7 +763,7 @@ function AppShellChrome() {
     } else if (asideRef.current?.contains(document.activeElement)) {
       toggleRef.current?.focus()
     }
-  }, [isMobile, mobileNavOpen, restoreSidebarFocus])
+  }, [isMobile, mobileNavOpen])
 
   // A level inside the drawer rather than a second overlay, so it moves focus
   // the way the drawer does: onto the control that leaves the level when it
@@ -742,10 +806,10 @@ function AppShellChrome() {
   }, [collapsed])
 
   // Move focus (and scroll) to the page's main region, past the header and the
-  // whole nav. A plain anchor to `#main-content` can't do this: the router runs
-  // on hash history, so that href would register as a route change. Focusing
-  // the ref directly keeps the route intact; `main` carries tabIndex={-1} so it
-  // can accept programmatic focus without joining the tab order.
+  // whole nav. A plain anchor to `#main-content` would leave a fragment in the
+  // address and a history entry under it. Focusing the ref directly keeps the
+  // address intact; `main` carries tabIndex={-1} so it can accept programmatic
+  // focus without joining the tab order.
   const skipToMain = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>) => {
       event.preventDefault()
@@ -764,14 +828,6 @@ function AppShellChrome() {
   // is in it, and the trail beside that control is the one thing worth reading
   // while the drawer is open.
   const backgroundInert = isMobile && mobileNavOpen ? true : undefined
-  // A swipe right opens the drawer and a swipe left closes it, the way a native
-  // app's side menu does.
-  useDrawerSwipe(rowRef, {
-    enabled: isMobile,
-    isOpen: mobileNavOpen,
-    onOpen: () => setMobileNavOpen(true),
-    onClose: closeMobileNav,
-  })
 
   return (
     // NOTE: This clips rather than hides. `overflow: hidden` makes a box a
@@ -799,7 +855,10 @@ function AppShellChrome() {
       <AutoUpdate />
       <ConnectionStatus />
       <PricingWarning />
+      <ShellBanner />
       <UnpricedUsageWarning />
+      <UpdateNotice />
+      <UpdateCheckPrompt />
       {/* `relative` so the mobile drawer can be offset from *this row* rather
           than from the viewport. The row's top edge is the header's top edge,
           and the pricing alarm above it is a band in flow, so a
@@ -808,7 +867,6 @@ function AppShellChrome() {
           it. The connection status is out of flow and carries its own fill, so
           it does not enter into this. */}
       <div
-        ref={rowRef}
         className="relative flex min-h-0 flex-1"
         // What the rail costs the content beside it, for a `position: fixed`
         // overlay that has to center on that content rather than on the
@@ -948,6 +1006,20 @@ function AppShellChrome() {
           {/* No bottom padding: the account band closes the rail, so it sits on
               the viewport's edge the way the scope band sits on the top. */}
           <div className="flex min-h-0 flex-1 flex-col gap-4 px-3 pt-3">
+            {/* The rail's one action. A key is how every session starts, so it
+                leads the workspace rail; a viewer, who is refused one, is not
+                offered it. */}
+            {railContext === "workspace" && canCreateKey ? (
+              <CreateKeyRailButton
+                isCollapsed={effectiveCollapsed}
+                onPress={() => {
+                  closeMobileNav()
+                  // Below `md` this closes the drawer it sits in, so the
+                  // dialog gives focus back to the drawer's toggle.
+                  openCreateKey("sidebar", isMobile ? toggleRef.current : null)
+                }}
+              />
+            ) : null}
             <nav
               // Named because the header's breadcrumb is a navigation landmark
               // too, and two unnamed ones give a screen-reader user no way to tell
@@ -997,12 +1069,14 @@ function AppShellChrome() {
                           // route. `navItemForPath` prefers the exact entry, and a
                           // future child route (`/routing/new`) still resolves to
                           // its parent, which is the highlight that route wants.
+                          // A page with no row selects the row that stands
+                          // for it (`railPathForPath`).
                           <NavRowLink
                             key={item.to}
                             to={item.to}
                             label={item.label}
                             icon={item.icon}
-                            isActive={currentItem?.to === item.to}
+                            isActive={railPathForPath(pathname) === item.to}
                             isCollapsed={effectiveCollapsed}
                             // Tapping a destination dismisses the mobile drawer so
                             // the page it landed on is visible, not behind it.
@@ -1015,6 +1089,11 @@ function AppShellChrome() {
                 )
               })}
             </nav>
+            {/* The organization's limit and how much of it is spent, for the
+                people who can change it. */}
+            {effectiveCollapsed ? null : (
+              <TeamBudget onNavigate={closeMobileNav} />
+            )}
             {/* The account block, set off by a rule as in the navigation prototype:
               the way onto the organization rail, the documentation, and the
               account control whose menu carries appearance and sign-out. */}
@@ -1114,6 +1193,10 @@ function AppShellChrome() {
               <div className="-mx-3 flex h-14 shrink-0 items-center border-t border-border">
                 <AccountMenu
                   isCollapsed={effectiveCollapsed}
+                  onOpenFeedback={() => {
+                    closeMobileNav()
+                    setFeedbackOpen(true)
+                  }}
                   triggerRef={accountTriggerRef}
                   // Below `md` the Deployment row opens a level inside the
                   // drawer instead of navigating: the popover it lives in is
@@ -1142,8 +1225,7 @@ function AppShellChrome() {
           <header
             // The design's top bar sits on the page ground rather than on a
             // card fill, so the rail is the only chrome that reads as a surface.
-            // `relative` for the loading bar laid over its bottom rule.
-            className="relative flex min-h-14 shrink-0 items-center gap-4 border-b border-border bg-background pr-5 pl-4"
+            className="flex min-h-14 shrink-0 items-center gap-4 border-b border-border bg-background pr-5 pl-4"
           >
             <div className="flex min-w-0 flex-1 items-center gap-4">
               <button
@@ -1157,7 +1239,9 @@ function AppShellChrome() {
                 }
                 aria-expanded={mobileNavOpen}
                 aria-controls="app-sidebar"
-                className="-ml-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-alt hover:text-foreground md:hidden"
+                // `-ml-3` hands the glyph's 12px of side padding to the gutter,
+                // so the bars rather than their box line up with the page title.
+                className="-ml-3 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-alt hover:text-foreground md:hidden"
               >
                 {mobileNavOpen ? (
                   <FiX aria-hidden="true" className="size-5" />
@@ -1183,8 +1267,16 @@ function AppShellChrome() {
               </button>
               <Breadcrumbs pathname={pathname} />
             </div>
-            <TopBarActions />
-            <PageLoadingBar />
+            {/* The phone's balance: `TopBarActions` and the wallet slot in it
+                are hidden below `md`. `empty:` keeps an empty slot out of the
+                header's gap. */}
+            <div className="flex shrink-0 items-center empty:hidden md:hidden">
+              <MobileWalletNavSlot />
+            </div>
+            <TopBarActions
+              onOpenFeedback={() => setFeedbackOpen(true)}
+              feedbackTriggerRef={feedbackTriggerRef}
+            />
           </header>
           <main
             ref={mainRef}
@@ -1193,15 +1285,88 @@ function AppShellChrome() {
             // without adding the region itself to the natural tab order.
             tabIndex={-1}
             inert={backgroundInert}
-            // The page scrolls vertically only. `overflow-y-auto` alone makes
-            // the x axis scroll too, so anything a page let spill past the edge
-            // turned the whole page into something a thumb could pan sideways.
-            // Hidden rather than clip, which computes to hidden beside a
-            // scrolling y axis anyway; a wide table keeps its own scroller.
-            className="flex-1 overflow-y-auto overflow-x-hidden overscroll-x-contain focus:outline-none"
+            // The page never scrolls sideways; content meant to (a wide table)
+            // carries its own scroller. This is the backstop, not the fix: the
+            // 390px e2e check measures overflow under it. Not `overflow-x-clip`,
+            // which computes to `hidden` beside `overflow-y: auto` anyway.
+            className="flex-1 overflow-x-hidden overflow-y-auto focus:outline-none"
+            onTouchStart={
+              isMobile && !mobileNavOpen
+                ? (e) => {
+                    // Ignore multi-touch; clear any stale gesture first.
+                    swipeStartXRef.current = null
+                    swipeStartYRef.current = null
+                    swipeTouchIdRef.current = null
+                    if (e.touches.length !== 1) return
+                    const touch = e.touches[0]
+                    // Only begin tracking a swipe that starts near the left
+                    // edge (within 30px), where a nav-open gesture belongs.
+                    if (!touch || touch.clientX > 30) return
+                    // Skip if the touch lands inside a horizontally scrollable
+                    // element, so a table or chart swipe does not also open the
+                    // drawer. Walk the target's ancestor chain looking for any
+                    // element that scrolls horizontally.
+                    let node = e.target as Element | null
+                    while (node && node !== e.currentTarget) {
+                      const style = window.getComputedStyle(node)
+                      const overflowX = style.overflowX
+                      if (
+                        (overflowX === "auto" || overflowX === "scroll") &&
+                        node.scrollWidth > node.clientWidth
+                      ) {
+                        return
+                      }
+                      node = node.parentElement
+                    }
+                    swipeStartXRef.current = touch.clientX
+                    swipeStartYRef.current = touch.clientY
+                    swipeTouchIdRef.current = touch.identifier
+                  }
+                : undefined
+            }
+            onTouchEnd={
+              isMobile && !mobileNavOpen
+                ? (e) => {
+                    const startX = swipeStartXRef.current
+                    const startY = swipeStartYRef.current
+                    const touchId = swipeTouchIdRef.current
+                    swipeStartXRef.current = null
+                    swipeStartYRef.current = null
+                    swipeTouchIdRef.current = null
+                    if (startX === null || startY === null || touchId === null)
+                      return
+                    // Match the ending contact to the one that started the
+                    // gesture by identifier, so a second finger lifting does
+                    // not trigger the drawer.
+                    const touch = Array.from(e.changedTouches).find(
+                      (t) => t.identifier === touchId,
+                    )
+                    if (!touch) return
+                    // Open the drawer when the finger has moved at least 50px
+                    // to the right without drifting more than 75px vertically,
+                    // so an upward scroll near the edge does not trigger it.
+                    const dx = touch.clientX - startX
+                    const dy = Math.abs(touch.clientY - startY)
+                    if (dx >= 50 && dy < 75) {
+                      setMobileNavOpen(true)
+                    }
+                  }
+                : undefined
+            }
+            onTouchCancel={
+              isMobile && !mobileNavOpen
+                ? () => {
+                    swipeStartXRef.current = null
+                    swipeStartYRef.current = null
+                    swipeTouchIdRef.current = null
+                  }
+                : undefined
+            }
           >
             <div className="mx-auto flex max-w-[112.5rem] flex-col gap-6 px-4 pt-5 pb-[calc(1.25rem+var(--shell-corner-clearance))] md:px-6 md:pt-6 md:pb-[calc(1.5rem+var(--shell-corner-clearance))]">
-              {answerIsStillComing ? (
+              {access === "blocked" ? (
+                <Navigate to="/" replace />
+              ) : access === "pending" || answerIsStillComing ? (
                 <PendingPage />
               ) : routeIsGatedOff ? (
                 <EmptyState
@@ -1211,8 +1376,8 @@ function AppShellChrome() {
                   // a registered path can be gated off, so the fallback is there
                   // for the type rather than for a case that happens.
                   title={`${navLabelForPath(pathname) ?? currentItem?.label ?? "That page"} is not available here`}
-                  description="This deployment does not serve that page. Choose another page from the menu, or go back to Overview."
-                  actionLabel={pathname === "/" ? undefined : "Go to Overview"}
+                  description="This deployment does not serve that page. Choose another page from the menu, or go back to Home."
+                  actionLabel={pathname === "/" ? undefined : "Go to Home"}
                   onAction={() => void navigate({ to: "/" })}
                 />
               ) : (
@@ -1222,15 +1387,16 @@ function AppShellChrome() {
           </main>
         </div>
       </div>
+      {feedback_enabled ? (
+        <FeedbackDialog
+          isOpen={feedbackOpen}
+          onOpenChange={setFeedbackOpen}
+          // Below `md` the drawer has closed by then, and the menu row inside it
+          // with it, so the control that reopens the drawer takes focus.
+          returnFocusRef={isMobile ? toggleRef : feedbackTriggerRef}
+          email={caller?.email?.trim() || null}
+        />
+      ) : null}
     </div>
   )
-}
-
-/**
- * The page's loading bar, apart from the chrome: `usePageLoading` re-renders
- * on every first read that starts or settles anywhere, and the rest of the
- * shell has no reason to render again with it.
- */
-function PageLoadingBar() {
-  return <LoadingBar isActive={usePageLoading()} />
 }

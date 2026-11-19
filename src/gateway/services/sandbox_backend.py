@@ -43,10 +43,12 @@ from gateway.ports.code_execution_port import (
     SandboxSessionGoneError,
     SandboxUnavailableError,
 )
+from gateway.ports.file_storage_port import FILE_STORE_ERRORS
 from gateway.services.code_execution import CONTAINER_ID_PREFIX, ContainerLease, SandboxContainers, new_container_id
-from gateway.services.tool_usage import TOOL_BUDGET_EXCEEDED_TEXT, ToolUsageTally, is_tool_error
+from gateway.services.tool_usage import TOOL_BUDGET_EXCEEDED_TEXT, TOOL_ERROR_SENTINEL, ToolUsageTally, is_tool_error
 from gateway.services.traces import RequestTrace, ToolSpans
 from gateway.types.code_execution import ResultBlock
+from gateway.types.tool_charges import gateway_tool_pricing_key
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -70,10 +72,22 @@ __all__ = [
     "SandboxNotReachableError",
     "SandboxSessionGoneError",
     "SandboxUnavailableError",
+    "code_execution_rate_keys",
     "code_execution_tool_definition",
 ]
 
 CODE_EXECUTION_TOOL_NAME = "code_execution"
+
+
+def code_execution_rate_keys(image: str | None) -> tuple[str, ...]:
+    """The rows that price a run in ``image``, first match winning.
+
+    The environment's own, ``otari:code_execution:<image>``, then ``otari:code_execution``.
+    """
+    tool_key = gateway_tool_pricing_key(CODE_EXECUTION_TOOL_NAME)
+    return (f"{tool_key}:{image}", tool_key) if image else (tool_key,)
+
+
 # The code-execution tool kinds a policy may name, which is the vocabulary the
 # hosted ``CodeExecutionConfig.tools`` uses and the one the protocol's ``tool``
 # field carries on the wire. This backend serves the first of them and no more,
@@ -156,6 +170,14 @@ class SandboxFiles(Protocol):
         ...
 
 
+# What the model sees for a call that carried no code. It carries the sentinel, so
+# the call is counted as a failure and never billed, and the model can try again.
+EMPTY_CODE_TEXT = (
+    f"{TOOL_ERROR_SENTINEL} invalid_input: the call had no code, so nothing was run. "
+    "Call the tool again with the Python code to run."
+)
+
+
 def code_execution_tool_definition() -> dict[str, Any]:
     """The OpenAI-shaped function definition the model is given for code execution.
 
@@ -200,6 +222,9 @@ class CodeExecution:
 
     code: str
     result: ResultBlock | None
+    # True for a call refused before it reached the sandbox because it had no code,
+    # so a loop can report a bad input rather than an unreachable sandbox.
+    invalid_input: bool = False
     # Produced filename -> the ``file_id`` it was stored under in ``/v1/files``,
     # for the files a bridge collected. A produced file with no entry here is
     # one the caller cannot download, so a native block does not announce it.
@@ -336,7 +361,9 @@ class SandboxBackend:
         # a backend that declined to hold it releases on exit, and a container id
         # promising a sandbox that is already gone is worse than none.
         if self._containers is not None and session.holds_across_requests:
-            self.lease = self._containers.lease(self.container_id, session.session_id, resumed=self._resume)
+            self.lease = self._containers.lease(
+                self.container_id, session.session_id, resumed=self._resume, image=self._image
+            )
             if self._on_lease is not None:
                 self._on_lease(self.lease)
         try:
@@ -367,7 +394,7 @@ class SandboxBackend:
         for staged in self._files.inputs:
             try:
                 data = await self._files.read_input(staged)
-            except OSError as exc:
+            except FILE_STORE_ERRORS as exc:
                 raise SandboxNotReachableError(f"could not read attachment {staged.file_id} for the sandbox") from exc
             try:
                 await self._session.put_file(staged.filename, data, mime_type=staged.mime_type)
@@ -541,8 +568,19 @@ class SandboxBackend:
             raise KeyError(f"SandboxBackend does not own tool {name!r}")
         code = str(arguments.get("code") or "")
         started = datetime.now(UTC)
+        if not code.strip():
+            # Nothing to run: an exit status from an empty program would read as a
+            # run that worked. Refused before admission, so it spends no budget.
+            self._executions.append(CodeExecution(code=code, result=None, invalid_input=True))
+            if self._tally is not None:
+                self._tally.record_failure(CODE_EXECUTION_TOOL_NAME)
+            self._spans.record(started, ok=False, arguments=arguments)
+            return EMPTY_CODE_TEXT
         # The sandbox is the deployment's, whichever backend runs it.
-        if self._tally is not None and not await self._tally.admit(CODE_EXECUTION_TOOL_NAME, deployment_paid=True):
+        rate_keys = code_execution_rate_keys(self._image)
+        if self._tally is not None and not await self._tally.admit(
+            CODE_EXECUTION_TOOL_NAME, rate_keys=rate_keys, deployment_paid=True
+        ):
             self._tally.record_failure(CODE_EXECUTION_TOOL_NAME)
             self._spans.record(started, ok=False, arguments=arguments)
             return TOOL_BUDGET_EXCEEDED_TEXT
@@ -556,7 +594,7 @@ class SandboxBackend:
             raise
         self._executions.append(CodeExecution(code=code, result=block, file_ids=file_ids))
         if self._tally is not None:
-            self._tally.record_result(CODE_EXECUTION_TOOL_NAME, result, deployment_paid=True)
+            self._tally.record_result(CODE_EXECUTION_TOOL_NAME, result, rate_keys=rate_keys, deployment_paid=True)
         self._spans.record(started, ok=not is_tool_error(result), arguments=arguments, result=result)
         return result
 

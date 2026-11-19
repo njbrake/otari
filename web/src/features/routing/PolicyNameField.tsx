@@ -18,25 +18,20 @@ export function PolicyNameField({
   value,
   onChange,
   previousName = "",
-  problem: clash = "",
-  label = "Name",
   autoFocus,
 }: {
   value: string
   onChange: (next: string) => void
   /** The stored name, on an edit; a different one renames the policy. */
   previousName?: string
-  /** A reason the page knows of, such as a name already taken, shown in place of the field's own. */
-  problem?: string
-  label?: string
   autoFocus?: boolean
 }) {
-  const problem = nameProblemOf(value, previousName) || clash
+  const problem = nameProblemOf(value, previousName)
   const isRenaming =
     previousName !== "" && value.trim() !== "" && value.trim() !== previousName
   return (
     <Field
-      label={label}
+      label="Name"
       value={value}
       onChange={onChange}
       placeholder="fast"

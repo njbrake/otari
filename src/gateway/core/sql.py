@@ -8,17 +8,13 @@ filters the operator was shown.
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, Literal, cast, overload
+from typing import Any, Literal, cast
 
-from sqlalchemy import ColumnElement, Integer, String, func, text
-from sqlalchemy import cast as sql_cast
+from sqlalchemy import ColumnElement, func, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.sql.compiler import SQLCompiler
-from sqlalchemy.sql.functions import FunctionElement
 
 # How many values one repeatable entity filter (model / user / API key) may carry.
 # Far above what a chart can distinguish (a stacked series folds past eight groups),
@@ -63,14 +59,8 @@ def contains_pattern(term: str) -> str:
     return f"%{escaped}%"
 
 
-@overload
-def utc_bound(value: datetime) -> datetime: ...
-@overload
-def utc_bound(value: None) -> None: ...
-
-
 def utc_bound(value: datetime | None) -> datetime | None:
-    """Pin an offset-less window bound, or a stored timestamp, to UTC.
+    """Pin an offset-less window bound to UTC.
 
     The date query params and selection bodies advertise ISO 8601, which parses to a
     naive value when the caller omits the offset. The driver then resolves it against
@@ -79,9 +69,6 @@ def utc_bound(value: datetime | None) -> datetime | None:
     select a different set of rows per deployment. Shared for the usual reason: a
     count an operator confirms and the delete that re-derives its target set from the
     same bound have to mean the same instant.
-
-    A stored timestamp is read the same way: SQLite hands a timezone-aware column
-    back naive, and the value is the UTC it was written as.
     """
     if value is None or value.tzinfo is not None:
         return value
@@ -107,45 +94,6 @@ def utc_iso(value: datetime) -> str:
 # they bucket the same way.
 BucketGrain = Literal["hour", "day"]
 
-# The usage log's own grid adds a five-minute bucket, for a chart over an hour or a
-# day, where an hourly bar would hide the shape of a burst. A separate type rather
-# than a third ``BucketGrain`` value, so the telemetry port is not made to support a
-# grain nothing asks it for.
-UsageBucketGrain = Literal["5min", "hour", "day"]
-BUCKET_SECONDS: dict[UsageBucketGrain, int] = {"5min": 300, "hour": 3600, "day": 86400}
-BUCKET_FORMATS: dict[UsageBucketGrain, str] = {
-    "5min": "%Y-%m-%dT%H:%M:00Z",
-    "hour": "%Y-%m-%dT%H:00:00Z",
-    "day": "%Y-%m-%dT00:00:00Z",
-}
-
-
-class uuid_text(FunctionElement[str]):  # noqa: N801  (a SQL function, named like one)
-    """A ``Uuid`` column as the hyphenated lowercase text ``str(uuid)`` gives, on either dialect.
-
-    PostgreSQL stores a native ``uuid`` that casts to that text. SQLite stores
-    the 32 hex digits without hyphens, so a plain cast there matches no id that
-    ``str(uuid)`` wrote and a comparison against one silently finds nothing.
-    """
-
-    type = String()
-    inherit_cache = True
-    name = "uuid_text"
-
-
-@compiles(uuid_text)
-def _uuid_text_default(element: uuid_text, compiler: SQLCompiler, **kw: Any) -> str:
-    return compiler.process(sql_cast(next(iter(element.clauses)), String), **kw)
-
-
-@compiles(uuid_text, "sqlite")
-def _uuid_text_sqlite(element: uuid_text, compiler: SQLCompiler, **kw: Any) -> str:
-    hex_digits = compiler.process(next(iter(element.clauses)), **kw)
-    parts = [
-        f"substr({hex_digits}, {start}, {length})" for start, length in ((1, 8), (9, 4), (13, 4), (17, 4), (21, 12))
-    ]
-    return "lower(" + " || '-' || ".join(parts) + ")"
-
 
 def dialect_name(db: AsyncSession) -> str:
     """The name of the dialect this session's engine speaks."""
@@ -159,23 +107,6 @@ def dialect_name(db: AsyncSession) -> str:
 # the statement timeout. The sender retries a refused batch and the insert skips
 # what already landed, so giving up early loses nothing.
 INGEST_LOCK_TIMEOUT_MS = 2000
-
-
-async def defer_commit_flush(db: AsyncSession) -> None:
-    """Let the current transaction's COMMIT return before PostgreSQL flushes its WAL to disk.
-
-    For a transaction that writes a row every request of a user or a key shares,
-    such as a budget hold. A row lock is held until the commit returns, and a
-    synchronous commit waits for the flush, so a storage stall that slows one
-    flush otherwise holds the row for its whole length and every concurrent
-    request that writes it gives up at ``lock_timeout``. The commit is still
-    atomic and visible at once, and WAL is replayed in order, so a crash can only
-    drop the last fraction of a second of such commits, never one without a
-    commit before it. SQLite has no such setting, so it is ignored there. Must
-    run inside the transaction it applies to; the commit resets it.
-    """
-    if dialect_name(db) == "postgresql":
-        await db.execute(text("SET LOCAL synchronous_commit = off"))
 
 
 async def insert_ignoring_duplicates(
@@ -211,7 +142,7 @@ async def insert_ignoring_duplicates(
     return list((await db.execute(statement, values)).scalars().all())
 
 
-def bucket_expr(dialect: str, bucket: UsageBucketGrain, column: Any) -> Any:
+def bucket_expr(dialect: str, bucket: BucketGrain, column: Any) -> Any:
     """A SQL expression that truncates ``column`` to the bucket start, in UTC.
 
     PostgreSQL ``date_trunc`` honors the session ``TimeZone``, so UTC is pinned
@@ -220,29 +151,21 @@ def bucket_expr(dialect: str, bucket: UsageBucketGrain, column: Any) -> Any:
     across DST. SQLite ``strftime`` already normalizes any stored offset to UTC.
     ``bucket`` is a validated ``Literal`` (never raw client text), so there is
     no injection surface.
-
-    Five minutes is not a unit either dialect truncates to. PostgreSQL bins with
-    ``date_bin`` (PostgreSQL 14 or later) from an origin on the hour; SQLite floors
-    the epoch seconds to a multiple of 300. Both land on the same instants.
     """
-    fmt = BUCKET_FORMATS[bucket]
     if dialect == "sqlite":
-        if bucket == "5min":
-            step = BUCKET_SECONDS[bucket]
-            return func.strftime(fmt, (sql_cast(func.strftime("%s", column), Integer) // step) * step, "unixepoch")
+        fmt = "%Y-%m-%dT%H:00:00Z" if bucket == "hour" else "%Y-%m-%dT00:00:00Z"
         return func.strftime(fmt, column)
     # PostgreSQL (and anything else that speaks date_trunc).
-    if bucket == "5min":
-        return func.date_bin(text("interval '5 minutes'"), func.timezone("UTC", column), text("timestamp '2000-01-01'"))
     return func.date_trunc(bucket, func.timezone("UTC", column))
 
 
-def canonical_bucket(value: Any, bucket: UsageBucketGrain) -> str:
-    """Normalize a bucket key to canonical ISO-8601 UTC (``YYYY-MM-DDTHH:MM:00Z``).
+def canonical_bucket(value: Any, bucket: BucketGrain) -> str:
+    """Normalize a bucket key to canonical ISO-8601 UTC (``YYYY-MM-DDTHH:00:00Z``).
 
     SQLite already returns that string; PostgreSQL returns a (naive, UTC) datetime.
     """
     if isinstance(value, str):
         return value
     dt: datetime = value
-    return dt.strftime(BUCKET_FORMATS[bucket])
+    fmt = "%Y-%m-%dT%H:00:00Z" if bucket == "hour" else "%Y-%m-%dT00:00:00Z"
+    return dt.strftime(fmt)

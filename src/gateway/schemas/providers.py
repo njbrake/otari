@@ -16,15 +16,23 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal, Self
 
-from pydantic import field_validator, model_validator
+from pydantic import ValidationInfo, field_validator, model_validator
 from sqlmodel import Field, SQLModel
 
-from gateway.core.settings.inference import country_codes
+from gateway.core.link_urls import normalize_link_url
+from gateway.core.settings.inference import country_codes, data_location, data_locations
 from gateway.models.money import as_float
-from gateway.models.pricing import ModelPricing, PriceSource
+from gateway.models.pricing import HostedPriceSource, ModelPricing, PriceSource
 from gateway.models.provider_keys import OrgProviderKey
-from gateway.models.providers import HostedModelDisabledReason, HostedProvider, HostedProviderModel, ProviderEndpoint
+from gateway.models.providers import (
+    HostedModelDisabledReason,
+    HostedProvider,
+    HostedProviderModel,
+    PlatformConnectState,
+    ProviderEndpoint,
+)
 from gateway.models.secret_fields import redact_secret_like_values
+from gateway.types.model_type import ModelType, OfferedModelType
 from gateway.types.price_unit import AcceptedPriceUnit, PriceUnit
 
 
@@ -236,12 +244,14 @@ class OrgProviderKeyModelPublic(SQLModel):
     prices the model yet. ``pricing_id`` names the organization's own row where
     there is one, so a client can edit that rate without re-deriving the key.
     ``unit`` says what the rates are per, as on a pricing row: token, request
-    or image, so a per-request rate is not read as a per-token one.
+    or image, so a per-request rate is not read as a per-token one. ``type``
+    is the kind of model, from models.dev, and None when it does not know.
     """
 
     id: uuid.UUID
     org_provider_key_id: uuid.UUID
     model: str
+    type: ModelType | None = None
     input_price_per_million: float | None = None
     output_price_per_million: float | None = None
     cache_read_price_per_million: float | None = None
@@ -255,10 +265,15 @@ class OrgProviderKeyModelPublic(SQLModel):
 
 
 class OrgProviderKeyModelsPublic(SQLModel):
-    """One page of a key's offered models, and how many there are in total."""
+    """One page of a key's offered models, and how many there are in total.
+
+    ``count`` is the total of the kind asked for, and ``type_counts`` how many
+    of each kind the key offers, ``unknown`` for a model of no known kind.
+    """
 
     data: list[OrgProviderKeyModelPublic]
     count: int
+    type_counts: dict[OfferedModelType, int] = Field(default_factory=dict)
 
 
 class OrgProviderModelsRefreshPublic(SQLModel):
@@ -394,13 +409,17 @@ class HostedProviderCreateRequest(SQLModel):
     every other one is served as if it were not configured.
     ``serves_unlisted_models`` serves a model the roster does not list, as a
     ``config.yml`` instance does, and switches on every model it offers
-    whether or not something prices it. ``session_affinity`` forwards the
-    caller's scoped prompt cache key as an ``x-session-affinity`` header, for an
-    ``openai`` or ``anthropic`` provider only. ``supported_countries`` keeps the
+    whether or not something prices it. ``supported_countries`` keeps the
     provider to requests from those ISO country codes, checked as well as
     ``provider_supported_countries``; null serves every country.
+    ``data_location`` declares where the upstream keeps request data: an ISO
+    3166-1 alpha-2 country code, ``EU`` or ``GLOBAL``; null leaves it undeclared.
+    A workspace that lists the locations it accepts is served only from one of them.
     ``zero_data_retention`` declares that the upstream keeps no prompt or
     completion data; the catalog shows it and nothing enforces it.
+    ``terms_url`` and ``privacy_url`` link the upstream's own terms of service
+    and privacy policy from the public Providers pages: absolute http(s)
+    addresses with no username or password.
     """
 
     model_config = {"json_schema_extra": {"example": {"provider": "openai", "api_key": "<your OpenAI API key>"}}}
@@ -413,14 +432,26 @@ class HostedProviderCreateRequest(SQLModel):
     enabled: bool = True
     restricted_to_organization_id: uuid.UUID | None = None
     serves_unlisted_models: bool = False
-    session_affinity: bool = False
     supported_countries: list[str] | None = Field(default=None, max_length=300)
+    data_location: str | None = Field(default=None, max_length=16)
     zero_data_retention: bool = False
+    terms_url: str | None = Field(default=None, max_length=1024)
+    privacy_url: str | None = Field(default=None, max_length=1024)
 
     @field_validator("supported_countries")
     @classmethod
     def _country_codes(cls, value: list[str] | None) -> list[str] | None:
         return country_codes(value) if value is not None else None
+
+    @field_validator("data_location")
+    @classmethod
+    def _data_location(cls, value: str | None) -> str | None:
+        return data_location(value) if value is not None else None
+
+    @field_validator("terms_url", "privacy_url")
+    @classmethod
+    def _link_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        return normalize_link_url(value, info.field_name or "link")
 
 
 class HostedProviderUpdateRequest(SQLModel):
@@ -435,7 +466,8 @@ class HostedProviderUpdateRequest(SQLModel):
     null clears it, and an entry echoed back as the mask keeps the stored value.
     ``restricted_to_organization_id`` reads the same way: omitted keeps the
     restriction, null lifts it, and so does ``supported_countries``, where an
-    empty list closes the provider to every country.
+    empty list closes the provider to every country, and ``data_location``. ``terms_url`` and
+    ``privacy_url`` omitted are left alone; null or an empty string removes the link.
     """
 
     # A toggle alone, so a reader who edits the example never re-sends a key.
@@ -447,14 +479,163 @@ class HostedProviderUpdateRequest(SQLModel):
     enabled: bool | None = None
     restricted_to_organization_id: uuid.UUID | None = None
     serves_unlisted_models: bool | None = None
-    session_affinity: bool | None = None
     supported_countries: list[str] | None = Field(default=None, max_length=300)
+    data_location: str | None = Field(default=None, max_length=16)
     zero_data_retention: bool | None = None
+    terms_url: str | None = Field(default=None, max_length=1024)
+    privacy_url: str | None = Field(default=None, max_length=1024)
 
     @field_validator("supported_countries")
     @classmethod
     def _country_codes(cls, value: list[str] | None) -> list[str] | None:
         return country_codes(value) if value is not None else None
+
+    @field_validator("data_location")
+    @classmethod
+    def _data_location(cls, value: str | None) -> str | None:
+        return data_location(value) if value is not None else None
+
+    @field_validator("terms_url", "privacy_url")
+    @classmethod
+    def _link_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        return normalize_link_url(value, info.field_name or "link")
+
+
+class HostedProviderModelSummary(SQLModel):
+    """How many models a hosted provider offers, how many it serves, and what holds the rest back.
+
+    ``serving`` counts a model switched on whose vendor is switched on too.
+    ``unpriced`` counts a model held off for want of a rate, and
+    ``vendors_off`` the vendors the provider does not serve.
+    """
+
+    total: int
+    serving: int
+    unpriced: int
+    vendors_off: int
+
+
+class HostedProviderRegionCreateRequest(SQLModel):
+    """Add a region a hosted provider serves from.
+
+    Only what differs from the provider is given; every field left out is the
+    provider's. ``slug`` pins the region in a selector
+    (``<provider>@<slug>:<model>``) and names it in every route. ``api_key``
+    left out uses the provider's key, which a region on another origin than
+    the provider's endpoint may not: it needs a key of its own there.
+    ``client_args`` are merged over the provider's on the provider's origin, so
+    a Bedrock region gives its ``region_name`` alone; a region on another
+    origin takes its own alone. An ``api_base`` that carries a key must be https.
+    ``data_location`` declares where the region keeps request data. Left out, it
+    copies the provider's declaration as it stands; null declares nothing. It is
+    the region's own from then on: a later change to the provider's does not
+    move it.
+
+    A request is served by the first enabled region whose countries admit it
+    and whose data location the workspace accepts; a pinned region is held to
+    the same filters. A provider with no regions yet serves from its own connection. Adding its
+    first region keeps that connection as a region of its own, ahead of the new
+    one, under ``primary_slug`` and ``primary_label``: by default the
+    provider's data location, or ``primary``.
+    """
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "slug": "sg",
+                "label": "Southeast Asia",
+                "api_base": "https://tokenhub-intl.example.com/v1",
+                "api_key": "<the region's key>",
+                "data_location": "SG",
+            }
+        }
+    }
+
+    slug: str = Field(min_length=1, max_length=32)
+    label: str = Field(min_length=1, max_length=64)
+    api_key: str | None = Field(default=None, min_length=1, max_length=1024)
+    api_base: str | None = Field(default=None, max_length=1024)
+    client_args: dict[str, Any] | None = None
+    data_location: str | None = Field(default=None, max_length=16)
+    supported_countries: list[str] | None = Field(default=None, max_length=300)
+    enabled: bool = True
+    primary_slug: str | None = Field(default=None, min_length=1, max_length=32)
+    primary_label: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("supported_countries")
+    @classmethod
+    def _country_codes(cls, value: list[str] | None) -> list[str] | None:
+        return country_codes(value) if value is not None else None
+
+    @field_validator("data_location")
+    @classmethod
+    def _data_location(cls, value: str | None) -> str | None:
+        return data_location(value) if value is not None else None
+
+
+class HostedProviderRegionUpdateRequest(SQLModel):
+    """Change one region. A field left out is left alone.
+
+    Null puts a field the region inherits back on the provider's value:
+    ``api_key`` null returns the region to the provider's key, an empty
+    ``api_base`` or null to the provider's endpoint, and so on for
+    ``client_args`` and ``supported_countries``. ``data_location`` is the
+    region's own, so null declares nothing. Null on ``label``, ``enabled`` or
+    ``position`` changes nothing. ``client_args`` echoed
+    back with masked entries keeps the stored values. ``position`` moves the
+    region to that place in the order regions are tried, counted from 0.
+    """
+
+    model_config = {"json_schema_extra": {"example": {"enabled": False}}}
+
+    label: str | None = Field(default=None, min_length=1, max_length=64)
+    api_key: str | None = Field(default=None, min_length=1, max_length=1024)
+    api_base: str | None = Field(default=None, max_length=1024)
+    client_args: dict[str, Any] | None = None
+    data_location: str | None = Field(default=None, max_length=16)
+    supported_countries: list[str] | None = Field(default=None, max_length=300)
+    enabled: bool | None = None
+    position: int | None = Field(default=None, ge=0, le=1000)
+
+    @field_validator("supported_countries")
+    @classmethod
+    def _country_codes(cls, value: list[str] | None) -> list[str] | None:
+        return country_codes(value) if value is not None else None
+
+    @field_validator("data_location")
+    @classmethod
+    def _data_location(cls, value: str | None) -> str | None:
+        return data_location(value) if value is not None else None
+
+
+class HostedProviderRegionPublic(SQLModel):
+    """One region of a hosted provider, as stored: null wherever it uses the provider's value.
+
+    ``data_location`` is the exception: it is the region's own, and null there
+    means nothing is declared.
+
+    ``selector`` is what pins it in a request (``tokenhub@sg``). ``has_api_key``
+    is true for a region with a key of its own, known by its last four
+    characters; ``client_args`` holds only the region's own extras, masked as
+    the provider's are. ``decryptable`` is false for a region whose own key or
+    extras no configured ``OTARI_SECRET_KEY`` reads, which serves nothing until
+    re-entered.
+    """
+
+    slug: str
+    selector: str
+    label: str
+    position: int
+    enabled: bool
+    data_location: str | None = None
+    has_api_key: bool = False
+    api_key_last4: str | None = None
+    api_base: str | None = None
+    client_args: dict[str, Any] | None = None
+    supported_countries: list[str] | None = None
+    decryptable: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class HostedProviderPublic(SQLModel):
@@ -476,10 +657,14 @@ class HostedProviderPublic(SQLModel):
     and ``decryptable`` false for one whose key or extras no configured
     ``OTARI_SECRET_KEY`` reads, which serves nothing until re-entered.
     ``serves_unlisted_models`` is true for one that serves a model its roster
-    does not list, and ``session_affinity`` for one that forwards the scoped
-    prompt cache key as ``x-session-affinity``. ``supported_countries`` is null
-    for one that serves every country. ``zero_data_retention`` is the operator's
-    declaration that the upstream keeps no prompt or completion data.
+    does not list. ``supported_countries`` is null for one that serves every
+    country. ``zero_data_retention`` is the operator's declaration that the
+    upstream keeps no prompt or completion data. ``terms_url`` and
+    ``privacy_url`` are the upstream's policies, null where none is linked.
+    ``data_location`` is where the upstream keeps request data, null where
+    nobody declared it. ``regions`` lists the regions it serves from, in the
+    order they are tried, and is empty for a provider that serves from its own
+    connection alone. ``models`` counts its offered models, on the list only.
     """
 
     id: uuid.UUID | None = None
@@ -494,10 +679,14 @@ class HostedProviderPublic(SQLModel):
     enabled: bool
     restricted_to_organization_id: uuid.UUID | None = None
     serves_unlisted_models: bool = False
-    session_affinity: bool = False
     supported_countries: list[str] | None = None
+    data_location: str | None = None
     zero_data_retention: bool = False
+    terms_url: str | None = None
+    privacy_url: str | None = None
     shadows_config: bool = False
+    regions: list[HostedProviderRegionPublic] = Field(default_factory=list)
+    models: HostedProviderModelSummary | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -531,9 +720,11 @@ class HostedProviderPublic(SQLModel):
             enabled=row.enabled,
             restricted_to_organization_id=row.restricted_to_organization_id,
             serves_unlisted_models=row.serves_unlisted_models,
-            session_affinity=row.session_affinity,
             supported_countries=row.supported_countries,
+            data_location=row.data_location,
             zero_data_retention=row.zero_data_retention,
+            terms_url=row.terms_url,
+            privacy_url=row.privacy_url,
             shadows_config=shadows_config,
             created_at=row.created_at,
             updated_at=row.updated_at,
@@ -552,7 +743,10 @@ class HostedProviderPublic(SQLModel):
         enabled: bool,
         restricted_to_organization_id: uuid.UUID | None,
         supported_countries: list[str] | None = None,
+        data_location: str | None = None,
         zero_data_retention: bool = False,
+        terms_url: str | None = None,
+        privacy_url: str | None = None,
     ) -> HostedProviderPublic:
         """Read one configuration entry for the API, masked as a row is.
 
@@ -569,7 +763,10 @@ class HostedProviderPublic(SQLModel):
             enabled=enabled,
             restricted_to_organization_id=restricted_to_organization_id,
             supported_countries=supported_countries,
+            data_location=data_location,
             zero_data_retention=zero_data_retention,
+            terms_url=terms_url,
+            privacy_url=privacy_url,
         )
 
 
@@ -763,7 +960,7 @@ class HostedModelUpdateRequest(SQLModel):
 class HostedModelRates(SQLModel):
     """The rates a hosted model is currently served at, and which rung of the deployment's ladder said so."""
 
-    source: PriceSource
+    source: HostedPriceSource
     input_price_per_million: float
     output_price_per_million: float
     cache_read_price_per_million: float | None = None
@@ -771,7 +968,7 @@ class HostedModelRates(SQLModel):
     unit: str = "token"
 
     @classmethod
-    def from_version(cls, version: ModelPricing, source: PriceSource) -> HostedModelRates:
+    def from_version(cls, version: ModelPricing, source: HostedPriceSource) -> HostedModelRates:
         """Read one pricing version, stored or transient, into the display shape."""
         return cls(
             source=source,
@@ -787,37 +984,63 @@ class HostedModelPublic(SQLModel):
     """One offered model, with the price the deployment currently serves it at.
 
     ``price_source`` says which rung of the deployment's ladder answered:
-    ``deployment`` for a rate an operator set, ``defaults`` for the
-    community-maintained rate, whether this surface stored it or the fallback
-    supplies it, and None when nothing prices the model yet. ``unit`` says what
+    ``deployment`` for a rate an operator set, ``provider`` for the rate the
+    provider's own listing named, ``defaults`` for the community-maintained
+    rate, whether this surface stored it or the fallback supplies it, and None
+    when nothing prices the model yet. ``unit`` says what
     the rates are per, so a per-request rate is not read as a per-token one.
     ``enabled`` is the serving switch; a model offered without a discoverable
     price starts off. ``disabled_reason`` says why a model is off: ``unpriced``
     while it waits for a rate, ``operator`` when an operator switched it off,
-    ``unavailable`` when its provider refused to serve it.
+    ``unavailable`` when its provider refused to serve it. ``type`` is the
+    kind of model, from models.dev, and None when it does not know.
+    ``vendor`` is who makes the model, ``Other`` when nothing names one.
+    ``default_rates`` is what the default rung (models.dev, or the provider's
+    own listing) would price a model an operator priced, where it prices it
+    and the two differ; None otherwise. ``region_rates`` holds, by region slug,
+    the rates a region of the provider sets of its own (stored under
+    ``<provider>@<slug>:<model>`` through the pricing endpoint); a region
+    absent from it settles at the provider's rate.
     """
 
     id: uuid.UUID
     provider: str
     model: str
+    type: ModelType | None = None
     input_price_per_million: float | None = None
     output_price_per_million: float | None = None
     cache_read_price_per_million: float | None = None
     cache_write_price_per_million: float | None = None
     unit: str | None = None
-    price_source: PriceSource | None = None
+    price_source: HostedPriceSource | None = None
+    default_rates: HostedModelRates | None = None
+    region_rates: dict[str, HostedModelRates] = Field(default_factory=dict)
+    vendor: str | None = None
     enabled: bool
     disabled_reason: HostedModelDisabledReason | None = None
     created_at: datetime
     updated_at: datetime | None = None
 
     @classmethod
-    def from_row(cls, row: HostedProviderModel, *, rates: HostedModelRates | None) -> HostedModelPublic:
+    def from_row(
+        cls,
+        row: HostedProviderModel,
+        *,
+        rates: HostedModelRates | None,
+        model_type: ModelType | None = None,
+        vendor: str | None = None,
+        default_rates: HostedModelRates | None = None,
+        region_rates: dict[str, HostedModelRates] | None = None,
+    ) -> HostedModelPublic:
         """Read one offered row for the API, with whatever currently prices it."""
         return cls(
             id=row.id,
             provider=row.provider,
             model=row.model,
+            type=model_type,
+            vendor=vendor,
+            default_rates=default_rates,
+            region_rates=region_rates or {},
             input_price_per_million=rates.input_price_per_million if rates else None,
             output_price_per_million=rates.output_price_per_million if rates else None,
             cache_read_price_per_million=rates.cache_read_price_per_million if rates else None,
@@ -831,11 +1054,114 @@ class HostedModelPublic(SQLModel):
         )
 
 
+class HostedVendorPublic(SQLModel):
+    """One vendor whose models a hosted provider offers, and what it serves of them.
+
+    ``enabled`` is the vendor's switch: off withholds every model of the
+    vendor, including ones offered later, and keeps each model's own switch.
+    The counts cover the whole provider, whatever the list was narrowed to:
+    ``serving`` the models served, ``unpriced`` those held off for want of a
+    rate, ``unavailable`` those the provider refused to serve, and
+    ``custom_differs`` those an operator priced where the default rate now
+    says something else.
+    """
+
+    vendor: str
+    enabled: bool
+    total: int
+    serving: int
+    unpriced: int
+    unavailable: int
+    custom_differs: int
+
+
 class HostedModelsPublic(SQLModel):
-    """A page of one hosted provider's offered models, and how many there are in total."""
+    """A page of one hosted provider's offered models, and how many there are in total.
+
+    ``count`` is the total of the kind asked for, and ``type_counts`` how many
+    of each kind the provider offers, ``unknown`` for a model of no known kind.
+    """
 
     data: list[HostedModelPublic]
     count: int
+    type_counts: dict[OfferedModelType, int] = Field(default_factory=dict)
+    vendors: list[HostedVendorPublic] = Field(default_factory=list)
+
+
+class HostedVendorUpdateRequest(SQLModel):
+    """Switch a vendor on or off on one hosted provider."""
+
+    model_config = {"json_schema_extra": {"example": {"vendor": "Anthropic", "enabled": False}}}
+
+    vendor: str = Field(min_length=1, max_length=128)
+    enabled: bool
+
+
+class HostedVendorModelsSwitchRequest(SQLModel):
+    """Set the switch of every model of one vendor at once.
+
+    ``enabled`` true serves each model that has a rate, and leaves one with
+    none off. ``only_unpriced`` with ``enabled`` false withholds only the
+    models served without a rate.
+    """
+
+    model_config = {"json_schema_extra": {"example": {"vendor": "Anthropic", "enabled": False}}}
+
+    vendor: str = Field(min_length=1, max_length=128)
+    enabled: bool
+    only_unpriced: bool = False
+
+
+class HostedVendorModelsSwitchPublic(SQLModel):
+    """What a vendor-wide switch did: how many models it changed, and how many it left off.
+
+    ``skipped_unpriced`` counts those left off for want of a rate, ``skipped_unavailable``
+    those the provider refused to serve, which an operator switches on one at a time.
+    """
+
+    changed: int
+    skipped_unpriced: int
+    skipped_unavailable: int = 0
+
+
+class HostedPriceResetRequest(SQLModel):
+    """Put models an operator priced back on the default rate.
+
+    ``models`` names them; null means every model, narrowed to ``vendor``
+    when one is given. ``dry_run`` answers what a reset would change and
+    writes nothing.
+    """
+
+    model_config = {"json_schema_extra": {"example": {"vendor": "Anthropic", "dry_run": True}}}
+
+    models: list[str] | None = Field(default=None, max_length=1000)
+    vendor: str | None = Field(default=None, max_length=128)
+    dry_run: bool = False
+
+
+class HostedPriceResetChangePublic(SQLModel):
+    """One model a reset covers: the rate an operator set, and the default rate it moves to."""
+
+    model: str
+    vendor: str
+    current: HostedModelRates
+    default: HostedModelRates
+    matches: bool
+
+
+class HostedPriceResetPublic(SQLModel):
+    """What a price reset changed, or would change on a dry run.
+
+    ``changes`` lists every operator-priced model the default rung prices,
+    ``matches`` marking one whose price is already the default; a price the
+    configuration stored is never listed. ``skipped_no_default`` names the
+    operator-priced models the default rung does not price, which keep their
+    price. ``applied`` is true only when a reset wrote something.
+    """
+
+    changes: list[HostedPriceResetChangePublic]
+    skipped_no_default: list[str]
+    applied: bool
 
 
 class HostedModelsRefreshPublic(SQLModel):
@@ -1022,6 +1348,14 @@ class WorkspaceHostedProviderPublic(SQLModel):
     zero_data_retention: bool = Field(
         default=False, description="Whether the deployment declares this provider keeps no prompt or completion data."
     )
+    data_locations: list[str | None] = Field(
+        default_factory=list,
+        description=(
+            "Where each region the provider serves from declares it keeps request data (one entry for a provider "
+            "with no regions), null where nothing is declared. A workspace listing allowed data locations is "
+            "refused the provider when none of these is on its list."
+        ),
+    )
 
 
 class WorkspaceHostedProvidersPublic(SQLModel):
@@ -1031,16 +1365,34 @@ class WorkspaceHostedProvidersPublic(SQLModel):
 class WorkspaceProviderPolicyRequest(SQLModel):
     """What one workspace requires of every provider serving it."""
 
-    require_zero_data_retention: bool = Field(
+    require_zero_data_retention: bool | None = Field(
+        default=None,
         description=(
             "Refuse every provider not declared zero data retention: an organization key or a hosted provider "
-            "nobody declared, and every provider configured in config.yml or endpoint the workspace owns."
-        )
+            "nobody declared, and every provider configured in config.yml or endpoint the workspace owns. "
+            "Omitted keeps the stored setting."
+        ),
     )
+
+    allowed_data_locations: list[str] | None = Field(
+        default=None,
+        description=(
+            "The data locations a hosted provider region must declare to serve the workspace: ISO 3166-1 alpha-2 "
+            "country codes, EU (which also admits each member state) or GLOBAL. Null accepts any location, and "
+            "omitting the field keeps the stored list. A region whose location nobody declared never matches a list."
+        ),
+        max_length=300,
+    )
+
+    @field_validator("allowed_data_locations")
+    @classmethod
+    def _data_locations(cls, value: list[str] | None) -> list[str] | None:
+        return data_locations(value) if value is not None else None
 
 
 class WorkspaceProviderPolicyPublic(SQLModel):
     require_zero_data_retention: bool
+    allowed_data_locations: list[str] | None = None
 
 
 __all__ = [
@@ -1061,6 +1413,9 @@ __all__ = [
     "HostedModelsRefreshPublic",
     "HostedProviderCreateRequest",
     "HostedProviderPublic",
+    "HostedProviderRegionCreateRequest",
+    "HostedProviderRegionPublic",
+    "HostedProviderRegionUpdateRequest",
     "HostedProviderTestPublic",
     "HostedProviderTestRequest",
     "HostedProviderUpdateRequest",
@@ -1091,3 +1446,29 @@ __all__ = [
     "WorkspaceProviderModelRestrictionRequest",
     "WorkspaceProviderModelRestrictionsPublic",
 ]
+
+
+class PlatformConnectStartPublic(SQLModel):
+    """What an operator needs to approve a connection on otari.ai.
+
+    ``user_code`` is what the approval page shows back, ``verification_uri_complete``
+    the page to open, and ``expires_in`` the seconds left to approve.
+    """
+
+    user_code: str
+    verification_uri_complete: str
+    expires_in: int
+
+
+class PlatformConnectStatusPublic(SQLModel):
+    """Where the deployment's connection to otari.ai stands.
+
+    ``idle`` means no attempt. The code, the link and the seconds left are set
+    while ``pending`` and null otherwise. ``connected`` means the ``otari-ai``
+    hosted provider holds the key otari.ai issued.
+    """
+
+    status: Literal["idle"] | PlatformConnectState
+    user_code: str | None = None
+    verification_uri_complete: str | None = None
+    expires_in: int | None = None

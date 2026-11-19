@@ -102,7 +102,7 @@ and overlays. If no row fits, open an issue and ask.
 
 ## Dev setup
 
-**Prerequisites:** Python 3.13+, `uv`, Docker (for integration tests).
+**Prerequisites:** Python 3.13+, `uv` within the `required-version` range in `pyproject.toml` (uv refuses every command outside it; `uv self update <version>` moves an installer-managed uv), Docker (for integration tests).
 
 ```bash
 git clone https://github.com/mozilla-ai/otari
@@ -155,7 +155,7 @@ Most dependencies are floored (`>=`) rather than pinned, and `uv.lock` is commit
 because CI and the Docker image both install from it with `--frozen`. Two mechanisms
 keep it current, and they cover different things:
 
-- **Dependabot** (`.github/dependabot.yml`) opens weekly version-update PRs for the
+- **Dependabot** (`.github/dependabot.yml`) opens monthly version-update PRs for the
   `uv`, `github-actions`, `docker` and dashboard (`npm`, which covers pnpm)
   ecosystems. Security updates are separate, need no config, and cover every
   ecosystem here but the dashboard: they follow alerts, and the dependency graph
@@ -235,7 +235,6 @@ English and avoid em dashes, as [AGENTS.md](AGENTS.md#writing-style) says.
 - Mark a breaking change with `!` in the title, for example `feat(api)!: ...`. See [Breaking changes](RELEASE.md#breaking-changes).
 - Keep diffs focused; avoid unrelated refactors in the same PR.
 - Do not hand-edit `CHANGELOG.md`; it is regenerated from commit history at release time.
-- The PR description must keep the **PR Type**, **Checklist**, and **AI Usage** sections from the [PR template](https://github.com/mozilla-ai/otari/blob/main/.github/pull_request_template.md). CI checks for these sections and will auto-close PRs that are missing them after 24 hours.
 - Until one of your PRs has been approved or merged, keep only one open at a time. CI closes any extra PRs from a first-time contributor (keeping the oldest open); reopen them once the first PR is approved. A maintainer can exempt a PR with the `skip-pr-limit` label.
 - Before opening a PR for an issue, check whether an open PR is already linked to it, and keep no more than four PRs open at a time. CI comments on a PR that duplicates another, and closes a newly opened or reopened PR that would take you past four (unless it carries the `skip-pr-limit` label).
 
