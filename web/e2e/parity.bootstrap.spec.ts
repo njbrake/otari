@@ -65,7 +65,8 @@ test("the deployment bootstrap is served unauthenticated", async ({
     passkeys_enabled: true,
     passkeys_ready: false,
     oauth_providers: [],
-    feedback_enabled: true,
+    // This fork ships no feedback, so nothing offers Contact.
+    feedback_enabled: false,
     // platform_url keeps its default here, so Connect otari.ai is offered;
     // nothing is sent to it unless somebody presses Connect.
     platform_connect: true,

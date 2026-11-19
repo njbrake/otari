@@ -53,6 +53,7 @@ async def test_reserve_budget_names_end_user_external_id_on_refusal(monkeypatch:
         AsyncMock(return_value=end_user),
     )
     db = AsyncMock()
+    db.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock()))
     update_result = MagicMock()
     update_result.rowcount = 0
     db.execute = AsyncMock(return_value=update_result)
