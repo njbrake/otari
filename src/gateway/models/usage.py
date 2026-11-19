@@ -6,7 +6,20 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, UniqueConstraint, Uuid, event, false
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+    Uuid,
+    event,
+    false,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -297,6 +310,83 @@ class UsageLog(Base):
             "attempt_count": self.attempt_count,
             "request_group_id": self.request_group_id,
         }
+
+
+class UsageRollup(Base):
+    """One hour's usage rows that share every key a usage read filters or groups by, summed.
+
+    Derived, never written by a request: the rollup refresh rebuilds an hour from
+    ``usage_logs`` once a ``UsageRollupDirtyHour`` names it, so a read can take a
+    whole hour's sums from here instead of every row in it. Each key column has the
+    name of the ``usage_logs`` column it groups, so a filter reads the same against
+    either table. ``rows`` is how many usage rows the row stands for, and every
+    measure sums.
+    """
+
+    __tablename__ = "usage_rollups"
+    __table_args__ = (Index("ix_usage_rollups_workspace_id_hour", "workspace_id", "hour"),)
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    model: Mapped[str] = mapped_column()
+    provider: Mapped[str | None] = mapped_column()
+    endpoint: Mapped[str] = mapped_column()
+    user_id: Mapped[str | None] = mapped_column()
+    api_key_id: Mapped[str | None] = mapped_column()
+    source: Mapped[str] = mapped_column()
+    source_label: Mapped[str | None] = mapped_column()
+    status: Mapped[str] = mapped_column()
+    status_code: Mapped[int | None] = mapped_column()
+    counts_toward_budget: Mapped[bool] = mapped_column()
+    needs_pricing: Mapped[bool] = mapped_column()
+
+    rows: Mapped[int] = mapped_column(BigInteger)
+    cost: Mapped[Decimal | None] = mapped_column(Numeric)
+    prompt_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    completion_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    total_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    cache_read_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    cache_write_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    cache_write_1h_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    reasoning_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    billed_input_tokens: Mapped[int] = mapped_column(BigInteger)
+    billed_output_tokens: Mapped[int] = mapped_column(BigInteger)
+    billed_cache_read_tokens: Mapped[int] = mapped_column(BigInteger)
+    billed_cache_write_tokens: Mapped[int] = mapped_column(BigInteger)
+    latency_ms: Mapped[int | None] = mapped_column(BigInteger)
+    latency_count: Mapped[int] = mapped_column(BigInteger)
+    # One set per gateway-run tool (``schemas.usage_and_telemetry.GATEWAY_TOOL_NAMES``):
+    # its billable calls, its failed calls, its spend and the rows that ran it.
+    web_search_calls: Mapped[int | None] = mapped_column(BigInteger)
+    web_search_errors: Mapped[int | None] = mapped_column(BigInteger)
+    web_search_cost: Mapped[Decimal | None] = mapped_column(Numeric)
+    web_search_rows: Mapped[int] = mapped_column(BigInteger)
+    web_fetch_calls: Mapped[int | None] = mapped_column(BigInteger)
+    web_fetch_errors: Mapped[int | None] = mapped_column(BigInteger)
+    web_fetch_cost: Mapped[Decimal | None] = mapped_column(Numeric)
+    web_fetch_rows: Mapped[int] = mapped_column(BigInteger)
+    code_execution_calls: Mapped[int | None] = mapped_column(BigInteger)
+    code_execution_errors: Mapped[int | None] = mapped_column(BigInteger)
+    code_execution_cost: Mapped[Decimal | None] = mapped_column(Numeric)
+    code_execution_rows: Mapped[int] = mapped_column(BigInteger)
+
+
+class UsageRollupDirtyHour(Base):
+    """An hour whose usage rows changed since ``usage_rollups`` last summed it.
+
+    Written by statement triggers on ``usage_logs`` (PostgreSQL only) in the same
+    transaction as the change, one row per statement and hour. Not unique on
+    purpose: a unique hour would make concurrent writers to one hour wait on each
+    other's commit. A read takes a marked hour from the rows until the refresh
+    rebuilds it and removes its marks.
+    """
+
+    __tablename__ = "usage_rollup_dirty_hours"
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class AgentTelemetry(Base):

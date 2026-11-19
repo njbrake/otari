@@ -401,6 +401,13 @@ Usage list, count, series, and bulk mutation must share filter semantics through
 `UsageSelection` with the same scalar-or-list shape and
 `MAX_FILTER_VALUES` bound.
 
+On PostgreSQL the aggregate reads take whole hours from the hourly rollups
+(`usage_rollups`, kept by triggers on `usage_logs` and a lifespan refresh), so a
+new filter is either over a column the rollups keep (`_key_conditions` in
+`usage_log_repository.py`) or one only a row carries (`_row_only_conditions`),
+which sends the read to the rows; `tests/integration/test_usage_rollups.py`
+checks that both answer alike.
+
 Bulk mutation re-derives rows from the submitted filters. It never trusts a
 count calculated earlier by the dashboard. Imported-only guards do not replace
 tenant or filter predicates.

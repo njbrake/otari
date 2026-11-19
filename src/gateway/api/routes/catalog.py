@@ -32,16 +32,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.api.deps import (
-    HeavyUsageReadsDep,
     HostedProviderServiceDep,
     OrgProviderKeyServiceDep,
     RequestSessionModelProviderPortDep,
-    UnitOfWorkDep,
+    UsageServiceDep,
     get_config,
     get_db,
     get_session_identity,
@@ -52,12 +51,10 @@ from gateway.api.key_scopes import key_scope
 from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.core.config import HOSTED_OFFERING_INSTANCE, GatewayConfig
 from gateway.core.metered_pricing import effective_rates
-from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import PriceSource, PricingSnapshot
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
-from gateway.models.usage import UsageLog
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.schemas.catalog import (
     CatalogCapabilities,
@@ -112,7 +109,7 @@ from gateway.services.selector_index_service import (
     rebuild_selector_index,
 )
 from gateway.services.tenancy import OrgProviderKeyService
-from gateway.services.usage_and_telemetry import HeavyUsageReads
+from gateway.services.usage_and_telemetry import UsageScope, UsageService
 from gateway.types.model_endpoint import ModelEndpoint
 from gateway.types.models_dev import ModelsDevCatalog, models_dev_provider_id
 
@@ -299,11 +296,11 @@ class _Offering:
 
 
 async def _usage_by_selector(
-    db: AsyncSession, organization_id: uuid.UUID, offerings: Iterable[tuple[str, str, str]]
+    usage: UsageService, organization_id: uuid.UUID, offerings: Iterable[tuple[str, str, str]]
 ) -> dict[str, OfferingUsage]:
     """The organization's last 30 days against each offering, keyed by selector.
 
-    One grouped query over the organization's workspaces. A usage row carries
+    One grouped read over the organization's workspaces. A usage row carries
     the instance and the provider's model id separately, and older rows carry
     the whole selector in ``model``, so both spellings are matched.
     """
@@ -311,28 +308,11 @@ async def _usage_by_selector(
     by_pair = {(instance, model_id): selector for selector, instance, model_id in offerings}
     if not by_pair:
         return {}
-    matches = [
-        (UsageLog.provider == instance) & (UsageLog.model == model_id) | (UsageLog.model == selector)
-        for (instance, model_id), selector in by_pair.items()
-    ]
-    stmt = (
-        select(
-            UsageLog.provider,
-            UsageLog.model,
-            func.count().label("requests"),
-            func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
-            func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
-            func.coalesce(func.sum(UsageLog.cache_read_tokens), 0).label("cache_read_tokens"),
-            func.coalesce(func.sum(UsageLog.cost), 0).label("spend"),
-        )
-        .join(Workspace, col(Workspace.id) == UsageLog.workspace_id)
-        .where(
-            col(Workspace.organization_id) == organization_id,
-            UsageLog.timestamp >= since,
-            UsageLog.status == "success",
-            or_(*matches),
-        )
-        .group_by(UsageLog.provider, UsageLog.model)
+    workspaces = select(col(Workspace.id)).where(col(Workspace.organization_id) == organization_id)
+    traffic = await usage.offering_traffic(
+        UsageScope(workspaces=workspaces),
+        since=since,
+        offerings=[(selector, instance, model_id) for (instance, model_id), selector in by_pair.items()],
     )
     # Both spellings of one offering come back as separate groups, so the rows
     # are summed per selector rather than assigned: a row set that carries the
@@ -340,21 +320,21 @@ async def _usage_by_selector(
     # database happened to return last.
     selectors = set(by_pair.values())
     totals: dict[str, list[float]] = {}
-    for row in (await db.execute(stmt)).all():
+    for row in traffic:
         selector = by_pair.get((row.provider or "", row.model))
         if selector is None and row.model in selectors:
             selector = row.model
         if selector is None:
             continue
         running = totals.setdefault(selector, [0.0, 0.0, 0.0, 0.0, 0.0])
-        running[0] += int(row.requests)
-        running[1] += int(row.total_tokens)
-        running[2] += int(row.prompt_tokens)
-        running[3] += int(row.cache_read_tokens)
-        running[4] += float(row.spend)
-    usage: dict[str, OfferingUsage] = {}
+        running[0] += row.requests
+        running[1] += row.total_tokens
+        running[2] += row.prompt_tokens
+        running[3] += row.cache_read_tokens
+        running[4] += row.spend
+    by_selector: dict[str, OfferingUsage] = {}
     for selector, (requests, total, prompt, cached, spend) in totals.items():
-        usage[selector] = OfferingUsage(
+        by_selector[selector] = OfferingUsage(
             requests=int(requests),
             total_tokens=int(total),
             cache_read_tokens=int(cached),
@@ -362,7 +342,7 @@ async def _usage_by_selector(
             cache_hit_rate=round(cached / prompt, 4) if prompt > 0 else None,
             effective_price_per_million=round(spend / total * 1_000_000, 6) if total > 0 else None,
         )
-    return usage
+    return by_selector
 
 
 async def _defaults_as_of(db: AsyncSession) -> datetime | None:
@@ -480,13 +460,7 @@ async def _group(
 
 
 async def _with_usage(
-    db: AsyncSession,
-    grouped: _Grouped,
-    members: list[_Offering],
-    caller: CatalogCaller,
-    *,
-    uow: UnitOfWork,
-    heavy_reads: HeavyUsageReads,
+    usage: UsageService, grouped: _Grouped, members: list[_Offering], caller: CatalogCaller
 ) -> list[CatalogOffering]:
     """One model's offerings with the viewer's 30-day usage of each.
 
@@ -498,13 +472,12 @@ async def _with_usage(
     """
     if grouped.organization_id is None or not viewer_reads_usage(caller):
         return [member.wire for member in members]
-    async with heavy_reads.turn(uow):
-        usage = await _usage_by_selector(
-            db,
-            grouped.organization_id,
-            ((member.wire.selector, member.wire.provider, member.model_id) for member in members),
-        )
-    return [member.wire.model_copy(update={"usage_30d": usage.get(member.wire.selector)}) for member in members]
+    by_selector = await _usage_by_selector(
+        usage,
+        grouped.organization_id,
+        ((member.wire.selector, member.wire.provider, member.model_id) for member in members),
+    )
+    return [member.wire.model_copy(update={"usage_30d": by_selector.get(member.wire.selector)}) for member in members]
 
 
 def _get_credential(config: GatewayConfig, instance: str, *, hosted: bool) -> CatalogCredential:
@@ -704,8 +677,7 @@ async def list_catalog(
 async def get_catalog_model(
     model_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
-    uow: UnitOfWorkDep,
-    heavy_reads: HeavyUsageReadsDep,
+    usage: UsageServiceDep,
     config: Annotated[GatewayConfig, Depends(get_config)],
     caller: Annotated[CatalogCaller, Depends(verify_catalog_reader_or_public)],
     session_identity: Annotated[TenancyUser | None, Depends(get_session_identity)],
@@ -749,7 +721,7 @@ async def get_catalog_model(
     # The cheapest offering first, unpriced ones last, so the comparison the
     # page exists for is the order the rows arrive in.
     offerings = sorted(
-        await _with_usage(db, grouped, members, caller, uow=uow, heavy_reads=heavy_reads),
+        await _with_usage(usage, grouped, members, caller),
         key=lambda o: (o.pricing is None, o.pricing.input_price_per_million if o.pricing else 0.0, o.selector),
     )
     return CatalogModelDetail(

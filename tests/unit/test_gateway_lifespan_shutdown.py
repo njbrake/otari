@@ -43,7 +43,7 @@ from gateway.main import (
 )
 from gateway.services.organizations import ExpiredInvitationCleanup, InvitationDelivery
 from gateway.services.tools import AttachedMcpServerIndex
-from gateway.services.usage_and_telemetry import TelemetryRetentionService
+from gateway.services.usage_and_telemetry import TelemetryRetentionService, UsageRollupService
 
 
 async def _absorbs_cancellation() -> None:
@@ -263,6 +263,7 @@ async def _started_worker_names(config: GatewayConfig, monkeypatch: pytest.Monke
     monkeypatch.setattr(
         TelemetryRetentionService, "poll", _recording_refresher("TelemetryRetentionService.poll", called)
     )
+    monkeypatch.setattr(UsageRollupService, "poll", _recording_refresher("UsageRollupService.poll", called))
     monkeypatch.setattr(
         AttachedMcpServerIndex, "run_refresher", _recording_refresher("AttachedMcpServerIndex.run_refresher", called)
     )
@@ -283,6 +284,7 @@ def _full_config(**overrides: Any) -> GatewayConfig:
     change under test dropped.
     """
     settings: dict[str, Any] = {
+        "database_url": "postgresql://otari@localhost/otari",
         "master_key": "sk-test-master",
         "sandbox_url": "http://sandbox:8080",
         "telemetry_retention_days": 90,
@@ -358,6 +360,15 @@ async def test_the_telemetry_retention_sweep_is_off_without_a_window(monkeypatch
     names, _called = await _started_worker_names(_full_config(telemetry_retention_days=0), monkeypatch)
 
     assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "telemetry retention sweep"]
+
+
+@pytest.mark.asyncio
+async def test_the_usage_rollup_refresh_is_off_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only PostgreSQL marks the hours a write changed, and leaving the refresh off must not drop any other worker."""
+    config = _full_config(database_url="sqlite:///./otari.db")
+    names, _called = await _started_worker_names(config, monkeypatch)
+
+    assert names == [worker.name for worker in _LIFESPAN_WORKERS if worker.name != "usage rollup refresh"]
 
 
 @pytest.mark.asyncio
