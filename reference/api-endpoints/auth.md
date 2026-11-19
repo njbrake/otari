@@ -1,5 +1,9 @@
 # Auth
 
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/auth/account" method="delete" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
 {% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/auth/oauth/{provider}/authorize" method="get" %}
 [OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
 {% endopenapi-operation %}
@@ -32,6 +36,10 @@
 [OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
 {% endopenapi-operation %}
 
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/auth/profile/avatar" method="put" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
 {% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/auth/resend-verification" method="post" %}
 [OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
 {% endopenapi-operation %}
@@ -45,6 +53,18 @@
 {% endopenapi-operation %}
 
 {% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/auth/signup" method="post" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/auth/sso/callback" method="post" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/auth/sso/lookup" method="post" %}
+[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
+{% endopenapi-operation %}
+
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/auth/sso/{slug}/authorize" method="get" %}
 [OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
 {% endopenapi-operation %}
 

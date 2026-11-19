@@ -4,12 +4,16 @@
 * [Deployment](deployment.md)
 * [Configuration](configuration.md)
 * [Sign-in and accounts](sign-in.md)
+* [OAuth apps](oauth-apps.md)
+* [Single sign-on](sso.md)
 * [Run the dashboard](run-the-dashboard.md)
 
 ## Providers
 
+* [Connect otari.ai](providers/otari-ai.md)
 * [Connect OpenAI](providers/openai.md)
 * [Connect Gemini](providers/gemini.md)
+* [Connect Azure OpenAI](providers/azureopenai.md)
 * [Connect a llama.cpp server](providers/llamacpp.md)
 * [Use with a ChatGPT subscription](chatgpt-subscription.md)
 * [Hosted providers and BYO credentials](hosted-providers.md)
@@ -19,6 +23,7 @@
 
 * [Workload identity](workload-identity.md)
 * [Health checks](health-checks.md)
-* [Run the guardrails service](guardrails-service.md)
+* [MCP server catalog](mcp-catalog.md)
+* [Update check](update-check.md)
 * [Store agent traces](trace-storage.md)
 * [Service keys on a deployment you run](operator-service-keys.md)

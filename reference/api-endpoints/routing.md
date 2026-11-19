@@ -12,11 +12,7 @@
 [OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
 {% endopenapi-operation %}
 
-{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/routing-policies/copy" method="post" %}
-[OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
-{% endopenapi-operation %}
-
-{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/routing-policies/traffic" method="get" %}
+{% openapi-operation spec="otari-openapi-spec-preview" path="/api/v1/organizations/me/routing-policies/explain" method="post" %}
 [OpenAPI otari-openapi-spec-preview](https://raw.githubusercontent.com/njbrake/otari/gitbook-docs-preview/api/openapi.json)
 {% endopenapi-operation %}
 

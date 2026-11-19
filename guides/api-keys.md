@@ -1,191 +1,268 @@
 # API keys
 
-An API key is the credential an application sends to Otari. It belongs to one
-workspace and one user, so it decides where a request's usage and spend land.
-What a key can carry, and who may manage which keys, is under
-[How it works](#how-it-works).
+An API key is the credential an application sends to Otari. Each key belongs to
+one workspace and one user, and that decides where its usage and spend land.
+Its [scopes](#scopes) decide which endpoints it may call.
 
-Send the key as a bearer token (`Authorization: Bearer <key>`); the other
-accepted headers are in [Authentication](https://docs.otari.ai/reference#authentication). The
-base URL to send it to, and the form each SDK expects, are in
-[Base URL](https://docs.otari.ai/reference#base-url).
+Applications send the key as a bearer token. The base URL to use and the other
+accepted headers are in [Base URL](https://docs.otari.ai/reference#base-url) and
+[Authentication](https://docs.otari.ai/reference#authentication).
 
 ## Create a key
 
-1. Open the workspace's **API keys** page and click **Create key**.
-2. Enter a **Name** and, optionally, an expiry under **Expires (optional)**.
-3. Optionally, click **Advanced** to narrow the models the key can use. By
-   default a key inherits your model access, and it can never exceed it; see
-   [Model and search tool access](#model-and-search-tool-access).
-4. Click **Create key**, then copy the key. It is shown once, so store it
+1. Open the **API keys** page and click **Create API key**.
+2. Enter a **Name** and, optionally, an expiry under **Expires**.
+3. Optionally, click **More options** to narrow the models and tools the key can
+   use. By default a key inherits your model access, and it can never exceed
+   it. A deployment operator also picks the key's owner there; it is the
+   operator unless they pick someone else.
+4. Click **Create API key**, then copy the key. It is shown once, so store it
    before you close the dialog.
+
+The key is made in the workspace selected in the top-left corner.
+
+**Access**, under **More options**, sets what the key may call: one checkbox
+per scope, grouped by area. Models, Tools and MCP are shown; Files, Batches,
+Coding agents, Usage, and End users on a service key are under **Advanced
+scopes**, which opens by itself on a key that holds one of them. A group's own
+box checks or clears the whole group. A new key starts with the Models, Tools
+and MCP groups (`inference:run`, `web:search`, `web:fetch`, `code:execute`,
+`mcp:read` and `mcp:execute`); the Claude Code plugin's hooks, routing and
+telemetry need the **Coding agents** group too. See [Scopes](#scopes). Edit a
+key to change its access later.
+
+![The Create API key dialog, with a name filled in.](assets/screenshots/api-keys-create.png)
 
 ## Cap a key's spend
 
 An organization owner or admin, or a deployment operator, can give a key a
-budget of its own: in the key's create or edit form, pick an existing budget under
-**Budget (optional)**, or set a **Limit (USD)** and how often it **Resets**. The
-key's owner's budget still applies beside it. The page's Budget column shows
-each key's spend this period against its limit. For budgets in general, see
-[Budgets](https://docs.otari.ai/learn/budgets).
+budget of its own:
 
-## Accept or reject mismatched `user` fields
+- When creating it, set a **Spend limit, in dollars** and how often it resets,
+  or pick an existing budget under **Budget** in **More options**.
+- On an existing key, choose **Edit…** from its row's menu and pick a budget
+  under **Budget (optional)**, or **Custom amount…** with a **Limit (USD)** and
+  how often it **Resets**.
 
-When the client behind a key puts something other than the key's own user in
-the request's `user` field (Claude Code does), choose what the key does with it:
-use the deployment setting, always reject, or always accept. What each choice
-does is in [Mismatched `user` fields](#mismatched-user-fields).
+The key's owner's budget still applies too. The page's **Budget** column shows
+each key's own limit and how often it resets, and the key's row menu shows its
+spend this period against it. See [Budgets](budgets.md).
 
-Set the value in the dashboard's create or edit key form (under **Search tools
-and user matching**), or as `reject_user_mismatch` on `POST` or `PATCH`
-`/api/v1/organizations/me/keys`. Self-hosted deployments can also set it on a key
-declared in config.yml, and change the deployment-wide default; see
+## Mismatched `user` fields
+
+A request can name a user (`user` on most routes, `metadata.user_id` on
+Messages). By default, an API key only accepts its own user there and refuses
+anything else with `403`.
+
+Some clients fill that field with a value of their own: Claude Code and Junie
+do, and so do applications that pass their customers' ids. For those keys, set
+**Mismatched `user` field** under **More options** in the key form, or on the edit
+form:
+
+| Choice | A request naming another user |
+| --- | --- |
+| **Use the deployment setting (default)** | Follows the deployment-wide setting, which rejects unless an operator changed it |
+| **Always reject (403)** | Rejected, even where the deployment accepts |
+| **Always accept** | Accepted, and billed to the key's own user |
+
+On an ordinary key, spend always stays with the key's user, so accepting a
+mismatch never lets a key charge someone else.
+
+An application that passes its own customer ids has two options:
+
+- **Always accept**: every request bills the key's user, under one budget.
+- Make the key a [service key](end-users.md): each id becomes an end user with
+  its own spend and budget.
+
+Through the API, this is the key's `reject_user_mismatch` field (`null`,
+`true` or `false`). Self-hosted deployments can also set it in config.yml; see
 [Budgets and API keys in config](https://docs.otari.ai/self-hosting/configuration#budgets-and-api-keys-in-config).
 
-## Regenerate or delete a key
+## Regenerate, disable or delete a key
 
-- **Regenerate** on a key's row issues a new secret and keeps the key record.
-  The current secret stops working immediately, with no grace period. The new
-  plaintext is shown once, as on creation.
-- **Delete** on a key's row removes the key permanently.
+The **API keys** page lists every key you can manage, in every workspace, with
+its state, when it was last used, when it expires, and what it spent this
+month. It opens on active keys; the **State** filter above the list shows
+disabled or expired keys, or every key. A deployment operator sees every key
+on the deployment, with an **Owner** column.
 
-On a self-hosted deployment, a key declared in config.yml behaves differently;
+Each key's row has an actions menu, the three dots at its end. The menu first
+names the key: its whole fingerprint, where it was made, and the models it may
+reach. Then it offers what you may do to it:
+
+- **Edit…** changes its name, expiry, budget, model and tool access, scopes and
+  MCP access.
+- **Disable** switches the key off; callers get `401` until you **Enable** it
+  again. A key an operator switched off can be switched back on only by an
+  operator, and a revoked key never.
+- **Regenerate…** issues a new secret and keeps the key. The old secret stops
+  working immediately. The new one is shown once.
+- **See its sessions** opens Sessions on the key's workspace, filtered to the
+  key, from the start of this month.
+- **Delete…** removes the key permanently, once it is disabled.
+
+A service key's menu also has **End users…** (see [End users](end-users.md)).
+Where the deployment lets organizations manage workload identity, an owner's,
+an admin's and the operator's menus have **Workload identity…** (see
+[Workload identity](https://docs.otari.ai/self-hosting/operations/workload-identity)).
+
+A key declared in a self-hosted deployment's config.yml behaves differently;
 see [What config.yml owns](https://docs.otari.ai/self-hosting/configuration#what-configyml-owns).
 
 ## How it works
 
 ### What a key carries
 
-Each key has a fixed user and workspace and may also define:
+Besides its user and workspace, a key can have:
 
-- expiration and active status
-- allowed models (see [Model and search tool access](#model-and-search-tool-access))
-- budget exemption
-- a budget of its own: a spend ceiling on the key, which its owner's budget does
-  not replace (both apply)
-- whether mismatched client `user` fields are accepted (see
-  [Mismatched `user` fields](#mismatched-user-fields))
+- an expiry, and an on/off state
+- [scopes](#scopes), which say which endpoints it may call
+- a list of allowed models and tools (see
+  [Model and search tool access](#model-and-search-tool-access))
+- a budget of its own, which applies alongside its owner's
+- a budget exemption, set only by an operator
+- a choice on [mismatched `user` fields](#mismatched-user-fields)
 - whether content-free agent telemetry is captured
-- whether it is a service key, which may name end users (see
-  [Track spend per end user](end-users.md))
+- whether it is a [service key](end-users.md), which can bill end users
 - application metadata
 
-A budget-exempt key is also exempt from `require_pricing`. Reserve such keys for
-usage import or other intentional observability-only traffic.
+A budget-exempt key is also exempt from `require_pricing`. Use such keys only
+for usage import or other traffic you mean to observe without enforcing.
 
 A backend on Google Cloud, or behind another OpenID Connect issuer, can
-authenticate as a key with its platform identity token instead of the key's
-secret, once the operator trusts the issuer and gives the key a federation
-rule. With `federation_member_rules` on, an organization owner or admin can give
-their own key one instead; see [Workload identity](https://docs.otari.ai/self-hosting/operations/workload-identity).
+authenticate as a key with its platform identity token instead of the secret.
+See [Workload identity](https://docs.otari.ai/self-hosting/operations/workload-identity).
 
 ### Who manages which keys
 
-Organization owners, admins and members manage their own keys on the
-workspace's **API keys** page, or at `/api/v1/organizations/me/keys`. That route
-derives a member's owner rather than accepting one, so a member's keys are always
-their own and billed to them. It mints only into a workspace the caller may see,
-and never issues a budget-exempt key. It refuses a field it does not take, such
-as `exclude_from_budget`, with `422` rather than ignoring it.
+- **Owners, admins and members** create and manage their own keys on the
+  **API keys** page. A key made there is always billed to whoever made it, and
+  is never budget-exempt.
+- **Owners and admins** also create the organization's own
+  [service keys](end-users.md#2-create-the-service-key).
+- **Viewers** can list their keys but cannot create, edit, regenerate or delete
+  one. An operator can issue a key to a viewer.
+- **Deployment operators** manage every key and choose each key's owner; see
+  [Deployment-wide account administration](https://docs.otari.ai/self-hosting/sign-in#deployment-wide-account-administration).
 
-An organization owner or admin also manages every other member's key, the
-organization owner's included: they list, edit, rotate and delete them, and
-create a key owned by another member (`user_id`), who must be an active member
-of the organization able to see the key's workspace. A member naming `user_id`
-is refused with `403`. Their role is read on every request, so lowering it takes
-those keys away at once. An existing budget-exempt key, an operator's service
-key, or one with no owner, is left out of an owner's or admin's view unless it
-is their own. So is a key the operator minted into one of the organization's
-workspaces for someone who has never been a member of it, since that is their
-spend and their credential; a former member's keys stay in view, so they can be
-removed after the person leaves. An owner or admin can also read the search tool
-names a key's access list may use (`GET /api/v1/organizations/me/search-tools`),
-without their endpoints or keys. An
-organization owner or admin also makes the organization's own service keys on
-this route; see
-[An organization's own service keys](end-users.md#2-create-the-service-key).
+Membership changes switch keys off:
 
-A viewer may list their keys there and is refused (`403`) every write:
-creating, editing, rotating or deleting a key takes organization owner or
-admin, or a caller who is a viewer neither of the organization nor of the key's
-workspace. To give a viewer a key, an operator issues it and owns its changes.
+- Removing someone from a workspace or the organization switches off every key
+  billed to them there. Only an operator can switch those back on.
+- Making someone a viewer switches off the keys they made for themselves, and
+  leaves alone keys an operator issued them. Promoted again, they can switch
+  their own keys back on.
+- Keys made before Otari recorded who made them are left alone on a demotion.
+  When you demote someone to viewer, check the keys billed to them.
 
-A deployment operator manages every key in the organization at `/api/v1/keys`
-and chooses each key's owner; on a self-hosted deployment, see
-[Deployment-wide account administration](https://docs.otari.ai/self-hosting/sign-in#deployment-wide-account-administration).
-
-A key records whether its owner minted it on the member surface or an operator
-issued it. Membership changes act on that:
-
-- Removing someone from a workspace, or from the organization, switches off every
-  key billed to them there. So does an operator switching a key off on
-  `/api/v1/keys`. Its owner may then delete it or keep it off, but only an
-  operator can switch it back on.
-- Making someone a viewer, of a workspace or of the organization, switches off
-  the keys they minted for themselves there, and leaves the keys an operator
-  issued them alone. Promoted again, they may switch their own keys back on.
-- A key minted before this was recorded has no origin on file and is left alone
-  by a demotion. An operator who demotes someone to viewer should check the keys
-  billed to them.
+The key routes are in the [OpenAPI specification](https://github.com/mozilla-ai/otari/blob/1b7e45e35c971e623b5f210967081e808e9d9fae/docs/public/openapi.json).
 
 ### Model and search tool access
 
-A user's `allowed_models` is inherited by newly created keys unless the key
-defines its own list. A missing list allows any model, an empty list allows none,
-and entries may use provider wildcards such as `openai:*`.
+**Models.** A new key inherits its user's `allowed_models` unless it sets its
+own list. No list allows any model, an empty list allows none, and entries may
+use provider wildcards such as `openai:*`. A key can narrow its user's access,
+never widen it.
 
-Search and fetch tools have a list of their own, `allowed_tools`, which governs
-`POST /api/v1/search` and `POST /api/v1/fetch`; the in-loop `otari_web_search` and
-`otari_web_fetch` tools, which run on the same tools, do not read it. Its entries
-are search or fetch tool names, as `search_tools`, `fetch_tools` or the dashboard
-names them, `builtin_fetch` for the gateway's own fetcher, or `*` for every tool,
-and no wildcard in `allowed_models` reaches a tool: a search provider can share
-its name with a model provider, as DeepSeek does, and `deepseek:*` is for
-DeepSeek's models. A key's own `allowed_tools` wins over its user's, and a key may
-narrow its user's list but never broaden it. An empty list allows no tool.
+**Search and fetch tools.** These have their own list, `allowed_tools`, which
+governs `POST /api/v1/search` and `POST /api/v1/fetch`:
 
-With no `allowed_tools` on the key or its user, the search tools are read off the
-model list: a key unrestricted for models may run any search or fetch tool, and a
-key restricted for models may run only the search tools its `allowed_models`
-names whole as `<provider>:<tool>`, such as `exa:exa-search`, and that its user's
-model list grants too; no model list grants a fetch tool. That form is
-deprecated, and a later release removes it; give the key or user an
-`allowed_tools` list instead. A wildcard no longer grants a search tool. A model
-list no longer takes a
-wildcard or another name under a provider that serves only search tools, such as
-`exa:*`; it takes that provider's exact `<provider>:<tool>` keys alone.
+- Entries are search or fetch tool names as the dashboard shows them,
+  `builtin_fetch` for Otari's own fetcher, or `*` for every tool.
+- A key's list wins over its user's, and may narrow it but never widen it.
+- An empty list allows no tool.
+- A model wildcard never grants a tool. A search provider can share its name
+  with a model provider (DeepSeek does), and `deepseek:*` covers only
+  DeepSeek's models.
+- The in-loop `otari_web_search` and `otari_web_fetch` tools do not read this
+  list.
 
-When a user is first given `allowed_tools`, each of their keys that has a model
-list of its own and no `allowed_tools` is set to the tools it could run before
-that are also on the user's new list, so moving a user off the deprecated form
-never widens a key that had narrowed its search away. A list sent back unchanged,
-as the dashboard's edit forms do, is not checked again, so a key or user naming
-a tool deleted since still saves an unrelated change. No search tool may be
-named `*`.
+**Deprecated: tools through the model list.** With no `allowed_tools` on the
+key or its user, search access follows the model list instead:
 
-### Mismatched `user` fields
+- A key with unrestricted models may run any search or fetch tool.
+- A key with a model list may run only the search tools named there in full as
+  `<provider>:<tool>` (such as `exa:exa-search`) that its user's list also
+  grants. No model list grants a fetch tool.
+- Wildcards no longer grant a search tool, and a model list rejects a wildcard
+  or partial name under a search-only provider such as `exa:*`.
 
-A request can name a user: `user` on Chat Completions, Responses and the
-pass-through routes, `metadata.user_id` on Messages. On an ordinary key that
-value may only be the key's own user; anything else is refused with `403`. A
-key's `reject_user_mismatch` changes that for the key alone:
+A later release removes this form, so give keys and users an `allowed_tools`
+list. When a user first gets one, each of their keys that has its own model list
+and no `allowed_tools` gets the tools it could already run that are also on the
+user's new list, so the switch never widens a key. A list sent back unchanged is
+not checked again, so a key naming a since-deleted tool can still save an
+unrelated change. No search tool may be named `*`.
 
-| Value | Dashboard choice | A request naming another user |
-| --- | --- | --- |
-| `null` (default) | Use the deployment setting | Follows the deployment-wide `reject_user_mismatch`, which rejects unless changed |
-| `true` | Always reject (403) | Rejected, even where the deployment accepts |
-| `false` | Always accept | Accepted, and billed to the key's user |
+### Scopes
 
-Spend binds to the key's own user whichever value applies, so accepting a
-mismatch never lets a key charge someone else.
+A key's scopes name the groups of endpoints it may call. A key holds the least
+it needs, so a leaked key can do only what its scopes allow, whatever its
+owner can do.
 
-Accept mismatches on a key whose client puts something other than an Otari
-user ID in that field. Claude Code sends a telemetry value there (see
-[Use with Claude Code](use-with-claude-code.md)). So does an application that
-sends every request on one key and passes its own end user's ID. That
-application has two choices:
+| Scope | Lets the key |
+| --- | --- |
+| `inference:run` | Call models: chat completions, messages, responses, embeddings, moderations, rerank, audio, images, video, and decisions |
+| `files:read` | List and download files, attach a stored file to a model request by its `file_id`, stage one into a code run, and resume a held code-execution container, which still holds what earlier runs staged into it |
+| `files:write` | Upload and delete files |
+| `batches:read` | List batches and read their results |
+| `batches:write` | Create and cancel batches |
+| `web:search` | Search the web, directly or by declaring a search in a model call |
+| `web:fetch` | Fetch a web page, directly or by declaring a fetch in a model call |
+| `code:execute` | Run code, directly or by declaring a code run in a model call. Resuming a held container needs `files:read` as well |
+| `mcp:read` | List MCP servers and their tools |
+| `mcp:execute` | Call MCP tools, directly or during a model call |
+| `telemetry:write` | Send OpenTelemetry traces, logs and metrics |
+| `agents:write` | Coding-agent hooks and subagent model recommendations |
+| `usage:read` | Read its own budget, usage and request records |
+| `usage:write` | Report usage it observed elsewhere |
+| `end-users:read` | List its end users and their budgets (service keys only) |
+| `end-users:write` | Create, move and block its end users (service keys only) |
+| `end-users:delete` | Delete its end users and erase their records (service keys only) |
 
-- Accept mismatches, and every request bills the key's user: one budget for
-  the whole application.
-- Make the key a [service key](end-users.md), and each ID becomes an end user
-  with spend and a budget of its own.
+Every key may read the model, tool, price and provider catalogs, whatever its
+scopes. No scope lets a key create or manage keys: that takes a dashboard
+session or the master key, so revoking a key always ends what it can do.
+
+A key created through the API or the dashboard without naming any scopes gets
+`inference:run`, `web:search`, `web:fetch`, `code:execute`, `mcp:read` and
+`mcp:execute`: it can call models and tools, and nothing else. (A key declared in the config file has a
+[different default](https://docs.otari.ai/self-hosting/configuration#budgets-and-api-keys-in-config).) Name
+them in `scopes` when you create the key, through `POST /api/v1/keys` or
+`POST /api/v1/organizations/me/keys`:
+
+```json
+{"key_name": "pipeline", "scopes": ["inference:run", "files:write", "batches:write", "batches:read"]}
+```
+
+`PATCH /api/v1/keys/{key_id}` or `PATCH /api/v1/organizations/me/keys/{key_id}`
+replaces a key's scopes. The change applies from the
+key's next request, so narrowing a key you suspect has leaked takes effect
+without rotating its secret. A key needs at least one scope, and only a service
+key may hold the `end-users` scopes.
+
+A request whose key lacks the scope an endpoint needs is refused with `403`,
+and the message names the scope, except on the MCP routes, which answer every
+refusal with the same fixed `forbidden` error and no challenge. Every other
+refusal for a missing scope carries
+`WWW-Authenticate: Bearer error="insufficient_scope", scope="<scope>"`
+([RFC 6750](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1)), so a
+client reads the scope it lacks without parsing the message. A model call that declares a web,
+code execution or MCP tool needs that tool's scope too, whoever ends up running
+it: naming a provider's own search or code keyword needs the scope as much as
+asking Otari to run one, because which of them runs it is the deployment's
+answer rather than the caller's. A call that attaches a stored file by its
+`file_id` needs `files:read`, and so does resuming a held code-execution
+container, because the container still holds what earlier runs staged into it.
+A key without `files:read` can still open a fresh container; only resuming an
+existing one is refused. The master key holds
+every scope. Each operation in the [OpenAPI specification](https://github.com/mozilla-ai/otari/blob/1b7e45e35c971e623b5f210967081e808e9d9fae/docs/public/openapi.json)
+lists the scope it asks of every caller in `x-otari-key-scopes`, empty where
+every key may call it. A scope a request needs only for something it asked for,
+such as `files:read` for a `file_id` or a container, is named in this page
+rather than there, because the extension carries one answer for the whole
+operation.
+
+Keys that existed before scopes hold every scope that existed then, so they
+keep working; a scope added later is never granted to a key that did not ask
+for it.
