@@ -2,7 +2,7 @@
 
 Otari serves an OpenAPI document at `/api/v1/openapi.json` and interactive API
 docs at `/api/v1/docs` by default. The repository also commits the generated
-[OpenAPI specification](https://github.com/mozilla-ai/otari/blob/0a455f0b754a1b767922347743819b9e01cc47af/docs/public/openapi.json), the source of truth for paths,
+[OpenAPI specification](https://github.com/mozilla-ai/otari/blob/9ea8bacd5ccbe051f9ea9ec918b3554cd5711226/docs/public/openapi.json), the source of truth for paths,
 parameters, and schemas.
 
 ## Base URL
@@ -376,6 +376,30 @@ key:
 
 ```
 GET /api/v1/usage/summary?group_by_tag=purpose&dimensions=none
+```
+
+### Narrowing usage reads
+
+The usage endpoints (`GET /api/v1/usage`, `/count`, `/summary`, `/series`,
+`/groups` and their `/api/v1/organizations/me/usage` counterparts) take these
+filters beside the entity filters:
+
+| Parameter | Keeps |
+| --- | --- |
+| `exclude_model`, `exclude_user_id`, `exclude_api_key_id`, `exclude_source`, `exclude_status` | Rows without these values; repeatable. Rows with no user or no key stay. |
+| `policy_name`, `exclude_policy_name` | Rows served, or not served, through these routing policies; repeatable. |
+| `routed` | `true`: requests a routing policy served. `false`: requests that named a model directly. |
+| `tokens_gt`, `cost_gt`, `latency_ms_gt` | Rows billed for more tokens (input plus output), costing more USD, or slower in milliseconds than the value. |
+
+`GET /api/v1/usage/groups?group_by=<column>` lists one column's values over the
+window with the requests that carry each, busiest first: `model`, `user`,
+`api_key`, `provider`, `status`, `source`, `source_label` or `policy`. `search`
+keeps the values containing a term, matching a user's alias and a key's name as
+well as the id, and `total` counts every value the filters leave, so a client can
+page past `limit`. The dashboard's column filters read it.
+
+```
+GET /api/v1/usage/groups?group_by=user&search=ada&exclude_status=absorbed
 ```
 
 ### The `user` field
