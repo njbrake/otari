@@ -278,6 +278,19 @@ def test_a_member_reads_only_the_workspaces_they_belong_to(client: TestClient, w
     assert listed.isdisjoint(_BETA_MODELS)
 
 
+def test_a_filter_menus_values_are_scoped_like_the_list(client: TestClient, world: _World) -> None:
+    """``/groups`` lists the values of the rows the caller may read, and no others."""
+    code, body = _as(client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage/groups?group_by=model")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert {group["key"] for group in body["groups"]} == set(_ALPHA_ONE_MODELS)
+    assert body["total"] == len(set(_ALPHA_ONE_MODELS))
+
+    code, body = _as(client, world, "alpha_newcomer", f"{API_ROOT}/organizations/me/usage/groups?group_by=user")
+    assert code == status.HTTP_200_OK, body
+    assert body == {**body, "groups": [], "total": 0}
+
+
 def test_a_viewer_is_scoped_like_a_member_and_not_like_an_admin(client: TestClient, world: _World) -> None:
     """``viewer`` is the fourth role and is outside ``MANAGEMENT_ROLES``.
 

@@ -45,6 +45,8 @@ from gateway.schemas.usage_and_telemetry import (
     UsageSeriesPoint,
     UsageToolRow,
     UsageTotals,
+    UsageValueGroup,
+    ValueGroupBy,
 )
 
 # The statuses that end a request. ``absorbed`` is an attempt a later one recovered
@@ -176,6 +178,30 @@ class UsageScope:
 
 
 @dataclass(frozen=True)
+class UsageRefinements:
+    """Filters that narrow a usage read past the entity filters: exclusions, routing and thresholds.
+
+    Every exclusion on a nullable column keeps its NULL rows: ``NOT IN`` alone would
+    drop them, since a NULL compares as unknown, and "not Priya's requests" does not
+    mean "not requests with no billed user". An empty list is no filter.
+    """
+
+    exclude_model: list[str] | None = None
+    exclude_user_id: list[str] | None = None
+    exclude_api_key_id: list[str] | None = None
+    exclude_source: list[str] | None = None
+    exclude_status: list[str] | None = None
+    policy_name: list[str] | None = None
+    exclude_policy_name: list[str] | None = None
+    # True: only requests a routing policy served; False: only those that named a model.
+    routed: bool | None = None
+    # Billed tokens (input including both cache buckets, plus output), as the log shows them.
+    tokens_gt: int | None = None
+    cost_gt: float | None = None
+    latency_ms_gt: int | None = None
+
+
+@dataclass(frozen=True)
 class UsageFilters:
     """What a client narrowed a usage read to. A field left ``None`` matches every row.
 
@@ -200,6 +226,7 @@ class UsageFilters:
     counts_toward_budget: bool | None = None
     request_group_id: list[str] | None = None
     workspace_id: uuid.UUID | None = None
+    refine: UsageRefinements = field(default_factory=UsageRefinements)
 
 
 @dataclass(frozen=True)
@@ -242,6 +269,17 @@ _GROUP_COLUMNS: dict[str, str] = {
     "source_label": "source_label",
     "endpoint": "endpoint",
     "provider": "provider",
+}
+
+# The columns a filter menu lists the values of, among those the rollups keep.
+_VALUE_COLUMNS: dict[str, str] = {
+    "model": "model",
+    "user": "user_id",
+    "api_key": "api_key_id",
+    "provider": "provider",
+    "status": "status",
+    "source": "source",
+    "source_label": "source_label",
 }
 
 # The usage columns an hour's rollups are grouped by, under the same names, so a
@@ -326,7 +364,23 @@ def _key_conditions(
         conditions.append(needs_pricing)
     if filters.counts_toward_budget is not None:
         conditions.append(columns.counts_toward_budget.is_(filters.counts_toward_budget))
+    refine = filters.refine
+    for values, column, nullable in (
+        (refine.exclude_model, columns.model, False),
+        (refine.exclude_user_id, columns.user_id, True),
+        (refine.exclude_api_key_id, columns.api_key_id, True),
+        (refine.exclude_source, columns.source, False),
+        (refine.exclude_status, columns.status, False),
+    ):
+        if values:
+            conditions.append(_excluding(column, values, nullable=nullable))
     return conditions
+
+
+def _excluding(column: Any, values: list[str], *, nullable: bool) -> ColumnElement[bool]:
+    """Rows whose ``column`` holds none of ``values``; a nullable column keeps its NULL rows."""
+    outside = column.not_in(values)
+    return or_(column.is_(None), outside) if nullable else outside
 
 
 def usage_conditions(filters: UsageFilters, scope: UsageScope) -> list[ColumnElement[bool]]:
@@ -361,6 +415,23 @@ def _row_only_conditions(filters: UsageFilters) -> list[ColumnElement[bool]]:
         conditions.append(match_any(UsageLog.request_group_id, filters.request_group_id))
     if filters.tool is not None:
         conditions.append(_tool_used_expr(filters.tool))
+    refine = filters.refine
+    if refine.policy_name:
+        conditions.append(match_any(UsageLog.policy_name, refine.policy_name))
+    if refine.exclude_policy_name:
+        conditions.append(_excluding(UsageLog.policy_name, refine.exclude_policy_name, nullable=True))
+    if refine.routed is not None:
+        conditions.append(UsageLog.policy_name.is_not(None) if refine.routed else UsageLog.policy_name.is_(None))
+    if refine.tokens_gt is not None:
+        conditions.append(
+            _billed_expr("total_input_tokens", UsageLog.prompt_tokens)
+            + _billed_expr("completion_tokens", UsageLog.completion_tokens)
+            > refine.tokens_gt
+        )
+    if refine.cost_gt is not None:
+        conditions.append(UsageLog.cost > refine.cost_gt)
+    if refine.latency_ms_gt is not None:
+        conditions.append(UsageLog.latency_ms > refine.latency_ms_gt)
     return conditions
 
 
@@ -627,7 +698,8 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
     the current hour's writes as they land, and any hour a write marked since its
     sums were built. A read whose filters name what the rollups do not keep (a
     tag, a request id, a tool) takes the whole window from the rows, and so does
-    every read on SQLite, where nothing marks the hours a write changed.
+    every read on SQLite, where nothing marks the hours a write changed. A routing
+    policy or a threshold is one of those filters too.
     ``rollups=False`` reads the rows everywhere.
     """
 
@@ -871,6 +943,58 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             UsageGroupRow(key=row[0], cost=float(row[1]), tokens=int(row[2]), requests=int(row[3]))
             for row in (await self.db.execute(stmt)).all()
         ]
+
+    async def value_groups(
+        self,
+        filters: UsageFilters,
+        scope: UsageScope,
+        *,
+        group_by: ValueGroupBy,
+        search: str | None,
+        named: Collection[str],
+        skip: int,
+        limit: int,
+    ) -> tuple[list[UsageValueGroup], int]:
+        """A page of one column's values over the matching rows, busiest first, and how many values there are.
+
+        ``search`` keeps the values that contain it (case-insensitive, ``%`` and
+        ``_`` literal), and also those in ``named``: the keys whose label matched,
+        which only the domain that owns the label can say. Equal counts rank by
+        key, so a page cuts the same values wherever the sums came from. The
+        policy a request was served through is kept only on the rows, so that
+        column reads them.
+        """
+        relation: Subquery | None = None
+        where: list[ColumnElement[bool]] = []
+        if group_by == "policy":
+            column: Any = UsageLog.policy_name
+            requests: Any = _request_count_expr(filters.status)
+            errors: Any = func.coalesce(func.sum(case((UsageLog.status == "error", 1), else_=0)), 0)
+            cost: Any = func.coalesce(func.sum(UsageLog.cost), 0.0)
+            where = usage_conditions(filters, scope)
+        else:
+            relation = await self._usage_rows(filters, scope)
+            column = relation.c[_VALUE_COLUMNS[group_by]]
+            # By status every row is its own value, the absorbed attempts included.
+            requests = _summed(relation.c.rows) if group_by == "status" else _requests(relation, filters.status)
+            errors = _summed(case((relation.c.status == "error", relation.c.rows), else_=0))
+            cost = _summed(relation.c.cost, 0.0)
+        term = (search or "").strip()
+        if term:
+            matched = [column.icontains(term, autoescape=True)]
+            if named:
+                matched.append(column.in_(sorted(named)))
+            where.append(or_(*matched))
+        grouped = select(column).where(*where).group_by(column)
+        stmt = select(column, requests, errors, cost).where(*where).group_by(column)
+        if relation is not None:
+            grouped = grouped.select_from(relation)
+            stmt = stmt.select_from(relation)
+        total = (await self.db.execute(select(func.count()).select_from(grouped.subquery()))).scalar_one()
+        page = (await self.db.execute(stmt.order_by(requests.desc(), column).offset(skip).limit(limit))).all()
+        return [
+            UsageValueGroup(key=row[0], requests=int(row[1]), errors=int(row[2]), cost=float(row[3])) for row in page
+        ], int(total)
 
     async def _tag_groups(
         self, filters: UsageFilters, scope: UsageScope, *, tag_key: str, limit: int | None

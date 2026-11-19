@@ -7,7 +7,7 @@ the old shape (``services/usage_admin_service.py``) and move here when the rest 
 the domain does.
 """
 
-from gateway.repositories.usage_and_telemetry import ServedTraffic, UsageFilters, UsageScope
+from gateway.repositories.usage_and_telemetry import ServedTraffic, UsageFilters, UsageRefinements, UsageScope
 from gateway.services.usage_and_telemetry._read_gate import HeavyUsageReads
 from gateway.services.usage_and_telemetry._retention import RetentionSweep, TelemetryRetentionService
 from gateway.services.usage_and_telemetry._rollups import UsageRollupService
@@ -31,6 +31,7 @@ __all__ = [
     "TelemetryRetentionService",
     "UsageRollupService",
     "UsageFilters",
+    "UsageRefinements",
     "UsageScope",
     "UsageService",
     "VideoUsageWriter",

@@ -400,6 +400,37 @@ class UsageGroupRow(BaseModel):
     is_other: bool = False
 
 
+# The columns a filter menu lists the values of. ``policy`` is the routing policy
+# that served a request; the rows that named a model directly group under a null key.
+ValueGroupBy = Literal["model", "user", "api_key", "provider", "status", "source", "source_label", "policy"]
+
+
+class UsageValueGroup(BaseModel):
+    """One value of a column over the window, and the requests that carry it.
+
+    ``key`` is None for the rows with no value in the column (no key, no billed
+    user, no policy). ``label`` names an opaque key: a user's alias, an API key's
+    name. ``requests`` counts requests as the summary does, except when grouped by
+    status, where it counts rows, so the absorbed attempts are counted too.
+    """
+
+    key: str | None
+    label: str | None = None
+    requests: int
+    errors: int
+    cost: float
+
+
+class UsageValueGroups(BaseModel):
+    """A page of a column's values, busiest first, and how many values the filters leave."""
+
+    start_date: str
+    end_date: str
+    group_by: ValueGroupBy
+    groups: list[UsageValueGroup]
+    total: int
+
+
 class UsageErrorCodeRow(BaseModel):
     """One error-taxonomy row: the failures in the window sharing a status code.
 

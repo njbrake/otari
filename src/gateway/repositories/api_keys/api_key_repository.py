@@ -164,6 +164,13 @@ class ApiKeyRepository(BaseRepository[APIKey, Never, Never]):
             names.update({key_id: name for key_id, name in result.all()})
         return names
 
+    async def ids_named_like(self, term: str, *, limit: int) -> list[str]:
+        """Up to ``limit`` ids of the keys whose name contains ``term``, case-insensitive."""
+        stmt = (
+            select(APIKey.id).where(APIKey.key_name.icontains(term, autoescape=True)).order_by(APIKey.id).limit(limit)
+        )
+        return list((await self.db.execute(stmt)).scalars())
+
     async def names_defaulting_end_users_to(self, budget_id: str) -> list[str]:
         """Name each key that starts its end users on ``budget_id`` by default, by its name or else its id."""
         result = await self.db.execute(

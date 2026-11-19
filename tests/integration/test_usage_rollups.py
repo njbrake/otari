@@ -27,7 +27,12 @@ from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.api_keys import APIKey
 from gateway.models.usage import UsageLog, UsageRollup, UsageRollupDirtyHour
 from gateway.models.users import User
-from gateway.repositories.usage_and_telemetry import UsageFilters, UsageLogRepository, UsageScope
+from gateway.repositories.usage_and_telemetry import (
+    UsageFilters,
+    UsageLogRepository,
+    UsageRefinements,
+    UsageScope,
+)
 from gateway.repositories.usage_and_telemetry.usage_log_repository import MAX_MARKED_HOURS
 from gateway.schemas.usage_and_telemetry import GATEWAY_TOOL_NAMES, Bucket
 from gateway.services.usage_and_telemetry import UsageRollupService
@@ -45,6 +50,7 @@ _ENDPOINTS = ("/v1/chat/completions", "/v1/messages")
 _SOURCES = ("gateway", "claude-code")
 _LABELS = (None, "session-a", "session-b")
 _STATUSES = ("success", "success", "success", "error", "absorbed", "incomplete")
+_POLICIES = (None, None, "fast", "cheap")
 
 
 def _meters(rng: random.Random) -> dict[str, Any] | None:
@@ -104,6 +110,7 @@ def _row(rng: random.Random, workspace_id: uuid.UUID, timestamp: datetime) -> Us
         billing_meters=_meters(rng),
         latency_ms=rng.choice([None, rng.randint(5, 30_000)]),
         request_group_id=str(uuid.uuid4()),
+        policy_name=rng.choice(_POLICIES),
     )
 
 
@@ -183,7 +190,19 @@ _FILTERS: list[dict[str, Any]] = [
     # Filters the rollups cannot serve read the rows on both sides.
     {"tags": {"team": ["a"]}},
     {"tool": "web_search"},
+    # Exclusions over the keys the rollups keep are served by them.
+    {"refine": UsageRefinements(exclude_model=["gpt-4o"], exclude_status=["absorbed", "error"])},
+    {"refine": UsageRefinements(exclude_user_id=["u1"], exclude_api_key_id=["k2"], exclude_source=["claude-code"])},
+    {"model": ["gpt-4o", "claude-sonnet"], "refine": UsageRefinements(exclude_model=["claude-sonnet"])},
+    # The routing policy and the thresholds only the rows carry.
+    {"refine": UsageRefinements(policy_name=["fast"])},
+    {"refine": UsageRefinements(exclude_policy_name=["fast"], routed=True)},
+    {"refine": UsageRefinements(routed=False)},
+    {"refine": UsageRefinements(tokens_gt=3000)},
+    {"refine": UsageRefinements(cost_gt=0.5, latency_ms_gt=1000)},
 ]
+
+_VALUE_GROUPS = ("model", "user", "api_key", "provider", "status", "source", "source_label", "policy")
 
 _DIMENSIONS = ("model", "user", "api_key", "source", "source_label", "endpoint", "provider")
 
@@ -221,6 +240,15 @@ async def _read_all(repo: UsageLogRepository, filters: UsageFilters, scope: Usag
         out[f"top:{dimension}"] = [
             row.model_dump() for row in await repo.groups(filters, scope, dimension=dimension, limit=2)
         ]
+    for group_by in _VALUE_GROUPS:
+        groups, total = await repo.value_groups(
+            filters, scope, group_by=group_by, search=None, named=(), skip=0, limit=200
+        )
+        out[f"values:{group_by}"] = ([group.model_dump() for group in groups], total)
+    searched, total = await repo.value_groups(
+        filters, scope, group_by="user", search="U", named=("k-none",), skip=0, limit=1
+    )
+    out["values:searched"] = ([group.model_dump() for group in searched], total)
     for bucket in ("hour", "day"):
         points = await repo.series(filters, scope, bucket=bucket)
         out[f"series:{bucket}"] = sorted((point.model_dump() for point in points), key=lambda p: p["bucket_start"])
@@ -464,3 +492,41 @@ async def test_whole_hours_come_from_the_rollups_and_edge_hours_from_the_rows(
         assert await rollups.repo.count_matching(filters, scope) == 2
     async with rows.uow:
         assert await rows.repo.count_matching(filters, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_refinement_the_rollups_do_not_key_reads_the_rows(
+    test_db: Session, async_db: AsyncSession, sessions: tuple[_Reader, _Reader]
+) -> None:
+    """An exclusion is answered from the rollups; a policy or a threshold, which only the rows carry, from the rows."""
+    workspace_id = seed_workspace_id(test_db)
+    _seed_identities(test_db, workspace_id)
+    rng = random.Random(19)
+    for hour in range(4):
+        row = _row(rng, workspace_id, _BASE + timedelta(hours=hour, minutes=30))
+        row.model = "gpt-4o"
+        test_db.add(row)
+    test_db.commit()
+    await _refresh_all(async_db)
+    await async_db.commit()
+    test_db.execute(text("ALTER TABLE usage_logs DISABLE TRIGGER USER"))
+    try:
+        test_db.execute(delete(UsageLog))
+        test_db.commit()
+    finally:
+        test_db.execute(text("ALTER TABLE usage_logs ENABLE TRIGGER USER"))
+        test_db.commit()
+    rollups, _ = sessions
+    window = {"start_date": _BASE, "end_date": _BASE + timedelta(hours=4)}
+    scope = UsageScope(workspaces=None)
+    async with rollups.uow:
+        excluded = UsageFilters(**window, refine=UsageRefinements(exclude_model=["claude-sonnet"]))
+        assert await rollups.repo.count_matching(excluded, scope) == 4
+        for refine in (
+            UsageRefinements(routed=False),
+            UsageRefinements(tokens_gt=0),
+            UsageRefinements(cost_gt=0),
+            UsageRefinements(latency_ms_gt=0),
+            UsageRefinements(policy_name=["fast"]),
+        ):
+            assert await rollups.repo.count_matching(UsageFilters(**window, refine=refine), scope) == 0, refine

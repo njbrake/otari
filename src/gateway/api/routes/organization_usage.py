@@ -50,12 +50,16 @@ from sqlmodel import col
 
 from gateway.api.deps import CurrentIdentity, UsageServiceDep, get_db, verify_master_key
 from gateway.api.routes._disconnect import CancelOnDisconnectRoute
+from gateway.api.routes._usage_refinements import UsageRefinementsQuery
 from gateway.api.routes.usage import (
     _API_KEY_MULTI_DESC,
     _COUNTS_DESC,
     _DIMENSIONS_DESC,
     _END_DESC,
     _ENDPOINT_DESC,
+    _GROUP_BY_DESC,
+    _GROUP_SEARCH_DESC,
+    _MAX_GROUP_SEARCH,
     _MAX_REQUEST_GROUPS,
     _MODEL_MULTI_DESC,
     _PRICED_DESC,
@@ -85,6 +89,8 @@ from gateway.schemas.usage_and_telemetry import (
     UsageEntry,
     UsageGroupedSeries,
     UsageSummary,
+    UsageValueGroups,
+    ValueGroupBy,
 )
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import (
@@ -165,6 +171,7 @@ async def list_organization_usage(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
     usage: UsageServiceDep,
+    refine: UsageRefinementsQuery,
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
     user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
@@ -214,6 +221,7 @@ async def list_organization_usage(
         counts_toward_budget=counts_toward_budget,
         request_group_id=request_group_id,
         workspace_id=workspace_id,
+        refine=refine,
     )
     return await usage.page(filters, scope, skip=skip, limit=limit)
 
@@ -223,6 +231,7 @@ async def count_organization_usage(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
     usage: UsageServiceDep,
+    refine: UsageRefinementsQuery,
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
     user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
@@ -273,6 +282,7 @@ async def count_organization_usage(
         counts_toward_budget=counts_toward_budget,
         request_group_id=request_group_id,
         workspace_id=workspace_id,
+        refine=refine,
     )
     return UsageCount(total=await usage.count(filters, scope))
 
@@ -282,6 +292,7 @@ async def organization_usage_summary(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
     usage: UsageServiceDep,
+    refine: UsageRefinementsQuery,
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
     user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
@@ -330,6 +341,7 @@ async def organization_usage_summary(
         tool=tool,
         counts_toward_budget=counts_toward_budget,
         workspace_id=workspace_id,
+        refine=refine,
     )
     return await usage.summary(filters, scope, bucket=bucket, dimensions=dimensions, group_by_tag=group_by_tag)
 
@@ -339,6 +351,7 @@ async def organization_usage_series(
     identity: CurrentIdentity,
     db: Annotated[AsyncSession, Depends(get_db)],
     usage: UsageServiceDep,
+    refine: UsageRefinementsQuery,
     group_by: SeriesGroupBy = Query(description="Dimension to split the series by"),
     start_date: datetime | None = Query(default=None, description=_START_DESC),
     end_date: datetime | None = Query(default=None, description=_END_DESC),
@@ -385,5 +398,63 @@ async def organization_usage_series(
         tool=tool,
         counts_toward_budget=counts_toward_budget,
         workspace_id=workspace_id,
+        refine=refine,
     )
     return await usage.grouped_series(filters, scope, bucket=bucket, group_by=group_by)
+
+
+@router.get("/groups")
+async def organization_usage_value_groups(
+    identity: CurrentIdentity,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    usage: UsageServiceDep,
+    refine: UsageRefinementsQuery,
+    group_by: ValueGroupBy = Query(description=_GROUP_BY_DESC),
+    start_date: datetime | None = Query(default=None, description=_START_DESC),
+    end_date: datetime | None = Query(default=None, description=_END_DESC),
+    user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
+    status: str | None = Query(default=None, description=_STATUS_DESC),
+    status_code: int | None = Query(default=None, description=_STATUS_CODE_DESC),
+    model: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_MODEL_MULTI_DESC)] = None,
+    endpoint: str | None = Query(default=None, description=_ENDPOINT_DESC),
+    provider: str | None = Query(default=None, description=_PROVIDER_DESC),
+    source: str | None = Query(default=None, description=_SOURCE_DESC),
+    source_label: str | None = Query(default=None, description=_SOURCE_LABEL_DESC),
+    tag: TagFilter = None,
+    api_key_id: Annotated[
+        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_API_KEY_MULTI_DESC)
+    ] = None,
+    priced: bool | None = Query(default=None, description=_PRICED_DESC),
+    tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
+    counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
+    workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    search: Annotated[str | None, Query(max_length=_MAX_GROUP_SEARCH, description=_GROUP_SEARCH_DESC)] = None,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> UsageValueGroups:
+    """One column's values over the window, for the caller's organization.
+
+    The tenant-scoped counterpart of ``GET /api/v1/usage/groups``: the same
+    values, over the rows this caller may read.
+    """
+    scope = await _scope(db, user=identity, workspace_id=workspace_id)
+    filters = UsageFilters(
+        start_date=start_date,
+        end_date=end_date,
+        user_id=user_id,
+        status=status,
+        status_code=status_code,
+        model=model,
+        endpoint=endpoint,
+        provider=provider,
+        source=source,
+        source_label=source_label,
+        tags=parse_tag_filters(tag),
+        api_key_id=api_key_id,
+        priced=priced,
+        tool=tool,
+        counts_toward_budget=counts_toward_budget,
+        workspace_id=workspace_id,
+        refine=refine,
+    )
+    return await usage.value_groups(filters, scope, group_by=group_by, search=search, skip=skip, limit=limit)

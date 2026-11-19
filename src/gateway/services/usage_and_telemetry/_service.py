@@ -27,6 +27,8 @@ from gateway.schemas.usage_and_telemetry import (
     UsageGroupRow,
     UsageSummary,
     UsageTotals,
+    UsageValueGroups,
+    ValueGroupBy,
 )
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.organizations import UserAccess
@@ -71,6 +73,10 @@ _SUMMARY_DIMENSIONS: dict[str, int] = {
 _ERROR_TAXONOMY_DIMENSION = "status_code"
 _TOOL_DIMENSION = "tool"
 _ALL_SUMMARY_DIMENSIONS: set[str] = set(_SUMMARY_DIMENSIONS) | {_ERROR_TAXONOMY_DIMENSION, _TOOL_DIMENSION}
+
+# How many ids a search may match by label: a search narrows a filter menu, so a
+# term that names more than this is one to type more of.
+_MAX_NAMED_BY_SEARCH = 500
 
 # A grouped series names its dimension by the column; a breakdown by the response field.
 _SERIES_DIMENSIONS: dict[str, str] = {"model": "model", "user_id": "user", "api_key_id": "api_key", "source": "source"}
@@ -255,6 +261,51 @@ class UsageService:
             by_tag=by_tag,
             errors_by_status_code=errors_by_status_code,
             series=series,
+        )
+
+    async def value_groups(
+        self,
+        filters: UsageFilters,
+        scope: UsageScope,
+        *,
+        group_by: ValueGroupBy,
+        search: str | None,
+        skip: int,
+        limit: int,
+    ) -> UsageValueGroups:
+        """A page of one column's values over a bounded window, busiest first, for a filter menu.
+
+        A user is found by alias and a key by name as well as by id: the ids whose
+        label contains ``search`` are read from the domains that own the labels,
+        and each value listed is labeled the same way.
+        """
+        start, end = resolve_window(filters.start_date, filters.end_date)
+        filters = replace(filters, start_date=start, end_date=end)
+        term = (search or "").strip() or None
+        async with self._heavy_read():
+            named: list[str] = []
+            if term is not None and group_by == "user":
+                named = await self._users.ids_aliased_like(term, limit=_MAX_NAMED_BY_SEARCH)
+            elif term is not None and group_by == "api_key":
+                named = await self._keys.ids_named_like(term, limit=_MAX_NAMED_BY_SEARCH)
+            groups, total = await self._usage_logs.value_groups(
+                filters, scope, group_by=group_by, search=term, named=named, skip=skip, limit=limit
+            )
+            keys = {group.key for group in groups if group.key is not None}
+            labels: dict[str, str | None] = {}
+            if group_by == "user":
+                labels = await self._users.aliases(keys)
+            elif group_by == "api_key":
+                labels = await self._keys.key_names(keys, workspace_ids=None)
+        return UsageValueGroups(
+            start_date=start.isoformat(),
+            end_date=end.isoformat(),
+            group_by=group_by,
+            groups=[
+                group.model_copy(update={"label": labels.get(group.key)}) if group.key in labels else group
+                for group in groups
+            ],
+            total=total,
         )
 
     async def grouped_series(

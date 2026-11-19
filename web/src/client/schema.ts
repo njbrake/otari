@@ -5433,6 +5433,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organizations/me/usage/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Organization Usage Value Groups
+         * @description One column's values over the window, for the caller's organization.
+         *
+         *     The tenant-scoped counterpart of ``GET /api/v1/usage/groups``: the same
+         *     values, over the rows this caller may read.
+         */
+        get: operations["organization-usage-organization_usage_value_groups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations/me/usage/series": {
         parameters: {
             query?: never;
@@ -7682,6 +7705,32 @@ export interface paths {
          *     prompt/completion/tool field is rejected (422), not stored.
          */
         post: operations["usage-ingest_external_usage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Usage Value Groups
+         * @description One column's values over the window, busiest first, with how many requests carry each.
+         *
+         *     What a column's filter menu lists. Same filters and window bounds as
+         *     ``/summary``; a menu leaves its own column's filters out so its list stays
+         *     complete. ``total`` counts every value the filters leave, so a menu can say how
+         *     many more there are past the page. Searched and ordered here rather than by
+         *     the client, so a window with more values than one page still reaches them all.
+         */
+        get: operations["usage-usage_value_groups"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -23512,6 +23561,46 @@ export interface components {
             unpriced_requests: number;
         };
         /**
+         * UsageValueGroup
+         * @description One value of a column over the window, and the requests that carry it.
+         *
+         *     ``key`` is None for the rows with no value in the column (no key, no billed
+         *     user, no policy). ``label`` names an opaque key: a user's alias, an API key's
+         *     name. ``requests`` counts requests as the summary does, except when grouped by
+         *     status, where it counts rows, so the absorbed attempts are counted too.
+         */
+        UsageValueGroup: {
+            /** Cost */
+            cost: number;
+            /** Errors */
+            errors: number;
+            /** Key */
+            key: string | null;
+            /** Label */
+            label?: string | null;
+            /** Requests */
+            requests: number;
+        };
+        /**
+         * UsageValueGroups
+         * @description A page of a column's values, busiest first, and how many values the filters leave.
+         */
+        UsageValueGroups: {
+            /** End Date */
+            end_date: string;
+            /**
+             * Group By
+             * @enum {string}
+             */
+            group_by: "model" | "user" | "api_key" | "provider" | "status" | "source" | "source_label" | "policy";
+            /** Groups */
+            groups: components["schemas"]["UsageValueGroup"][];
+            /** Start Date */
+            start_date: string;
+            /** Total */
+            total: number;
+        };
+        /**
          * UserResponse
          * @description Response model for user information.
          */
@@ -34059,6 +34148,28 @@ export interface operations {
                 workspace_id?: string | null;
                 skip?: number;
                 limit?: number;
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
             };
             header?: never;
             path?: never;
@@ -34123,6 +34234,28 @@ export interface operations {
                 request_group_id?: string[] | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
             };
             header?: never;
             path?: never;
@@ -34137,6 +34270,96 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsageCount"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "organization-usage-organization_usage_value_groups": {
+        parameters: {
+            query: {
+                /** @description The column to list the values of: 'policy' is the routing policy a request was served through, under a null key for the requests that named a model directly. */
+                group_by: "model" | "user" | "api_key" | "provider" | "status" | "source" | "source_label" | "policy";
+                /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
+                start_date?: string | null;
+                /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
+                end_date?: string | null;
+                /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
+                user_id?: string[] | null;
+                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                status?: string | null;
+                /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
+                status_code?: number | null;
+                /** @description Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call. */
+                model?: string[] | null;
+                /** @description Filter to a single endpoint (e.g. '/v1/chat/completions') */
+                endpoint?: string | null;
+                /** @description Filter to a single provider (e.g. 'openai') */
+                provider?: string | null;
+                /** @description Filter to a single provenance source (e.g. 'gateway' or 'claude_code') */
+                source?: string | null;
+                /** @description Filter to a single session (source_label): the session's trace id on a gateway request that named one, or the session/project label imported usage carried */
+                source_label?: string | null;
+                /** @description Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call. */
+                tag?: string[] | null;
+                /** @description Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call. */
+                api_key_id?: string[] | null;
+                /** @description Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing. */
+                priced?: boolean | null;
+                /** @description Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically. */
+                tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
+                /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
+                counts_toward_budget?: boolean | null;
+                /** @description Only usage recorded in this workspace. */
+                workspace_id?: string | null;
+                /** @description Keep the values that contain this, case-insensitive, or whose name does: a user's alias, an API key's name. What a column's filter menu searches. At most 200 characters. */
+                search?: string | null;
+                skip?: number;
+                limit?: number;
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageValueGroups"];
                 };
             };
             /** @description Validation Error */
@@ -34189,6 +34412,28 @@ export interface operations {
                 workspace_id?: string | null;
                 /** @description Time-series granularity: 'hour' or 'day' */
                 bucket?: "hour" | "day";
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
             };
             header?: never;
             path?: never;
@@ -34257,6 +34502,28 @@ export interface operations {
                 dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
                 /** @description A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key. */
                 group_by_tag?: string | null;
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
             };
             header?: never;
             path?: never;
@@ -37659,6 +37926,28 @@ export interface operations {
                 workspace_id?: string | null;
                 skip?: number;
                 limit?: number;
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
             };
             header?: never;
             path?: never;
@@ -37756,6 +38045,28 @@ export interface operations {
                 request_group_id?: string[] | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
             };
             header?: never;
             path?: never;
@@ -37803,6 +38114,96 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExternalIngestResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "usage-usage_value_groups": {
+        parameters: {
+            query: {
+                /** @description The column to list the values of: 'policy' is the routing policy a request was served through, under a null key for the requests that named a model directly. */
+                group_by: "model" | "user" | "api_key" | "provider" | "status" | "source" | "source_label" | "policy";
+                /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
+                start_date?: string | null;
+                /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
+                end_date?: string | null;
+                /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
+                user_id?: string[] | null;
+                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                status?: string | null;
+                /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
+                status_code?: number | null;
+                /** @description Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call. */
+                model?: string[] | null;
+                /** @description Filter to a single endpoint (e.g. '/v1/chat/completions') */
+                endpoint?: string | null;
+                /** @description Filter to a single provider (e.g. 'openai') */
+                provider?: string | null;
+                /** @description Filter to a single provenance source (e.g. 'gateway' or 'claude_code') */
+                source?: string | null;
+                /** @description Filter to a single session (source_label): the session's trace id on a gateway request that named one, or the session/project label imported usage carried */
+                source_label?: string | null;
+                /** @description Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call. */
+                tag?: string[] | null;
+                /** @description Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call. */
+                api_key_id?: string[] | null;
+                /** @description Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing. */
+                priced?: boolean | null;
+                /** @description Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically. */
+                tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
+                /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
+                counts_toward_budget?: boolean | null;
+                /** @description Only usage recorded in this workspace. */
+                workspace_id?: string | null;
+                /** @description Keep the values that contain this, case-insensitive, or whose name does: a user's alias, an API key's name. What a column's filter menu searches. At most 200 characters. */
+                search?: string | null;
+                skip?: number;
+                limit?: number;
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageValueGroups"];
                 };
             };
             /** @description Validation Error */
@@ -37906,6 +38307,28 @@ export interface operations {
                 workspace_id?: string | null;
                 /** @description Time-series granularity: 'hour' or 'day' */
                 bucket?: "hour" | "day";
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
             };
             header?: never;
             path?: never;
@@ -38007,6 +38430,28 @@ export interface operations {
                 dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
                 /** @description A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key. */
                 group_by_tag?: string | null;
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
             };
             header?: never;
             path?: never;
