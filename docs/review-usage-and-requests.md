@@ -186,7 +186,8 @@ page: how many, how many failed and how many attempts a routing policy
 recovered from, what was billed, what imported subscription usage would have
 cost (which nothing charged through the gateway), how many requests have no
 price (press it to list them), the tokens with their cache share, and the 95th
-percentile of total time.
+percentile of total time. Under **All** it adds up the last year, the span the
+chart shows, so with older requests the line counts fewer than the pages hold.
 
 The log is live by default: on the first page, with no request open and a
 window that runs to now, the newest rows and the count catch up every ten
@@ -196,7 +197,8 @@ on a window that has ended, so nothing
 moves while you read. **Live** beside the refresh control pauses and resumes
 it; while paused it says why, and pressing it goes back to the newest requests,
 newest first.
-While paused, a **new · load** button says how many requests have landed since.
+While paused, a **new · load** button says how many requests have landed since,
+except under a column sort, where new requests do not land at the top.
 
 On a desktop, drag the edge of a column's header to resize it, and use
 **Columns** in the row of controls to hide or show columns; the column

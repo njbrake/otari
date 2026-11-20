@@ -429,16 +429,18 @@ function ActivityPageContent({
   }, [filtersKey, url, page, requestId])
 
   // Live mode: on unless the reader paused it, and holding still on its own
-  // while they read a later page, have a request open, or look at a window
+  // while they read a later page, have a request open, sort by a column, or look at a window
   // that has ended, so no row moves under someone reading it.
   const [liveWanted, setLiveWanted] = useState(true)
+  const sorted =
+    sort.sort !== NEWEST_FIRST.sort || sort.order !== NEWEST_FIRST.order
   const livePause: LivePause = filters.end_date
     ? "ended"
     : requestId !== ""
       ? "request"
       : page > 0
         ? "page"
-        : sort.sort !== NEWEST_FIRST.sort || sort.order !== NEWEST_FIRST.order
+        : sorted
           ? "sort"
           : ""
   const isLive = liveWanted && livePause === ""
@@ -493,8 +495,7 @@ function ActivityPageContent({
   // that ends in the past can gain no rows at all, so the poll would be pure cost.
   // While live the rows themselves catch up, so the badge has nothing to say,
   // and under a column sort newer rows land anywhere but the top.
-  const newRowsRelevant =
-    page === 0 && !filters.end_date && !isLive && livePause !== "sort"
+  const newRowsRelevant = page === 0 && !filters.end_date && !isLive && !sorted
   const liveCount = useLiveUsageCount(filters, newRowsRelevant)
 
   // The timeline histogram spans the whole preset *extent* (the rolling preset

@@ -129,6 +129,20 @@ describe("ActivityPage live mode", () => {
     await waitFor(() => expect(control).toHaveAttribute("aria-pressed", "true"))
   })
 
+  it("asks for no new-row count under a sort, a request open or not", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const { calls } = mockApi({ rows: [entry()] })
+    await renderRequests("?sort=cost&order=desc")
+    const row = (await screen.findAllByText("gpt-4o"))[0].closest("tr")!
+    await user.click(row)
+    await waitFor(() => expect(urlParams().get("request")).toBe("req-1"))
+    const counts = countCalls(calls).length
+
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(countCalls(calls).length).toBe(counts)
+  })
+
   it("cannot follow a window that has ended", async () => {
     mockApi({ rows: [entry()] })
     await renderRequests(
@@ -261,9 +275,9 @@ describe("ActivityPage cell filters", () => {
 
     cell.focus()
     fireEvent.keyDown(cell, { key: "F10", shiftKey: true })
-    expect(
-      await screen.findByRole("menuitem", { name: "Only gpt-4o" }),
-    ).toBeInTheDocument()
+    // Focus starts on the first item, so Enter applies it at once.
+    const only = await screen.findByRole("menuitem", { name: "Only gpt-4o" })
+    await waitFor(() => expect(only).toHaveFocus())
     await userEvent.setup().keyboard("{Escape}")
     await waitFor(() =>
       expect(

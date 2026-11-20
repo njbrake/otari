@@ -39,6 +39,9 @@ export function CellFilter({
   children: ReactNode
 }) {
   const [isOpen, setIsOpen] = useState(false)
+  // Opened from the keyboard, the menu puts focus on its first item, as a menu
+  // button's arrow keys do, so Enter acts at once.
+  const [byKey, setByKey] = useState(false)
   const anchor = useRef<HTMLSpanElement>(null)
   // The cell, not the control, holds focus as the grid's arrows move, so the
   // key is heard there; the cell also says it has the shortcut.
@@ -52,6 +55,7 @@ export function CellFilter({
       if (!opensFilter(event)) return
       event.preventDefault()
       event.stopPropagation()
+      setByKey(true)
       setIsOpen(true)
     }
     cell.addEventListener("keydown", onKeyDown)
@@ -63,7 +67,13 @@ export function CellFilter({
   return (
     <span ref={anchor} className="relative flex min-w-0 items-center gap-1">
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      <Dropdown isOpen={isOpen} onOpenChange={setIsOpen}>
+      <Dropdown
+        isOpen={isOpen}
+        onOpenChange={(open) => {
+          setIsOpen(open)
+          if (!open) setByKey(false)
+        }}
+      >
         <Dropdown.Trigger
           aria-label={`Only or exclude ${label}`}
           className="otari-cell-filter"
@@ -74,6 +84,7 @@ export function CellFilter({
         <Dropdown.Popover placement="bottom end" className="otari-row-menu">
           <Dropdown.Menu
             aria-label={`Only or exclude ${label}`}
+            autoFocus={byKey ? "first" : true}
             onAction={(key) =>
               onFilter(value, key === "exclude" ? "exclude" : "include")
             }
