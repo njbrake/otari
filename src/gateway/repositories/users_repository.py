@@ -423,9 +423,11 @@ class UserAccessRepository(BaseRepository[User, Never, Never]):
         """Whether an organization besides ``organization_id`` also reaches this user.
 
         By the joins :func:`in_organization` reads: a key, usage, a roster row, or
-        for an end user a key of its owner.
+        for an end user a key of its owner. Usage of an end user this user owns
+        counts too, since a merge moves that end user onto another owner.
         """
         elsewhere = col(Workspace.organization_id) != organization_id
+        end_user = aliased(User)
         reached = or_(
             select(APIKey.user_id)
             .join(Workspace, col(Workspace.id) == APIKey.workspace_id)
@@ -444,6 +446,11 @@ class UserAccessRepository(BaseRepository[User, Never, Never]):
             select(APIKey.user_id)
             .join(Workspace, col(Workspace.id) == APIKey.workspace_id)
             .where(APIKey.user_id == User.parent_user_id, elsewhere)
+            .exists(),
+            select(UsageLog.user_id)
+            .join(Workspace, col(Workspace.id) == UsageLog.workspace_id)
+            .join(end_user, end_user.user_id == UsageLog.user_id)
+            .where(end_user.parent_user_id == User.user_id, elsewhere)
             .exists(),
         )
         found = await self.db.execute(select(User.user_id).where(User.user_id == user_id, reached))

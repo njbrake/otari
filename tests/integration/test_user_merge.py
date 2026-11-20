@@ -776,6 +776,45 @@ def test_rows_in_another_organizations_workspace_refuse_the_merge(
     assert set(moved) == {LEGACY}
 
 
+def test_an_end_user_another_organization_bills_refuses_the_merge(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session: Session,
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    """The source's end user carries usage in another organization, so moving it onto the target is refused."""
+    other = Organization(name="Other", slug="other")
+    db_session.add(other)
+    db_session.commit()
+    db_session.refresh(other)
+    elsewhere = Workspace(name="Other one", organization_id=other.id)
+    db_session.add(elsewhere)
+    db_session.commit()
+    db_session.refresh(elsewhere)
+    _add(db_session_factory, User(user_id="end-elsewhere", parent_user_id=LEGACY, external_id="customer-elsewhere"))
+    _add(
+        db_session_factory,
+        UsageLog(
+            id=str(uuid.uuid4()),
+            workspace_id=elsewhere.id,
+            user_id="end-elsewhere",
+            model="m",
+            provider="p",
+            endpoint="/v1/chat/completions",
+            source="gateway",
+            status="success",
+            timestamp=datetime.now(UTC) - timedelta(hours=1),
+        ),
+    )
+
+    response = _merge(client, master_key_header, target=world.account, source=LEGACY)
+
+    assert response.status_code == status.HTTP_409_CONFLICT, response.text
+    assert "another organization" in response.json()["detail"]
+    assert _user(db_session_factory, "end-elsewhere").parent_user_id == LEGACY
+
+
 def test_an_end_user_or_a_record_no_account_owns_cannot_be_the_target(
     client: TestClient,
     master_key_header: dict[str, str],
