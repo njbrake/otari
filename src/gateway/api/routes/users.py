@@ -521,10 +521,12 @@ async def merge_user(
     changes nothing. Running the merge again for a source already merged into
     this user moves what reached the source since.
 
-    Refused with 400 for a merge of a user into itself, and with 409 when the
-    source is the user a sign-in account bills through or the shared
-    ``default`` user, is also used in another organization, sent a request in
-    the last five minutes, has a budget reservation in flight, is named by a
+    Refused with 400 for a merge of a user into itself, with 409 when this user
+    is not a sign-in account's own record (an end user included), and with 409
+    when the source is the user a sign-in account bills through or the shared
+    ``default`` user, is also used in another organization (reached from it, or
+    holding any row a merge moves in one of its workspaces), sent a request in
+    the last five minutes on a first merge, has a budget reservation in flight, is named by a
     routing policy's ``when.user_id`` condition, or shares with this user a
     per-user alias, routing policy or provider endpoint name in one workspace,
     or an end user id.

@@ -736,3 +736,79 @@ def test_the_shared_default_user_cannot_be_the_source(
 
     assert response.status_code == status.HTTP_409_CONFLICT, response.text
     assert _user(db_session_factory, "default").deleted_at is None
+
+
+def test_rows_in_another_organizations_workspace_refuse_the_merge(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session, world: _World
+) -> None:
+    """A row the other organization holds under the source refuses the merge, though no key or usage puts it there.
+
+    Each table a merge moves is checked, not only those that put a user in an
+    organization's reach, so none of the other organization's rows moves.
+    """
+    other = Organization(name="Other", slug="other")
+    db_session.add(other)
+    db_session.commit()
+    db_session.refresh(other)
+    elsewhere = Workspace(name="Other one", organization_id=other.id)
+    db_session.add(elsewhere)
+    db_session.commit()
+    db_session.refresh(elsewhere)
+    _seed_every_reference(db_session, elsewhere.id, LEGACY)
+
+    for preview in (True, False):
+        response = _merge(client, master_key_header, target=world.account, source=LEGACY, preview=preview)
+        assert response.status_code == status.HTTP_409_CONFLICT, response.text
+        detail = response.json()["detail"]
+        assert "another organization" in detail
+        for table in ("routing_policies", "provider_endpoints", "traces", "file_objects", "mcp_user_connections"):
+            assert table in detail, table
+
+    moved = db_session.execute(
+        text(
+            "SELECT user_id FROM routing_policies WHERE workspace_id = :w UNION ALL "
+            "SELECT user_id FROM provider_endpoints WHERE workspace_id = :w UNION ALL "
+            "SELECT user_id FROM traces WHERE workspace_id = :w UNION ALL "
+            "SELECT user_id FROM file_objects WHERE workspace_id = :w"
+        ),
+        {"w": elsewhere.id},
+    ).scalars()
+    assert set(moved) == {LEGACY}
+
+
+def test_an_end_user_or_a_record_no_account_owns_cannot_be_the_target(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    _add(
+        db_session_factory,
+        User(user_id="plain-record", alias="Plain"),
+        User(user_id="end-target", parent_user_id=LEGACY, external_id="customer-target"),
+    )
+
+    for target in ("plain-record", "end-target"):
+        response = _merge(client, master_key_header, target=target, source=LEGACY, preview=True)
+        assert response.status_code == status.HTTP_409_CONFLICT, (target, response.text)
+        assert "sign-in account" in response.json()["detail"]
+    assert _owners(db_session_factory, APIKey).count(LEGACY) == 2
+
+
+def test_a_resumed_merge_sweeps_rows_written_moments_ago(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    """The quiet period guards a first merge; rows reaching a retired source are what running it again is for."""
+    assert _merge(client, master_key_header, target=world.account, source=LEGACY).status_code == status.HTTP_200_OK
+    _add(db_session_factory, _usage_row(world.workspace_id, LEGACY, age=timedelta(seconds=5)))
+
+    preview = _merge(client, master_key_header, target=world.account, source=LEGACY, preview=True)
+    assert preview.status_code == status.HTTP_200_OK, preview.text
+    assert (preview.json()["resumed"], preview.json()["moved"]["usage_logs"]) == (True, 1)
+
+    swept = _merge(client, master_key_header, target=world.account, source=LEGACY)
+    assert swept.status_code == status.HTTP_200_OK, swept.text
+    assert LEGACY not in _owners(db_session_factory, UsageLog)

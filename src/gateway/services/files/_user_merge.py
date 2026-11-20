@@ -1,6 +1,7 @@
 """Moving a merged user's files onto the user it was merged into."""
 
-from collections.abc import Mapping
+import uuid
+from collections.abc import Collection, Mapping
 
 from gateway.repositories.files import FileRepositories
 
@@ -11,7 +12,13 @@ class FileUserMergeListener:
     def __init__(self, repositories: FileRepositories) -> None:
         self._files = repositories.files
 
-    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+    async def rows_elsewhere(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> list[str]:
+        """The tables holding a row of ``user_id`` in a workspace other than these."""
+        return ["file_objects"] if await self._files.has_user_rows_outside(user_id, workspace_ids) else []
+
+    async def user_merged(
+        self, from_user_id: str, to_user_id: str, *, preview: bool, resumed: bool
+    ) -> Mapping[str, int]:
         """Point every file of ``from_user_id`` at ``to_user_id``, or with ``preview`` count them."""
         if preview:
             return {"file_objects": await self._files.count_naming_user(from_user_id)}

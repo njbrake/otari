@@ -19,7 +19,7 @@ from gateway.models.inference import BatchRecord
 
 if TYPE_CHECKING:
     import uuid
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Collection, Iterable, Mapping
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -118,7 +118,22 @@ class BatchUserMergeListener:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+    async def rows_elsewhere(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> list[str]:
+        """The tables holding a row of ``user_id`` in a workspace other than these."""
+        found = await self._db.execute(
+            select(BatchRecord.user_id)
+            .where(
+                BatchRecord.user_id == user_id,
+                BatchRecord.workspace_id.is_not(None),
+                BatchRecord.workspace_id.not_in(list(workspace_ids)),
+            )
+            .limit(1)
+        )
+        return ["batches"] if found.first() is not None else []
+
+    async def user_merged(
+        self, from_user_id: str, to_user_id: str, *, preview: bool, resumed: bool
+    ) -> Mapping[str, int]:
         """Point every batch of ``from_user_id`` at ``to_user_id``, or with ``preview`` count them."""
         if preview:
             found = await self._db.execute(

@@ -1,6 +1,7 @@
 """Moving a merged user's idempotency records and video jobs onto the user it was merged into."""
 
-from collections.abc import Mapping
+import uuid
+from collections.abc import Collection, Mapping
 
 from gateway.repositories.inference import InferenceRepositories
 
@@ -12,7 +13,13 @@ class InferenceUserMergeListener:
         self._idempotency = repositories.idempotency
         self._video_jobs = repositories.video_jobs
 
-    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+    async def rows_elsewhere(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> list[str]:
+        """The tables holding a row of ``user_id`` in a workspace other than these."""
+        return ["video_jobs"] if await self._video_jobs.has_user_rows_outside(user_id, workspace_ids) else []
+
+    async def user_merged(
+        self, from_user_id: str, to_user_id: str, *, preview: bool, resumed: bool
+    ) -> Mapping[str, int]:
         """Point both at ``to_user_id``, so a retried request or a job's poll still finds its owner.
 
         With ``preview`` count them.

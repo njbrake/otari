@@ -1,6 +1,7 @@
 """Moving a merged user's own routing policies onto the user it was merged into."""
 
-from collections.abc import Mapping
+import uuid
+from collections.abc import Collection, Mapping
 from typing import Any
 
 from gateway.core.config import GatewayConfig
@@ -32,7 +33,13 @@ class RoutingUserMergeListener:
         self._policies = RoutingPolicyRepository(uow)
         self._config = config
 
-    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+    async def rows_elsewhere(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> list[str]:
+        """The tables holding a row of ``user_id`` in a workspace other than these."""
+        return ["routing_policies"] if await self._policies.has_user_rows_outside(user_id, workspace_ids) else []
+
+    async def user_merged(
+        self, from_user_id: str, to_user_id: str, *, preview: bool, resumed: bool
+    ) -> Mapping[str, int]:
         """Point the policies at ``to_user_id``, refusing where a condition names the merged user or a name clashes."""
         conditioned = sorted(
             {name for name, _workspace, spec in await self._policies.specs() if names_user(spec, from_user_id)}

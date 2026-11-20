@@ -14,10 +14,12 @@ complete. A repository that committed would break every multi-step service
 operation into separately-durable pieces.
 """
 
+import uuid
+from collections.abc import Collection
 from typing import Any, Generic, TypeVar, cast
 
 from pydantic import BaseModel
-from sqlalchemy import CursorResult, and_, delete, func, select, update
+from sqlalchemy import CursorResult, and_, delete, func, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, class_mapper
 
@@ -138,6 +140,28 @@ class BaseRepository(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         owner = getattr(self.model_class, column)
         result = await self.db.execute(select(func.count()).select_from(self.model_class).where(owner == user_id))
         return int(result.scalar_one())
+
+    async def has_user_rows_outside(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> bool:
+        """Whether a row of ``user_id`` sits in a workspace other than these; one with no workspace does not."""
+        workspace = getattr(self.model_class, "workspace_id")
+        found = await self.db.execute(
+            select(literal(1))
+            .select_from(self.model_class)
+            .where(
+                getattr(self.model_class, "user_id") == user_id,
+                workspace.is_not(None),
+                workspace.not_in(list(workspace_ids)),
+            )
+            .limit(1)
+        )
+        return found.first() is not None
+
+    async def values_for_user(self, user_id: str, column: str) -> set[Any]:
+        """The distinct values ``user_id``'s rows hold in ``column``."""
+        rows = await self.db.execute(
+            select(getattr(self.model_class, column)).where(getattr(self.model_class, "user_id") == user_id).distinct()
+        )
+        return set(rows.scalars().all())
 
     async def shared_with_user(
         self, from_user_id: str, to_user_id: str, *, by: tuple[str, ...]

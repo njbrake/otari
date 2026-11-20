@@ -33,7 +33,7 @@ sweep (``container_sweeper``) only drops rows whose clocks ran out.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -43,6 +43,7 @@ from gateway.exceptions.api_keys_exceptions import KeyScopeMissingError
 from gateway.repositories.code_execution import (
     SandboxContainerRow,
     claim_container_row,
+    container_owner_outside,
     count_container_owner,
     delete_container_rows,
     get_container_row,
@@ -345,7 +346,13 @@ class SandboxContainerUserMergeListener:
     def __init__(self, uow: UnitOfWork) -> None:
         self._uow = uow
 
-    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+    async def rows_elsewhere(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> list[str]:
+        """The tables holding a row of ``user_id`` in a workspace other than these."""
+        return ["sandbox_containers"] if await container_owner_outside(self._uow, user_id, workspace_ids) else []
+
+    async def user_merged(
+        self, from_user_id: str, to_user_id: str, *, preview: bool, resumed: bool
+    ) -> Mapping[str, int]:
         """Point every lease of ``from_user_id`` at ``to_user_id``, or with ``preview`` count them."""
         if preview:
             return {"sandbox_containers": await count_container_owner(self._uow, from_user_id)}

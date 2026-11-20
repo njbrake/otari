@@ -156,6 +156,12 @@ export function MergeUserRecordDialog({
       {previewed ? (
         <div className="flex flex-col gap-2">
           <p className="text-overline">What moves</p>
+          {previewed.resumed ? (
+            <InfoBanner>
+              This record was already merged into {name}. What is listed reached
+              it since, and merging again moves it.
+            </InfoBanner>
+          ) : null}
           <MovedList result={previewed} />
           <p className="text-caption">
             This cannot be undone: once merged, the rows cannot be told apart

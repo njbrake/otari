@@ -13,7 +13,7 @@ rows that moved already carry the history.
 """
 
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -39,10 +39,17 @@ class UserMergeListener(Protocol):
     ``UserMergeRefusedError`` when its rows cannot move, on a preview too.
     """
 
-    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+    async def rows_elsewhere(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> list[str]:
+        """The tables of this domain holding a row of ``user_id`` in a workspace other than these."""
+        ...
+
+    async def user_merged(
+        self, from_user_id: str, to_user_id: str, *, preview: bool, resumed: bool
+    ) -> Mapping[str, int]:
         """Stage moving this domain's rows from one user to the other; the rows moved per table.
 
-        With ``preview`` write nothing and count what would move.
+        With ``preview`` write nothing and count what would move. ``resumed`` is a
+        merge run again for a source already retired into this target.
         """
         ...
 
@@ -81,6 +88,7 @@ class UserMergeService:
         self._uow = uow
         self._refresh_caches = refresh_caches
         self._users = repositories.users
+        self._workspaces = repositories.workspaces
         self._accounts = accounts
         self._telemetry = telemetry
         self._listeners = listeners
@@ -167,12 +175,24 @@ class UserMergeService:
             source, target = users.get(from_user_id), users.get(to_user_id)
             if target is None or target.deleted_at is not None:
                 raise UserMergeRefusedError(f"User '{to_user_id}' does not exist or was deleted")
+            if target.parent_user_id is not None or not await self._is_sign_in_account(to_user_id):
+                raise UserMergeRefusedError(
+                    f"User '{to_user_id}' is not a sign-in account's own record; a record merges only into one"
+                )
             if source is None or (source.deleted_at is not None and not _merged_into(source, to_user_id)):
                 raise UserMergeRefusedError(f"User '{from_user_id}' does not exist or was deleted")
             resumed = source.deleted_at is not None
             # Its rows in that organization would move too, onto a user this one names.
             if await self._users.named_outside_organization(from_user_id, organization_id):
                 raise UserMergeRefusedError(f"User '{from_user_id}' is also used in another organization")
+            workspace_ids = await self._workspaces.get_ids_by_organization(organization_id)
+            elsewhere = [
+                table
+                for listener in self._listeners
+                for table in await listener.rows_elsewhere(from_user_id, workspace_ids)
+            ]
+            if elsewhere:
+                raise UserMergeRefusedError.used_elsewhere(from_user_id, elsewhere)
             if source.reserved or source.reserved_tokens or source.reserved_requests:
                 raise UserMergeRefusedError(
                     f"User '{from_user_id}' has a budget reservation in flight; retry once its requests finish"
@@ -191,7 +211,15 @@ class UserMergeService:
                 )
             }
             for listener in self._listeners:
-                moved.update(await listener.user_merged(from_user_id, to_user_id, preview=preview))
+                moved.update(await listener.user_merged(from_user_id, to_user_id, preview=preview, resumed=resumed))
+            if resumed and any(moved.values()):
+                logger.warning(
+                    "A user merged earlier still has rows naming it: from=%s to=%s preview=%s rows=%s",
+                    from_user_id,
+                    to_user_id,
+                    preview,
+                    {table: count for table, count in moved.items() if count},
+                )
             if not preview and not resumed:
                 _retire(source, into=to_user_id, merged_by=merged_by)
                 await self._users.flush()

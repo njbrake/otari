@@ -7,7 +7,7 @@ service layer; this module is the only place its statements are spelled.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -169,3 +169,14 @@ async def count_container_owner(uow: UnitOfWork, user_id: str) -> int:
         select(func.count()).select_from(SandboxContainer).where(SandboxContainer.user_id == user_id)
     )
     return int(result.scalar_one())
+
+
+async def container_owner_outside(uow: UnitOfWork, user_id: str, workspace_ids: Collection[uuid.UUID]) -> bool:
+    """Whether ``user_id`` holds a lease in a workspace other than these."""
+    db = session_for(uow)
+    found = await db.execute(
+        select(SandboxContainer.id)
+        .where(SandboxContainer.user_id == user_id, SandboxContainer.workspace_id.not_in(list(workspace_ids)))
+        .limit(1)
+    )
+    return found.first() is not None

@@ -535,6 +535,11 @@ class SignupRegistrationUnresolvedError(TenancyError):
 class UserMergeRefusedError(TenancyConflictError):
     """A user merge was refused before anything moved, for the reason the message gives."""
 
+    @classmethod
+    def used_elsewhere(cls, user_id: str, tables: list[str]) -> "UserMergeRefusedError":
+        """The refusal for a user with rows in another organization's workspaces, naming where they are."""
+        return cls(f"User '{user_id}' is also used in another organization ({', '.join(sorted(tables))})")
+
 
 class UserMergeIntoItselfError(TenancyValidationError):
     """A user merge named the same user as its source and its target."""

@@ -1,6 +1,7 @@
 """Moving a merged user's budget history onto the user it was merged into."""
 
-from collections.abc import Mapping
+import uuid
+from collections.abc import Collection, Mapping
 
 from gateway.exceptions.organizations_exceptions import UserMergeRefusedError
 from gateway.repositories.budgets import BudgetRepositories
@@ -13,7 +14,13 @@ class BudgetUserMergeListener:
         self._budgets = repositories.budgets
         self._reservations = repositories.reservations
 
-    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+    async def rows_elsewhere(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> list[str]:
+        """The tables holding a row of ``user_id`` in a workspace other than these."""
+        return []
+
+    async def user_merged(
+        self, from_user_id: str, to_user_id: str, *, preview: bool, resumed: bool
+    ) -> Mapping[str, int]:
         """Point the settled reservations and the reset history at ``to_user_id``, refusing while one is in flight.
 
         A reservation in flight settles against the user it was taken for, so

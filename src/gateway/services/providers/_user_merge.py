@@ -1,6 +1,7 @@
 """Moving a merged user's own provider endpoints onto the user it was merged into."""
 
-from collections.abc import Mapping
+import uuid
+from collections.abc import Collection, Mapping
 
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.organizations_exceptions import UserMergeRefusedError
@@ -16,7 +17,13 @@ class ProviderEndpointUserMergeListener:
     def __init__(self, uow: UnitOfWork) -> None:
         self._endpoints = ProviderEndpointRepository(uow)
 
-    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+    async def rows_elsewhere(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> list[str]:
+        """The tables holding a row of ``user_id`` in a workspace other than these."""
+        return ["provider_endpoints"] if await self._endpoints.has_user_rows_outside(user_id, workspace_ids) else []
+
+    async def user_merged(
+        self, from_user_id: str, to_user_id: str, *, preview: bool, resumed: bool
+    ) -> Mapping[str, int]:
         """Point the endpoints at ``to_user_id``, refusing where both users hold one of a name in one workspace."""
         shared = await self._endpoints.shared_with_user(from_user_id, to_user_id, by=("workspace_id", "name"))
         if shared:

@@ -788,6 +788,32 @@ describe("Merge user record", () => {
     ).toBeNull()
   })
 
+  it("says a record merged earlier still has rows to sweep", async () => {
+    mockApi({
+      accounts: [ANALYST],
+      merge: (preview) => jsonResponse({ ...merged(preview), resumed: true }),
+    })
+    await renderPage(<DeploymentAccountsPage />)
+
+    const user = userEvent.setup()
+    await screen.findByText("Analyst")
+    await pressRowAction(user, "Merge another user record into Analyst")
+    const dialog = await screen.findByRole("dialog")
+    await user.click(
+      within(dialog).getByRole("combobox", { name: /Record to merge in/ }),
+    )
+    await user.click(
+      await screen.findByRole("option", { name: /Pat \(old id\)/ }),
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Show what moves" }),
+    )
+
+    expect(
+      await within(dialog).findByText(/already merged into Analyst/),
+    ).toBeInTheDocument()
+  })
+
   it("says why a merge is refused and merges nothing", async () => {
     const requests = mockApi({
       accounts: [ANALYST],

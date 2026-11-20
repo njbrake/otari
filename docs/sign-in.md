@@ -394,18 +394,27 @@ move and changes nothing. A merge:
 
 Running the merge again for a source already merged into this user moves what
 reached the source since, such as usage written moments after the merge, and
-leaves the source retired as it was (`resumed` is `true`). A batch created
+leaves the source retired as it was (`resumed` is `true`). It does not wait for
+the source to be quiet, and its preview counts what is left to move; the
+gateway also logs a warning whenever a retired source is found with rows still
+naming it. A batch created
 before batch records existed has none to move: the provider's own metadata
 names its owner, so it stays reachable only by the source.
 
-It is refused with 400 for a user merged into itself, and with 409 when the
-source:
+The target must be a sign-in account's own record, not an end user a service
+key bills. It is refused with 400 for a user merged into itself, with 409 for
+any other target, and with 409 when the source:
 
 - is a sign-in account's own record (merge the other way round) or the shared
   `default` user;
-- is also used in another organization;
+- is also used in another organization: a key, usage or a roster row there
+  puts it in that organization's reach, or any row a merge would move sits in
+  one of that organization's workspaces (a policy, alias, provider endpoint,
+  file, trace, batch, video job, sandbox session, or an MCP grant, connection
+  or sign-in on that organization's server). The refusal names the tables;
 - sent a request in the last five minutes or has a budget reservation in
-  flight, so it may still be sending requests (retry once it is quiet);
+  flight, so it may still be sending requests (retry once it is quiet). Only a
+  first merge waits for this;
 - is named by a routing policy's `when.user_id` condition, which would stop
   matching once its requests bill this user (the refusal names the policies;
   change them first);

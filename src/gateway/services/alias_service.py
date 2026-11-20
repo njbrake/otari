@@ -41,7 +41,7 @@ acting deployment-wide, and the default workspace is where its writes land too.
 
 import asyncio
 import uuid
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 
 from sqlalchemy import Select, and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -238,7 +238,22 @@ class AliasUserMergeListener:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+    async def rows_elsewhere(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> list[str]:
+        """The tables holding a row of ``user_id`` in a workspace other than these."""
+        found = await self._db.execute(
+            select(ModelAlias.user_id)
+            .where(
+                ModelAlias.user_id == user_id,
+                ModelAlias.workspace_id.is_not(None),
+                ModelAlias.workspace_id.not_in(list(workspace_ids)),
+            )
+            .limit(1)
+        )
+        return ["model_aliases"] if found.first() is not None else []
+
+    async def user_merged(
+        self, from_user_id: str, to_user_id: str, *, preview: bool, resumed: bool
+    ) -> Mapping[str, int]:
         """Point the aliases at ``to_user_id``, refusing where both users hold one of a name in one workspace."""
         theirs = aliased(ModelAlias)
         shared = await self._db.execute(

@@ -1,7 +1,7 @@
 """Moving a merged user's MCP grants, connections and sign-ins onto the user it was merged into."""
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.repositories.tools import (
@@ -30,7 +30,20 @@ class McpUserMergeListener:
         self._revocations: list[McpRevocation] = []
         self._unread = 0
 
-    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+    async def rows_elsewhere(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> list[str]:
+        """The tables holding a row of ``user_id`` in a workspace other than these."""
+        tables = {
+            "workspace_mcp_server_grants": await self._grants.values_for_user(user_id, "server_id"),
+            "mcp_user_connections": await self._connections.values_for_user(user_id, "server_id"),
+            "mcp_oauth_flows": await self._flows.values_for_user(user_id, "server_id"),
+        }
+        servers = await self._servers.find_many(set().union(*tables.values()))
+        elsewhere = {server.id for server in servers if server.workspace_id not in workspace_ids}
+        return [table for table, server_ids in tables.items() if server_ids & elsewhere]
+
+    async def user_merged(
+        self, from_user_id: str, to_user_id: str, *, preview: bool, resumed: bool
+    ) -> Mapping[str, int]:
         """Point the grants, connections and sign-ins in progress at ``to_user_id``, keeping its own on a clash.
 
         With ``preview`` count what would move, a dropped grant or connection left out.
