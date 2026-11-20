@@ -13,6 +13,7 @@ import { SettingsGroup } from "@/design-system/layout/SettingsGroup"
 import { Toolbar } from "@/design-system/layout/Toolbar"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { CountryDatabaseCard } from "@/features/settings/CountryDatabaseCard"
+import { ImportedUsageCard } from "@/features/settings/ImportedUsageCard"
 import { MailDeliveryCard } from "@/features/settings/MailDeliveryCard"
 import { MaintenanceModeCard } from "@/features/settings/MaintenanceModeCard"
 import { RateLimitsCard } from "@/features/settings/RateLimitsCard"
@@ -730,6 +731,7 @@ export function SettingsPage() {
       <MaintenanceModeCard />
 
       <CountryDatabaseCard />
+      <ImportedUsageCard />
       <UpdateCheckCard />
 
       {data ? (

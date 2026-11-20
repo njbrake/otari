@@ -796,3 +796,65 @@ def test_count_and_delete_agree_on_budget_exempt_gateway_rows(
     db_session.expire_all()
     assert _get(db_session, "imp-1") is None
     assert _get(db_session, "gw-exempt") is not None
+
+
+def test_the_imported_usage_cards_count_is_what_its_writes_reach(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    """Settings > Imported usage counts a window, a source and unpriced rows, then writes by the same filter.
+
+    The count it shows before a delete has to be the number the delete removes,
+    and a recost has to reach the same rows, so both are read with one scope.
+    """
+    _make_log(db_session, log_id="in-window", counts_toward_budget=False, source="claude_code")
+    _make_log(db_session, log_id="priced", counts_toward_budget=False, source="claude_code", cost=0.5)
+    _make_log(db_session, log_id="other-source", counts_toward_budget=False, source="codex")
+    _make_log(
+        db_session,
+        log_id="too-old",
+        counts_toward_budget=False,
+        source="claude_code",
+        timestamp=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    _make_log(db_session, log_id="served", counts_toward_budget=True, source=SERVED_HERE_SLUG)
+    db_session.commit()
+    start = "2026-06-01T00:00:00Z"
+    scope: dict[str, object] = {"start_date": start, "source": "claude_code", "priced": False}
+
+    counted = client.get(
+        COUNT_PATH,
+        params={
+            "counts_toward_budget": "false",
+            "start_date": start,
+            "source": "claude_code",
+            "priced": "false",
+        },
+        headers=master_key_header,
+    )
+    assert counted.status_code == 200, counted.text
+    assert counted.json()["total"] == 1
+
+    recost = client.post(
+        SET_PRICE_PATH,
+        json={"by_filter": True, **scope, "input_price_per_million": 3.0, "output_price_per_million": 15.0},
+        headers=master_key_header,
+    )
+    assert recost.status_code == 200, recost.text
+    assert recost.json()["matched"] == 1
+    db_session.expire_all()
+    recosted = _get(db_session, "in-window")
+    assert recosted is not None and recosted.cost is not None
+
+    # Recosted, the row has a cost now, so the same unpriced scope reaches nothing.
+    deleted = client.request("DELETE", DELETE_PATH, json={"by_filter": True, **scope}, headers=master_key_header)
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted"] == 0
+
+    scope.pop("priced")
+    deleted = client.request("DELETE", DELETE_PATH, json={"by_filter": True, **scope}, headers=master_key_header)
+    assert deleted.json()["deleted"] == 2
+    db_session.expire_all()
+    assert _get(db_session, "in-window") is None
+    assert _get(db_session, "priced") is None
+    for kept in ("other-source", "too-old", "served"):
+        assert _get(db_session, kept) is not None, kept
