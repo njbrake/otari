@@ -63,7 +63,10 @@ month), **Today** marks where the month stands, and **Over budget** marks the
 day the total crosses the budget, with a ~ where that day is projected. The
 picker reaches back eleven months; an earlier month is drawn against the budget
 as it stands today. A budget that resets on another cadence draws no line, and
-the band says so. Point at a day, or focus the chart and use the arrow keys, to
+the band names it instead. A budget set partway through the month counts from
+that day, as the gateway does: its line starts there, the spend before it is
+grey and counts toward nothing, and the figure under the title is what the
+budget has counted, the same figure as the sidebar. Point at a day, or focus the chart and use the arrow keys, to
 read it.
 
 **Where it went** then breaks the window's spend down by **People**,
