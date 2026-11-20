@@ -33,16 +33,24 @@ from sqlalchemy import cast as sql_cast
 from gateway.core.metered_pricing import ChargeLine
 from gateway.core.sql import bucket_expr, canonical_bucket, dialect_name, match_any, utc_bound
 from gateway.core.unit_of_work import UnitOfWork
-from gateway.models.usage import SERVED_HERE_SLUG, UsageLog, UsageRollup, UsageRollupDirtyHour
+from gateway.models.usage import (
+    PLAYGROUND_USAGE_ENDPOINT,
+    SERVED_HERE_SLUG,
+    UsageLog,
+    UsageRollup,
+    UsageRollupDirtyHour,
+)
 from gateway.repositories.base_repository import BaseRepository
 from gateway.schemas.usage_and_telemetry import (
     ANY_TOOL,
     GATEWAY_TOOL_NAMES,
     TOOL_METER_NAMESPACE,
     Bucket,
+    SortOrder,
     UsageGroupedSeriesPoint,
     UsageGroupRow,
     UsageSeriesPoint,
+    UsageSort,
     UsageToolRow,
     UsageTotals,
     UsageValueGroup,
@@ -199,6 +207,42 @@ class UsageRefinements:
     tokens_gt: int | None = None
     cost_gt: float | None = None
     latency_ms_gt: int | None = None
+    # Only rows with one of these statuses: the subset form of ``UsageFilters.status``.
+    statuses: list[str] | None = None
+    # False leaves out the attempts a routing policy recovered from, unless a status
+    # filter names what to keep.
+    include_absorbed: bool | None = None
+    # Which ways in (``UsageChannel``) a row may have come by.
+    channel: list[str] | None = None
+    # The columns (``NullableUsageField``) that must be empty.
+    is_null: list[str] | None = None
+    # Free text: a usage row id or request id exactly, or a substring of a model,
+    # the name the caller sent, the source, the session label or the user id.
+    q: str | None = None
+    # The users whose alias and the keys whose name contain ``q``, which only the
+    # domains owning those names can read; the usage service fills them in.
+    q_user_ids: tuple[str, ...] = ()
+    q_api_key_ids: tuple[str, ...] = ()
+
+
+def search_term(q: str | None) -> str | None:
+    """The term a free-text search looks for, or None when there is nothing to search."""
+    term = (q or "").strip()
+    return term or None
+
+
+def search_request_id(term: str) -> str | None:
+    """``term`` in canonical form when it is a UUID, which the search matches exactly, else None."""
+    try:
+        return str(uuid.UUID(term))
+    except ValueError:
+        return None
+
+
+def is_substring_search(q: str | None) -> bool:
+    """Whether ``q`` searches by substring, which no index serves, rather than looking up an id."""
+    term = search_term(q)
+    return term is not None and search_request_id(term) is None
 
 
 @dataclass(frozen=True)
@@ -394,7 +438,38 @@ def _key_conditions(
     ):
         if values:
             conditions.append(_excluding(column, values, nullable=nullable))
+    if refine.statuses:
+        conditions.append(match_any(columns.status, refine.statuses))
+    if refine.include_absorbed is False and filters.status is None and not refine.statuses:
+        conditions.append(columns.status != "absorbed")
+    if refine.channel:
+        conditions.append(_channel_conditions(columns, refine.channel))
+    for name in sorted(set(refine.is_null or [])):
+        conditions.append(columns[_NULLABLE_COLUMNS[name]].is_(None))
     return conditions
+
+
+def single_status(filters: UsageFilters) -> str | None:
+    """The one status the rows are narrowed to, if they are, which decides what a request count counts."""
+    statuses = filters.refine.statuses or []
+    if filters.status is not None:
+        return filters.status
+    return statuses[0] if len(statuses) == 1 else None
+
+
+_NULLABLE_COLUMNS: dict[str, str] = {"api_key": "api_key_id", "user": "user_id", "session": "source_label"}
+
+
+def _channel_conditions(columns: Any, channels: Collection[str]) -> ColumnElement[bool]:
+    """Rows that came in by one of these ways, read off the source and the endpoint, which the rollups keep."""
+    served = columns.source == SERVED_HERE_SLUG
+    playground = columns.endpoint == PLAYGROUND_USAGE_ENDPOINT
+    by_channel: dict[str, ColumnElement[bool]] = {
+        "imported": columns.source != SERVED_HERE_SLUG,
+        "playground": and_(served, playground),
+        "api": and_(served, columns.endpoint != PLAYGROUND_USAGE_ENDPOINT),
+    }
+    return or_(*(by_channel[channel] for channel in sorted(set(channels))))
 
 
 def _excluding(column: Any, values: list[str], *, nullable: bool) -> ColumnElement[bool]:
@@ -452,7 +527,40 @@ def _row_only_conditions(filters: UsageFilters) -> list[ColumnElement[bool]]:
         conditions.append(UsageLog.cost > refine.cost_gt)
     if refine.latency_ms_gt is not None:
         conditions.append(UsageLog.latency_ms > refine.latency_ms_gt)
+    if (search := _search_condition(refine)) is not None:
+        conditions.append(search)
     return conditions
+
+
+def _search_condition(refine: UsageRefinements) -> ColumnElement[bool] | None:
+    """The rows a free-text search matches, or None when there is nothing to search for.
+
+    A UUID is a row id or an ``Otari-Request-ID`` pasted from a log line, matched
+    against those two indexed columns alone, since an OR with the substring arms
+    could use neither index. Anything else is a case-insensitive substring of the
+    small text columns, or a user or key whose name the service found containing it.
+    """
+    term = search_term(refine.q)
+    if term is None:
+        return None
+    request_id = search_request_id(term)
+    if request_id is not None:
+        return or_(UsageLog.id == request_id, UsageLog.request_group_id == request_id)
+    arms: list[ColumnElement[bool]] = [
+        column.icontains(term, autoescape=True)
+        for column in (
+            UsageLog.model,
+            UsageLog.requested_model,
+            UsageLog.source,
+            UsageLog.source_label,
+            UsageLog.user_id,
+        )
+    ]
+    if refine.q_user_ids:
+        arms.append(UsageLog.user_id.in_(sorted(refine.q_user_ids)))
+    if refine.q_api_key_ids:
+        arms.append(UsageLog.api_key_id.in_(sorted(refine.q_api_key_ids)))
+    return or_(*arms)
 
 
 def _tag_expr(key: str) -> Any:
@@ -708,6 +816,58 @@ def _summed(column: Any, zero: Any = 0) -> Any:
     return func.coalesce(func.sum(column), zero)
 
 
+@dataclass(frozen=True)
+class UsageSortLabels:
+    """How the user and source orders name a row, from the domains that own the names.
+
+    Each takes ``usage_logs``' own id column and returns the name it points at as a
+    scalar subquery: a user's alias, an API key's name.
+    """
+
+    user: Callable[[Any], Any]
+    api_key: Callable[[Any], Any]
+
+
+def _ordering(sort: UsageSort, order: SortOrder, labels: UsageSortLabels | None) -> tuple[Any, ...]:
+    """ORDER BY for a page: the chosen key with empty values last, then newest first, then the id.
+
+    The id closes the ordering so rows tied on every other key keep one order
+    across pages; without it, OFFSET paging could repeat or skip a row.
+    """
+    if sort == "timestamp":
+        # Not nulls_last(): the column is never NULL, and NULLS LAST would stop
+        # PostgreSQL scanning the timestamp index backwards.
+        if order == "asc":
+            return UsageLog.timestamp.asc(), UsageLog.id.asc()
+        return UsageLog.timestamp.desc(), UsageLog.id.desc()
+    user_name: Any = labels.user(UsageLog.user_id) if labels is not None else None
+    key_name: Any = labels.api_key(UsageLog.api_key_id) if labels is not None else None
+    keys: dict[str, Any] = {
+        "user": func.lower(func.coalesce(user_name, UsageLog.user_id)),
+        "model": func.lower(UsageLog.model),
+        "policy": func.lower(UsageLog.policy_name),
+        # The API key's name, or the provenance source where no key made the row.
+        "source": func.lower(func.coalesce(key_name, UsageLog.source)),
+        "input_tokens": _billed_expr("total_input_tokens", UsageLog.prompt_tokens),
+        "output_tokens": _billed_expr("completion_tokens", UsageLog.completion_tokens),
+        "tokens": _billed_expr("total_input_tokens", UsageLog.prompt_tokens)
+        + _billed_expr("completion_tokens", UsageLog.completion_tokens),
+        "cost": UsageLog.cost,
+        "latency": UsageLog.latency_ms,
+        # A request served on a later attempt had an earlier one fail, so it ranks
+        # with the recovered attempts, between the failures and the clean successes.
+        "status": case(
+            (UsageLog.status == "error", 3),
+            (UsageLog.status == "incomplete", 2),
+            (or_(UsageLog.status == "absorbed", UsageLog.attempt_position > 1), 1),
+            else_=0,
+        ),
+    }
+    key = keys[sort]
+    primary = (key.asc() if order == "asc" else key.desc()).nulls_last()
+    return primary, UsageLog.timestamp.desc(), UsageLog.id.desc()
+
+
 class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
     """Read usage rows inside a set of workspaces, and keep their hourly rollups.
 
@@ -852,16 +1012,61 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             for row in (await self.db.execute(stmt)).all()
         ]
 
-    async def page(self, filters: UsageFilters, scope: UsageScope, *, skip: int, limit: int) -> list[UsageLog]:
-        """The rows matching these filters inside this scope, most recent first."""
+    async def page(
+        self,
+        filters: UsageFilters,
+        scope: UsageScope,
+        *,
+        skip: int,
+        limit: int,
+        sort: UsageSort = "timestamp",
+        order: SortOrder = "desc",
+        labels: UsageSortLabels | None = None,
+    ) -> list[UsageLog]:
+        """The rows matching these filters inside this scope, in the order asked for, newest first by default."""
         stmt = (
             select(UsageLog)
             .where(*usage_conditions(filters, scope))
-            .order_by(UsageLog.timestamp.desc())
+            .order_by(*_ordering(sort, order, labels))
             .offset(skip)
             .limit(limit)
         )
         return list((await self.db.execute(stmt)).scalars().all())
+
+    async def p95_latency_ms(self, filters: UsageFilters, scope: UsageScope) -> int | None:
+        """The 95th-percentile total latency over the matching requests, absorbed attempts left out.
+
+        Read from the rows, since an hour's rollups keep only a latency sum.
+        PostgreSQL interpolates with ``percentile_cont``; SQLite has no ordered-set
+        aggregate, so there the two latencies either side of the same position are
+        read by rank and interpolated the same way, and both engines agree.
+        """
+        measured = [
+            *usage_conditions(filters, scope),
+            UsageLog.status != "absorbed",
+            UsageLog.latency_ms.is_not(None),
+        ]
+        if dialect_name(self.db) == "postgresql":
+            value = (
+                await self.db.execute(
+                    select(func.percentile_cont(0.95).within_group(UsageLog.latency_ms.asc())).where(*measured)
+                )
+            ).scalar_one_or_none()
+            return round(float(value)) if value is not None else None
+        count = int((await self.db.execute(select(func.count()).select_from(UsageLog).where(*measured))).scalar_one())
+        if not count:
+            return None
+        position = 0.95 * (count - 1)
+        lower = int(position)
+        ranked = (
+            await self.db.execute(
+                select(UsageLog.latency_ms).where(*measured).order_by(UsageLog.latency_ms.asc()).offset(lower).limit(2)
+            )
+        ).scalars()
+        values = [int(value) for value in ranked if value is not None]
+        if len(values) == 1:
+            return values[0]
+        return round(values[0] + (values[1] - values[0]) * (position - lower))
 
     async def count_matching(self, filters: UsageFilters, scope: UsageScope, *, imported_only: bool = False) -> int:
         """How many rows match these filters inside this scope; with ``imported_only``, only rows not served here."""
@@ -910,7 +1115,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
     async def cost_and_requests(self, filters: UsageFilters, scope: UsageScope) -> tuple[float, int]:
         """The spend and the request count over the matching rows."""
         rows = await self._usage_rows(filters, scope)
-        stmt = select(_summed(rows.c.cost, 0.0), _requests(rows, filters.status))
+        stmt = select(_summed(rows.c.cost, 0.0), _requests(rows, single_status(filters)))
         cost, requests = (await self.db.execute(stmt)).one()
         return float(cost), int(requests)
 
@@ -938,7 +1143,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                     _summed(c.cache_read_tokens),
                     _summed(c.cache_write_tokens),
                     _summed(c.cache_write_1h_tokens),
-                    _requests(rows, filters.status),
+                    _requests(rows, single_status(filters)),
                     _summed(case((c.status == "error", c.rows), else_=0)),
                     latency,
                     # Unpriced *served* rows only; see UsageTotals.unpriced_requests. The
@@ -948,6 +1153,9 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                     _summed(c.billed_input_tokens),
                     _summed(c.billed_output_tokens),
                     _summed(c.reasoning_tokens),
+                    _summed(case((c.status == "absorbed", c.rows), else_=0)),
+                    _summed(case((c.status == "incomplete", c.rows), else_=0)),
+                    _summed(case((c.source != SERVED_HERE_SLUG, c.cost), else_=0), 0.0),
                 )
             )
         ).one()
@@ -966,6 +1174,9 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             billed_input_tokens=int(row[11]),
             billed_output_tokens=int(row[12]),
             reasoning_tokens=int(row[13]),
+            absorbed_count=int(row[14]),
+            incomplete_count=int(row[15]),
+            imported_cost=float(row[16]),
         )
 
     async def groups(
@@ -994,7 +1205,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 column,
                 cost_sum,
                 _summed(rows.c.billed_input_tokens) + _summed(rows.c.billed_output_tokens),
-                _requests(rows, filters.status),
+                _requests(rows, single_status(filters)),
             )
             .group_by(column)
             .order_by(cost_sum.desc(), column)
@@ -1030,7 +1241,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         where: list[ColumnElement[bool]] = []
         if group_by == "policy":
             column: Any = UsageLog.policy_name
-            requests: Any = _request_count_expr(filters.status)
+            requests: Any = _request_count_expr(single_status(filters))
             errors: Any = func.coalesce(func.sum(case((UsageLog.status == "error", 1), else_=0)), 0)
             cost: Any = func.coalesce(func.sum(UsageLog.cost), 0.0)
             where = usage_conditions(filters, scope)
@@ -1038,7 +1249,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             relation = await self._usage_rows(filters, scope)
             column = relation.c[_VALUE_COLUMNS[group_by]]
             # By status every row is its own value, the absorbed attempts included.
-            requests = _summed(relation.c.rows) if group_by == "status" else _requests(relation, filters.status)
+            requests = _summed(relation.c.rows) if group_by == "status" else _requests(relation, single_status(filters))
             errors = _summed(case((relation.c.status == "error", relation.c.rows), else_=0))
             cost = _summed(relation.c.cost, 0.0)
         term = (search or "").strip()
@@ -1077,7 +1288,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 column,
                 cost_sum,
                 _billed_input_sum() + _billed_output_sum(),
-                _request_count_expr(filters.status),
+                _request_count_expr(single_status(filters)),
             )
             .where(*usage_conditions(filters, scope))
             .group_by(column)
@@ -1170,7 +1381,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                     expr,
                     _summed(c.cost, 0.0),
                     _summed(c.total_tokens),
-                    _requests(rows, filters.status),
+                    _requests(rows, single_status(filters)),
                     _summed(case((c.status == "error", c.rows), else_=0)),
                     _summed(c.billed_input_tokens),
                     _summed(c.billed_cache_read_tokens),
@@ -1233,7 +1444,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                     fold_expr,
                     _summed(rows.c.cost, 0.0),
                     _summed(rows.c.billed_input_tokens) + _summed(rows.c.billed_output_tokens),
-                    _requests(rows, filters.status),
+                    _requests(rows, single_status(filters)),
                 ).group_by(expr, key_expr, fold_expr)
             )
         ).all()

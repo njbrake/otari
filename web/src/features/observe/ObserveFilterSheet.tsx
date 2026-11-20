@@ -2,8 +2,15 @@ import { useState } from "react"
 import { FiX } from "react-icons/fi"
 
 import { Button } from "@/design-system/actions/Button"
+import { ColumnFilterList } from "@/design-system/data/ColumnFilterList"
 import { Dialog } from "@/design-system/feedback/Dialog"
 import { Disclosure } from "@/design-system/navigation/Disclosure"
+import {
+  readSort,
+  readSortChoice,
+  sortChoices,
+  sortUrl,
+} from "@/features/activity/requestSort"
 import {
   clearedKeys,
   isFiltered,
@@ -86,7 +93,7 @@ function SheetSections({ view }: { view: ObserveView }) {
       .filter((column) => isFiltered(column.sections, state))
       .map((column) => column.label),
   )
-  return columns.map((column) => (
+  const sections = columns.map((column) => (
     <SheetSection
       key={column.label}
       view={view}
@@ -103,6 +110,55 @@ function SheetSections({ view }: { view: ObserveView }) {
       }
     />
   ))
+  return state.isRequests ? (
+    <>
+      <SortSection state={state} />
+      {sections}
+    </>
+  ) : (
+    sections
+  )
+}
+
+const SORT_CHOICES = sortChoices()
+
+/**
+ * The order the cards are listed in, which a desk sets by pressing a column's
+ * header: the phone's cards have none to press.
+ */
+function SortSection({ state }: { state: ObserveFilterState }) {
+  const current = readSort(state.url.get("sort"), state.url.get("order"))
+  const [isExpanded, setIsExpanded] = useState(false)
+  const value = `${current.sort}:${current.order}`
+  const label =
+    SORT_CHOICES.find((choice) => choice.value === value)?.label ??
+    "Newest first"
+  return (
+    <div className="px-6">
+      <Disclosure
+        heading={
+          <span className="flex min-w-0 items-center gap-2">
+            Sort
+            <span className="truncate text-caption text-muted">{label}</span>
+          </span>
+        }
+        isExpanded={isExpanded}
+        onExpandedChange={setIsExpanded}
+      >
+        <div className="-mx-3 flex flex-col">
+          <ColumnFilterList
+            label="Sort requests"
+            selectionMode="single"
+            options={SORT_CHOICES}
+            selected={[value]}
+            onChange={(values) =>
+              state.patch(sortUrl(readSortChoice(values.at(-1) ?? value)))
+            }
+          />
+        </div>
+      </Disclosure>
+    </div>
+  )
 }
 
 function SheetSection({

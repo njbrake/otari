@@ -36,6 +36,10 @@ class UserAccess:
         """Each of these users that has a row, deleted or not, to its alias."""
         return await self._users.aliases(user_ids)
 
+    def alias_of(self, user_id: object) -> object:
+        """The alias of the user ``user_id`` names, as an expression another domain's read can order by."""
+        return self._users.alias_of(user_id)
+
     async def ids_aliased_like(self, term: str, *, limit: int) -> list[str]:
         """Up to ``limit`` ids of the users whose alias contains ``term``, case-insensitive."""
         return await self._users.ids_aliased_like(term, limit=limit)

@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Never
+from typing import Any, Never
 
 from sqlalchemy import Update, case, select, update
 from sqlalchemy.exc import IntegrityError
@@ -186,6 +186,11 @@ class ApiKeyRepository(BaseRepository[APIKey, Never, Never]):
             KeyPlacement(id=key_id, workspace_id=workspace_id, user_id=user_id, allowed_models=allowed_models)
             for key_id, workspace_id, user_id, allowed_models in (await self.db.execute(stmt)).all()
         ]
+
+    @staticmethod
+    def name_of(key_id: Any) -> Any:
+        """The name of the key ``key_id`` names, as a scalar subquery another table's read can order by."""
+        return select(APIKey.key_name).where(APIKey.id == key_id).scalar_subquery()
 
     async def ids_named_like(self, term: str, *, limit: int) -> list[str]:
         """Up to ``limit`` ids of the keys whose name contains ``term``, case-insensitive."""

@@ -470,6 +470,50 @@ def test_the_series_splits_only_the_callers_own_rows(client: TestClient, world: 
     assert keys == set(_ALPHA_ONE_MODELS)
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?q=one",
+        "?q=beta",
+        "?sort=model&order=asc",
+        "?sort=source",
+        "?channel=api",
+        "?is_null=user",
+        "?include_absorbed=false",
+        "?statuses=success",
+    ],
+)
+def test_a_search_sort_or_refinement_only_narrows_the_callers_own_rows(
+    client: TestClient, world: _World, query: str
+) -> None:
+    """None of them reaches past the scope: beta's rows match every one of these and still never appear."""
+    listed = _models_listed(client, world, "alpha_member", query)
+    assert listed <= set(_ALPHA_ONE_MODELS)
+    assert not listed & set(_BETA_MODELS)
+    code, body = _as(client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage/count{query}")
+    assert code == status.HTTP_200_OK, body
+    assert body == {"total": len(listed)}
+    assert _models_summarized(client, world, "alpha_member", query) == listed
+
+
+def test_an_id_search_finds_no_row_outside_the_scope(client: TestClient, world: _World) -> None:
+    code, beta_rows = _as(client, world, "beta_owner", f"{API_ROOT}/organizations/me/usage")
+    assert code == status.HTTP_200_OK
+    assert isinstance(beta_rows, list)
+    assert beta_rows
+    assert _models_listed(client, world, "alpha_owner", f"?q={beta_rows[0]['id']}") == set()
+    assert _models_listed(client, world, "beta_owner", f"?q={beta_rows[0]['id']}") == {beta_rows[0]["model"]}
+
+
+def test_the_summary_p95_reads_only_the_callers_own_rows(client: TestClient, world: _World) -> None:
+    code, body = _as(client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage/summary?include_p95=true")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    # The world's rows carry no latency, so there is nothing in scope to rank.
+    assert body["totals"]["p95_latency_ms"] is None
+    assert body["totals"]["request_count"] == len(_ALPHA_ONE_MODELS)
+
+
 def test_the_deployment_publishes_and_scopes_the_surface(client: TestClient, world: _World) -> None:
     """Every test here is the several-organization case.
 

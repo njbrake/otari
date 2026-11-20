@@ -5471,7 +5471,7 @@ export interface paths {
         };
         /**
          * List Organization Usage
-         * @description List the caller's organization's usage logs, most recent first.
+         * @description List the caller's organization's usage logs, most recent first unless ``sort`` and ``order`` say otherwise.
          *
          *     The tenant-scoped counterpart of ``GET /api/v1/usage``: same filters, same bare
          *     JSON array, same separate ``/count`` for a paginator's total, confined to
@@ -7699,7 +7699,7 @@ export interface paths {
         };
         /**
          * List Usage
-         * @description List usage logs ordered by timestamp (most recent first).
+         * @description List usage logs, most recent first unless ``sort`` and ``order`` say otherwise.
          *
          *     Supports optional filters for time range, user, status, failure status code,
          *     model, endpoint, provider, source, session (``source_label``), and request
@@ -23716,6 +23716,11 @@ export interface components {
          * @description Grand totals over the filtered window.
          */
         UsageTotals: {
+            /**
+             * Absorbed Count
+             * @default 0
+             */
+            absorbed_count: number;
             /** Avg Latency Ms */
             avg_latency_ms: number | null;
             /**
@@ -23740,6 +23745,18 @@ export interface components {
             cost: number;
             /** Error Count */
             error_count: number;
+            /**
+             * Imported Cost
+             * @default 0
+             */
+            imported_cost: number;
+            /**
+             * Incomplete Count
+             * @default 0
+             */
+            incomplete_count: number;
+            /** P95 Latency Ms */
+            p95_latency_ms?: number | null;
             /** Prompt Tokens */
             prompt_tokens: number;
             /**
@@ -34544,6 +34561,10 @@ export interface operations {
                 request_group_id?: string[] | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
+                /** @description Order rows by this column; ties fall back to newest first, then the row id. 'user' is the billed user's alias (or id), 'source' the API key's name (or the provenance source where no key made the row), 'tokens' billed input plus output, and 'status' ranks failures, then incomplete requests, then recovered attempts and the requests served after one, then successes. Rows with no value sort last in either direction. Any order but 'timestamp' sorts every row in the window, so it reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                sort?: "timestamp" | "user" | "model" | "policy" | "source" | "input_tokens" | "output_tokens" | "tokens" | "cost" | "latency" | "status";
+                /** @description Sort direction: 'desc' (the default) or 'asc'. */
+                order?: "asc" | "desc";
                 skip?: number;
                 limit?: number;
                 /** @description Leave out rows served by these models. At most 50 per call. */
@@ -34568,6 +34589,16 @@ export interface operations {
                 cost_gt?: number | null;
                 /** @description Only rows whose total latency exceeded this many milliseconds. */
                 latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -34632,6 +34663,8 @@ export interface operations {
                 request_group_id?: string[] | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
+                /** @description The order the list beside this count was read in. Any order but 'timestamp' bounds the window as the list's does, so the total is the total of its pages. */
+                sort?: "timestamp" | "user" | "model" | "policy" | "source" | "input_tokens" | "output_tokens" | "tokens" | "cost" | "latency" | "status";
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -34654,6 +34687,16 @@ export interface operations {
                 cost_gt?: number | null;
                 /** @description Only rows whose total latency exceeded this many milliseconds. */
                 latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -34744,6 +34787,16 @@ export interface operations {
                 cost_gt?: number | null;
                 /** @description Only rows whose total latency exceeded this many milliseconds. */
                 latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -34832,6 +34885,16 @@ export interface operations {
                 cost_gt?: number | null;
                 /** @description Only rows whose total latency exceeded this many milliseconds. */
                 latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -34900,6 +34963,8 @@ export interface operations {
                 dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
                 /** @description A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key. */
                 group_by_tag?: string | null;
+                /** @description Also compute 'totals.p95_latency_ms', the 95th-percentile total latency over the requests, which sorts the window's latencies. Off by default, so a caller that does not show it does not pay for it. */
+                include_p95?: boolean;
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -34922,6 +34987,16 @@ export interface operations {
                 cost_gt?: number | null;
                 /** @description Only rows whose total latency exceeded this many milliseconds. */
                 latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -38322,6 +38397,10 @@ export interface operations {
                 request_group_id?: string[] | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
+                /** @description Order rows by this column; ties fall back to newest first, then the row id. 'user' is the billed user's alias (or id), 'source' the API key's name (or the provenance source where no key made the row), 'tokens' billed input plus output, and 'status' ranks failures, then incomplete requests, then recovered attempts and the requests served after one, then successes. Rows with no value sort last in either direction. Any order but 'timestamp' sorts every row in the window, so it reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                sort?: "timestamp" | "user" | "model" | "policy" | "source" | "input_tokens" | "output_tokens" | "tokens" | "cost" | "latency" | "status";
+                /** @description Sort direction: 'desc' (the default) or 'asc'. */
+                order?: "asc" | "desc";
                 skip?: number;
                 limit?: number;
                 /** @description Leave out rows served by these models. At most 50 per call. */
@@ -38346,6 +38425,16 @@ export interface operations {
                 cost_gt?: number | null;
                 /** @description Only rows whose total latency exceeded this many milliseconds. */
                 latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -38443,6 +38532,8 @@ export interface operations {
                 request_group_id?: string[] | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
+                /** @description The order the list beside this count was read in. Any order but 'timestamp' bounds the window as the list's does, so the total is the total of its pages. */
+                sort?: "timestamp" | "user" | "model" | "policy" | "source" | "input_tokens" | "output_tokens" | "tokens" | "cost" | "latency" | "status";
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -38465,6 +38556,16 @@ export interface operations {
                 cost_gt?: number | null;
                 /** @description Only rows whose total latency exceeded this many milliseconds. */
                 latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -38588,6 +38689,16 @@ export interface operations {
                 cost_gt?: number | null;
                 /** @description Only rows whose total latency exceeded this many milliseconds. */
                 latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -38727,6 +38838,16 @@ export interface operations {
                 cost_gt?: number | null;
                 /** @description Only rows whose total latency exceeded this many milliseconds. */
                 latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -38828,6 +38949,8 @@ export interface operations {
                 dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
                 /** @description A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key. */
                 group_by_tag?: string | null;
+                /** @description Also compute 'totals.p95_latency_ms', the 95th-percentile total latency over the requests, which sorts the window's latencies. Off by default, so a caller that does not show it does not pay for it. */
+                include_p95?: boolean;
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -38850,6 +38973,16 @@ export interface operations {
                 cost_gt?: number | null;
                 /** @description Only rows whose total latency exceeded this many milliseconds. */
                 latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
             };
             header?: never;
             path?: never;

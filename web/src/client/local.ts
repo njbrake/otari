@@ -159,6 +159,18 @@ export interface UsageFilters {
   tokens_gt?: number
   cost_gt?: number
   latency_ms_gt?: number
+  // Only rows with one of these statuses, the subset form of `status`.
+  statuses?: ("success" | "error" | "absorbed" | "incomplete")[]
+  // false lists each request once, without the attempts a routing policy
+  // recovered from; a status filter takes precedence.
+  include_absorbed?: boolean
+  // How a row came in: the API, imported usage, or the dashboard's Playground.
+  channel?: ("api" | "imported" | "playground")[]
+  // Columns that must be empty: no key, no billed user, no session.
+  is_null?: ("api_key" | "user" | "session")[]
+  // Free text: a row or request id exactly, or a substring of the model, the
+  // name the caller sent, the source, the session, the user or the key's name.
+  q?: string
 }
 
 /** Which tool/guardrail service a settings test targets. A path parameter in the

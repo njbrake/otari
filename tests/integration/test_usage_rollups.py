@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from conftest import seed_workspace_id
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.api_keys import APIKey
-from gateway.models.usage import UsageLog, UsageRollup, UsageRollupDirtyHour
+from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT, UsageLog, UsageRollup, UsageRollupDirtyHour
 from gateway.models.users import User
 from gateway.repositories.usage_and_telemetry import (
     UsageFilters,
@@ -46,7 +46,7 @@ _USERS = ("u1", "u2", None)
 _KEYS = ("k1", "k2", None)
 _MODELS = ("gpt-4o", "claude-sonnet", "openai/gpt-4o")
 _PROVIDERS = ("openai", "anthropic", None)
-_ENDPOINTS = ("/v1/chat/completions", "/v1/messages")
+_ENDPOINTS = ("/v1/chat/completions", PLAYGROUND_USAGE_ENDPOINT)
 _SOURCES = ("gateway", "claude-code")
 _LABELS = (None, "session-a", "session-b")
 _STATUSES = ("success", "success", "success", "error", "absorbed", "incomplete")
@@ -181,7 +181,7 @@ _FILTERS: list[dict[str, Any]] = [
     {"status": "error"},
     {"status": "absorbed"},
     {"status_code": 429},
-    {"provider": "openai", "endpoint": "/v1/messages"},
+    {"provider": "openai", "endpoint": PLAYGROUND_USAGE_ENDPOINT},
     {"source": "claude-code", "source_label": "session-a"},
     {"api_key_id": ["k2"]},
     {"priced": True},
@@ -200,6 +200,18 @@ _FILTERS: list[dict[str, Any]] = [
     {"refine": UsageRefinements(routed=False)},
     {"refine": UsageRefinements(tokens_gt=3000)},
     {"refine": UsageRefinements(cost_gt=0.5, latency_ms_gt=1000)},
+    # A status subset, the recovered attempts left out, the ways in and the empty
+    # columns are all read off keys the rollups keep.
+    {"refine": UsageRefinements(statuses=["error", "incomplete"])},
+    {"refine": UsageRefinements(statuses=["absorbed"])},
+    {"refine": UsageRefinements(include_absorbed=False)},
+    {"status": "absorbed", "refine": UsageRefinements(include_absorbed=False)},
+    {"refine": UsageRefinements(channel=["imported"])},
+    {"refine": UsageRefinements(channel=["api", "playground"], is_null=["session"])},
+    {"refine": UsageRefinements(is_null=["user", "api_key"])},
+    # A search reads the rows.
+    {"refine": UsageRefinements(q="gpt")},
+    {"refine": UsageRefinements(q="SESSION-A", q_user_ids=("u2",))},
 ]
 
 _VALUE_GROUPS: tuple[ValueGroupBy, ...] = (
@@ -539,6 +551,7 @@ async def test_a_refinement_the_rollups_do_not_key_reads_the_rows(
             UsageRefinements(cost_gt=0),
             UsageRefinements(latency_ms_gt=0),
             UsageRefinements(policy_name=["fast"]),
+            UsageRefinements(q="gpt"),
         ):
             assert (
                 await rollups.repo.count_matching(UsageFilters(start_date=start, end_date=end, refine=refine), scope)

@@ -3,7 +3,7 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import NamedTuple, Never
+from typing import Any, NamedTuple, Never
 
 from sqlalchemy import Select, String, and_, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -460,6 +460,11 @@ class UserAccessRepository(BaseRepository[User, Never, Never]):
             )
         ).first()
         return None if row is None else BudgetUse(**row._asdict())
+
+    @staticmethod
+    def alias_of(user_id: Any) -> Any:
+        """The alias of the user ``user_id`` names, as a scalar subquery another table's read can order by."""
+        return select(User.alias).where(User.user_id == user_id).scalar_subquery()
 
     async def ids_aliased_like(self, term: str, *, limit: int) -> list[str]:
         """Up to ``limit`` ids of the users whose alias contains ``term``, case-insensitive, deleted or not."""

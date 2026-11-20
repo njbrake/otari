@@ -201,6 +201,15 @@ type TraceListQuery = NonNullable<
 >
 export type TraceSortKey = NonNullable<TraceListQuery["sort"]>
 export type TraceSortOrder = NonNullable<TraceListQuery["order"]>
+export type UsageSortKey = NonNullable<RequestsQueryShape["sort"]>
+export type UsageSortOrder = NonNullable<RequestsQueryShape["order"]>
+export type UsageChannel = NonNullable<RequestsQueryShape["channel"]>[number]
+export type UsageNullableField = NonNullable<
+  RequestsQueryShape["is_null"]
+>[number]
+type RequestsQueryShape = NonNullable<
+  operations["usage-list_usage"]["parameters"]["query"]
+>
 
 // `UsageFilters` (`./local`) stays hand-written, because it is a filter set the
 // hooks assemble across five usage endpoints and several of its values go on the

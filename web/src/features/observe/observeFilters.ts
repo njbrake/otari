@@ -71,6 +71,9 @@ const URL_DEFAULTS = {
   endpoint: "",
   status_code: "",
   tool: "",
+  q: "",
+  sort: "",
+  order: "",
   page: "0",
 } as const
 
@@ -231,6 +234,7 @@ function usageFiltersFor(
           endpoint: url.get("endpoint") || undefined,
           status_code: url.get("status_code") || undefined,
           tool: leaveOut === "tool" ? undefined : url.get("tool") || undefined,
+          q: url.get("q").trim() || undefined,
         }
       : {}),
   }

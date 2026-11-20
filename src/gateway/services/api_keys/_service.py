@@ -171,6 +171,10 @@ class ApiKeyService:
         async with self._uow:
             return await self._keys.names_by_id(key_ids, workspace_ids=workspace_ids)
 
+    def name_of(self, key_id: object) -> object:
+        """The name of the key ``key_id`` names, as an expression another domain's read can order by."""
+        return self._keys.name_of(key_id)
+
     async def ids_named_like(self, term: str, *, limit: int) -> list[str]:
         """Up to ``limit`` ids of the keys whose name contains ``term``, case-insensitive, in a block of its own."""
         async with self._uow:

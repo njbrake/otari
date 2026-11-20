@@ -390,6 +390,31 @@ filters beside the entity filters:
 | `policy_name`, `exclude_policy_name` | Rows served, or not served, through these routing policies; repeatable. |
 | `routed` | `true`: requests a routing policy served. `false`: requests that named a model directly. |
 | `tokens_gt`, `cost_gt`, `latency_ms_gt` | Rows billed for more tokens (input plus output), costing more USD, or slower in milliseconds than the value. |
+| `statuses` | Rows with one of these statuses; repeatable. `status` narrows to one. |
+| `include_absorbed` | `false`: each request once, without the attempts a routing policy recovered from. A status filter wins. |
+| `channel` | Rows that came in these ways; repeatable: `imported` (external usage), `playground` (the dashboard's Playground) or `api` (anything else this deployment served). |
+| `is_null` | Rows with nothing in these columns; repeatable: `api_key`, `user` or `session`. |
+| `q` | A search. A UUID matches a usage row id or an `Otari-Request-ID` exactly; anything else is a case-insensitive substring of the model, the name the caller sent, the source, the session label, the user id, the user's alias or the API key's name. At most 200 characters. |
+
+`GET /api/v1/usage` takes `sort` and `order` (`asc` or `desc`, default `desc`).
+`sort` is `timestamp` (the default), `user`, `model`, `policy`, `source` (the
+API key's name, or the source where no key made the row), `input_tokens`,
+`output_tokens`, `tokens`, `cost`, `latency` or `status` (failures, incomplete
+requests, recovered attempts, then successes). Ties fall back to newest first and
+then the row id, so pages never repeat or skip a row, and empty values sort last.
+Any order but time, and a substring `q`, read the window `/summary` does: the
+last 30 days when `start_date` is omitted, and at most 366. Pass the same `sort`
+to `/count` so the total is the total of those pages.
+
+`/summary`'s totals carry `absorbed_count` (recovered attempts),
+`incomplete_count` and `imported_cost` (the part of `cost` imported usage
+accounts for, which nothing charged through the gateway). With
+`include_p95=true` they also carry `p95_latency_ms`, the 95th-percentile total
+latency over the requests, which costs a sort of the window's latencies.
+
+```
+GET /api/v1/usage?q=claude&sort=cost&order=desc&include_absorbed=false
+```
 
 `GET /api/v1/usage/groups?group_by=<column>` lists one column's values over the
 window with the requests that carry each, busiest first: `model`, `user`,
