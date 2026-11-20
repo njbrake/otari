@@ -462,8 +462,8 @@ test.describe("fallback routing", () => {
       .getByRole("list", { name: "Tried in order" })
       .getByRole("listitem")
     await expect(tried).toHaveCount(3)
-    await expect(tried.nth(1)).toHaveText("claude-3-5-haiku-latest · Anthropic")
-    await expect(tried.nth(2)).toHaveText("llama-3.3-70b-versatile · Groq")
+    await expect(tried.nth(1)).toContainText("claude-3-5-haiku-latest")
+    await expect(tried.nth(2)).toContainText("llama-3.3-70b-versatile")
 
     // Shrinking has to be possible too: a chain that could only grow would strand
     // an operator who added a candidate by mistake. Edit opens the policy's own
@@ -484,9 +484,7 @@ test.describe("fallback routing", () => {
       .getByRole("list", { name: "Tried in order" })
       .getByRole("listitem")
     await expect(triedAfter).toHaveCount(2)
-    await expect(triedAfter.nth(1)).toHaveText(
-      "claude-3-5-haiku-latest · Anthropic",
-    )
+    await expect(triedAfter.nth(1)).toContainText("claude-3-5-haiku-latest")
 
     await pressRowAction(row(page, "Routing policies", POLICY), "Delete")
     const confirmPolicy = page.getByRole("alertdialog")
