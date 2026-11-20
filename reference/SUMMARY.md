@@ -49,6 +49,7 @@
   * [Overview](api-endpoints/overview.md)
   * [Platform connect](api-endpoints/platform-connect.md)
   * [Playground](api-endpoints/playground.md)
+  * [Preferences](api-endpoints/preferences.md)
   * [Pricing](api-endpoints/pricing.md)
   * [Provider endpoints](api-endpoints/provider-endpoints.md)
   * [Provider keys](api-endpoints/provider-keys.md)
