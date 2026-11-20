@@ -48,9 +48,7 @@ def world(client: TestClient, master_key_header: dict[str, str], db_session_fact
     session = db_session_factory()
     try:
         workspace = session.execute(select(Workspace).where(col(Workspace.name) == DEFAULT_WORKSPACE_NAME)).scalar_one()
-        identity = Identity(
-            email="pat@example.com", full_name="Pat", active_organization_id=workspace.organization_id
-        )
+        identity = Identity(email="pat@example.com", full_name="Pat", active_organization_id=workspace.organization_id)
         session.add(identity)
         session.commit()
         session.refresh(identity)
@@ -63,7 +61,9 @@ def world(client: TestClient, master_key_header: dict[str, str], db_session_fact
         session.add_all(
             [
                 User(user_id=account, alias="pat@example.com", spend=Decimal("1.50"), current_requests=2),
-                User(user_id=LEGACY, alias="Pat (old id)", spend=Decimal("2.25"), current_requests=3, current_tokens=40),
+                User(
+                    user_id=LEGACY, alias="Pat (old id)", spend=Decimal("2.25"), current_requests=3, current_tokens=40
+                ),
             ]
         )
         session.commit()
