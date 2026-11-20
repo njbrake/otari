@@ -10,8 +10,8 @@ import { FiChevronDown, FiDollarSign, FiTrash2 } from "react-icons/fi"
 
 import type { UsageFilters } from "@/client"
 import { RowMenuItemContent } from "@/design-system/actions/RowMenuItemContent"
+import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
-import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { Checkbox } from "@/design-system/forms/Checkbox"
 import { SettingsGroup } from "@/design-system/layout/SettingsGroup"
@@ -54,6 +54,22 @@ export function windowStart(
   return start.toISOString()
 }
 
+/**
+ * The bounds of a window picked now, both fixed when it is picked: the end as
+ * well as the start, so an import that lands while a dialog is open is neither
+ * counted nor reached by the write the count confirms.
+ */
+export function windowBounds(
+  period: string,
+  now = Date.now(),
+): { start_date?: string; end_date: string } {
+  const start = windowStart(period, now)
+  return {
+    ...(start ? { start_date: start } : {}),
+    end_date: new Date(now).toISOString(),
+  }
+}
+
 /** "1 imported row", "1,204 imported rows". */
 export function importedRows(count: number): string {
   return `${formatCount(count)} imported ${count === 1 ? "row" : "rows"}`
@@ -73,7 +89,7 @@ type Dialog = "recost" | "delete"
  */
 export function ImportedUsageCard() {
   const [period, setPeriod] = useState("720")
-  const [start, setStart] = useState(() => windowStart("720"))
+  const [bounds, setBounds] = useState(() => windowBounds("720"))
   const [source, setSource] = useState("")
   const [unpricedOnly, setUnpricedOnly] = useState(false)
   const [dialog, setDialog] = useState<Dialog>()
@@ -82,7 +98,7 @@ export function ImportedUsageCard() {
 
   const filters: UsageFilters = {
     counts_toward_budget: false,
-    ...(start ? { start_date: start } : {}),
+    ...bounds,
     ...(source ? { source } : {}),
     ...(unpricedOnly ? { priced: false } : {}),
   }
@@ -90,7 +106,7 @@ export function ImportedUsageCard() {
   // so this is the number the writes below can reach.
   const count = useUsageCount(filters)
   const sources = useUsageValueGroups(
-    { counts_toward_budget: false, ...(start ? { start_date: start } : {}) },
+    { counts_toward_budget: false, ...bounds },
     "source",
     "",
   )
@@ -100,7 +116,7 @@ export function ImportedUsageCard() {
   const matching = count.data?.total ?? 0
   const selection = {
     by_filter: true,
-    ...(start ? { start_date: start } : {}),
+    ...bounds,
     ...(source ? { source } : {}),
     ...(unpricedOnly ? { priced: false } : {}),
   }
@@ -116,6 +132,7 @@ export function ImportedUsageCard() {
     setDialog(undefined)
     setTyped("")
     remove.reset()
+    recost.reset()
   }
 
   return (
@@ -127,7 +144,7 @@ export function ImportedUsageCard() {
           budget, so recosting or deleting it leaves every budget's spend as it
           is, and a row the gateway served is never touched.
         </p>
-        <ErrorBanner error={count.error ?? recost.error} />
+        <ErrorBanner error={count.error} />
         {outcome ? <InfoBanner>{outcome}</InfoBanner> : null}
         <div className="flex flex-wrap items-end gap-3">
           <FilterSelect
@@ -135,7 +152,7 @@ export function ImportedUsageCard() {
             value={period}
             onChange={(next) => {
               setPeriod(next)
-              setStart(windowStart(next))
+              setBounds(windowBounds(next))
               setOutcome(undefined)
             }}
             options={WINDOWS}
@@ -179,7 +196,6 @@ export function ImportedUsageCard() {
                 aria-label="Manage imported usage"
                 onAction={(id) => {
                   setOutcome(undefined)
-                  recost.reset()
                   setDialog(id === "delete" ? "delete" : "recost")
                 }}
               >
@@ -236,18 +252,17 @@ export function ImportedUsageCard() {
         />
       ) : null}
 
-      <FormDialog
+      <ConfirmDialog
         isOpen={dialog === "delete"}
         onOpenChange={(open) => {
           if (!open) closeDialog()
         }}
-        title={`Delete ${rows}?`}
-        submitLabel={`Delete ${rows}`}
-        isSubmitDisabled={typed.trim().toLowerCase() !== DELETE_CONFIRMATION}
-        isDirty={typed !== ""}
+        heading={`Delete ${rows}?`}
+        confirmLabel={`Delete ${rows}`}
+        isConfirmDisabled={typed.trim().toLowerCase() !== DELETE_CONFIRMATION}
         isPending={remove.isPending}
         error={remove.error}
-        onSubmit={() =>
+        onConfirm={() =>
           remove.mutate(selection, {
             onSuccess: (result) => {
               setOutcome(`Deleted ${importedRows(result.deleted)}.`)
@@ -255,23 +270,26 @@ export function ImportedUsageCard() {
             },
           })
         }
-      >
-        <p className="text-body">
-          Removes every imported row matching the window, source and pricing
-          picked, from every view that reads usage. Rows the gateway served are
-          not touched. This cannot be undone.
-        </p>
-        <TextField
-          value={typed}
-          onChange={setTyped}
-          className="flex flex-col gap-1"
-        >
-          <Label className="text-body">
-            Type <strong>{DELETE_CONFIRMATION}</strong> to confirm
-          </Label>
-          <Input autoComplete="off" />
-        </TextField>
-      </FormDialog>
+        body={
+          <div className="flex flex-col gap-4">
+            <p>
+              Removes every imported row matching the window, source and pricing
+              picked, from every view that reads usage. Rows the gateway served
+              are not touched. This cannot be undone.
+            </p>
+            <TextField
+              value={typed}
+              onChange={setTyped}
+              className="flex flex-col gap-1"
+            >
+              <Label className="text-body">
+                Type <strong>{DELETE_CONFIRMATION}</strong> to confirm
+              </Label>
+              <Input autoComplete="off" />
+            </TextField>
+          </div>
+        }
+      />
     </SettingsGroup>
   )
 }

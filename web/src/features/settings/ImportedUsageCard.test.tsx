@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   ImportedUsageCard,
   importedRows,
+  windowBounds,
   windowStart,
 } from "@/features/settings/ImportedUsageCard"
 import { API_ROOT } from "@/shared/api/client"
@@ -90,6 +91,19 @@ describe("windowStart", () => {
   })
 })
 
+describe("windowBounds", () => {
+  it("ends a window when it is picked, so a later import is outside it", () => {
+    const now = Date.parse("2026-11-20T12:34:56.789Z")
+    expect(windowBounds("24", now)).toEqual({
+      start_date: "2026-11-19T12:34:00.000Z",
+      end_date: "2026-11-20T12:34:56.789Z",
+    })
+    expect(windowBounds("all", now)).toEqual({
+      end_date: "2026-11-20T12:34:56.789Z",
+    })
+  })
+})
+
 describe("importedRows", () => {
   it("counts rows in words", () => {
     expect(importedRows(1)).toBe("1 imported row")
@@ -109,6 +123,7 @@ describe("ImportedUsageCard", () => {
     const params = new URL(count!.url, "http://x").searchParams
     expect(params.get("counts_toward_budget")).toBe("false")
     expect(params.get("start_date")).toBeTruthy()
+    expect(params.get("end_date")).toBeTruthy()
     expect(writes(calls)).toEqual([])
   })
 
@@ -124,7 +139,7 @@ describe("ImportedUsageCard", () => {
     await user.click(
       await screen.findByRole("menuitem", { name: /Delete imported rows/ }),
     )
-    const dialog = await screen.findByRole("dialog")
+    const dialog = await screen.findByRole("alertdialog")
     const confirm = within(dialog).getByRole("button", {
       name: "Delete 42 imported rows",
     })
@@ -140,8 +155,12 @@ describe("ImportedUsageCard", () => {
     expect(deleted.method).toBe("DELETE")
     expect(deleted.url).toMatch(new RegExp(`${API_ROOT}/usage$`))
     const count = calls.find((call) => call.url.includes("/usage/count"))
-    const start = new URL(count!.url, "http://x").searchParams.get("start_date")
-    expect(deleted.body).toEqual({ by_filter: true, start_date: start })
+    const params = new URL(count!.url, "http://x").searchParams
+    expect(deleted.body).toEqual({
+      by_filter: true,
+      start_date: params.get("start_date"),
+      end_date: params.get("end_date"),
+    })
   })
 
   it("recosts the matching rows at the rates entered", async () => {
