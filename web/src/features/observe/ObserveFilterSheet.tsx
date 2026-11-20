@@ -32,7 +32,7 @@ const inSentence = (label: string) =>
  * A full-screen sheet below `sm` (the `Dialog` frame), which traps focus while
  * open and returns it to the control that opened it. Every change applies at
  * once, as a funnel's does, so Done only closes it. A section reads its values
- * when it is expanded; one already filtered opens expanded, so what is set is
+ * when it is first expanded; one already filtered opens expanded, so what is set is
  * what the sheet shows first.
  */
 export function ObserveFilterSheet({
@@ -121,6 +121,10 @@ function SheetSection({
   onExpandedChange: (isExpanded: boolean) => void
 }) {
   const filtered = isFiltered(sections, state)
+  // Kept mounted once opened, so collapsing animates the list rather than an
+  // empty panel.
+  const [hasOpened, setHasOpened] = useState(isExpanded)
+  if (isExpanded && !hasOpened) setHasOpened(true)
   return (
     <div className="border-border border-t px-6">
       <Disclosure
@@ -135,10 +139,10 @@ function SheetSection({
         isExpanded={isExpanded}
         onExpandedChange={onExpandedChange}
       >
-        {/* Mounted only while expanded: the values read from the server when
-            it mounts. The rows carry their own inset, so the list is pulled
-            out by it to share the heading's edge. */}
-        {isExpanded ? (
+        {/* Mounted on first expand: the values read from the server when it
+            mounts. The rows carry their own inset, so the list is pulled out
+            by it to share the heading's edge. */}
+        {hasOpened ? (
           <div className="-mx-3 flex flex-col">
             <ObserveFilterSections
               view={view}
@@ -149,6 +153,7 @@ function SheetSection({
             {filtered ? (
               <Button
                 size="sm"
+                variant="ghost"
                 className="mx-1 mt-1 justify-start"
                 onPress={() => state.patch(clearedKeys(sections))}
               >

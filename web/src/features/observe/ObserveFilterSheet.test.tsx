@@ -131,6 +131,25 @@ describe("ObserveFilterSheet on Requests", () => {
     ).toBe(false)
   })
 
+  it("keeps a section's list mounted while it collapses", async () => {
+    mockApi({
+      rows: [entry({ model: "gpt-4o" }), entry({ id: "b", model: "claude-x" })],
+    })
+    await renderRequests()
+    await screen.findAllByText("claude-x")
+    const { user, sheet } = await openSheet()
+    const model = within(sheet).getByRole("button", { name: "Model" })
+    await user.click(model)
+    const option = await within(sheet).findByRole("checkbox", {
+      name: "claude-x",
+    })
+
+    await user.click(model)
+
+    expect(model).toHaveAttribute("aria-expanded", "false")
+    expect(option).toBeInTheDocument()
+  })
+
   it("checking a value writes the funnel's URL key and shows a chip", async () => {
     const { calls } = mockApi({
       rows: [entry({ model: "gpt-4o" }), entry({ id: "b", model: "claude-x" })],
