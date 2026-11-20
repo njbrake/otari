@@ -21,6 +21,15 @@ import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
  * to a workspace, so someone placed in none has nowhere to mint one.
  */
 export function useCanCreateKey(): boolean {
+  return useCanContribute()
+}
+
+/**
+ * Whether the caller may run things in the selected workspace: mint a key, or
+ * use the Playground. A viewer may not, and someone placed in no workspace has
+ * nowhere to.
+ */
+export function useCanContribute(): boolean {
   const context = useOrganizationContext().data
   const { selected, isSettled } = useSelectedWorkspace()
   const { answer, isOperator } = useDeploymentOperator()

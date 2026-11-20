@@ -23,6 +23,8 @@ export interface PlaygroundModel {
   vendor: string
   /** What the picker shows: the model's catalog id. */
   label: string
+  /** Every offering's own `instance:model` selector, which a link may name instead of the key. */
+  selectors?: readonly string[]
 }
 
 // Models that cannot hold a conversation. Matched on the id's own slug, never
@@ -75,7 +77,14 @@ export function buildPlaygroundModels(
     const key = model.selector ?? model.selectors[0] ?? ""
     if (!key || seen.has(key) || !isChatModel(model.id)) return []
     seen.add(key)
-    return [{ key, vendor: model.vendor ?? "", label: model.id }]
+    return [
+      {
+        key,
+        vendor: model.vendor ?? "",
+        label: model.id,
+        selectors: model.selectors,
+      },
+    ]
   })
 }
 
@@ -161,4 +170,20 @@ export function pickInitialModel(
     return remembered
   }
   return models[0]?.key ?? ""
+}
+
+/**
+ * The picker's key for a model a link names, by its key or by one of its
+ * offerings' selectors (what a usage row records), or undefined when the
+ * Playground does not offer it.
+ */
+export function findLinkedModel(
+  linked: string | undefined,
+  models: readonly PlaygroundModel[],
+): string | undefined {
+  if (!linked) return undefined
+  return (
+    models.find((model) => model.key === linked) ??
+    models.find((model) => model.selectors?.includes(linked))
+  )?.key
 }

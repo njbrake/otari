@@ -250,8 +250,11 @@ test.describe("activity log", () => {
     await expect(detail).toContainText("This request carries no cost.")
     // The offer names the pricing key the row bills against, which is
     // `provider:model` and not the bare model the row displays: a price stored
-    // under the bare name would never be read.
-    await expect(detail.getByText(UNPRICED_MODEL_KEY)).toBeVisible()
+    // under the bare name would never be read. Served by names the same key,
+    // so the offer's own is the one checked.
+    await expect(
+      detail.locator("code", { hasText: UNPRICED_MODEL_KEY }),
+    ).toBeVisible()
     await expect(
       detail.getByRole("button", { name: "Price this model" }),
     ).toBeVisible()

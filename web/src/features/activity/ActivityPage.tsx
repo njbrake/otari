@@ -938,6 +938,9 @@ function ActivityPageContent({
       {openEntry ? (
         <RequestPeek
           entry={openEntry}
+          position={
+            openIndex >= 0 ? `${openIndex + 1} / ${rows.length}` : undefined
+          }
           onPriceModel={priceModel}
           onClose={() => url.patch({ request: "" })}
           onPrevious={

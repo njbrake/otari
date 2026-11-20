@@ -278,3 +278,54 @@ describe("ActivityPage request panel", () => {
     expect(location.search.request).toBeUndefined()
   })
 })
+
+describe("ActivityPage request panel header and actions", () => {
+  it("says where the open request sits in the page and copies its id", async () => {
+    const user = userEvent.setup()
+    renderLog("/activity", [
+      ...ROWS.slice(0, 1),
+      entry({ id: "r2", model: "claude-sonnet", request_group_id: "req-77" }),
+      ...ROWS.slice(2),
+    ])
+
+    await user.click(await rowOf("claude-sonnet"))
+    await findPanel()
+    expect(within(panel()).getByText("2 / 3")).toBeInTheDocument()
+    expect(within(panel()).getByText("req-77")).toBeInTheDocument()
+    expect(
+      within(panel()).getByRole("button", { name: "Copy request ID" }),
+    ).toBeInTheDocument()
+  })
+
+  it.each([
+    ["Session", "source_label", "trace-5"],
+    ["Model", "model", "gpt-4o"],
+    ["Web search", "tool", "web_search"],
+  ])("filters the log to the open request's %s", async (name, key, value) => {
+    const user = userEvent.setup()
+    renderLog("/activity?request=r1", [
+      entry({
+        id: "r1",
+        model: "gpt-4o",
+        source_label: "trace-5",
+        billing_meters: { tools: { web_search: { billed: 1 } } },
+      }),
+    ])
+    await findPanel()
+
+    await user.click(within(panel()).getByRole("button", { name }))
+    await waitFor(() => expect(String(location.search[key])).toBe(value))
+  })
+
+  it("opens what served the request in the Playground", async () => {
+    renderLog("/activity?request=r1", [
+      entry({ id: "r1", model: "gpt-4o", provider: "openai" }),
+    ])
+    await findPanel()
+
+    const link = within(panel()).getByRole("link", {
+      name: "Open in Playground",
+    })
+    expect(link.getAttribute("href")).toContain("model=openai%3Agpt-4o")
+  })
+})

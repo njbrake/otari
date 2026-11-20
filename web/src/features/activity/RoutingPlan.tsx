@@ -7,12 +7,29 @@ import {
   findPricingSelector,
   formatLatencyCell,
   formatUSD,
+  isSkippedAttempt,
   sortPlanRows,
 } from "./activityModel"
 
+const plural = (count: number, one: string, many: string) =>
+  `${count} ${count === 1 ? one : many}`
+
+/**
+ * What came before the attempt that served: ", after 1 failed attempt and 2
+ * skipped candidates", or "" when it was the first one tried.
+ */
+export function describeEarlierAttempts(failed: number, skipped: number) {
+  const parts = [
+    failed ? plural(failed, "failed attempt", "failed attempts") : "",
+    skipped ? plural(skipped, "skipped candidate", "skipped candidates") : "",
+  ].filter(Boolean)
+  return parts.length ? `, after ${parts.join(" and ")}` : ""
+}
+
 // The whole plan behind one routed request: every candidate that ran, in order,
-// with the one that served marked. This is the answer to "a fallback fired, so
-// what actually served me", which no single row can give.
+// with the one that served marked and why each earlier one failed. This is the
+// answer to "a fallback fired, so what actually served me", which no single row
+// can give.
 export function RoutingPlan({ entry }: { entry: UsageEntry }) {
   const groupId = entry.request_group_id
   const groupIds = groupId ? [groupId] : []
@@ -29,6 +46,10 @@ export function RoutingPlan({ entry }: { entry: UsageEntry }) {
   const attempts = sortPlanRows(siblings.length ? siblings : [entry])
   const isComplete = siblings.length > 0
   const served = attempts.find((attempt) => attempt.status === "success")
+  const failed = attempts.filter(
+    (attempt) => attempt.status !== "success" && !isSkippedAttempt(attempt),
+  )
+  const skipped = attempts.filter(isSkippedAttempt).length
   const total = entry.attempt_count ?? attempts.length
 
   // "Loading" only while a lookup is actually outstanding: a failed lookup, or a row
@@ -40,7 +61,7 @@ export function RoutingPlan({ entry }: { entry: UsageEntry }) {
         ? "Loading the rest of this request's attempts…"
         : "This row carries no request group, so its other attempts cannot be found."
     : served
-      ? `Served by attempt ${served.attempt_position ?? "?"} of ${total}: ${findPricingSelector(served)}`
+      ? `Served by attempt ${served.attempt_position ?? "?"} of ${total}: ${findPricingSelector(served)}${describeEarlierAttempts(failed.length, skipped)}`
       : attempts.some((attempt) => attempt.status === "error")
         ? "No candidate served this request."
         : "This request has no outcome row yet."
@@ -128,6 +149,21 @@ export function RoutingPlan({ entry }: { entry: UsageEntry }) {
           </tbody>
         </table>
       </div>
+      {/* Each failure's own words, which the Outcome column has no room for. */}
+      {failed
+        .filter((attempt) => attempt.error_message)
+        .map((attempt) => (
+          <p
+            key={attempt.id}
+            className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-caption break-all"
+          >
+            <span className="text-foreground">
+              Attempt {attempt.attempt_position ?? "?"}
+              {attempt.status_code !== null ? ` (${attempt.status_code})` : ""}:
+            </span>{" "}
+            {attempt.error_message}
+          </p>
+        ))}
       <span className="text-caption">
         Cost and tool charges settle on the attempt that served, so a failed
         attempt carries its tokens and no charge.

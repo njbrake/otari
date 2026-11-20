@@ -29677,6 +29677,17 @@
             ],
             "title": "Request Group Id"
           },
+          "requested_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Model"
+          },
           "selection_reason": {
             "anyOf": [
               {
@@ -29761,6 +29772,17 @@
               }
             ],
             "title": "Total Tokens"
+          },
+          "ttft_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttft Ms"
           },
           "user_alias": {
             "anyOf": [

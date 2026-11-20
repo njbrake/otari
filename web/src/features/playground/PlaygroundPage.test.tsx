@@ -384,7 +384,7 @@ function mockStream(frames: string[]) {
 const delta = (content: string) =>
   JSON.stringify({ choices: [{ delta: { content } }] })
 
-function renderPage() {
+function renderPage(url = "/playground") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -397,7 +397,7 @@ function renderPage() {
         </SelectedWorkspaceProvider>
       </QueryClientProvider>
     </DeploymentProvider>,
-    { wrapper: withRouter({ url: "/playground" }) },
+    { wrapper: withRouter({ url }) },
   )
 }
 
@@ -437,6 +437,31 @@ describe("the Playground before the first question", () => {
     await userEvent.click(screen.getByRole("button", { name: "Model" }))
     expect(screen.queryByText("openai:gpt-4o")).not.toBeInTheDocument()
     expect(screen.queryByText("backup:gpt-4o")).not.toBeInTheDocument()
+  })
+
+  it("opens on the model a link names by one of its offerings", async () => {
+    // A request's "Open in Playground" names the `instance:model` that served it.
+    mockApi({
+      catalog: {
+        ...CATALOG,
+        models: [
+          ...CATALOG.models,
+          catalogModelSummary({
+            id: "claude-haiku",
+            vendor: "Anthropic",
+            selector: "claude-haiku",
+            selectors: ["anthropic:claude-haiku"],
+          }),
+        ],
+      },
+    })
+    renderPage("/playground?model=anthropic%3Aclaude-haiku")
+    await screen.findByText("Try a prompt.")
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent(
+        "claude-haiku",
+      )
+    })
   })
 
   it("filters comparison history from the shared History control", async () => {

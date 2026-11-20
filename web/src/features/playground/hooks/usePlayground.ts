@@ -23,10 +23,12 @@ import {
   useUploadPlaygroundFile,
 } from "@/shared/api/playground"
 import { useTraceContentPolicy } from "@/shared/api/traces"
+import { useUrlState } from "@/shared/helpers/urlState"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 
 import {
   buildPlaygroundModels,
+  findLinkedModel,
   pickInitialModel,
 } from "../helpers/playgroundModels"
 import {
@@ -60,6 +62,9 @@ export type PendingConsent =
 
 /** How long the "recorded, thanks" line stays up after a rating. */
 const RATING_ACKNOWLEDGEMENT_MS = 3000
+
+// The model a link opens the Playground on, by its key or an offering's selector.
+const LINK_DEFAULTS = { model: "" } as const
 
 /** The most files one question carries, which is what a saved turn may record. */
 export const MAX_ATTACHMENTS = 10
@@ -241,7 +246,9 @@ export function usePlayground() {
     invalidateSavedState()
   }, [workspaceId, stop, invalidateSavedState, setAttachments])
 
-  // Restore A from this browser; B stays empty until explicitly chosen.
+  // Restore A from a link that names a model (a request's "Open in
+  // Playground"), else from this browser; B stays empty until explicitly chosen.
+  const linkedModel = useUrlState(LINK_DEFAULTS).get("model") || undefined
   const defaultModel = models[0]?.key ?? ""
   useEffect(() => {
     if (!defaultModel || !workspaceId) return
@@ -250,10 +257,12 @@ export function usePlayground() {
         ? prev
         : {
             ...prev,
-            model: pickInitialModel(readRememberedModel(workspaceId), models),
+            model:
+              findLinkedModel(linkedModel, models) ??
+              pickInitialModel(readRememberedModel(workspaceId), models),
           },
     )
-  }, [defaultModel, workspaceId, models])
+  }, [defaultModel, workspaceId, models, linkedModel])
 
   useEffect(() => {
     if (panelA.model && workspaceId) rememberModel(workspaceId, panelA.model)

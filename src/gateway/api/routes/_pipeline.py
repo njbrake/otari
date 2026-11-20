@@ -784,8 +784,11 @@ class RequestContext:
         country_gate: CountryGate | None = None,
         api_key: APIKey | None = None,
         session: bool = False,
+        requested_model: str | None = None,
     ) -> None:
         self.config = config
+        # The model name as the caller sent it, before an alias or a policy resolved it.
+        self.requested_model = requested_model
         # The key that authenticated the request; ``None`` for the master key and a session principal.
         self.api_key = api_key
         # Whether a dashboard session (the Playground) made the request, which MCP access binds as its user.
@@ -1093,6 +1096,7 @@ async def resolve_dispatch_provider(
         # A reservation is already held for this selector, so it is released before the rejection is recorded.
         await release_reservation(ctx)
         await log_gateway_rejection(
+            requested_model=ctx.requested_model,
             db=ctx.db,
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
@@ -1167,6 +1171,7 @@ async def _refuse_if_hosted_model_switched_off(
     detail = hosted_model_not_offered_detail(resolved.alias or f"{resolved.instance}:{resolved.model}")
     await release_reservation(ctx)
     await log_gateway_rejection(
+        requested_model=ctx.requested_model,
         db=ctx.db,
         log_writer=ctx.log_writer,
         api_key_id=ctx.api_key_id,
@@ -1215,6 +1220,7 @@ async def _refuse_if_model_unknown(
         return
     await release_reservation(ctx)
     await log_gateway_rejection(
+        requested_model=ctx.requested_model,
         db=ctx.db,
         log_writer=ctx.log_writer,
         api_key_id=ctx.api_key_id,
@@ -1254,6 +1260,7 @@ async def _hold_at_deployment_paid_rate(
         detail = str(exc.detail)
         await release_reservation(ctx)
         await log_gateway_rejection(
+            requested_model=ctx.requested_model,
             db=ctx.db,
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
@@ -1408,6 +1415,7 @@ async def _record_funding_refusal(
     """Release the reservation of a request its funding gate refused, and log the refusal."""
     await release_reservation(ctx)
     await log_gateway_rejection(
+        requested_model=ctx.requested_model,
         db=ctx.db,
         log_writer=ctx.log_writer,
         api_key_id=ctx.api_key_id,
@@ -1435,6 +1443,7 @@ async def _provider_not_configured(
     missing = MissingCredential.from_error(exc)
     await release_reservation(ctx)
     await log_gateway_rejection(
+        requested_model=ctx.requested_model,
         db=ctx.db,
         log_writer=ctx.log_writer,
         api_key_id=ctx.api_key_id,
@@ -1685,6 +1694,7 @@ async def _serve_from_hosted_credential(
         denied_detail = model_not_allowed_detail(resolved.alias or f"{resolved.instance}:{resolved.model}")
         await release_reservation(ctx)
         await log_gateway_rejection(
+            requested_model=ctx.requested_model,
             db=ctx.db,
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
@@ -1725,6 +1735,7 @@ async def _serve_from_hosted_credential(
         )
         await release_reservation(ctx)
         await log_gateway_rejection(
+            requested_model=ctx.requested_model,
             db=ctx.db,
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
@@ -1754,6 +1765,7 @@ async def _serve_from_hosted_credential(
         detail = exc.gate.refusal_detail(resolved.alias or f"{resolved.instance}:{resolved.model}")
         await release_reservation(ctx)
         await log_gateway_rejection(
+            requested_model=ctx.requested_model,
             db=ctx.db,
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
@@ -1787,6 +1799,7 @@ async def _serve_from_hosted_credential(
         # the activity log during an overlay rollout would otherwise see dropped
         # traffic as nothing at all.
         await log_gateway_rejection(
+            requested_model=ctx.requested_model,
             db=ctx.db,
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
@@ -2361,6 +2374,7 @@ async def _compile_request_plan(
     except NoEligibleCandidatesError as exc:
         logger.warning("%s", exc.operator_detail)
         await log_gateway_rejection(
+            requested_model=model,
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
@@ -2450,6 +2464,7 @@ async def _resolve_keyed_user_id(
             and not await throttle_early_rejection(raw_request, str(api_key.user_id))
         ):
             await log_gateway_rejection(
+                requested_model=model,
                 db=db,
                 log_writer=log_writer,
                 api_key_id=api_key_id,
@@ -2793,6 +2808,7 @@ async def resolve_request_context(
         # Nothing is reserved yet (the reservation is taken below), so there
         # is no refund to do before recording the drop.
         await log_gateway_rejection(
+            requested_model=model,
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
@@ -2834,6 +2850,7 @@ async def resolve_request_context(
         )
         if refusal is not None:
             await log_gateway_rejection(
+                requested_model=model,
                 db=db,
                 log_writer=log_writer,
                 api_key_id=api_key_id,
@@ -2861,6 +2878,7 @@ async def resolve_request_context(
     wrong_type = not_chat_detail(config, cached_models_dev_catalog(), candidates, model)
     if wrong_type is not None:
         await log_gateway_rejection(
+            requested_model=model,
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
@@ -2889,6 +2907,7 @@ async def resolve_request_context(
     except CountryNotServedError as exc:
         detail = exc.gate.refusal_detail(model)
         await log_gateway_rejection(
+            requested_model=model,
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
@@ -2912,6 +2931,7 @@ async def resolve_request_context(
             # Only a blocked user is logged: usage_logs.user_id is a foreign key, so an unknown user cannot be.
             if exc.status_code == status.HTTP_403_FORBIDDEN:
                 await log_gateway_rejection(
+                    requested_model=model,
                     db=db,
                     log_writer=log_writer,
                     api_key_id=api_key_id,
@@ -3049,6 +3069,7 @@ async def resolve_request_context(
         # naming a user that does not exist could not be inserted.
         if exc.status_code != status.HTTP_404_NOT_FOUND:
             await log_gateway_rejection(
+                requested_model=model,
                 db=db,
                 log_writer=log_writer,
                 api_key_id=api_key_id,
@@ -3077,6 +3098,7 @@ async def resolve_request_context(
     if unresolved is not None:
         await refund_reservation(db, reservation)
         await log_gateway_rejection(
+            requested_model=model,
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
@@ -3119,6 +3141,7 @@ async def resolve_request_context(
         # Record the rejection after the refund, so an operator who flipped
         # require_pricing on can see that live traffic is being dropped.
         await log_gateway_rejection(
+            requested_model=model,
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
@@ -3272,6 +3295,7 @@ async def resolve_request_context(
             await refund_reservation(db, reservation)
             detail = exc.gate.refusal_detail(model)
             await log_gateway_rejection(
+                requested_model=model,
                 db=db,
                 log_writer=log_writer,
                 api_key_id=api_key_id,
@@ -3377,6 +3401,7 @@ async def resolve_request_context(
         source_label=_session_trace_id(session, workspace_id, user_id, api_key_id),
         api_key=api_key,
         session=session_principal is not None,
+        requested_model=model,
     )
 
 
@@ -4344,6 +4369,7 @@ async def _refuse_tool_funding(
     """Release the reservation and record a request the tools' funding gate refused."""
     await release_reservation(ctx)
     await log_gateway_rejection(
+        requested_model=ctx.requested_model,
         db=ctx.db,
         log_writer=ctx.log_writer,
         api_key_id=ctx.api_key_id,
@@ -4713,6 +4739,7 @@ async def _log_unpriced_tool_rejection(adapter: FormatAdapter[Any, Any], ctx: Re
         provider, model = GATEWAY_TOOL_PRICING_PROVIDER, gateway_tool_pricing_key(tool.name)
     logger.warning("Rejecting request: gateway tool '%s' has no pricing for %s", tool.name, describe_rate_key(rate_key))
     await log_gateway_rejection(
+        requested_model=ctx.requested_model,
         db=ctx.db,
         log_writer=ctx.log_writer,
         api_key_id=ctx.api_key_id,
@@ -4903,6 +4930,7 @@ async def record_usage(
     result_tier: str | None = None,
     stream_cut_by: StreamCutBy | None = None,
     answered: bool = False,
+    requested_model: str | None = None,
 ) -> LoggedUsage:
     """Log API usage to the database and return the computed cost and its source.
 
@@ -4976,6 +5004,9 @@ async def record_usage(
             the provider reports, never the one the request asked for.
         answered: The provider answered in full and ``error`` is the gateway's
             refusal of the answer, so the call is billed and counted as a success.
+        requested_model: The model name the caller sent
+            (``RequestContext.requested_model``), stored as-is; None where the
+            row bills something other than the model the caller named.
 
     Returns:
         The computed cost for this request, or None when usage/pricing is absent,
@@ -5007,6 +5038,7 @@ async def record_usage(
         tags=tags,
         deployment_paid=deployment_paid,
         source_label=source_label,
+        requested_model=requested_model,
         safety_identifier=safety_identifier,
     )
 
@@ -5479,6 +5511,7 @@ async def log_gateway_rejection(
     request_id: str | None = None,
     tags: dict[str, str] | None = None,
     safety_identifier: str | None = None,
+    requested_model: str | None = None,
 ) -> None:
     """Record a request the gateway itself refused before any provider was called.
 
@@ -5552,6 +5585,7 @@ async def log_gateway_rejection(
             tags=tags,
             safety_identifier=safety_identifier,
             upstream_attempt=False,
+            requested_model=requested_model,
         )
     except Exception:
         # Deliberately broad, and deliberately not re-raised: see the docstring.
@@ -5608,6 +5642,7 @@ async def _log_failure_and_refund(
         request_id=ctx.request_id,
         tags=ctx.tags,
         source_label=ctx.source_label,
+        requested_model=ctx.requested_model,
         safety_identifier=ctx.upstream_user,
         prices=ctx.prices,
         deployment_paid=ctx.deployment_charge is not None,
@@ -6088,6 +6123,7 @@ def build_streaming_response(
     automatic_observation: AutomaticObservation | None = None,
     prompt_chars: int | None = None,
     price_facts: PriceFacts = NO_FACTS,
+    requested_model: str | None = None,
 ) -> StreamingResponse:
     """Wrap an already-opened upstream stream in an SSE response.
 
@@ -6196,6 +6232,7 @@ def build_streaming_response(
                 request_id=request_id,
                 tags=tags,
                 source_label=source_label,
+                requested_model=requested_model,
                 safety_identifier=safety_identifier,
                 prices=prices,
                 deployment_paid=deployment_paid,
@@ -6249,6 +6286,7 @@ def build_streaming_response(
                 request_id=request_id,
                 tags=tags,
                 source_label=source_label,
+                requested_model=requested_model,
                 safety_identifier=safety_identifier,
                 prices=prices,
                 deployment_paid=deployment_paid,
@@ -6277,6 +6315,7 @@ def build_streaming_response(
                 request_id=request_id,
                 tags=tags,
                 source_label=source_label,
+                requested_model=requested_model,
                 safety_identifier=safety_identifier,
                 deployment_paid=deployment_paid,
             )
@@ -6314,6 +6353,7 @@ def build_streaming_response(
                 request_id=request_id,
                 tags=tags,
                 source_label=source_label,
+                requested_model=requested_model,
                 safety_identifier=safety_identifier,
                 deployment_paid=deployment_paid,
             )
@@ -6412,6 +6452,7 @@ def build_streaming_response(
             request_id=request_id,
             tags=tags,
             source_label=source_label,
+            requested_model=requested_model,
             safety_identifier=safety_identifier,
             prices=prices,
             deployment_paid=deployment_paid,
@@ -6476,6 +6517,7 @@ def build_streaming_response(
                 request_id=request_id,
                 tags=tags,
                 source_label=source_label,
+                requested_model=requested_model,
                 safety_identifier=safety_identifier,
                 prices=prices,
                 deployment_paid=deployment_paid,
@@ -6957,6 +6999,7 @@ async def run_single_attempt_stream(
         tool_tally=tool_ctx.tally,
         tags=ctx.tags,
         source_label=ctx.source_label,
+        requested_model=ctx.requested_model,
         safety_identifier=ctx.upstream_user,
         tool_loop=served_tools.use_tool_loop,
         deployment_charge=ctx.deployment_charge,
@@ -7070,6 +7113,7 @@ async def log_exhausted_plan(
         workspace_id=ctx.workspace_id,
         tags=ctx.tags,
         source_label=ctx.source_label,
+        requested_model=ctx.requested_model,
         safety_identifier=ctx.upstream_user,
         prices=ctx.prices,
         deployment_paid=funded is not None,
@@ -7178,6 +7222,7 @@ async def _log_absorbed_row(
             workspace_id=ctx.workspace_id,
             tags=ctx.tags,
             source_label=ctx.source_label,
+            requested_model=ctx.requested_model,
             safety_identifier=ctx.upstream_user,
         )
     except Exception:
@@ -7376,6 +7421,7 @@ async def run_non_stream(
                     request_id=ctx.request_id,
                     tags=ctx.tags,
                     source_label=ctx.source_label,
+                    requested_model=ctx.requested_model,
                     safety_identifier=ctx.upstream_user,
                     prices=ctx.prices,
                     deployment_paid=ctx.deployment_charge is not None,
