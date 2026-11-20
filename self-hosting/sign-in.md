@@ -298,6 +298,8 @@ operator can:
   them.
 - grant or remove operator access.
 - send a password link.
+- merge another user record into the account's own (see
+  [Merging user records](#merging-user-records)).
 
 The bootstrap operator can also hand that role to another operator (see
 [The bootstrap operator](#the-bootstrap-operator)).
@@ -360,6 +362,66 @@ from a forgotten password on a deployment without mail.
 account: an address sent with it is the operator's sign-in address, and on an
 unclaimed deployment it claims the deployment. It refuses an address another
 account holds, pointing to the password link.
+
+#### Merging user records
+
+Keys and usage recorded under a user id typed before sign-in existed (`pat`)
+stay apart from the record a sign-in account bills through, its own id. On
+**Accounts**, **Merge user record…** folds such a record into the account's own:
+pick the record, read what moves, then confirm. It is offered for accounts in
+your active organization that have a record of their own.
+
+`POST /api/v1/users/{user_id}/merge` with `source_user_id` does the same for an
+operator, in one transaction, and with `"preview": true` counts what would
+move and changes nothing. A merge:
+
+- moves every row that names the source onto this user: API keys, usage,
+  agent telemetry, traces, files, batches, budget reservations and resets,
+  per-user aliases, routing policies and provider endpoints, MCP grants and
+  connections, sandbox sessions, video jobs, idempotency records, and the end
+  users the source's service keys bill. `moved` counts each table, none moved
+  included. Hourly usage rollups rebuild for the hours the moved rows fall in;
+- leaves this user's budget, model access, blocked flag and spend, token and
+  request counters as they are. The counters count this user's own budget
+  window, so the source's are not added; its moved usage rows carry its
+  history;
+- keeps this user's MCP grant or connection where both hold one for a server,
+  drops the source's, and asks the server's authorization server to end the
+  dropped connection's tokens;
+- soft-deletes the source, recording `merged_into`, `merged_at` and `merged_by`
+  (the operator's account id) in its metadata, and logs the merge with what it
+  moved.
+
+Running the merge again for a source already merged into this user moves what
+reached the source since, such as usage written moments after the merge, and
+leaves the source retired as it was (`resumed` is `true`). It does not wait for
+the source to be quiet, and its preview counts what is left to move; the
+gateway also logs a warning whenever a retired source is found with rows still
+naming it. A batch created
+before batch records existed has none to move: the provider's own metadata
+names its owner, so it stays reachable only by the source.
+
+The target must be a sign-in account's own record, not an end user a service
+key bills. It is refused with 400 for a user merged into itself, with 409 for
+any other target, and with 409 when the source:
+
+- is a sign-in account's own record (merge the other way round) or the shared
+  `default` user;
+- is also used in another organization: a key, usage or a roster row there
+  puts it in that organization's reach, or any row a merge would move sits in
+  one of that organization's workspaces (a policy, alias, provider endpoint,
+  file, trace, batch, video job, sandbox session, or an MCP grant, connection
+  or sign-in on that organization's server). The refusal names the tables;
+- sent a request in the last five minutes or has a budget reservation in
+  flight, so it may still be sending requests (retry once it is quiet). Only a
+  first merge waits for this;
+- is named by a routing policy's `when.user_id` condition, which would stop
+  matching once its requests bill this user (the refusal names the policies;
+  change them first);
+- shares with this user a per-user alias, routing policy or provider endpoint
+  name in one workspace, or an end user id.
+
+A merge cannot be undone.
 
 #### Blocking email addresses
 
