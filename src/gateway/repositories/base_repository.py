@@ -14,12 +14,14 @@ complete. A repository that committed would break every multi-step service
 operation into separately-durable pieces.
 """
 
-from typing import Any, Generic, TypeVar
+import uuid
+from collections.abc import Collection
+from typing import Any, Generic, TypeVar, cast
 
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import CursorResult, and_, delete, func, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import class_mapper
+from sqlalchemy.orm import aliased, class_mapper
 
 from gateway.core.unit_of_work import UnitOfWork, session_for
 
@@ -118,6 +120,74 @@ class BaseRepository(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         """Count the table's rows without loading them."""
         result = await self.db.execute(select(func.count()).select_from(self.model_class))
         return result.scalar_one()
+
+    async def reassign_user(self, from_user_id: str, to_user_id: str, *, column: str = "user_id") -> int:
+        """Stage pointing every row whose ``column`` names ``from_user_id`` at ``to_user_id``; how many moved.
+
+        For a user merge, whose caller holds both users and decides what may move.
+        """
+        owner = getattr(self.model_class, column)
+        result = await self.db.execute(
+            update(self.model_class)
+            .where(owner == from_user_id)
+            .values({column: to_user_id})
+            .execution_options(synchronize_session=False)
+        )
+        return cast("CursorResult[Any]", result).rowcount or 0
+
+    async def count_naming_user(self, user_id: str, *, column: str = "user_id") -> int:
+        """How many rows name ``user_id`` in ``column``: what :meth:`reassign_user` would move."""
+        owner = getattr(self.model_class, column)
+        result = await self.db.execute(select(func.count()).select_from(self.model_class).where(owner == user_id))
+        return int(result.scalar_one())
+
+    async def has_user_rows_outside(self, user_id: str, workspace_ids: Collection[uuid.UUID]) -> bool:
+        """Whether a row of ``user_id`` sits in a workspace other than these; one with no workspace does not."""
+        workspace = getattr(self.model_class, "workspace_id")
+        found = await self.db.execute(
+            select(literal(1))
+            .select_from(self.model_class)
+            .where(
+                getattr(self.model_class, "user_id") == user_id,
+                workspace.is_not(None),
+                workspace.not_in(list(workspace_ids)),
+            )
+            .limit(1)
+        )
+        return found.first() is not None
+
+    async def values_for_user(self, user_id: str, column: str) -> set[Any]:
+        """The distinct values ``user_id``'s rows hold in ``column``."""
+        rows = await self.db.execute(
+            select(getattr(self.model_class, column)).where(getattr(self.model_class, "user_id") == user_id).distinct()
+        )
+        return set(rows.scalars().all())
+
+    async def shared_with_user(
+        self, from_user_id: str, to_user_id: str, *, by: tuple[str, ...]
+    ) -> list[tuple[Any, ...]]:
+        """The ``by`` values of ``from_user_id``'s rows that ``to_user_id`` also holds a row under.
+
+        What a merge would collide on where a table is unique on ``by`` and the user.
+        """
+        theirs = aliased(self.model_class)
+        columns = [getattr(self.model_class, name) for name in by]
+        rows = await self.db.execute(
+            select(*columns)
+            .join(theirs, and_(*(getattr(theirs, name) == getattr(self.model_class, name) for name in by)))
+            .where(getattr(self.model_class, "user_id") == from_user_id, getattr(theirs, "user_id") == to_user_id)
+        )
+        return [tuple(row) for row in rows.all()]
+
+    async def drop_shared_with_user(self, from_user_id: str, to_user_id: str, *, by: str) -> int:
+        """Stage deleting ``from_user_id``'s rows whose ``by`` value ``to_user_id`` also holds; how many went."""
+        held = select(getattr(self.model_class, by)).where(getattr(self.model_class, "user_id") == to_user_id)
+        result = await self.db.execute(
+            delete(self.model_class)
+            .where(getattr(self.model_class, "user_id") == from_user_id, getattr(self.model_class, by).in_(held))
+            .execution_options(synchronize_session=False)
+        )
+        return cast("CursorResult[Any]", result).rowcount or 0
 
 
 __all__ = ["BaseRepository"]

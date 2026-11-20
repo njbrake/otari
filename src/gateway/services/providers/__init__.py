@@ -76,6 +76,7 @@ from gateway.services.providers._provider_endpoint_cache import (
     run_provider_endpoint_refresher,
 )
 from gateway.services.providers._provider_endpoint_service import ProviderEndpointService
+from gateway.services.providers._user_merge import ProviderEndpointUserMergeListener
 from gateway.services.providers._workspace_hosted_access import (
     WorkspaceHostedAccessDeniedError,
     WorkspaceHostedAccessService,
@@ -89,6 +90,7 @@ from gateway.services.providers._workspace_hosted_access import (
 )
 
 __all__ = [
+    "ProviderEndpointUserMergeListener",
     "CountryGate",
     "CountryNotServedError",
     "HostedCatalogUpdate",

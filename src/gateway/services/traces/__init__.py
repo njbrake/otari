@@ -35,9 +35,11 @@ from gateway.services.traces._retention import run_trace_retention
 from gateway.services.traces._service import TraceService
 from gateway.services.traces._turn_content import TurnContent, read_turn_content
 from gateway.services.traces._turns import AnsweredCall, TurnFacts, read_turn
+from gateway.services.traces._user_merge import TraceUserMergeListener
 from gateway.services.traces._writer import TraceWriter
 
 __all__ = [
+    "TraceUserMergeListener",
     "ContextWeights",
     "AnsweredCall",
     "CACHE_WRITE_ATTRIBUTES",

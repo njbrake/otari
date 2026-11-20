@@ -20,6 +20,7 @@ from gateway.services.usage_and_telemetry._read_gate import HeavyUsageReads
 from gateway.services.usage_and_telemetry._retention import RetentionSweep, TelemetryRetentionService
 from gateway.services.usage_and_telemetry._rollups import UsageRollupService
 from gateway.services.usage_and_telemetry._service import UsageService
+from gateway.services.usage_and_telemetry._user_merge import UsageUserMergeListener
 from gateway.services.usage_and_telemetry._video_usage_writer import VideoUsageWriter
 from gateway.services.usage_and_telemetry._window import (
     MAX_SERIES_POINTS,
@@ -31,6 +32,7 @@ from gateway.services.usage_and_telemetry._window import (
 )
 
 __all__ = [
+    "UsageUserMergeListener",
     "MAX_SERIES_POINTS",
     "SERIES_TOP_N",
     "HeavyUsageReads",

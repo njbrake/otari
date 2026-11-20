@@ -15,8 +15,10 @@ from gateway.services.files._service import (
 )
 from gateway.services.files._staging import StagedFile
 from gateway.services.files._sweeper import run_file_sweeper
+from gateway.services.files._user_merge import FileUserMergeListener
 
 __all__ = [
+    "FileUserMergeListener",
     "FileBackends",
     "FileContent",
     "FileDialect",

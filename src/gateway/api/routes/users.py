@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.api.deps import (
     ApiKeyServiceDep,
     CallerOrganization,
+    CurrentIdentity,
     McpConnectionServiceDep,
     TelemetryStoragePortDep,
     TraceServiceDep,
+    UserMergeServiceDep,
     get_config,
     get_db,
     require_deployment_operator,
@@ -120,6 +122,30 @@ class UserResponse(BaseModel):
             parent_user_id=user.parent_user_id,
             external_id=user.external_id,
         )
+
+
+class MergeUserRequest(BaseModel):
+    """Which user to fold into this one."""
+
+    source_user_id: str = Field(description="The user whose rows move onto this one, and which is then retired.")
+    preview: bool = Field(
+        default=False, description="Say what would move and change nothing, so the merge can be confirmed first."
+    )
+
+
+class MergeUserResponse(BaseModel):
+    """What a merge moved, or on a preview would move."""
+
+    user: UserResponse = Field(description="This user, after the merge; unchanged on a preview.")
+    source_user_id: str
+    moved: dict[str, int] = Field(
+        description="Rows per table that names a user, every such table listed with the rows that moved or would."
+    )
+    preview: bool
+    resumed: bool = Field(
+        description="The source was already merged into this user; this moved what reached it since and left it "
+        "retired as it was."
+    )
 
 
 class UpdateUserRequest(BaseModel):
@@ -468,6 +494,62 @@ async def delete_user(
         await connections.end_for_deleted_user(user_id)
     except DATABASE_ERRORS as exc:
         raise database_error("delete user", exc) from None
+
+
+@router.post("/{user_id}/merge")
+async def merge_user(
+    user_id: str,
+    request: MergeUserRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    organization_id: CallerOrganization,
+    identity: CurrentIdentity,
+    merges: UserMergeServiceDep,
+) -> MergeUserResponse:
+    """Merge another user in the caller's organization into this one, or with ``preview`` say what would move.
+
+    Moves every row that names the source user onto this one: its API keys,
+    usage history, agent telemetry, traces, files, batches, budget reservations
+    and resets, per-user aliases, routing policies and provider endpoints, MCP
+    grants and connections, sandbox leases, video jobs, idempotency records and
+    the end users its service keys bill. The source is soft-deleted with
+    ``merged_into``, ``merged_at`` and ``merged_by`` in its metadata. This user
+    keeps its own budget, access lists, blocked flag and spend, token and
+    request counters, which count its own budget window; the moved usage rows
+    carry the source's history. Where both users hold an MCP grant or
+    connection for one server, this user's is kept and the source's dropped,
+    and the dropped connection's tokens are revoked. A preview counts and
+    changes nothing. Running the merge again for a source already merged into
+    this user moves what reached the source since.
+
+    Refused with 400 for a merge of a user into itself, with 409 when this user
+    is not a sign-in account's own record (an end user included), and with 409
+    when the source is the user a sign-in account bills through or the shared
+    ``default`` user, is also used in another organization (reached from it, or
+    holding any row a merge moves in one of its workspaces), sent a request in
+    the last five minutes on a first merge, has a budget reservation in flight, is named by a
+    routing policy's ``when.user_id`` condition, or shares with this user a
+    per-user alias, routing policy or provider endpoint name in one workspace,
+    or an end user id.
+    """
+    await _load_user_in_organization(db, user_id, organization_id)
+    # A retired source is loaded too, so a merge run again sweeps what reached it since; the merge decides.
+    await _load_user_in_organization(db, request.source_user_id, organization_id, include_deleted=True)
+    merge = await merges.merge(
+        request.source_user_id,
+        user_id,
+        organization_id=organization_id,
+        merged_by=str(identity.id),
+        preview=request.preview,
+    )
+    target = await _load_user_in_organization(db, user_id, organization_id)
+    await db.refresh(target)
+    return MergeUserResponse(
+        user=UserResponse.from_model(target),
+        source_user_id=merge.from_user_id,
+        moved=merge.moved,
+        preview=merge.preview,
+        resumed=merge.resumed,
+    )
 
 
 @router.get("/{user_id}/usage")

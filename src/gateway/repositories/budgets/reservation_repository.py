@@ -66,6 +66,15 @@ class ReservationRepository(BaseRepository[BudgetReservation, Never, Never]):
         ).one()
         return HeldAmounts(amount=amount, tokens=int(tokens), requests=int(requests))
 
+    async def has_active(self, user_id: str) -> bool:
+        """Whether any active reservation is held for this user, on its own counters or a ceiling's."""
+        found = await self.db.execute(
+            select(BudgetReservation.id)
+            .where(BudgetReservation.user_id == user_id, BudgetReservation.status == RESERVATION_ACTIVE)
+            .limit(1)
+        )
+        return found.first() is not None
+
     async def active_user_held(self, user_id: str) -> HeldAmounts:
         """Return what this user's active rows hold on the per-user counters, summed on each axis."""
         amount, tokens, requests = (

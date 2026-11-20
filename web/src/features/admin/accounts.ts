@@ -90,3 +90,71 @@ export function organizationSummary(account: DeploymentUser): string {
     )
     .join(", ")
 }
+
+/** What each table a user merge moves rows in is called in the merge dialog. */
+const MERGED_ROWS: Record<string, [one: string, many: string]> = {
+  api_keys: ["API key", "API keys"],
+  usage_logs: ["Usage row", "Usage rows"],
+  agent_telemetry: ["Agent telemetry event", "Agent telemetry events"],
+  traces: ["Agent trace", "Agent traces"],
+  file_objects: ["File", "Files"],
+  batches: ["Batch", "Batches"],
+  budget_reservations: [
+    "Settled budget reservation",
+    "Settled budget reservations",
+  ],
+  budget_reset_logs: ["Budget reset record", "Budget reset records"],
+  model_aliases: ["Personal alias", "Personal aliases"],
+  routing_policies: ["Personal routing policy", "Personal routing policies"],
+  provider_endpoints: [
+    "Personal provider endpoint",
+    "Personal provider endpoints",
+  ],
+  workspace_mcp_server_grants: ["MCP server grant", "MCP server grants"],
+  mcp_user_connections: ["MCP connection", "MCP connections"],
+  mcp_oauth_flows: ["MCP sign-in in progress", "MCP sign-ins in progress"],
+  sandbox_containers: ["Sandbox session", "Sandbox sessions"],
+  video_jobs: ["Video job", "Video jobs"],
+  idempotency_keys: ["Idempotency record", "Idempotency records"],
+  end_users: [
+    "End user its service keys bill",
+    "End users its service keys bill",
+  ],
+}
+
+/**
+ * The lines a merge preview lists: each kind of row that moves, with how many,
+ * most first. A table with nothing to move is left out, and one this build has
+ * no words for is named by its table.
+ */
+export function mergedRowLines(
+  moved: Record<string, number>,
+): { key: string; count: number; label: string }[] {
+  return Object.entries(moved)
+    .filter(([, count]) => count > 0)
+    .map(([key, count]) => {
+      const [one, many] = MERGED_ROWS[key] ?? [key, key]
+      return { key, count, label: count === 1 ? one : many }
+    })
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+}
+
+/**
+ * Whether **Merge user record…** is offered for this account: it belongs to the
+ * operator's active organization, whose records a merge reaches, and it has a
+ * record of its own (`billed`, the user ids that organization's users list
+ * holds) to fold another into.
+ */
+export function canMergeInto(
+  account: DeploymentUser,
+  activeOrganizationId: string | undefined,
+  billed: ReadonlySet<string>,
+): boolean {
+  return (
+    activeOrganizationId !== undefined &&
+    account.organizations.some(
+      (organization) => organization.organization_id === activeOrganizationId,
+    ) &&
+    billed.has(account.id)
+  )
+}

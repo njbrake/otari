@@ -5,9 +5,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, NamedTuple, Never
 
-from sqlalchemy import Select, String, and_, cast, delete, func, or_, select
+from sqlalchemy import Select, String, and_, cast, delete, func, or_, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
 
@@ -402,6 +403,72 @@ class UserAccessRepository(BaseRepository[User, Never, Never]):
             .with_for_update()
         )
         return list((await self.db.execute(statement)).scalars().all())
+
+    async def lock_live(self, user_ids: Collection[str], *, include_deleted: bool = False) -> dict[str, User]:
+        """Lock these users' rows, in id order so two lockers never wait on each other; the live ones by id.
+
+        With ``include_deleted`` the deleted ones too, for a caller that decides which of them it may act on.
+        """
+        statement = (
+            select(User)
+            .where(User.user_id.in_(sorted(user_ids)), true() if include_deleted else User.deleted_at.is_(None))
+            .order_by(User.user_id)
+            .with_for_update()
+            # Sessions keep loaded rows across a commit, so the locked rows' counters are read again.
+            .execution_options(populate_existing=True)
+        )
+        return {user.user_id: user for user in (await self.db.execute(statement)).scalars().all()}
+
+    async def named_outside_organization(self, user_id: str, organization_id: uuid.UUID) -> bool:
+        """Whether an organization besides ``organization_id`` also reaches this user.
+
+        By the joins :func:`in_organization` reads: a key, usage, a roster row, or
+        for an end user a key of its owner. Usage of an end user this user owns
+        counts too, since a merge moves that end user onto another owner.
+        """
+        elsewhere = col(Workspace.organization_id) != organization_id
+        end_user = aliased(User)
+        reached = or_(
+            select(APIKey.user_id)
+            .join(Workspace, col(Workspace.id) == APIKey.workspace_id)
+            .where(APIKey.user_id == User.user_id, elsewhere)
+            .exists(),
+            select(UsageLog.user_id)
+            .join(Workspace, col(Workspace.id) == UsageLog.workspace_id)
+            .where(UsageLog.user_id == User.user_id, elsewhere)
+            .exists(),
+            select(col(OrganizationMember.id))
+            .where(
+                cast(col(OrganizationMember.user_id), String) == User.user_id,
+                col(OrganizationMember.organization_id) != organization_id,
+            )
+            .exists(),
+            select(APIKey.user_id)
+            .join(Workspace, col(Workspace.id) == APIKey.workspace_id)
+            .where(APIKey.user_id == User.parent_user_id, elsewhere)
+            .exists(),
+            select(UsageLog.user_id)
+            .join(Workspace, col(Workspace.id) == UsageLog.workspace_id)
+            .join(end_user, end_user.user_id == UsageLog.user_id)
+            .where(end_user.parent_user_id == User.user_id, elsewhere)
+            .exists(),
+        )
+        found = await self.db.execute(select(User.user_id).where(User.user_id == user_id, reached))
+        return found.scalar_one_or_none() is not None
+
+    async def shared_end_users(self, from_user_id: str, to_user_id: str) -> list[str]:
+        """The external ids both users bill an end user under, which are unique per billing user."""
+        theirs = aliased(User)
+        rows = await self.db.execute(
+            select(User.external_id)
+            .join(theirs, theirs.external_id == User.external_id)
+            .where(User.parent_user_id == from_user_id, theirs.parent_user_id == to_user_id)
+        )
+        return sorted(str(external_id) for external_id in rows.scalars().all())
+
+    async def flush(self) -> None:
+        """Stage the changes made to loaded users."""
+        await self.db.flush()
 
     async def add_tombstone(self) -> str:
         """Stage a new deleted user with no name, for rows kept after the users they belonged to are gone."""

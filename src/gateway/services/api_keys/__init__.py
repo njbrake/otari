@@ -42,8 +42,10 @@ from gateway.services.api_keys._service_keys import (
     refuse_service_key_flag_change,
 )
 from gateway.services.api_keys._token_exchange import FederationTokenExchange, OrganizationOfWorkspace
+from gateway.services.api_keys._user_merge import ApiKeyUserMergeListener
 
 __all__ = [
+    "ApiKeyUserMergeListener",
     "API_KEY_NO_USER_DETAIL",
     "API_KEY_VALIDATION_FAILED_DETAIL",
     "MASTER_KEY_USER_REQUIRED_DETAIL",

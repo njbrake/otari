@@ -128,6 +128,7 @@ from gateway.services.inference._upstream_user import (
     upstream_user_identifier,
     with_upstream_user,
 )
+from gateway.services.inference._user_merge import InferenceUserMergeListener
 from gateway.services.inference._videos import (
     ESTIMATED_VIDEO_SECONDS,
     CompletedVideoUsage,
@@ -136,6 +137,7 @@ from gateway.services.inference._videos import (
 )
 
 __all__ = [
+    "InferenceUserMergeListener",
     "CONVERSATION_CACHE_KEY_FIELD",
     "CompletedVideoUsage",
     "ESTIMATED_VIDEO_SECONDS",

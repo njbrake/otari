@@ -10,7 +10,7 @@ from gateway.api.deps._base import (
     UnitOfWorkDep,
     get_config,
 )
-from gateway.api.deps.ports import ApiKeyFormatPortDep
+from gateway.api.deps.ports import ApiKeyFormatPortDep, TelemetryStoragePortDep
 from gateway.core.config import (
     GatewayConfig,
 )
@@ -19,7 +19,9 @@ from gateway.core.unit_of_work import UnitOfWork
 from gateway.ports.rate_limit_store_port import RateLimitStorePort
 from gateway.repositories.api_keys import ApiKeyRepositories
 from gateway.repositories.budgets import BudgetRepositories
+from gateway.repositories.files import FileRepositories
 from gateway.repositories.identity import BlockedEmailRepository
+from gateway.repositories.inference import InferenceRepositories
 from gateway.repositories.organizations import OrganizationRepositories
 from gateway.repositories.tenancy import (
     OrganizationDomainRepository,
@@ -28,9 +30,14 @@ from gateway.repositories.tenancy import (
     WorkspaceRepository,
 )
 from gateway.repositories.traces import TracesRepositories
-from gateway.services.api_keys import ApiKeyMembershipListener
-from gateway.services.budgets import BudgetMembershipListener
+from gateway.services.alias_service import AliasUserMergeListener, refresh_alias_cache
+from gateway.services.api_keys import ApiKeyMembershipListener, ApiKeyUserMergeListener
+from gateway.services.batch_service import BatchUserMergeListener
+from gateway.services.budgets import BudgetMembershipListener, BudgetUserMergeListener
+from gateway.services.code_execution import SandboxContainerUserMergeListener
+from gateway.services.files import FileUserMergeListener
 from gateway.services.identity import EmailBlocklist
+from gateway.services.inference import InferenceUserMergeListener
 from gateway.services.mail import Mailer
 from gateway.services.oauth_service import provider_label
 from gateway.services.organizations import (
@@ -41,7 +48,11 @@ from gateway.services.organizations import (
     InvitationMailLimit,
     OrganizationClaimedDomains,
     UserAccess,
+    UserMergeService,
 )
+from gateway.services.policy_store import refresh_policy_cache
+from gateway.services.providers import ProviderEndpointUserMergeListener, refresh_provider_endpoint_cache
+from gateway.services.routing import RoutingUserMergeListener
 from gateway.services.tenancy import (
     InvitationClaimSettings,
     MembershipListener,
@@ -52,8 +63,9 @@ from gateway.services.tenancy import (
 from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.workspace_activation_service import WorkspaceActivationService
 from gateway.services.tenancy.workspace_service import WorkspaceService
-from gateway.services.tools import McpGrantMembershipListener
-from gateway.services.traces import TraceMembershipListener
+from gateway.services.tools import McpGrantMembershipListener, McpUserMergeListener
+from gateway.services.traces import TraceMembershipListener, TraceUserMergeListener
+from gateway.services.usage_and_telemetry import UsageUserMergeListener
 
 
 def get_user_access(uow: UnitOfWorkDep) -> UserAccess:
@@ -191,3 +203,42 @@ def get_workspace_access(
 
 
 WorkspaceAccessDep = Annotated[WorkspaceAccess, Depends(get_workspace_access)]
+
+
+def get_user_merge_service(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    uow: UnitOfWorkDep,
+    telemetry: TelemetryStoragePortDep,
+    config: Annotated[GatewayConfig, Depends(get_config)],
+) -> UserMergeService:
+    """Build the user merge on the request's Unit of Work, with every domain whose rows name a billing user."""
+
+    async def refresh_caches() -> None:
+        await refresh_alias_cache(db)
+        await refresh_policy_cache(db)
+        await refresh_provider_endpoint_cache(uow)
+
+    return UserMergeService(
+        uow,
+        OrganizationRepositories.on(uow),
+        UserRepository(uow),
+        telemetry=telemetry,
+        refresh_caches=refresh_caches,
+        listeners=(
+            ApiKeyUserMergeListener(ApiKeyRepositories.on(uow)),
+            BudgetUserMergeListener(BudgetRepositories.on(uow)),
+            FileUserMergeListener(FileRepositories.on(uow)),
+            TraceUserMergeListener(TracesRepositories.on(uow)),
+            InferenceUserMergeListener(InferenceRepositories.on(uow)),
+            McpUserMergeListener(uow),
+            UsageUserMergeListener(uow),
+            ProviderEndpointUserMergeListener(uow),
+            RoutingUserMergeListener(uow, config),
+            SandboxContainerUserMergeListener(uow),
+            AliasUserMergeListener(db),
+            BatchUserMergeListener(db),
+        ),
+    )
+
+
+UserMergeServiceDep = Annotated[UserMergeService, Depends(get_user_merge_service)]

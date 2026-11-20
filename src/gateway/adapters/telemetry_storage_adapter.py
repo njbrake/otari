@@ -17,7 +17,7 @@ seam at all.
 from collections import defaultdict
 from typing import Any, cast
 
-from sqlalchemy import ColumnElement, case, delete, func, null, select
+from sqlalchemy import ColumnElement, case, delete, func, null, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -343,6 +343,25 @@ class DatabaseTelemetryStorageAdapter(TelemetryStoragePort):
         deleted = await self._delete([AgentTelemetry.user_id == user_id])
         logger.info("agent_telemetry erase for user: removed=%d", deleted)
         return deleted
+
+    async def reassign_user(self, *, from_user_id: str, to_user_id: str) -> int:
+        """Attribute every row of one user to another."""
+        db = self._db
+        try:
+            result = cast(
+                "CursorResult[Any]",
+                await db.execute(
+                    update(AgentTelemetry).where(AgentTelemetry.user_id == from_user_id).values(user_id=to_user_id)
+                ),
+            )
+            await db.commit()
+        except SQLAlchemyError as exc:
+            await db.rollback()
+            logger.error("agent_telemetry reassign failed: %s", describe_database_error(exc))
+            raise
+        moved = result.rowcount or 0
+        logger.info("agent_telemetry reassigned for a user merge: moved=%d", moved)
+        return moved
 
     async def _delete(self, conditions: list[ColumnElement[bool]]) -> int:
         db = self._db

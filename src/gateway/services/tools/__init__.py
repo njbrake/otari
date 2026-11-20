@@ -201,6 +201,7 @@ from gateway.services.tools._tool_prices import (
     unpriced_tool_detail,
 )
 from gateway.services.tools._use_budget import MAX_USES_EXCEEDED_ERROR, ToolUseBudget, is_capped_call
+from gateway.services.tools._user_merge import McpUserMergeListener
 from gateway.services.tools._web_access import WebAccessGrant, apply_web_access_policy, web_access_disabled_refusal
 from gateway.services.tools._web_admission import (
     NO_WEB_TOOLS,
@@ -279,6 +280,7 @@ from gateway.services.tools._web_tool_failure import WebToolFailure
 from gateway.services.tools._workspace_mcp_server_urls import WorkspaceMcpServerUrls
 
 __all__ = [
+    "McpUserMergeListener",
     "AttachedMcpServerIndex",
     "DirectCaller",
     "DirectToolAccounts",

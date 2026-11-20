@@ -7,12 +7,12 @@ service layer; this module is the only place its statements are spelled.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, or_, select, update
+from sqlalchemy import CursorResult, delete, func, or_, select, update
 
 from gateway.core.unit_of_work import UnitOfWork, session_for
 from gateway.models.tools import SandboxContainer
@@ -147,3 +147,36 @@ async def expired_container_ids(uow: UnitOfWork, *, now: datetime, batch_size: i
         .limit(batch_size)
     )
     return list(result.scalars().all())
+
+
+async def reassign_container_owner(uow: UnitOfWork, from_user_id: str, to_user_id: str) -> int:
+    """Point a user's leases at another, returning how many moved. Flushes; the caller's block commits."""
+    db = session_for(uow)
+    result = cast(
+        "CursorResult[Any]",
+        await db.execute(
+            update(SandboxContainer).where(SandboxContainer.user_id == from_user_id).values(user_id=to_user_id)
+        ),
+    )
+    await db.flush()
+    return result.rowcount or 0
+
+
+async def count_container_owner(uow: UnitOfWork, user_id: str) -> int:
+    """How many leases ``user_id`` holds."""
+    db = session_for(uow)
+    result = await db.execute(
+        select(func.count()).select_from(SandboxContainer).where(SandboxContainer.user_id == user_id)
+    )
+    return int(result.scalar_one())
+
+
+async def container_owner_outside(uow: UnitOfWork, user_id: str, workspace_ids: Collection[uuid.UUID]) -> bool:
+    """Whether ``user_id`` holds a lease in a workspace other than these."""
+    db = session_for(uow)
+    found = await db.execute(
+        select(SandboxContainer.id)
+        .where(SandboxContainer.user_id == user_id, SandboxContainer.workspace_id.not_in(list(workspace_ids)))
+        .limit(1)
+    )
+    return found.first() is not None
