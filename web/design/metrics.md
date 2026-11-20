@@ -22,8 +22,8 @@ Is it a part-to-whole with ordered segments?
 
 ```ts
 KpiStrip: { empty: boolean, children }
-KpiCell: { label: string, value: string, severity?: Severity, subline?: string,
-  delta?: ReactNode, graphic?: ReactNode }
+KpiCell: { label: string, value: string, severity?: Severity, subline?: ReactNode,
+  delta?: ReactNode, graphic?: ReactNode, isLoading?: boolean }
 Severity: { status: "ok" | "warn" | "alert", word: string }
 ```
 
@@ -37,9 +37,12 @@ is what leaves one cell taller than its neighbors.
 `toLocaleString()` at the call site. `delta` and `graphic` take elements (a
 `TrendChip`, a `Sparkline`); `severity` takes data.
 
-A cell may carry `severity`, `delta` and `subline` at once: the meta line drops the
-subline first, because its facts also live in the breakdown table below while a delta
-lives nowhere else.
+A cell may carry `severity`, `delta` and `subline` at once. The severity and the
+delta hold their width; a subline that does not fit beside them wraps under them,
+and on a phone it always takes a line of its own.
+
+`isLoading` holds the figure and its line with `Skeleton`s while the read is
+still coming, in place of a dash, which reads as a figure that is missing.
 
 **Five cells.** The strip's grid is a fixed 2 / 3 / 5 columns by breakpoint, so four
 cells leave one empty track on a wide viewport and three leave two. Both call sites
@@ -51,11 +54,16 @@ A cell has four rows and **always four**, in this order:
 1. `label`: overline, bottom-aligned so a wrapped label still shares its baseline.
 2. `value`: `text-mono-figure`, weight 400, tabular.
 3. The meta line: `severity`, then `delta`, then `subline`, most-judged to least.
-   One line, never two, and only the subline truncates.
+   It wraps rather than cutting the subline short.
 4. `graphic`: a `Sparkline`. Reserved even when absent.
 
 The reserved rows are the whole point: an absent sparkline must not make one cell
-shorter than the four beside it.
+shorter than the four beside it. The cell subgrids its four rows onto the strip's,
+so each row of the strip is as tall as its tallest part: a wrapped label or meta line
+moves that row for every cell, and the values stay on one line. That is also why
+the cell itself is never a size container (`@container`): container queries apply
+layout containment, a subgrid inside one computes to `none`, and the four rows then
+split the cell's height evenly. The figure's container is a wrapper around it.
 
 Always pass `subline`, in every page state. An em dash with nothing under it makes
 the reader guess whether the number is missing or zero.

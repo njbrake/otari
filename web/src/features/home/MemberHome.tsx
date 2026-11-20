@@ -1,6 +1,7 @@
 import { Link, useNavigate } from "@tanstack/react-router"
 import { type ReactNode, useState } from "react"
 import { FiKey, FiLayers } from "react-icons/fi"
+import { RefreshButton } from "@/design-system/actions/RefreshButton"
 import { RowMenu, type RowMenuAction } from "@/design-system/actions/RowMenu"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
@@ -13,7 +14,10 @@ import { KpiCell } from "@/design-system/metrics/KpiCell"
 import { KpiStrip } from "@/design-system/metrics/KpiStrip"
 import { TrendChip } from "@/design-system/metrics/TrendChip"
 import { Segmented } from "@/design-system/navigation/Segmented"
+import { FigureLinks } from "@/features/home/FigureLinks"
+import { failureSeverity, spendSplit } from "@/features/home/homeFigures"
 import { canOpenInKeys } from "@/features/home/keyAccess"
+import { MemberAttentionBand } from "@/features/home/MemberAttentionBand"
 import { MemberFirstRun } from "@/features/home/MemberFirstRun"
 import {
   hasActiveKey,
@@ -25,8 +29,12 @@ import {
   unseenLimitLines,
 } from "@/features/home/memberHomeModel"
 import { hasProviderSlot, ProviderSlot } from "@/features/home/ProviderSlot"
+import { RecentFailures } from "@/features/home/RecentFailures"
 import { RowOpenLink } from "@/features/home/RowOpenLink"
 import { ShareCell } from "@/features/home/ShareCell"
+import { useHomeRefresh } from "@/features/home/useHomeRefresh"
+import { useMemberAttention } from "@/features/home/useMemberAttention"
+import { useSpendDetail } from "@/features/home/useSpendDetail"
 import { useCanCreateKey } from "@/features/organization/access"
 import { useCurrentOwner } from "@/features/organization/attribution"
 import { wholePct } from "@/features/spend/limits"
@@ -53,7 +61,10 @@ import { TopModelCell } from "@/features/usage/TopModelCell"
 import { billedTokenTotal, cacheSums } from "@/features/usage/usageTotals"
 import { useTopModels } from "@/features/usage/useTopModels"
 import { useKeys } from "@/shared/api/apiKeys"
-import { useOrganizationMembers } from "@/shared/api/organizations"
+import {
+  useOrganizationContext,
+  useOrganizationMembers,
+} from "@/shared/api/organizations"
 import { useTraceCount } from "@/shared/api/traces"
 import { useRefusedUsage, useUsageSummary } from "@/shared/api/usage"
 import { useWorkspaceBudgetDefaults } from "@/shared/api/workspaces"
@@ -114,6 +125,9 @@ export function MemberHome({
   const owner = useCurrentOwner()
   const me = owner.ownerId || undefined
   const canCreateKey = useCanCreateKey()
+  const callerUserId =
+    useOrganizationContext().data?.caller?.user_id ?? undefined
+  const { refresh, isFetching } = useHomeRefresh(refreshClock)
 
   const period = periodFromUrl(get("period"))
   const window = windowOf(period, now)
@@ -126,6 +140,20 @@ export function MemberHome({
     resetEndedAt: now,
   })
   const keys = useKeys(workspaceId)
+  const attention = useMemberAttention({
+    now,
+    owner: { userId: me, isPending: owner.isPending, isFailed: owner.isFailed },
+    workspaceId,
+    keys,
+    callerUserId,
+  })
+  const detail = useSpendDetail({
+    window,
+    now,
+    workspaceId,
+    userId: me,
+    isEnabled: me !== undefined,
+  })
   const members = useOrganizationMembers()
   const defaults = useWorkspaceBudgetDefaults(workspaceId)
   // A deployment that records no sessions serves no route to count them, and
@@ -208,6 +236,20 @@ export function MemberHome({
         ? "Loading"
         : undefined
   const words = windowWords(window)
+  const isReading = !spend.totals && usage === "loading"
+  const split = spendSplit(total, detail.charged)
+  // Charged and not charged lead, and stay whole: they reconcile Spent with
+  // the person page's Charged. Today's spend only where nothing else is said.
+  const spentFacts = split
+    ? [
+        `${formatUsd(split.charged)} charged`,
+        `+${formatUsd(split.notCharged)} not charged`,
+      ]
+    : detail.today !== undefined
+      ? [`${formatUsd(detail.today)} today`]
+      : []
+  const failed = spend.totals?.error_count ?? 0
+  const hasRequests = hasSurface("usage")
   // A cell with no graphic still holds the row, or its figure drops off the
   // baseline of the cells beside it that have one.
   const hasGraphicRow = spend.series.length > 1 || Boolean(sessionCount)
@@ -449,26 +491,34 @@ export function MemberHome({
       <PageIntro
         title="Home"
         action={
-          <SpendPeriodPicker
-            value={period}
-            onChange={(next) => {
-              refreshClock()
-              patch({ period: next })
-            }}
-          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <RefreshButton
+              onRefresh={refresh}
+              isFetching={isFetching}
+              updatedAt={now}
+            />
+            <SpendPeriodPicker
+              value={period}
+              onChange={(next) => {
+                refreshClock()
+                patch({ period: next })
+              }}
+            />
+          </div>
         }
       />
       {notice}
       <ErrorBanner error={spend.error} />
-      {/* Needs attention (`MemberAttentionBand`) is held back until it reads
-          each row's scope right; only the first-run band shows here. */}
       {isFirstRun ? (
         <MemberFirstRun workspace={workspace} canCreateKey={canCreateKey} />
-      ) : null}
+      ) : (
+        <MemberAttentionBand attention={attention} />
+      )}
       <KpiStrip isEmpty={false} columns={4}>
         <KpiCell
           label={figureLabel("Spent", window)}
           value={spend.totals ? formatUsd(total) : "—"}
+          isLoading={isReading}
           delta={
             delta !== null ? (
               <TrendChip
@@ -479,13 +529,17 @@ export function MemberHome({
             ) : undefined
           }
           subline={
-            delta !== null
-              ? undefined
-              : !spend.totals
-                ? unreadLine
-                : requestCount > 0
-                  ? `${formatNumber(requestCount)} requests`
-                  : "No requests yet"
+            !spend.totals
+              ? delta !== null
+                ? undefined
+                : unreadLine
+              : spentFacts.length > 0
+                ? spentFacts
+                : delta !== null
+                  ? undefined
+                  : requestCount > 0
+                    ? `${formatNumber(requestCount)} requests`
+                    : "No requests yet"
           }
           graphic={slot(
             spend.series.length > 1 ? (
@@ -539,6 +593,7 @@ export function MemberHome({
               ? formatTokens(billedTokenTotal(spend.totals) ?? 0)
               : "—"
           }
+          isLoading={isReading}
           subline={
             !spend.totals
               ? unreadLine
@@ -586,7 +641,7 @@ export function MemberHome({
         ) : (
           // The owner's Home has this cell, so the strip keeps its four.
           <KpiCell
-            label="Failures"
+            label={figureLabel("Failures", window)}
             value={
               spend.totals
                 ? formatPct(
@@ -596,10 +651,34 @@ export function MemberHome({
                   )
                 : "—"
             }
+            isLoading={isReading}
+            severity={
+              spend.totals ? failureSeverity(failed, requestCount) : undefined
+            }
             subline={
-              spend.totals
-                ? `${formatNumber(spend.totals.error_count)} failed ${spend.totals.error_count === 1 ? "request" : "requests"}`
-                : unreadLine
+              spend.totals ? (
+                <FigureLinks
+                  links={[
+                    {
+                      text: `${formatNumber(failed)} failed`,
+                      search: { ...mySessions, status: "error" },
+                      isShown: hasRequests,
+                    },
+                    {
+                      text: `${formatNumber(detail.unpriced ?? 0)} unpriced`,
+                      search: {
+                        ...mySessions,
+                        status: "success",
+                        priced: "false",
+                      },
+                      isShown: hasRequests && (detail.unpriced ?? 0) > 0,
+                    },
+                  ]}
+                  fallback={`${formatNumber(failed)} failed`}
+                />
+              ) : (
+                unreadLine
+              )
             }
             graphic={slot(undefined)}
           />
@@ -647,6 +726,15 @@ export function MemberHome({
           </p>
         ) : null}
       </section>
+      {hasRequests && me ? (
+        <RecentFailures
+          window={window}
+          now={now}
+          workspaceId={workspaceId}
+          userId={me}
+          total={spend.totals?.error_count}
+        />
+      ) : null}
     </div>
   )
 }

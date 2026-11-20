@@ -379,7 +379,7 @@ describe("MemberHome, sessions", () => {
     ).toBeNull()
     expect(await findRowMenuItem(user, /See its sessions/, table)).toBeNull()
     // The strip keeps four figures: the owner's Failures takes the place.
-    expect(screen.getByText("Failures")).toBeVisible()
+    expect(screen.getByText(/^Failures/)).toBeVisible()
   })
 
   it("counts and links the member's sessions where the deployment records them", async () => {
@@ -490,9 +490,15 @@ describe("MemberHome, the window", () => {
     ).toBeVisible()
     expect(screen.getByText("Spent yesterday")).toBeVisible()
     expect(screen.getByText("yesterday in Platform")).toBeVisible()
+    // Needs attention reads the last 24 hours whatever the window.
+    const isBandRead = (url: URL) =>
+      url.searchParams.getAll("dimensions").includes("status_code") ||
+      (url.searchParams.get("status_code") === "403" &&
+        url.searchParams.getAll("dimensions").includes("user"))
     const reads = asked.filter(
       (url) =>
-        url.searchParams.has("start_date") || url.searchParams.has("start"),
+        (url.searchParams.has("start_date") || url.searchParams.has("start")) &&
+        !isBandRead(url),
     )
     // The window, the one before it, the refusals and the session count.
     expect(reads.length).toBeGreaterThanOrEqual(4)

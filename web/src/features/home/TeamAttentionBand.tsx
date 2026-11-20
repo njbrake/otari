@@ -10,6 +10,7 @@ import type { AttentionItem } from "@/features/home/attention"
 import { useTeamAttention } from "@/features/home/useTeamAttention"
 import type { LimitTarget } from "@/features/spend/limits"
 import type { Spend } from "@/features/spend/useSpend"
+import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 
 const ROW =
   "flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border-subtle py-2.5"
@@ -64,7 +65,8 @@ function ItemRow({
   onSetLimit: (target: LimitTarget) => void
 }) {
   const { action } = item
-  const { limit } = action
+  const { limit, workspaceId } = action
+  const { select } = useSelectedWorkspace()
   return (
     <Row
       severity={severityOf(item.isUrgent)}
@@ -83,6 +85,9 @@ function ItemRow({
           <Link
             to={action.to}
             search={action.search}
+            // The destination lists the shell's workspace, so it is moved to
+            // the one this row counted before the page opens.
+            onClick={workspaceId ? () => select(workspaceId) : undefined}
             className="shrink-0 text-sm text-link underline max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
           >
             {action.label}

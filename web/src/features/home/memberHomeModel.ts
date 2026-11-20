@@ -10,18 +10,19 @@ import type {
   WorkspaceBudgetDefault,
 } from "@/client"
 import {
-  type AttentionInput,
+  type AttentionDay,
   type AttentionState,
   countedFailures,
   readsOf,
 } from "@/features/home/attention"
+import {
+  calendarDaysUntil,
+  DAY_MS,
+  EXPIRY_WARN_DAYS,
+} from "@/features/home/days"
 import { keyState } from "@/features/keys/keyList"
 import { perWords } from "@/features/spend/limits"
 import { formatNumber, formatPct } from "@/shared/helpers/format"
-
-const DAY_MS = 86_400_000
-/** How far ahead a key's expiry is worth saying, and how long after. */
-const EXPIRY_DAYS = 7
 
 /**
  * The caller's limit in a team, from what a member may read: their own row on
@@ -272,6 +273,28 @@ export type MemberAttentionKey = Pick<
   | "disabled_reason"
 >
 
+/**
+ * The keys a member's band speaks of as theirs: issued under one of their own
+ * ids. The keys list a member reads also carries the workspace's service keys
+ * and, for a workspace admin, other people's keys, none of which is "your key"
+ * or the member's to renew.
+ */
+export function ownKeys<
+  Key extends Pick<
+    ApiKey,
+    "user_id" | "is_service_key" | "is_organization_service_key"
+  >,
+>(keys: readonly Key[], userIds: readonly (string | undefined)[]): Key[] {
+  const ids = new Set(userIds.filter((id): id is string => Boolean(id)))
+  return keys.filter(
+    (key) =>
+      !key.is_service_key &&
+      !key.is_organization_service_key &&
+      key.user_id !== null &&
+      ids.has(key.user_id),
+  )
+}
+
 export interface MemberAttentionInput {
   now: number
   /** The caller, for the Requests filter an item opens. */
@@ -284,7 +307,7 @@ export interface MemberAttentionInput {
   /** The caller's requests the gateway refused with a 403 in the last 24 hours. */
   refused: number
   /** The caller's requests in the last 24 hours, by error class. */
-  day: AttentionInput["day"]
+  day: AttentionDay
   /** The caller's own keys in the team. */
   keys: readonly MemberAttentionKey[]
 }
@@ -312,19 +335,6 @@ const DATE = new Intl.DateTimeFormat("en-US", {
 const keyName = (key: MemberAttentionKey) =>
   key.key_name || `ending ${key.key_suffix ?? ""}`.trim()
 
-/** Whole local days from `now` to `at`: 0 today, 1 tomorrow. */
-function calendarDaysUntil(at: number, now: number): number {
-  const day = (time: number) => {
-    const date = new Date(time)
-    return new Date(
-      date.getFullYear(),
-      date.getMonth(),
-      date.getDate(),
-    ).getTime()
-  }
-  return Math.round((day(at) - day(now)) / DAY_MS)
-}
-
 function keyItems(
   keys: readonly MemberAttentionKey[],
   now: number,
@@ -351,7 +361,7 @@ function keyItems(
     if (!key.expires_at) continue
     const at = Date.parse(key.expires_at)
     if (at <= now) {
-      if (now - at > EXPIRY_DAYS * DAY_MS) continue
+      if (now - at > EXPIRY_WARN_DAYS * DAY_MS) continue
       items.push({
         id: `key-expired:${key.id}`,
         isUrgent: true,
@@ -364,7 +374,7 @@ function keyItems(
       })
       continue
     }
-    if (!key.is_active || at - now > EXPIRY_DAYS * DAY_MS) continue
+    if (!key.is_active || at - now > EXPIRY_WARN_DAYS * DAY_MS) continue
     const days = calendarDaysUntil(at, now)
     items.push({
       id: `key-expiring:${key.id}`,

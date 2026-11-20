@@ -17,6 +17,14 @@ import type { ReactNode } from "react"
  * against raw file contents without stripping comments first, so a quoted
  * example keeps the file on the offender list with nothing wrong to find.
  *
+ * The action sits beside the title while both fit and wraps under it when
+ * they do not, as one flex row that wraps rather than a breakpoint: what fits
+ * depends on the content column (a rail open or closed, a long title, a page
+ * with three controls), not on the viewport. The action keeps to the trailing
+ * edge on either line, takes the whole width on a phone as it always has, and
+ * its own controls wrap inside it once it is narrower than they are, so
+ * nothing in the header can push past the page.
+ *
  * `pb-5` rather than a gap on the parent, because a page is a stack of bands
  * that set their own rules and spacing, and a column gap would add air above
  * the first rule as well.
@@ -35,8 +43,8 @@ export function PageIntro({
   detail?: ReactNode
 }) {
   return (
-    <header className="flex flex-col gap-4 pb-5 sm:flex-row sm:items-start sm:justify-between">
-      <div className="max-w-[38.75rem]">
+    <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4 pb-5">
+      <div className="min-w-0 max-w-[38.75rem]">
         {leading ? (
           <div className="flex items-center gap-3">
             {leading}
@@ -47,7 +55,9 @@ export function PageIntro({
         )}
         {detail ? <p className="mt-1 text-sm text-muted">{detail}</p> : null}
       </div>
-      {action ? <div className="shrink-0">{action}</div> : null}
+      {action ? (
+        <div className="ml-auto min-w-0 max-w-full max-sm:w-full">{action}</div>
+      ) : null}
     </header>
   )
 }

@@ -1,4 +1,10 @@
-import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query"
+import {
+  keepPreviousData,
+  useIsFetching,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import type {
   InFlightResponse,
   SummaryDimension,
@@ -14,7 +20,13 @@ import type {
 } from "@/client"
 import { ApiError, apiFetch, heavyReadSignal } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
-import { NO_RETRY, USAGE, workspaceMeta } from "@/shared/api/queryKeys"
+import {
+  NO_RETRY,
+  ORGANIZATION_SPEND_CEILINGS,
+  TRACES,
+  USAGE,
+  workspaceMeta,
+} from "@/shared/api/queryKeys"
 import { isoAgo } from "@/shared/helpers/timeRange"
 
 // ---------- activity / request log ----------
@@ -135,8 +147,9 @@ export function useUsageLogs(
   page: number,
   pageSize: number,
   enabled = true,
+  usageScope: UsageScope = "caller",
 ) {
-  const scope = useUsageScope()
+  const scope = useUsageScope(usageScope)
   return useQuery({
     queryKey: [USAGE, "list", scope.base, filters, page, pageSize],
     meta: workspaceMeta(filters.workspace_id),
@@ -574,6 +587,37 @@ export function useWorkspaceSpendSummaries(
 }
 
 /**
+ * One summary per workspace over the same filters, for a figure that has to
+ * say which workspace it counted: Requests lists one workspace at a time, so a
+ * count across all of them would link to a page that shows only part of it.
+ * A handful of workspaces, read in parallel; answers come back in the order of
+ * `workspaceIds`.
+ */
+export function useWorkspaceSummaries(
+  workspaceIds: readonly string[],
+  params: Record<string, string>,
+  isEnabled = true,
+) {
+  const scope = useUsageScope("organization")
+  return useQueries({
+    queries: workspaceIds.map((workspaceId) => ({
+      queryKey: [USAGE, "workspace-summary", scope.base, workspaceId, params],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        apiFetch<UsageSummary>(
+          `${scope.base}/summary?${new URLSearchParams({
+            ...params,
+            workspace_id: workspaceId,
+          })}`,
+          { signal: heavyReadSignal(signal) },
+        ),
+      enabled: isEnabled && scope.isReady,
+      staleTime: 30_000,
+      ...HEAVY_READ,
+    })),
+  })
+}
+
+/**
  * Requests the gateway refused with a 403 since `start` (up to `end`, where
  * one is given), newest first, for the people, keys or workspace named, or the
  * whole organization when none is. The usage log does not say which limit
@@ -658,4 +702,26 @@ export function useModelSummariesBy(
       ...HEAVY_READ,
     })),
   })
+}
+
+/**
+ * A page's Refresh over usage: reads usage, sessions and limits again, and
+ * says whether any usage read is in flight. A press within the same minute
+ * leaves a window's query key as it was, so a moved clock alone refetches
+ * nothing.
+ */
+export function useRefreshUsageReads(): {
+  refresh: () => void
+  isFetching: boolean
+} {
+  const queryClient = useQueryClient()
+  const isFetching = useIsFetching({ queryKey: [USAGE] }) > 0
+  return {
+    isFetching,
+    refresh: () => {
+      for (const key of [USAGE, TRACES, ORGANIZATION_SPEND_CEILINGS]) {
+        void queryClient.invalidateQueries({ queryKey: [key] })
+      }
+    },
+  }
 }
