@@ -34,8 +34,11 @@ export type ValueDimension =
 /** A threshold a row must exceed, on the token, cost and latency columns. */
 export type ThresholdKey = "tokens_gt" | "cost_gt" | "latency_ms_gt"
 
-/** A filter a column carries beside its values: priced or unpriced rows, direct requests. */
-export type ExtraKey = "priced" | "direct"
+/** A filter a column carries beside its values: priced or unpriced rows, direct requests, recovered attempts. */
+export type ExtraKey = "priced" | "direct" | "recovered"
+
+/** A column a row may have nothing in, which `is_null` asks for. */
+export type EmptyField = "user" | "api_key" | "session"
 
 /** One part of a column's filter panel. */
 export type FilterSection =
@@ -43,6 +46,8 @@ export type FilterSection =
   | { kind: "threshold"; key: ThresholdKey }
   | { kind: "extra"; key: ExtraKey }
   | { kind: "tool" }
+  | { kind: "channel" }
+  | { kind: "empty"; field: EmptyField }
 
 const URL_DEFAULTS = {
   scope: "",
@@ -74,6 +79,9 @@ const URL_DEFAULTS = {
   q: "",
   sort: "",
   order: "",
+  channel: "",
+  is_null: "",
+  recovered: "",
   page: "0",
 } as const
 
@@ -88,9 +96,46 @@ export const VALUE_KEYS: Record<
   user: { include: "user_id", exclude: "exclude_user_id" },
   api_key: { include: "api_key_id", exclude: "exclude_api_key_id" },
   provider: { include: "provider", isSingle: true },
-  status: { include: "status", exclude: "exclude_status", isSingle: true },
+  // One at a time on Sessions, whose sessions have one of two outcomes; a
+  // subset on Requests (`isSingleFor`).
+  status: { include: "status", exclude: "exclude_status" },
   policy: { include: "policy_name", exclude: "exclude_policy_name" },
   source: { include: "source", exclude: "exclude_source", isSingle: true },
+}
+
+/** Whether a column takes one value at a time on this view. */
+export const isSingleFor = (
+  dimension: ValueDimension,
+  isRequests: boolean,
+): boolean =>
+  Boolean(VALUE_KEYS[dimension].isSingle) ||
+  (dimension === "status" && !isRequests)
+
+/** The ways a request comes in, which the API key column filters by. */
+export const CHANNEL_OPTIONS: { value: string; label: string }[] = [
+  { value: "api", label: "API" },
+  { value: "imported", label: "Imported" },
+  { value: "playground", label: "Playground" },
+]
+
+/** How each empty column's filter reads. */
+export const EMPTY_LABELS: Record<EmptyField, string> = {
+  user: "No user",
+  api_key: "No API key",
+  session: "No session",
+}
+
+/**
+ * The statuses a Requests read narrows to, as the wire takes them: one as
+ * `status`, which also decides what a request count counts, and a subset as
+ * `statuses`.
+ */
+export function statusFilters(
+  values: readonly string[],
+): Pick<UsageFilters, "status" | "statuses"> {
+  if (values.length === 0) return {}
+  if (values.length === 1) return { status: values[0] }
+  return { statuses: [...values] as UsageFilters["statuses"] }
 }
 
 /** The presets each threshold offers, and how a value reads. */
@@ -196,11 +241,16 @@ function usageFiltersFor(
   const threshold = (key: ThresholdKey) =>
     isRequests ? readThreshold(url.get(key)) : undefined
   const priced = url.get("priced")
+  const statuses =
+    leaveOut !== "status" && state.statusApplied
+      ? isRequests
+        ? url.getAll("status")
+        : state.status
+          ? [state.status]
+          : []
+      : []
   return {
-    status:
-      leaveOut !== "status" && state.statusApplied && state.status
-        ? state.status
-        : undefined,
+    ...statusFilters(statuses),
     exclude_status: out("status") as UsageFilters["exclude_status"],
     model: all("model"),
     exclude_model: out("model"),
@@ -235,6 +285,8 @@ function usageFiltersFor(
           status_code: url.get("status_code") || undefined,
           tool: leaveOut === "tool" ? undefined : url.get("tool") || undefined,
           q: url.get("q").trim() || undefined,
+          channel: listOrNone(url.getAll("channel")) as UsageFilters["channel"],
+          is_null: listOrNone(url.getAll("is_null")) as UsageFilters["is_null"],
         }
       : {}),
   }

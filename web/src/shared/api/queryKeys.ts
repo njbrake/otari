@@ -93,6 +93,9 @@ export const BUDGETS = "budgets"
 export const SCOPED_BUDGETS = "scoped-budgets"
 export const USERS = "users"
 export const USAGE = "usage"
+// The request log's live clock: a tick, not a read, kept apart from USAGE so an
+// invalidation of the usage reads never re-anchors the window it follows.
+export const LIVE_CLOCK = "live-clock"
 export const TRACES = "traces"
 export const ORGANIZATIONS = "organizations"
 // The caller's standing in the organization they are acting in. Composed here

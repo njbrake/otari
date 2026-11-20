@@ -16,7 +16,12 @@ import type {
 } from "@/client"
 import { ApiError, apiFetch, heavyReadSignal } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
-import { NO_RETRY, USAGE, workspaceMeta } from "@/shared/api/queryKeys"
+import {
+  LIVE_CLOCK,
+  NO_RETRY,
+  USAGE,
+  workspaceMeta,
+} from "@/shared/api/queryKeys"
 import { isoAgo } from "@/shared/helpers/timeRange"
 
 // ---------- activity / request log ----------
@@ -430,12 +435,16 @@ export const NO_BREAKDOWNS: SummaryDimension[] = []
 // or `series` (tiles, timeline context, the previous-period comparison), so they
 // pass `[]` and skip all of them. Omitting the argument keeps the server default
 // (every breakdown).
+//
+// `includeP95` adds the totals' 95th-percentile latency, which costs the server a
+// sort of the window's latencies, so only the request log's totals ask for it.
 export function useUsageSummary(
   filters: UsageFilters,
   bucket: UsageBucket,
   dimensions?: SummaryDimension[],
   enabled = true,
   usageScope: UsageScope = "caller",
+  { includeP95 = false }: { includeP95?: boolean } = {},
 ) {
   const scope = useUsageScope(usageScope)
   return useQuery({
@@ -446,11 +455,13 @@ export function useUsageSummary(
       filters,
       bucket,
       dimensions ?? "all",
+      ...(includeP95 ? ["p95"] : []),
     ],
     meta: workspaceMeta(filters.workspace_id),
     queryFn: ({ signal }) => {
       const params = usageParams(filters)
       params.set("bucket", bucket)
+      if (includeP95) params.set("include_p95", "true")
       // A repeated query param has no empty-list form, so an empty selection goes
       // on the wire as the server's `none` sentinel.
       if (dimensions) {
@@ -702,4 +713,26 @@ export function useModelSummariesBy(
       ...HEAVY_READ,
     })),
   })
+}
+
+/**
+ * A reading of the clock that moves every `intervalMs` while `enabled`, for the
+ * request log's live mode, whose window follows "now".
+ *
+ * A query rather than a timer, so it keeps the rules every poll here keeps: it
+ * stops in a background tab and starts again on return, and it stops the
+ * moment `enabled` turns off. It reads nothing from the server; the page
+ * re-anchors its window when the reading moves, and the usage reads keyed on
+ * that window follow.
+ */
+export function useLiveClock(enabled: boolean, intervalMs: number): number {
+  const tick = useQuery({
+    queryKey: [LIVE_CLOCK, intervalMs],
+    queryFn: () => Promise.resolve(Date.now()),
+    enabled,
+    refetchInterval: intervalMs,
+    staleTime: 0,
+    gcTime: 0,
+  })
+  return tick.data ?? 0
 }

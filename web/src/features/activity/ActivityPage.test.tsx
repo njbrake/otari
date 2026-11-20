@@ -1687,6 +1687,18 @@ function liveControl(): HTMLElement | null {
   return screen.queryByRole("button", { name: /in flight/ })
 }
 
+// Live mode re-reads the rows on its own; these tests are about the page held
+// still, so they pause it first, as an operator reading the page would.
+async function pauseLive(
+  user: ReturnType<typeof userEvent.setup> = userEvent.setup({
+    advanceTimers: vi.advanceTimersByTime,
+  }),
+) {
+  const control = await screen.findByRole("button", { name: "Live updates" })
+  await user.click(control)
+  await waitFor(() => expect(control).toHaveAttribute("aria-pressed", "false"))
+}
+
 describe("ActivityPage live traffic", () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -1908,6 +1920,7 @@ describe("ActivityPage live traffic", () => {
       renderPage(<ActivityPage />, "/activity?range=24h")
 
       await waitFor(() => expect(liveControl()).toBeInTheDocument())
+      await pauseLive()
       const before = listCalls(calls).length
 
       // The request settles: the next poll no longer carries it.
@@ -1969,6 +1982,7 @@ describe("ActivityPage live traffic", () => {
       renderPage(<ActivityPage />, "/activity?range=24h")
 
       await screen.findByText("gpt-4o")
+      await pauseLive(user)
       expect(
         screen.queryByRole("button", { name: /new/ }),
       ).not.toBeInTheDocument()
@@ -2062,6 +2076,7 @@ describe("ActivityPage live traffic", () => {
     renderPage(<ActivityPage />, "/activity?range=24h")
 
     await screen.findByText("gpt-4o")
+    await pauseLive(userEvent.setup())
     await waitFor(() =>
       expect(screen.getByText("Newer rows unknown")).toBeInTheDocument(),
     )
@@ -2105,6 +2120,7 @@ describe("ActivityPage live traffic", () => {
       renderPage(<ActivityPage />, "/activity?range=24h")
 
       await screen.findByText("gpt-4o")
+      await pauseLive(user)
       serverTotal = 120
       await vi.advanceTimersByTimeAsync(16_000)
       await screen.findByRole("button", { name: /20 new/ })

@@ -288,7 +288,7 @@ describe("ObserveColumnFilter writing the URL", () => {
     )
   })
 
-  it("picks one status, a second replaces it, and counts each", async () => {
+  it("picks a subset of statuses on Requests, and counts each", async () => {
     mockApi({
       rows: [
         entry({ id: "a", status: "error" }),
@@ -307,7 +307,54 @@ describe("ObserveColumnFilter writing the URL", () => {
     expect(urlParams().has("page")).toBe(false)
 
     await user.click(within(panel).getByRole("checkbox", { name: "Absorbed" }))
-    await waitFor(() => expect(urlParams().get("status")).toBe("absorbed"))
+    await waitFor(() =>
+      expect(urlParams().getAll("status")).toEqual(["error", "absorbed"]),
+    )
+  })
+
+  it("narrows by the way requests came in and by an empty column, and clears only its own", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    renderFunnel(
+      "requests",
+      "API key",
+      [{ kind: "channel" }, { kind: "empty", field: "api_key" }],
+      "?is_null=user",
+    )
+    const { user, panel } = await open("API key")
+
+    await user.click(within(panel).getByRole("checkbox", { name: "Imported" }))
+    await waitFor(() =>
+      expect(urlParams().getAll("channel")).toEqual(["imported"]),
+    )
+    await user.click(
+      within(panel).getByRole("checkbox", { name: "No API key" }),
+    )
+    await waitFor(() =>
+      expect(urlParams().getAll("is_null")).toEqual(["user", "api_key"]),
+    )
+    await user.click(
+      within(panel).getByRole("checkbox", { name: "No API key" }),
+    )
+    await waitFor(() => expect(urlParams().getAll("is_null")).toEqual(["user"]))
+    await user.click(
+      within(panel).getByRole("checkbox", { name: "No API key" }),
+    )
+
+    // Clearing the column leaves the User column's empty filter alone.
+    await user.click(within(panel).getByRole("button", { name: /^Clear/ }))
+    await waitFor(() => expect(urlParams().has("channel")).toBe(false))
+    expect(urlParams().getAll("is_null")).toEqual(["user"])
+    expect(calls.length).toBeGreaterThan(0)
+  })
+
+  it("shows the recovered attempts from the Status column", async () => {
+    mockApi({ rows: [entry()] })
+    renderFunnel("requests", "Status", [{ kind: "extra", key: "recovered" }])
+    const { user, panel } = await open("Status")
+    await user.click(
+      within(panel).getByRole("checkbox", { name: "Show recovered attempts" }),
+    )
+    await waitFor(() => expect(urlParams().get("recovered")).toBe("show"))
   })
 
   it("offers Sessions only the outcomes a session has, and no exclusions", async () => {

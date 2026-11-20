@@ -21,6 +21,9 @@ import { ObserveFilterSheet } from "./ObserveFilterSheet"
 import { ObserveSearchBox } from "./ObserveSearchBox"
 import { OBSERVE_FILTER_COLUMNS } from "./observeColumnFilters"
 import {
+  CHANNEL_OPTIONS,
+  EMPTY_LABELS,
+  type EmptyField,
   type ObserveUrlKey,
   readThreshold,
   THRESHOLDS,
@@ -90,6 +93,9 @@ const CLEARED: Partial<Record<ObserveUrlKey, string | []>> = {
   status_code: "",
   endpoint: "",
   q: "",
+  channel: [],
+  is_null: [],
+  recovered: "",
 }
 
 /**
@@ -106,7 +112,7 @@ const CLEARED: Partial<Record<ObserveUrlKey, string | []>> = {
  */
 export function ObserveFilterRow({ view }: { view: ObserveView }) {
   const state = useObserveFilterState(view)
-  const { url, patch, status, users, isMine, clearMine, isRequests } = state
+  const { url, patch, users, isMine, clearMine, isRequests } = state
   const excludedUsers = url.getAll("exclude_user_id")
   const keys = url.getAll("api_key_id")
   const excludedKeys = url.getAll("exclude_api_key_id")
@@ -217,19 +223,22 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
         ]
       : []
   }
+  const statuses = url.getAll("status")
   const chips: FilterChip[] = [
-    ...(status
-      ? [
-          {
-            key: "status",
-            label: "Status",
-            value: state.statusApplied
-              ? statusName(status)
-              : `${status}${notApplied}`,
-            onClear: () => patch({ status: "" }),
-          },
-        ]
-      : []),
+    // Several on Requests; Sessions reads the first, so the rest say so there.
+    ...statuses.map((value, index) => {
+      const applied = isRequests ? true : index === 0 && state.statusApplied
+      const shown = applied ? statusName(value) : `${value}${notApplied}`
+      return {
+        key: `status:${value}`,
+        label: "Status",
+        value: shown,
+        clearLabel:
+          statuses.length > 1 ? `Remove Status filter ${shown}` : undefined,
+        onClear: () =>
+          patch({ status: statuses.filter((picked) => picked !== value) }),
+      }
+    }),
     ...valueChips("Status", "exclude_status", statusName, {
       negate: true,
       onlyRequests: true,
@@ -299,6 +308,34 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
     ...singleChip("source_label", "Session", (value) => value),
     ...singleChip("status_code", "Status code", (value) => value),
     ...singleChip("endpoint", "Endpoint", (value) => value),
+    ...valueChips(
+      "Channel",
+      "channel",
+      (value) => labelFrom(CHANNEL_OPTIONS, value),
+      {
+        onlyRequests: true,
+      },
+    ),
+    ...url.getAll("is_null").map((field) => ({
+      key: `is_null:${field}`,
+      label: "Empty",
+      value: requestOnly(EMPTY_LABELS[field as EmptyField] ?? field),
+      clearLabel: `Remove ${EMPTY_LABELS[field as EmptyField] ?? field} filter`,
+      onClear: () =>
+        patch({
+          is_null: url.getAll("is_null").filter((one) => one !== field),
+        }),
+    })),
+    ...(url.get("recovered") === "show"
+      ? [
+          {
+            key: "recovered",
+            label: "Recovered attempts",
+            value: requestOnly("Shown"),
+            onClear: () => patch({ recovered: "" }),
+          },
+        ]
+      : []),
     ...thresholdChip("tokens_gt"),
     ...thresholdChip("cost_gt"),
     ...thresholdChip("latency_ms_gt"),
