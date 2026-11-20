@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, NamedTuple
 
@@ -47,6 +48,18 @@ class KeySummary(NamedTuple):
     name: str | None
     user_id: str | None
     is_active: bool
+
+
+@dataclass(frozen=True)
+class KeyReach:
+    """A key's workspace, organization and owner, and the model allow-list its requests are held to."""
+
+    id: str
+    workspace_id: uuid.UUID
+    organization_id: uuid.UUID
+    user_id: str | None
+    allowlist: list[str] | None
+    """The key's own list, else its owner's; ``None`` is unrestricted, as in ``effective_allowlist``."""
 
 
 class ApiKeyService:
@@ -118,6 +131,35 @@ class ApiKeyService:
     async def get_key_ids_in_workspaces(self, workspace_ids: Sequence[uuid.UUID]) -> list[str]:
         """Return the IDs of the keys in these workspaces, in no particular order."""
         return await self._keys.get_key_ids_in_workspaces(workspace_ids)
+
+    async def reach(
+        self, key_ids: Collection[str], *, organization_id: uuid.UUID, workspace_ids: Collection[uuid.UUID]
+    ) -> list[KeyReach]:
+        """The keys among ``key_ids`` in these workspaces of ``organization_id``, with what their requests reach.
+
+        A key elsewhere is absent rather than refused, like a key that does not
+        exist. Two reads in a block of their own, whatever the number of keys.
+        """
+        async with self._uow:
+            placements = await self._keys.placements(key_ids, workspace_ids=workspace_ids)
+            owners = await self._users.lists_of(
+                {p.user_id for p in placements if p.allowed_models is None and p.user_id is not None}
+            )
+        reaches: list[KeyReach] = []
+        for placement in placements:
+            allowlist = placement.allowed_models
+            if allowlist is None and placement.user_id is not None and placement.user_id in owners:
+                allowlist = owners[placement.user_id].models
+            reaches.append(
+                KeyReach(
+                    id=placement.id,
+                    workspace_id=placement.workspace_id,
+                    organization_id=organization_id,
+                    user_id=placement.user_id,
+                    allowlist=allowlist,
+                )
+            )
+        return reaches
 
     async def key_names(
         self, key_ids: Collection[str], *, workspace_ids: Collection[uuid.UUID] | None

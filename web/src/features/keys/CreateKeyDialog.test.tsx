@@ -478,4 +478,15 @@ describe("what a new key carries", () => {
     expect(post.body).not.toHaveProperty("user_id")
     expect(post.body).not.toHaveProperty("exclude_from_budget")
   })
+
+  it("offers an organization owner no owner to pick: a key acts as its owner", async () => {
+    const writes = mockApi({ role: "owner", isOperator: false })
+    const { user, dialog } = await openDialog()
+    await moreOptions(user, dialog)
+    expect(within(dialog).queryByRole("combobox", { name: "Owner" })).toBeNull()
+    await createKey(user, dialog)
+
+    await screen.findByRole("dialog", { name: "API key created" })
+    expect(posted(writes).body).not.toHaveProperty("user_id")
+  })
 })

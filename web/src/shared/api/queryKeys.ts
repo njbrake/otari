@@ -79,6 +79,9 @@ export const UPDATE_CHECK = "update-check"
 export const BUILD = "build"
 export const GATEWAY_LIVENESS = "gateway-liveness"
 export const KEYS = "keys"
+// What each listed key sent in the last 30 days: traffic, not key rows, so a
+// root of its own that a key edit does not invalidate.
+export const KEYS_ROUTING = "keys-routing"
 // One key's federation rules. Its own root rather than a child of KEYS: a key
 // edit invalidates KEYS, and that changes nothing about which identities may
 // stand in for the key.

@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Never
 
@@ -13,6 +14,16 @@ from gateway.repositories.base_repository import BaseRepository
 from gateway.types.key_scope import KeyScopeSet
 
 _NAMES_BATCH = 10_000
+
+
+@dataclass(frozen=True)
+class KeyPlacement:
+    """Where a key sits and whose it is: what deciding which models its requests reach needs."""
+
+    id: str
+    workspace_id: uuid.UUID
+    user_id: str | None
+    allowed_models: list[str] | None
 
 
 class ApiKeyRepository(BaseRepository[APIKey, Never, Never]):
@@ -163,6 +174,18 @@ class ApiKeyRepository(BaseRepository[APIKey, Never, Never]):
             )
             names.update({key_id: name for key_id, name in result.all()})
         return names
+
+    async def placements(self, key_ids: Collection[str], *, workspace_ids: Collection[uuid.UUID]) -> list[KeyPlacement]:
+        """The keys among ``key_ids`` in ``workspace_ids``; an id that names no key there is simply absent."""
+        if not key_ids or not workspace_ids:
+            return []
+        stmt = select(APIKey.id, APIKey.workspace_id, APIKey.user_id, APIKey.allowed_models).where(
+            APIKey.id.in_(sorted(key_ids)), APIKey.workspace_id.in_(sorted(workspace_ids))
+        )
+        return [
+            KeyPlacement(id=key_id, workspace_id=workspace_id, user_id=user_id, allowed_models=allowed_models)
+            for key_id, workspace_id, user_id, allowed_models in (await self.db.execute(stmt)).all()
+        ]
 
     async def ids_named_like(self, term: str, *, limit: int) -> list[str]:
         """Up to ``limit`` ids of the keys whose name contains ``term``, case-insensitive."""

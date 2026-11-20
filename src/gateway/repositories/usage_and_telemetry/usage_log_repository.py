@@ -248,6 +248,26 @@ class RequestRows:
 
 
 @dataclass(frozen=True)
+class KeyNameTraffic:
+    """The requests one key sent under one name.
+
+    The name is what routing recorded the request was sent as (``policy_name``,
+    the routing policy or catalog ID it named) on a row served here, and
+    otherwise the offering it reached, ``provider:model``. Imported usage
+    reports only the model that ran. A request that named an alias reads as
+    the offering the alias pointed at, since no row records the alias.
+    """
+
+    api_key_id: str
+    name: str
+    requests: int
+    imported: int
+    """Of ``requests``, those imported rather than served here."""
+    routed: bool = False
+    """Whether routing recorded the name, so it named a policy or a catalog ID when sent."""
+
+
+@dataclass(frozen=True)
 class OfferingTraffic:
     """The successful requests one provider instance served for one model id, and what they used."""
 
@@ -786,6 +806,48 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 api_key_id=row.api_key_id,
                 requests=int(row.requests),
                 fell_back=int(row.fell_back),
+            )
+            for row in (await self.db.execute(stmt)).all()
+        ]
+
+    async def names_by_key(
+        self, key_ids: Collection[str], *, workspace_ids: Collection[uuid.UUID], since: datetime
+    ) -> list[KeyNameTraffic]:
+        """Requests per key and name sent since ``since``, for these keys in these workspaces, most first.
+
+        Each request counts once, on the row that ended it: an attempt a later
+        one recovered from is ``absorbed`` and left out.
+        """
+        if not key_ids or not workspace_ids:
+            return []
+        imported = UsageLog.source != SERVED_HERE_SLUG
+        reached = case((UsageLog.provider.is_not(None), UsageLog.provider + ":" + UsageLog.model), else_=UsageLog.model)
+        name = case((imported, UsageLog.model), else_=func.coalesce(UsageLog.policy_name, reached))
+        requests = func.count()
+        stmt = (
+            select(
+                UsageLog.api_key_id,
+                name.label("name"),
+                requests.label("requests"),
+                func.sum(case((imported, 1), else_=0)).label("imported"),
+                func.max(case((and_(~imported, UsageLog.policy_name.is_not(None)), 1), else_=0)).label("routed"),
+            )
+            .where(
+                UsageLog.api_key_id.in_(sorted(key_ids)),
+                UsageLog.workspace_id.in_(sorted(workspace_ids)),
+                UsageLog.status.in_(_REQUEST_STATUSES),
+                UsageLog.timestamp >= since,
+            )
+            .group_by(UsageLog.api_key_id, name)
+            .order_by(UsageLog.api_key_id, requests.desc(), name)
+        )
+        return [
+            KeyNameTraffic(
+                api_key_id=row.api_key_id,
+                name=row.name,
+                requests=int(row.requests),
+                imported=int(row.imported),
+                routed=bool(row.routed),
             )
             for row in (await self.db.execute(stmt)).all()
         ]

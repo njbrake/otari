@@ -1,21 +1,25 @@
 """The routing domain's service: what callers get from routing, read for one organization."""
 
 import uuid
-from collections import Counter
-from collections.abc import Collection
+from collections import Counter, defaultdict
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from gateway.core.config import GatewayConfig
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.organizations_exceptions import WorkspaceNotFoundError
 from gateway.repositories.routing import RoutingPolicyRepository
-from gateway.services.api_keys import ApiKeyService
-from gateway.services.catalog import catalog_models, offering_input_rate
+from gateway.services.alias_service import resolve_effective_alias
+from gateway.services.api_keys import ApiKeyService, KeyReach
+from gateway.services.catalog import catalog_models, offering_input_rate, resolve_catalog_offerings
 from gateway.services.model_access import workspace_serves_target
+from gateway.services.policy_store import resolve_effective_policy
+from gateway.services.routing.compiler import compile_catalog_plan, reachable_candidates
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tools import provider_tools
-from gateway.services.usage_and_telemetry import ServedTraffic, UsageService
+from gateway.services.usage_and_telemetry import KeyNameTraffic, ServedTraffic, UsageService
 
 FALLBACK_WINDOW = timedelta(days=30)
 """How far back the automatic fallbacks look for traffic."""
@@ -66,6 +70,68 @@ class AutomaticFallback:
     """The pinned requests by key and provider, most first."""
 
 
+KEY_MODELS_SHOWN = 10
+"""How many of a key's names its routing read lists; the counts cover them all."""
+
+NameKind = Literal["policy", "alias", "catalog", "pinned", "unknown"]
+Backup = Literal["has_backup", "no_backup", "subscription", "unknown"]
+NoBackupReason = Literal["single_offering", "single_target_policy", "pinned", "no_allowed_offering"]
+
+
+@dataclass(frozen=True)
+class KeyModel:
+    """One name a key sent in the window, and whether a failure on it has somewhere to go."""
+
+    name: str
+    requests: int
+    kind: NameKind
+    """What the name is to this key now: a routing policy, an alias, a catalog ID, a pinned ``provider:model``."""
+    backup: Backup
+    reason: NoBackupReason | None
+    """Why there is no backup; set only when ``backup`` is ``no_backup``."""
+    provider: str | None
+    """The one instance that serves it, when one alone does."""
+
+
+@dataclass(frozen=True)
+class KeyPolicy:
+    """One routing policy a key sent in the window, by name."""
+
+    name: str
+    requests: int
+    deleted: bool = False
+    """No policy of that name is in force for the key now: it was deleted or renamed since."""
+
+
+@dataclass(frozen=True)
+class KeyRouting:
+    """What one key sent in the window and what a failure on each name does."""
+
+    api_key_id: str
+    models: tuple[KeyModel, ...]
+    """The most requested names first, at most ``KEY_MODELS_SHOWN``."""
+    model_count: int
+    no_backup_count: int
+    no_backup: tuple[KeyModel, ...]
+    """The names with no backup, most requested first, at most ``KEY_MODELS_SHOWN``; ``no_backup_count`` counts all."""
+    policies: tuple[KeyPolicy, ...]
+    """Every policy the key sent, most requested first, a deleted one included."""
+
+
+@dataclass(frozen=True)
+class _Coverage:
+    kind: NameKind
+    backup: Backup
+    reason: NoBackupReason | None = None
+    provider: str | None = None
+
+
+def _instance(selector: str) -> str | None:
+    """The instance a ``provider:model`` selector names; None for any other spelling, such as a catalog ID."""
+    instance, colon, _ = selector.partition(":")
+    return instance if colon else None
+
+
 @dataclass
 class _Tally:
     requests: int = 0
@@ -102,6 +168,120 @@ class RoutingService:
         workspace_ids = await self._organizations.get_workspace_ids_in_organization(organization_id)
         async with self._uow:
             return await RoutingPolicyRepository(self._uow).count_in_workspaces(workspace_ids) == 1
+
+    async def key_routing(self, key_ids: Sequence[str], *, organization_id: uuid.UUID) -> list[KeyRouting]:
+        """For each of these keys in the organization, the names it sent in the window and what a failure on each does.
+
+        In the order ``key_ids`` names them; a key outside the organization is left
+        out like one that does not exist. A name is judged as a request from the
+        key would resolve it now, not as it resolved when sent: a routing policy
+        in force for the key's owner in its workspace, then an alias, then a
+        catalog ID, whose offerings are narrowed to the ones a request from the
+        key may reach. A policy has a backup when it can try a second candidate
+        the key may reach; a catalog ID when its plan has two offerings. An
+        alias's target is sent as written, so like a pinned ``provider:model`` it
+        never has one. A name every request of which was imported is a
+        subscription's, which the gateway never routed.
+        """
+        workspace_ids = await self._organizations.get_workspace_ids_in_organization(organization_id)
+        reaches = await self._keys.reach(key_ids, organization_id=organization_id, workspace_ids=workspace_ids)
+        if not reaches:
+            return []
+        position = {key_id: index for index, key_id in reversed(list(enumerate(key_ids)))}
+        keys = sorted(reaches, key=lambda key: position[key.id])
+        now = datetime.now(UTC)
+        traffic = await self._usage.names_by_key(
+            [key.id for key in keys], workspace_ids={key.workspace_id for key in keys}, since=now - FALLBACK_WINDOW
+        )
+        by_key: defaultdict[str, list[KeyNameTraffic]] = defaultdict(list)
+        for row in traffic:
+            by_key[row.api_key_id].append(row)
+        return [self._key_routing(key, by_key[key.id]) for key in keys]
+
+    def _key_routing(self, key: KeyReach, names: list[KeyNameTraffic]) -> KeyRouting:
+        models: list[KeyModel] = []
+        for row in names:
+            coverage = (
+                _Coverage("unknown", "subscription")
+                if row.imported == row.requests
+                else self._coverage(key, row.name, routed=row.routed)
+            )
+            models.append(
+                KeyModel(
+                    name=row.name,
+                    requests=row.requests,
+                    kind=coverage.kind,
+                    backup=coverage.backup,
+                    reason=coverage.reason,
+                    provider=coverage.provider,
+                )
+            )
+        models.sort(key=lambda model: (-model.requests, model.name))
+        no_backup = [model for model in models if model.backup == "no_backup"]
+        return KeyRouting(
+            api_key_id=key.id,
+            models=tuple(models[:KEY_MODELS_SHOWN]),
+            model_count=len(models),
+            no_backup_count=len(no_backup),
+            no_backup=tuple(no_backup[:KEY_MODELS_SHOWN]),
+            policies=tuple(
+                KeyPolicy(name=model.name, requests=model.requests, deleted=model.backup == "unknown")
+                for model in models
+                if model.kind == "policy"
+            ),
+        )
+
+    def _coverage(self, key: KeyReach, name: str, *, routed: bool) -> _Coverage:
+        policy = resolve_effective_policy(self._config, name, key.user_id, workspace_id=key.workspace_id)
+        if policy is not None:
+            # The candidates a request from this key could try, after the same
+            # allow-list and organization-key filters its compiled plan applies.
+            reachable = reachable_candidates(
+                self._config,
+                name,
+                [*(policy.router_candidates or [policy.default_target]), *policy.on_failure],
+                allowlist=key.allowlist,
+                workspace_id=key.workspace_id,
+            )
+            if len(reachable) > 1:
+                return _Coverage("policy", "has_backup")
+            if reachable:
+                return _Coverage("policy", "no_backup", "single_target_policy", reachable[0].instance)
+            return _Coverage("policy", "no_backup", "no_allowed_offering")
+        target = resolve_effective_alias(self._config, name, key.user_id, workspace_id=key.workspace_id)
+        if target is not None:
+            # A one-target policy: the request path never fails an alias over to a catalog ID's other offerings.
+            return _Coverage("alias", "no_backup", "single_target_policy", _instance(target))
+        coverage = self._model_coverage(key, name)
+        if routed and coverage.kind == "unknown":
+            # Routing recorded it, and it is no catalog ID: a policy since deleted or renamed.
+            return _Coverage("policy", "unknown")
+        return coverage
+
+    def _model_coverage(self, key: KeyReach, selector: str) -> _Coverage:
+        offerings = resolve_catalog_offerings(
+            selector, workspace_id=key.workspace_id, organization_id=key.organization_id
+        )
+        if offerings:
+            # The plan a request sending the catalog ID compiles to: the same
+            # filters and the same fallback to the plain path.
+            plan = compile_catalog_plan(
+                self._config, selector, user_id=key.user_id, allowlist=key.allowlist, workspace_id=key.workspace_id
+            )
+            if plan is not None and len(plan.attempts) > 1:
+                return _Coverage("catalog", "has_backup")
+            if plan is not None:
+                return _Coverage("catalog", "no_backup", "single_offering", plan.attempts[0].instance)
+            # No plan: the request takes the plain path, which serves the first offering alone.
+            reachable = reachable_candidates(
+                self._config, selector, offerings[:1], allowlist=key.allowlist, workspace_id=key.workspace_id
+            )
+            if reachable:
+                return _Coverage("catalog", "no_backup", "single_offering", reachable[0].instance)
+            return _Coverage("catalog", "no_backup", "no_allowed_offering")
+        if ":" in selector:
+            return _Coverage("pinned", "no_backup", "pinned", _instance(selector))
+        return _Coverage("unknown", "unknown")
 
     async def automatic_fallbacks(
         self,

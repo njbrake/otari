@@ -18,6 +18,7 @@ import {
   keyBudgetIncomplete,
   useKeyBudgets,
 } from "@/features/keys/KeyBudgetField"
+import { KeyRoutingSummary } from "@/features/keys/KeyRoutingCells"
 import { heldScopes, KeyScopeFields } from "@/features/keys/KeyScopeFields"
 import { OwnerAccessNote } from "@/features/keys/OwnerAccessNote"
 import {
@@ -34,10 +35,11 @@ import {
   userMismatchChoice,
 } from "@/features/keys/UserMismatchPicker"
 import { ModelScopeControl } from "@/features/models/ModelScopeControl"
+import { useCurrentOwnerId } from "@/features/organization/attribution"
 import { useKeyBudgetChoices } from "@/features/spend/keyBudgetChoices"
 import { KeyMcpAccess } from "@/features/tools/KeyMcpAccess"
 import { ToolScopeControl } from "@/features/tools/ToolScopeControl"
-import { useUpdateKey } from "@/shared/api/apiKeys"
+import { useKeysRouting, useUpdateKey } from "@/shared/api/apiKeys"
 import { useUsers } from "@/shared/api/users"
 
 // datetime-local wants "YYYY-MM-DDTHH:mm" in local time.
@@ -70,6 +72,11 @@ export function EditKeyForm({
   onClose: () => void
 }) {
   const update = useUpdateKey()
+  const routing = useKeysRouting([apiKey.id], isOpen)
+  const me = useCurrentOwnerId()
+  // Whose access the key narrows: an owner or admin editing a member's key
+  // speaks of that member, as the operator does.
+  const ownerVoice = isDeploymentWide || (apiKey.user_id ?? "") !== (me ?? "")
   const keyBudgets = useKeyBudgets(isDeploymentWide)
   const budgetChoices = useKeyBudgetChoices(
     keyBudgets,
@@ -264,13 +271,11 @@ export function EditKeyForm({
         workspaceId={apiKey.workspace_id ?? undefined}
         title="Restrict this key’s models"
         description={
-          isDeploymentWide
+          ownerVoice
             ? "This key inherits its owner’s access by default. Narrow it to a subset here; it can never exceed the owner’s allowed models."
             : "This key inherits your model access by default. Narrow it to a subset here; it can never exceed your allowed models."
         }
-        anyLabel={
-          isDeploymentWide ? "Inherit owner access" : "Inherit your access"
-        }
+        anyLabel={ownerVoice ? "Inherit owner access" : "Inherit your access"}
         initial={apiKey.allowed_models ?? undefined}
         onChange={(value, isValid) => {
           setAllowedModels(value)
@@ -280,12 +285,12 @@ export function EditKeyForm({
       <ToolScopeControl
         title="Restrict this key’s search and fetch tools"
         description={
-          isDeploymentWide
+          ownerVoice
             ? "Which search and fetch tools this key may run on /v1/search and /v1/fetch. Left on Inherit, it takes its owner’s list. With no list on either, it follows its model access, or its owner’s when it has none: unrestricted runs every tool, restricted only a search tool named there as provider:tool (deprecated). It can never exceed its owner’s."
             : "Which search and fetch tools this key may run on /v1/search and /v1/fetch. Left on Inherit, it takes your list. With no list on either, it follows its model access, or yours when it has none: unrestricted runs every tool, restricted only a search tool named there as provider:tool (deprecated). It can never exceed yours."
         }
         inheritLabel={
-          isDeploymentWide ? "Inherit owner’s tools" : "Inherit your tools"
+          ownerVoice ? "Inherit owner’s tools" : "Inherit your tools"
         }
         initial={apiKey.allowed_tools ?? undefined}
         onChange={(value, isValid) => {
@@ -315,6 +320,17 @@ export function EditKeyForm({
           isLocked={!isDeploymentWide}
         />
       ) : null}
+      <section aria-label="Routing" className="flex flex-col gap-2">
+        <h3 className="text-overline">Routing</h3>
+        <p className="text-caption">
+          A key does not own its routing: a policy is chosen by the name a
+          request sends. Here is what this key sent in the last 30 days.
+        </p>
+        <KeyRoutingSummary
+          routing={routing.data?.get(apiKey.id)}
+          isPending={routing.isPending}
+        />
+      </section>
       <UserMismatchPicker
         value={rejectUserMismatch}
         onChange={setRejectUserMismatch}

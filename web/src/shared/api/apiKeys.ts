@@ -8,6 +8,8 @@ import type {
   EndUser,
   EndUserCount,
   FederationRule,
+  KeyRouting,
+  KeyRoutingResponse,
   UpdateKeyRequest,
   UpdateOwnKeyRequest,
 } from "@/client"
@@ -18,6 +20,7 @@ import {
   FEDERATION_RULES,
   KEY_END_USERS,
   KEYS,
+  KEYS_ROUTING,
   workspaceMeta,
 } from "@/shared/api/queryKeys"
 
@@ -63,6 +66,43 @@ export function useKeys(workspaceId?: string, enabled = true) {
     meta: workspaceMeta(workspaceId),
     queryFn: () => fetchAllKeys(scope.base, workspaceId),
     enabled: scope.isReady && enabled,
+    staleTime: 60_000,
+  })
+}
+
+// The routing read takes at most this many ids, the gateway's filter bound.
+const ROUTING_BATCH = 50
+
+/**
+ * What each of these keys sent in the last 30 days and whether a failure on
+ * each name has a backup, by key id. Asked in batches of the endpoint's bound,
+ * on the surface the key list came from; a key the caller may not see is
+ * absent from the map rather than an error.
+ */
+export function useKeysRouting(keyIds: readonly string[], enabled = true) {
+  const scope = useKeysScope()
+  const ids = [...new Set(keyIds)].sort()
+  return useQuery({
+    queryKey: [KEYS_ROUTING, scope.base, ids],
+    queryFn: async () => {
+      const batches: string[][] = []
+      for (let start = 0; start < ids.length; start += ROUTING_BATCH) {
+        batches.push(ids.slice(start, start + ROUTING_BATCH))
+      }
+      const answers = await Promise.all(
+        batches.map((batch) => {
+          const params = new URLSearchParams()
+          for (const id of batch) params.append("api_key_id", id)
+          return apiFetch<KeyRoutingResponse>(`${scope.base}/routing?${params}`)
+        }),
+      )
+      return new Map<string, KeyRouting>(
+        answers.flatMap((answer) =>
+          answer.keys.map((key) => [key.api_key_id, key] as const),
+        ),
+      )
+    },
+    enabled: scope.isReady && enabled && ids.length > 0,
     staleTime: 60_000,
   })
 }

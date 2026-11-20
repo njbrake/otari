@@ -20,6 +20,10 @@ class UserAccess:
         """A user's access lists, or ``None`` when there is no such user."""
         return await self._users.access_lists(user_id)
 
+    async def lists_of(self, user_ids: Collection[str]) -> dict[str, AccessLists]:
+        """These users' access lists, by user id, in one read; an id with no user is absent."""
+        return await self._users.access_lists_of(user_ids)
+
     async def live_lists(self) -> dict[str, AccessLists]:
         """Every live user's access lists, by user id."""
         return await self._users.live_access_lists()

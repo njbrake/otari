@@ -492,6 +492,9 @@ export type DeploymentProviderMigrationReviewedRow =
 export type AutomaticFallbacksResponse = Schemas["AutomaticFallbacksResponse"]
 export type AutomaticFallback = Schemas["AutomaticFallbackPublic"]
 export type FallbackOffering = Schemas["FallbackOfferingPublic"]
+export type KeyRoutingResponse = Schemas["KeyRoutingResponse"]
+export type KeyRouting = Schemas["KeyRoutingPublic"]
+export type KeyRoutingModel = Schemas["KeyModelPublic"]
 
 // `spec` is the one field taken from ./local rather than the generator: the wire
 // contract declares it a free-form object, so the generated type is
