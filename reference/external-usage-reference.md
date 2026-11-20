@@ -42,7 +42,7 @@ event takes:
 
 Only metadata and token counts are accepted; prompt, completion and tool fields
 are rejected. The exact schema is in the
-[OpenAPI specification](https://github.com/mozilla-ai/otari/blob/e472fc513692f0af2dae64c3e342d42792ad4d40/docs/public/openapi.json).
+[OpenAPI specification](https://github.com/mozilla-ai/otari/blob/7c79390e6e72be740fbd2906805bb4eb0172a9fb/docs/public/openapi.json).
 
 Sending a batch again is safe: events already stored come back as duplicates.
 When the database is busy or unreachable, this endpoint and the OTLP endpoints
@@ -121,7 +121,8 @@ first of:
 
 An unpriced event is still stored, with no cost. `require_pricing` does not
 apply. Later price changes and replays do not change stored rows; reprice them
-with the usage repricing API.
+from **Settings** > **Imported usage**, or with the usage repricing API
+(`POST /api/v1/usage/set-price`).
 
 Imported cost is an estimate at API rates, not an invoice or a subscription
 charge, and cache pricing is only as accurate as the source's token counts.
