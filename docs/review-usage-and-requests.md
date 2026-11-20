@@ -231,10 +231,12 @@ filter, and **Save changes to** puts the change on a view of your own.
 workspace can also share it with the workspace, and only they can change a
 shared view or delete one somebody else shared. A view's menu renames it,
 saves the current filters over it, shares or stops sharing it, and deletes it.
-**Copy link** copies the page's address, which opens on the same filters
-for anyone who can see the workspace. You keep up to 50 views per page in a
+**Copy link** copies the page's address, which opens on the same filters and
+names the same view in the workspace the reader has selected; a reload keeps
+the view's name too. You keep up to 50 views per page in a
 workspace. A dragged span on the chart is not part of a view, and your views
-in a workspace are removed when you leave it or delete your account. On a
+in a workspace, shared ones included, are removed when you leave it or delete
+your account. On a
 phone, **Views** sits in the same row of controls as **Filters**.
 
 ## Find one request

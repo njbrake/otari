@@ -58,8 +58,10 @@ const PAGE_DEFAULTS: Record<SavedViewPage, Record<string, string>> = {
   requests: { range: ACTIVITY_DEFAULT_KEY },
 }
 
-// Where the reader is in a page's view, which applying a view starts over.
+// Where the reader is in a page's view, which applying a view starts over, and
+// the view applied, which the caller sets again.
 const POSITION_KEYS = [
+  "view",
   "start_date",
   "end_date",
   "page",

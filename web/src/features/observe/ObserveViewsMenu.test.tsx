@@ -208,6 +208,35 @@ describe("ObserveViewsMenu", () => {
     expect(within(menu).queryByText("Share with the workspace")).toBeNull()
   })
 
+  it("lets the owner of a shared view stop sharing it after losing the role", async () => {
+    const demoted = view({
+      ...MINE,
+      id: "v-3",
+      name: "Was shared",
+      query: "status=success",
+      shared: true,
+      can_edit: false,
+    })
+    const { calls } = await renderMenu("?status=success", {
+      savedViews: [...BUILT_IN, demoted],
+    })
+    const menu = await openMenu(/^Views: Was shared$/)
+    expect(within(menu).queryByRole("option", { name: /^Rename/ })).toBeNull()
+    await userEvent.click(
+      within(menu).getByRole("option", { name: "Stop sharing Was shared" }),
+    )
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "PATCH" &&
+            call.url.endsWith("/saved-views/v-3") &&
+            call.body === JSON.stringify({ shared: false }),
+        ),
+      ).toBe(true),
+    )
+  })
+
   it("offers changes only on a view the caller may change", async () => {
     await renderMenu("?status=error")
     const shared = await openMenu(/^Views: Team errors$/)
@@ -241,6 +270,44 @@ describe("ObserveViewsMenu", () => {
     expect(
       JSON.parse(calls.find((call) => call.method === "PATCH")?.body ?? "{}"),
     ).toEqual({ name: "Slow" })
+  })
+
+  it("keeps the applied view in the URL, so a reload still names it and marks a change", async () => {
+    await renderMenu("?model=gpt-4o&latency_ms_gt=5000&cost_gt=0.4&view=v-1")
+    expect(
+      await screen.findByRole("button", { name: "Views: Slow gpt, changed" }),
+    ).toBeInTheDocument()
+    expect(urlParams().get("view")).toBe("v-1")
+  })
+
+  it("names the applied view in the URL", async () => {
+    await renderMenu("?cost_gt=0.4")
+    const menu = await openMenu(/^Views/)
+    await userEvent.click(
+      within(menu).getByRole("option", { name: /^Slow gpt/ }),
+    )
+    await waitFor(() => expect(urlParams().get("view")).toBe("v-1"))
+  })
+
+  it("drops a view the URL names that is not listed", async () => {
+    await renderMenu("?cost_gt=0.9&view=gone")
+    await screen.findByRole("button", { name: "Views" })
+    await waitFor(() => expect(urlParams().get("cost_gt")).toBe("0.9"))
+    await waitFor(() => expect(urlParams().has("view")).toBe(false))
+    expect(urlParams().get("cost_gt")).toBe("0.9")
+  })
+
+  it("drops the deleted view from the URL", async () => {
+    await renderMenu("?model=gpt-4o&latency_ms_gt=5000&view=v-1")
+    const menu = await openMenu(/^Views: Slow gpt$/)
+    await userEvent.click(
+      within(menu).getByRole("option", { name: "Delete Slow gpt…" }),
+    )
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Delete view" }),
+    )
+    await waitFor(() => expect(urlParams().has("view")).toBe(false))
+    expect(urlParams().get("model")).toBe("gpt-4o")
   })
 
   it("is not offered without a workspace to keep views in", async () => {

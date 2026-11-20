@@ -90,7 +90,8 @@ function ViewsMenu({ views }: { views: ObserveViews }) {
     ...(current?.can_edit
       ? [{ id: "rename", label: `Rename ${current.name}…`, icon: FiEdit2 }]
       : []),
-    ...(current?.is_mine && views.canShare
+    // Someone who no longer manages the workspace may still stop sharing their view.
+    ...(current?.is_mine && (views.canShare || current.shared)
       ? [
           {
             id: "share",
@@ -135,6 +136,8 @@ function ViewsMenu({ views }: { views: ObserveViews }) {
         trigger={
           <Button
             size="sm"
+            // One width whatever the name, so the controls after it never move.
+            className="w-36 justify-start md:w-44"
             aria-label={
               current
                 ? `Views: ${current.name}${isChanged ? ", changed" : ""}`
@@ -142,7 +145,10 @@ function ViewsMenu({ views }: { views: ObserveViews }) {
             }
           >
             <FiBookmark aria-hidden className="size-3.5" />
-            <span className="max-w-[10rem] truncate">
+            <span
+              className="min-w-0 flex-1 truncate text-left"
+              title={current?.name}
+            >
               {current?.name ?? "Views"}
             </span>
             {isChanged ? <Dot className="rounded-full bg-attention" /> : null}

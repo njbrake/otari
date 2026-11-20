@@ -142,6 +142,37 @@ async def test_only_a_manager_shares_and_a_shared_view_reads_as_theirs(async_db:
 
 
 @pytest.mark.asyncio
+async def test_a_manager_who_loses_the_role_may_only_stop_sharing_their_view(async_db: AsyncSession) -> None:
+    organization, workspace, _, member = await _world(async_db, "views-demoted")
+    admin = await create_member(async_db, organization, role="member", full_name="Wes Admin")
+    membership = await WorkspaceMemberRepository(async_db).create(
+        workspace_id=workspace.id, user_id=admin.id, role="admin"
+    )
+    await async_db.commit()
+    service = _service(async_db)
+    shared = await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Team", shared=True))
+    view_id = uuid.UUID(shared.id)
+    membership.role = "member"
+    await async_db.commit()
+
+    listed = await service.list_views(user=admin, workspace_id=workspace.id, page=REQUESTS)
+    team = next(view for view in listed.data if view.name == "Team")
+    assert (listed.can_share, team.can_edit, team.can_delete) == (False, False, True)
+    with pytest.raises(SavedViewSharingForbiddenError):
+        await service.update_view(
+            user=admin, workspace_id=workspace.id, view_id=view_id, request=SavedViewUpdate(query="status=success")
+        )
+    await _reload(async_db)
+    unshared = await service.update_view(
+        user=admin, workspace_id=workspace.id, view_id=view_id, request=SavedViewUpdate(shared=False)
+    )
+
+    assert unshared.shared is False
+    listed = await service.list_views(user=member, workspace_id=workspace.id, page=REQUESTS)
+    assert all(view.built_in for view in listed.data)
+
+
+@pytest.mark.asyncio
 async def test_a_manager_deletes_a_view_another_manager_shared(async_db: AsyncSession) -> None:
     organization, workspace, manager, _ = await _world(async_db, "views-shared-delete")
     admin = await create_member(async_db, organization, role="admin", full_name="Ada Admin")
