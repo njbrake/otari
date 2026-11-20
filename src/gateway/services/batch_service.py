@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from gateway.log_config import logger
@@ -108,13 +108,23 @@ async def claim_batch_accounting(db: AsyncSession, batch_id: str) -> bool:
 
 
 class BatchUserMergeListener:
-    """Moves a merged user's batch records inside the caller's transaction, so the user merged into owns the batches."""
+    """Moves a merged user's batch records inside the caller's transaction, so the user merged into owns the batches.
+
+    A batch created before batch records existed has none, and is found by the
+    owner the provider's own metadata names; such a batch stays reachable only
+    by the merged user.
+    """
 
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def user_merged(self, from_user_id: str, to_user_id: str) -> Mapping[str, int]:
-        """Point every batch of ``from_user_id`` at ``to_user_id``."""
+    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+        """Point every batch of ``from_user_id`` at ``to_user_id``, or with ``preview`` count them."""
+        if preview:
+            found = await self._db.execute(
+                select(func.count()).select_from(BatchRecord).where(BatchRecord.user_id == from_user_id)
+            )
+            return {"batches": int(found.scalar_one())}
         result = await self._db.execute(
             update(BatchRecord)
             .where(BatchRecord.user_id == from_user_id)
@@ -122,3 +132,6 @@ class BatchUserMergeListener:
             .execution_options(synchronize_session=False)
         )
         return {"batches": getattr(result, "rowcount", 0) or 0}
+
+    async def merge_committed(self) -> None:
+        """Nothing to do once the merge commits."""

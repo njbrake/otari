@@ -209,6 +209,7 @@ def get_user_merge_service(
     db: Annotated[AsyncSession, Depends(get_db)],
     uow: UnitOfWorkDep,
     telemetry: TelemetryStoragePortDep,
+    config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> UserMergeService:
     """Build the user merge on the request's Unit of Work, with every domain whose rows name a billing user."""
 
@@ -232,7 +233,7 @@ def get_user_merge_service(
             McpUserMergeListener(uow),
             UsageUserMergeListener(uow),
             ProviderEndpointUserMergeListener(uow),
-            RoutingUserMergeListener(uow),
+            RoutingUserMergeListener(uow, config),
             SandboxContainerUserMergeListener(uow),
             AliasUserMergeListener(db),
             BatchUserMergeListener(db),

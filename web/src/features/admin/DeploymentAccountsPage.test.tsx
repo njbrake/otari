@@ -24,6 +24,7 @@ import {
   findRowMenuItem,
   getRowMenuItem,
   pressRowAction,
+  rowMenuItemNames,
   rowMenuTriggers,
 } from "@/tests/rowMenu"
 
@@ -105,6 +106,9 @@ function mockApi(opts: {
     if (url.endsWith("/merge") && opts.merge) {
       const body = init?.body ? JSON.parse(String(init.body)) : {}
       return opts.merge(body.preview === true)
+    }
+    if (url.endsWith(`${API_ROOT}/organizations/me`)) {
+      return jsonResponse(organizationContext())
     }
     if (url.includes(`${API_ROOT}/users?`)) {
       return jsonResponse([
@@ -672,10 +676,8 @@ describe("Merge user record", () => {
       user: billingUser({ user_id: ANALYST.id }),
       source_user_id: "pat-old",
       moved: { api_keys: 2, usage_logs: 140, traces: 0 },
-      spend: 3.5,
-      tokens: 1200,
-      requests: 9,
       preview,
+      resumed: false,
     }
   }
 
@@ -723,6 +725,44 @@ describe("Merge user record", () => {
       source_user_id: "pat-old",
       preview: false,
     })
+  })
+
+  it("offers no merge for an account outside the active organization or with no record", async () => {
+    const OUTSIDER = deploymentUser({
+      id: "cccccccc-0000-0000-0000-000000000000",
+      full_name: "Outsider",
+      email: "outsider@example.com",
+      organizations: [
+        {
+          organization_id: "77777777-7777-7777-7777-777777777777",
+          name: "Elsewhere",
+          slug: "elsewhere",
+          role: "member",
+          status: "active",
+        },
+      ],
+    })
+    const UNBILLED = deploymentUser({
+      id: "dddddddd-0000-0000-0000-000000000000",
+      full_name: "Unbilled",
+      email: "unbilled@example.com",
+    })
+    mockApi({ accounts: [ANALYST, OUTSIDER, UNBILLED] })
+    await renderPage(<DeploymentAccountsPage />)
+
+    const user = userEvent.setup()
+    await screen.findByText("Outsider")
+    // Once the users list is in, the account with a record is offered a merge.
+    await waitFor(async () =>
+      expect(await rowMenuItemNames(user, rowFor("Analyst"))).toContain(
+        "Merge another user record into Analyst",
+      ),
+    )
+    for (const name of ["Outsider", "Unbilled"]) {
+      expect(await rowMenuItemNames(user, rowFor(name))).not.toContain(
+        `Merge another user record into ${name}`,
+      )
+    }
   })
 
   it("does not offer the account's own record to merge into itself", async () => {

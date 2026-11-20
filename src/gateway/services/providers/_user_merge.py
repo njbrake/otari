@@ -16,7 +16,7 @@ class ProviderEndpointUserMergeListener:
     def __init__(self, uow: UnitOfWork) -> None:
         self._endpoints = ProviderEndpointRepository(uow)
 
-    async def user_merged(self, from_user_id: str, to_user_id: str) -> Mapping[str, int]:
+    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
         """Point the endpoints at ``to_user_id``, refusing where both users hold one of a name in one workspace."""
         shared = await self._endpoints.shared_with_user(from_user_id, to_user_id, by=("workspace_id", "name"))
         if shared:
@@ -24,4 +24,9 @@ class ProviderEndpointUserMergeListener:
                 "Both users have a provider endpoint of the same name in one workspace: "
                 + ", ".join(sorted(str(name) for _, name in shared))
             )
+        if preview:
+            return {"provider_endpoints": await self._endpoints.count_naming_user(from_user_id)}
         return {"provider_endpoints": await self._endpoints.reassign_user(from_user_id, to_user_id)}
+
+    async def merge_committed(self) -> None:
+        """Nothing to do once the merge commits."""

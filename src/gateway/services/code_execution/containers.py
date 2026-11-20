@@ -43,6 +43,7 @@ from gateway.exceptions.api_keys_exceptions import KeyScopeMissingError
 from gateway.repositories.code_execution import (
     SandboxContainerRow,
     claim_container_row,
+    count_container_owner,
     delete_container_rows,
     get_container_row,
     reassign_container_owner,
@@ -344,6 +345,11 @@ class SandboxContainerUserMergeListener:
     def __init__(self, uow: UnitOfWork) -> None:
         self._uow = uow
 
-    async def user_merged(self, from_user_id: str, to_user_id: str) -> Mapping[str, int]:
-        """Point every lease of ``from_user_id`` at ``to_user_id``."""
+    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+        """Point every lease of ``from_user_id`` at ``to_user_id``, or with ``preview`` count them."""
+        if preview:
+            return {"sandbox_containers": await count_container_owner(self._uow, from_user_id)}
         return {"sandbox_containers": await reassign_container_owner(self._uow, from_user_id, to_user_id)}
+
+    async def merge_committed(self) -> None:
+        """Nothing to do once the merge commits."""

@@ -138,3 +138,23 @@ export function mergedRowLines(
     })
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
 }
+
+/**
+ * Whether **Merge user record…** is offered for this account: it belongs to the
+ * operator's active organization, whose records a merge reaches, and it has a
+ * record of its own (`billed`, the user ids that organization's users list
+ * holds) to fold another into.
+ */
+export function canMergeInto(
+  account: DeploymentUser,
+  activeOrganizationId: string | undefined,
+  billed: ReadonlySet<string>,
+): boolean {
+  return (
+    activeOrganizationId !== undefined &&
+    account.organizations.some(
+      (organization) => organization.organization_id === activeOrganizationId,
+    ) &&
+    billed.has(account.id)
+  )
+}

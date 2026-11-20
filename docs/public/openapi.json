@@ -16236,24 +16236,14 @@
             "title": "Preview",
             "type": "boolean"
           },
-          "requests": {
-            "description": "The source's request counter, added to this user's.",
-            "title": "Requests",
-            "type": "integer"
+          "resumed": {
+            "description": "The source was already merged into this user; this moved what reached it since and left it retired as it was.",
+            "title": "Resumed",
+            "type": "boolean"
           },
           "source_user_id": {
             "title": "Source User Id",
             "type": "string"
-          },
-          "spend": {
-            "description": "The source's spend, added to this user's.",
-            "title": "Spend",
-            "type": "number"
-          },
-          "tokens": {
-            "description": "The source's token counter, added to this user's.",
-            "title": "Tokens",
-            "type": "integer"
           },
           "user": {
             "$ref": "#/components/schemas/UserResponse",
@@ -16264,10 +16254,8 @@
           "user",
           "source_user_id",
           "moved",
-          "spend",
-          "tokens",
-          "requests",
-          "preview"
+          "preview",
+          "resumed"
         ],
         "title": "MergeUserResponse",
         "type": "object"
@@ -66028,7 +66016,7 @@
     },
     "/api/v1/users/{user_id}/merge": {
       "post": {
-        "description": "Merge another user in the caller's organization into this one, or with ``preview`` say what would move.\n\nMoves every row that names the source user onto this one: its API keys,\nusage history, agent telemetry, traces, files, batches, budget reservations\nand resets, per-user aliases, routing policies and provider endpoints, MCP\ngrants and connections, sandbox leases, video jobs, idempotency records and\nthe end users its service keys bill. The source's spend, token and request\ncounters are added to this user's, and the source is soft-deleted with\n``merged_into``, ``merged_at`` and ``merged_by`` in its metadata. This user\nkeeps its own budget, access lists and blocked flag. Where both users hold\nan MCP grant or connection for one server, this user's is kept and the\nsource's dropped.\n\nRefused with 400 for a merge of a user into itself, and with 409 when the\nsource is the user a sign-in account bills through, has a budget\nreservation in flight, or shares with this user a per-user alias, routing\npolicy or provider endpoint name in one workspace, or an end user id.",
+        "description": "Merge another user in the caller's organization into this one, or with ``preview`` say what would move.\n\nMoves every row that names the source user onto this one: its API keys,\nusage history, agent telemetry, traces, files, batches, budget reservations\nand resets, per-user aliases, routing policies and provider endpoints, MCP\ngrants and connections, sandbox leases, video jobs, idempotency records and\nthe end users its service keys bill. The source is soft-deleted with\n``merged_into``, ``merged_at`` and ``merged_by`` in its metadata. This user\nkeeps its own budget, access lists, blocked flag and spend, token and\nrequest counters, which count its own budget window; the moved usage rows\ncarry the source's history. Where both users hold an MCP grant or\nconnection for one server, this user's is kept and the source's dropped,\nand the dropped connection's tokens are revoked. A preview counts and\nchanges nothing. Running the merge again for a source already merged into\nthis user moves what reached the source since.\n\nRefused with 400 for a merge of a user into itself, and with 409 when the\nsource is the user a sign-in account bills through or the shared\n``default`` user, is also used in another organization, sent a request in\nthe last five minutes, has a budget reservation in flight, is named by a\nrouting policy's ``when.user_id`` condition, or shares with this user a\nper-user alias, routing policy or provider endpoint name in one workspace,\nor an end user id.",
         "operationId": "users-merge_user",
         "parameters": [
           {

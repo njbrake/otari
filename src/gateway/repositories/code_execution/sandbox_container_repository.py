@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, or_, select, update
+from sqlalchemy import CursorResult, delete, func, or_, select, update
 
 from gateway.core.unit_of_work import UnitOfWork, session_for
 from gateway.models.tools import SandboxContainer
@@ -160,3 +160,12 @@ async def reassign_container_owner(uow: UnitOfWork, from_user_id: str, to_user_i
     )
     await db.flush()
     return result.rowcount or 0
+
+
+async def count_container_owner(uow: UnitOfWork, user_id: str) -> int:
+    """How many leases ``user_id`` holds."""
+    db = session_for(uow)
+    result = await db.execute(
+        select(func.count()).select_from(SandboxContainer).where(SandboxContainer.user_id == user_id)
+    )
+    return int(result.scalar_one())

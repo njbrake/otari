@@ -31,6 +31,8 @@ import {
   useIsBootstrapOperator,
   useUpdateDeploymentUser,
 } from "@/shared/api/deployment"
+import { useOrganizationContext } from "@/shared/api/organizations"
+import { useUsers } from "@/shared/api/users"
 import { formatRelative } from "@/shared/helpers/format"
 import { useUrlState } from "@/shared/helpers/urlState"
 import { useDebounced } from "@/shared/hooks/useDebounced"
@@ -39,6 +41,7 @@ import {
   accountLabel,
   accountLockoutReason,
   bootstrapHandoverBlockedReason,
+  canMergeInto,
   organizationSummary,
   passwordLinkBlockedReason,
 } from "./accounts"
@@ -111,6 +114,15 @@ export function DeploymentAccountsPage() {
   const [handingTo, setHandingTo] = useState<DeploymentUser>()
   const [linkFor, setLinkFor] = useState<DeploymentUser>()
   const [mergeInto, setMergeInto] = useState<DeploymentUser>()
+  // What decides where a merge is offered: the active organization, whose
+  // records a merge reaches, and which accounts have a record in it.
+  const activeOrganizationId =
+    useOrganizationContext(isGranted).data?.organization.id
+  const billedUsers = useUsers(isGranted).data
+  const billed = useMemo(
+    () => new Set((billedUsers ?? []).map((user) => user.user_id)),
+    [billedUsers],
+  )
 
   const rows = accounts.data?.data ?? []
 
@@ -203,12 +215,14 @@ export function DeploymentAccountsPage() {
                 ariaLabel={`Send ${accountLabel(account)} a password link${linkBlocked ? ` (${linkBlocked})` : ""}`}
                 onPress={() => setLinkFor(account)}
               />
-              <RowAction
-                icon={FiGitMerge}
-                label="Merge user record…"
-                ariaLabel={`Merge another user record into ${accountLabel(account)}`}
-                onPress={() => setMergeInto(account)}
-              />
+              {canMergeInto(account, activeOrganizationId, billed) ? (
+                <RowAction
+                  icon={FiGitMerge}
+                  label="Merge user record…"
+                  ariaLabel={`Merge another user record into ${accountLabel(account)}`}
+                  onPress={() => setMergeInto(account)}
+                />
+              ) : null}
               {/* The reason is folded into each control's own name, as the
                   organization roster does it: a disabled control is not
                   focusable, so an `aria-describedby` would never be announced
@@ -274,7 +288,7 @@ export function DeploymentAccountsPage() {
         },
       },
     ],
-    [update, isBootstrapOperator],
+    [update, isBootstrapOperator, activeOrganizationId, billed],
   )
 
   if (access.isLoading) {

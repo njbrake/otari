@@ -7,7 +7,7 @@ baseline until they move.
 
 import uuid
 from collections.abc import Collection
-from typing import Never
+from typing import Any, Never
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,3 +31,8 @@ class RoutingPolicyRepository(BaseRepository[RoutingPolicy, Never, Never]):
             select(func.count()).select_from(RoutingPolicy).where(RoutingPolicy.workspace_id.in_(workspace_ids))
         )
         return int(result.scalar_one())
+
+    async def specs(self) -> list[tuple[str, uuid.UUID, dict[str, Any]]]:
+        """Every stored policy's name, workspace and spec, for a scan of what the specs name."""
+        rows = await self.db.execute(select(RoutingPolicy.name, RoutingPolicy.workspace_id, RoutingPolicy.spec))
+        return [(name, workspace_id, dict(spec or {})) for name, workspace_id, spec in rows.all()]

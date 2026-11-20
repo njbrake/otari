@@ -368,10 +368,11 @@ account holds, pointing to the password link.
 Keys and usage recorded under a user id typed before sign-in existed (`pat`)
 stay apart from the record a sign-in account bills through, its own id. On
 **Accounts**, **Merge user record…** folds such a record into the account's own:
-pick the record, read what moves, then confirm.
+pick the record, read what moves, then confirm. It is offered for accounts in
+your active organization that have a record of their own.
 
 `POST /api/v1/users/{user_id}/merge` with `source_user_id` does the same for an
-operator, in one transaction, and with `"preview": true` answers what would
+operator, in one transaction, and with `"preview": true` counts what would
 move and changes nothing. A merge:
 
 - moves every row that names the source onto this user: API keys, usage,
@@ -379,19 +380,38 @@ move and changes nothing. A merge:
   per-user aliases, routing policies and provider endpoints, MCP grants and
   connections, sandbox sessions, video jobs, idempotency records, and the end
   users the source's service keys bill. `moved` counts each table, none moved
-  included;
-- adds the source's spend, token and request counters to this user's, which
-  keeps its own budget, model access and blocked flag;
+  included. Hourly usage rollups rebuild for the hours the moved rows fall in;
+- leaves this user's budget, model access, blocked flag and spend, token and
+  request counters as they are. The counters count this user's own budget
+  window, so the source's are not added; its moved usage rows carry its
+  history;
 - keeps this user's MCP grant or connection where both hold one for a server,
-  and drops the source's;
+  drops the source's, and asks the server's authorization server to end the
+  dropped connection's tokens;
 - soft-deletes the source, recording `merged_into`, `merged_at` and `merged_by`
   (the operator's account id) in its metadata, and logs the merge with what it
   moved.
 
+Running the merge again for a source already merged into this user moves what
+reached the source since, such as usage written moments after the merge, and
+leaves the source retired as it was (`resumed` is `true`). A batch created
+before batch records existed has none to move: the provider's own metadata
+names its owner, so it stays reachable only by the source.
+
 It is refused with 400 for a user merged into itself, and with 409 when the
-source is a sign-in account's own record (merge the other way round), has a
-budget reservation in flight, or shares with this user a per-user alias,
-routing policy or provider endpoint name in one workspace, or an end user id.
+source:
+
+- is a sign-in account's own record (merge the other way round) or the shared
+  `default` user;
+- is also used in another organization;
+- sent a request in the last five minutes or has a budget reservation in
+  flight, so it may still be sending requests (retry once it is quiet);
+- is named by a routing policy's `when.user_id` condition, which would stop
+  matching once its requests bill this user (the refusal names the policies;
+  change them first);
+- shares with this user a per-user alias, routing policy or provider endpoint
+  name in one workspace, or an end user id.
+
 A merge cannot be undone.
 
 #### Blocking email addresses

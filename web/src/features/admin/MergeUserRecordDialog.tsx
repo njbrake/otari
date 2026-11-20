@@ -5,18 +5,19 @@ import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { UserComboBox } from "@/features/users/UserComboBox"
 import { useMergeUser, useUsers } from "@/shared/api/users"
-import { formatCount, formatUsd } from "@/shared/helpers/format"
+import { formatCount } from "@/shared/helpers/format"
 
 import { accountLabel, mergedRowLines } from "./accounts"
 
 /** What the preview found, or, after the merge, what moved. */
 function MovedList({ result }: { result: MergeUserResponse }) {
   const lines = mergedRowLines(result.moved)
-  const counters = result.spend > 0 || result.tokens > 0 || result.requests > 0
-  if (lines.length === 0 && !counters) {
+  if (lines.length === 0) {
     return (
       <p className="text-caption">
-        Nothing names this record. Merging only retires it.
+        {result.preview
+          ? "Nothing names this record. Merging only retires it."
+          : "Nothing named this record."}
       </p>
     )
   }
@@ -33,15 +34,6 @@ function MovedList({ result }: { result: MergeUserResponse }) {
           </span>
         </li>
       ))}
-      {counters ? (
-        <li className="flex justify-between gap-4 border-t border-border-subtle pt-1">
-          <span>Spend and counters added</span>
-          <span className="tabular-nums text-muted">
-            {formatUsd(result.spend)} · {formatCount(result.tokens)} tokens ·{" "}
-            {formatCount(result.requests)} requests
-          </span>
-        </li>
-      ) : null}
     </ul>
   )
 }
@@ -94,8 +86,17 @@ export function MergeUserRecordDialog({
         isPending={false}
       >
         <InfoBanner>
-          <code>{merge.data.source_user_id}</code> is merged into{" "}
-          <strong>{name}</strong> and retired.
+          {merge.data.resumed ? (
+            <>
+              <code>{merge.data.source_user_id}</code> was already merged into{" "}
+              <strong>{name}</strong>; what reached it since has moved too.
+            </>
+          ) : (
+            <>
+              <code>{merge.data.source_user_id}</code> is merged into{" "}
+              <strong>{name}</strong> and retired.
+            </>
+          )}
         </InfoBanner>
         <MovedList result={merge.data} />
       </FormDialog>
@@ -134,9 +135,10 @@ export function MergeUserRecordDialog({
     >
       <p className="text-body">
         Move everything recorded under another user id onto{" "}
-        <strong>{name}</strong>: its keys, usage history, budgets' spend,
-        personal aliases and policies, files and traces. The other record is
-        then retired. {name} keeps its own budget and model access.
+        <strong>{name}</strong>: its keys, usage history, personal aliases and
+        policies, files and traces. The other record is then retired. {name}{" "}
+        keeps its own budget, model access and spend counters; the moved usage
+        rows carry the other record's history.
       </p>
       <UserComboBox
         label="Record to merge in"

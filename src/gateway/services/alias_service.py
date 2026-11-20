@@ -43,7 +43,7 @@ import asyncio
 import uuid
 from collections.abc import Mapping
 
-from sqlalchemy import Select, and_, select, update
+from sqlalchemy import Select, and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -238,7 +238,7 @@ class AliasUserMergeListener:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def user_merged(self, from_user_id: str, to_user_id: str) -> Mapping[str, int]:
+    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
         """Point the aliases at ``to_user_id``, refusing where both users hold one of a name in one workspace."""
         theirs = aliased(ModelAlias)
         shared = await self._db.execute(
@@ -251,6 +251,11 @@ class AliasUserMergeListener:
             raise UserMergeRefusedError(
                 "Both users have an alias of the same name in one workspace: " + ", ".join(names)
             )
+        if preview:
+            found = await self._db.execute(
+                select(func.count()).select_from(ModelAlias).where(ModelAlias.user_id == from_user_id)
+            )
+            return {"model_aliases": int(found.scalar_one())}
         result = await self._db.execute(
             update(ModelAlias)
             .where(ModelAlias.user_id == from_user_id)
@@ -258,3 +263,6 @@ class AliasUserMergeListener:
             .execution_options(synchronize_session=False)
         )
         return {"model_aliases": getattr(result, "rowcount", 0) or 0}
+
+    async def merge_committed(self) -> None:
+        """Nothing to do once the merge commits."""

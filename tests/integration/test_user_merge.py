@@ -22,14 +22,25 @@ from sqlmodel import col
 
 from gateway.core.config import API_ROOT
 from gateway.models.api_keys import APIKey
-from gateway.models.budgets import BudgetReservation
+from gateway.models.budgets import Budget, BudgetReservation, BudgetResetLog
+from gateway.models.files import FileObject
+from gateway.models.inference import BatchRecord, IdempotencyRecord, VideoJobRecord
 from gateway.models.providers import ModelAlias, ProviderEndpoint
 from gateway.models.routing import RoutingPolicy
-from gateway.models.tenancy import OrganizationMember, Workspace
+from gateway.models.tenancy import Organization, OrganizationMember, Workspace
 from gateway.models.tenancy import User as Identity
+from gateway.models.tools import (
+    McpOAuthFlow,
+    McpUserConnection,
+    SandboxContainer,
+    WorkspaceMcpServer,
+    WorkspaceMcpServerGrant,
+)
+from gateway.models.traces import Trace
 from gateway.models.usage import AgentTelemetry, UsageLog
 from gateway.models.users import User
 from gateway.services.tenancy.provisioning_service import DEFAULT_WORKSPACE_NAME
+from gateway.services.tools import _user_merge as user_merge_listeners
 
 LEGACY = "legacy-id"
 
@@ -93,7 +104,8 @@ def world(client: TestClient, master_key_header: dict[str, str], db_session_fact
                     source="gateway",
                     status="success",
                     total_tokens=10,
-                    timestamp=datetime.now(UTC),
+                    # Outside the window in which the user counts as still sending requests.
+                    timestamp=datetime.now(UTC) - timedelta(hours=1),
                 ),
                 ModelAlias(
                     name="fast",
@@ -151,10 +163,9 @@ def test_a_merge_moves_keys_usage_and_aliases_and_retires_the_source(
         assert LEGACY not in _owners(db_session_factory, model), model.__tablename__
     assert _owners(db_session_factory, APIKey).count(world.account) == 2
 
+    # The target's counters count its own budget window, so the source's are not added; the rows carry them.
     target = _user(db_session_factory, world.account)
-    assert target.spend == Decimal("3.75")
-    assert target.current_requests == 5
-    assert target.current_tokens == 40
+    assert (target.spend, target.current_requests, target.current_tokens) == (Decimal("1.50"), 2, 0)
 
     source = _user(db_session_factory, LEGACY)
     assert source.deleted_at is not None
@@ -307,29 +318,192 @@ def test_a_merge_moves_a_users_own_provider_endpoint(
     assert _owners(db_session_factory, ProviderEndpoint) == [world.account]
 
 
-def test_every_table_that_references_a_user_is_moved(
-    client: TestClient, master_key_header: dict[str, str], db_session: Session, world: _World
-) -> None:
-    """A table that gains a foreign key to ``users`` is named by a merge, or this fails.
+def _seed_every_reference(session: Session, workspace_id: uuid.UUID, user_id: str) -> uuid.UUID:
+    """One row naming ``user_id`` in each table that references ``users``, beyond the world's; the MCP server's id."""
+    now = datetime.now(UTC)
+    server = WorkspaceMcpServer(workspace_id=workspace_id, name="docs", url="https://mcp.example.com")
+    budget = Budget()
+    session.add_all([server, budget])
+    session.commit()
+    session.refresh(server)
+    session.refresh(budget)
+    connection = {
+        "client_id": "client",
+        "client_auth_method": "none",
+        "token_endpoint": "https://auth.example.com/token",
+        "server_url": "https://mcp.example.com",
+    }
+    session.add_all(
+        [
+            BudgetReservation(user_id=user_id, status="settled", expires_at=now),
+            BudgetResetLog(user_id=user_id, budget_id=budget.budget_id, previous_spend=Decimal("1")),
+            FileObject(user_id=user_id, workspace_id=workspace_id, filename="a.txt", mime_type="text/plain", bytes=1),
+            ProviderEndpoint(
+                workspace_id=workspace_id, user_id=user_id, name="homelab", provider="openai", api_base="https://x"
+            ),
+            RoutingPolicy(
+                name="mine", spec={"select": [{"default": "openai:gpt-4o"}]}, workspace_id=workspace_id, user_id=user_id
+            ),
+            SandboxContainer(
+                id="cntr_merge",
+                user_id=user_id,
+                workspace_id=workspace_id,
+                provider="e2b",
+                provider_session_id="session",
+                created_at=now,
+                last_used_at=now,
+                expires_at=now + timedelta(hours=1),
+                hard_expires_at=now + timedelta(hours=1),
+            ),
+            AgentTelemetry(user_id=user_id, name="tool_call", source="claude_code", dedup_key="seed"),
+            BatchRecord(id="batch_merge", provider="openai", user_id=user_id, model="gpt-4o"),
+            VideoJobRecord(id="video_merge", provider="openai", model="sora", user_id=user_id),
+            IdempotencyRecord(
+                scope="chat",
+                idempotency_key="merge",
+                request_hash="h",
+                claim_token=str(uuid.uuid4()),
+                state="completed",
+                user_id=user_id,
+                locked_until=now,
+                expires_at=now + timedelta(hours=1),
+            ),
+            WorkspaceMcpServerGrant(server_id=server.id, user_id=user_id, tools=[]),
+            McpUserConnection(server_id=server.id, user_id=user_id, encrypted_access_token="t", **connection),
+            McpOAuthFlow(
+                state_hash="merge",
+                server_id=server.id,
+                user_id=user_id,
+                encrypted_code_verifier="v",
+                redirect_uri="https://gateway.example.com/callback",
+                expires_at=now + timedelta(minutes=5),
+                **connection,
+            ),
+            Trace(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                trace_id="trace-merge",
+                session_source="otlp",
+                started_at=now,
+                last_activity_at=now,
+            ),
+            User(user_id="end-merge", parent_user_id=user_id, external_id="customer-merge"),
+        ]
+    )
+    session.commit()
+    return server.id
 
-    A merge names every table it moves rows in, none moved included, so a table
-    missing from its answer is one whose rows a merge would leave on a retired user.
-    """
-    referencing = {
-        str(table)
-        for (table,) in db_session.execute(
+
+def _referencing_columns(session: Session) -> set[tuple[str, str]]:
+    return {
+        (str(table), str(column))
+        for table, column in session.execute(
             text(
-                "SELECT conrelid::regclass::text FROM pg_constraint c "
+                "SELECT conrelid::regclass::text, a.attname FROM pg_constraint c "
+                "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) "
                 "WHERE c.contype = 'f' AND c.confrelid = 'users'::regclass"
             )
         )
     }
-    response = _merge(client, master_key_header, target=world.account, source=LEGACY, preview=True)
+
+
+def test_every_table_that_references_a_user_is_moved(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session, world: _World
+) -> None:
+    """Every column with a foreign key to ``users`` holds a row naming the source, and none still does after.
+
+    A table that gains such a key and no listener moves fails here: the seed
+    below misses it, or the merge leaves its row on the retired user.
+    """
+    _seed_every_reference(db_session, world.workspace_id, LEGACY)
+    columns = _referencing_columns(db_session)
+
+    def naming(user_id: str) -> dict[tuple[str, str], int]:
+        return {
+            (table, column): int(
+                db_session.execute(
+                    text(f"SELECT count(*) FROM {table} WHERE {column} = :u"), {"u": user_id}
+                ).scalar_one()
+            )
+            for table, column in columns
+        }
+
+    before = naming(LEGACY)
+    assert [ref for ref, count in before.items() if count == 0] == [], "seed a row for every reference"
+    preview = _merge(client, master_key_header, target=world.account, source=LEGACY, preview=True).json()
+    assert set(preview["moved"]) >= {table for table, _ in columns} - {"users"} | {"end_users"}
+
+    response = _merge(client, master_key_header, target=world.account, source=LEGACY)
     assert response.status_code == status.HTTP_200_OK, response.text
-    moved = set(response.json()["moved"])
-    # End users reference ``users`` from ``users`` itself; the merge names them apart.
-    assert referencing - {"users"} <= moved, referencing - moved
-    assert "end_users" in moved
+
+    db_session.expire_all()
+    # The source's own row in ``users`` is the one row left naming it.
+    assert {ref: count for ref, count in naming(LEGACY).items() if count} == {}
+    after = naming(world.account)
+    for ref, count in before.items():
+        assert after[ref] >= count, ref
+    assert response.json()["moved"] == {**preview["moved"], "agent_telemetry": preview["moved"]["agent_telemetry"]}
+
+
+def test_moved_usage_marks_its_hours_for_the_rollups_to_rebuild(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session, world: _World
+) -> None:
+    """``usage_rollups.user_id`` has no foreign key: the trigger on ``usage_logs`` marks the hour, and it rebuilds."""
+    db_session.execute(text("DELETE FROM usage_rollup_dirty_hours"))
+    db_session.commit()
+
+    assert _merge(client, master_key_header, target=world.account, source=LEGACY).status_code == status.HTTP_200_OK
+
+    marked = db_session.execute(text("SELECT count(*) FROM usage_rollup_dirty_hours")).scalar_one()
+    assert marked >= 1
+
+
+def test_a_dropped_mcp_connection_is_revoked_once_the_merge_commits(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session: Session,
+    world: _World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server_id = _seed_every_reference(db_session, world.workspace_id, LEGACY)
+    db_session.execute(text("UPDATE mcp_user_connections SET revocation_endpoint = 'https://auth.example.com/revoke'"))
+    db_session.add(
+        McpUserConnection(
+            server_id=server_id,
+            user_id=world.account,
+            encrypted_access_token="theirs",
+            client_id="client",
+            client_auth_method="none",
+            token_endpoint="https://auth.example.com/token",
+            server_url="https://mcp.example.com",
+        )
+    )
+    db_session.commit()
+    collected: list[tuple[set[uuid.UUID], str]] = []
+    revoked: list[list[str]] = []
+
+    async def collect(_connections: Any, _servers: Any, *, server_ids: set[uuid.UUID], user_id: str) -> Any:
+        # Which tokens a revocation sends is the deletion path's to decide; this checks what the merge hands it.
+        collected.append((set(server_ids), user_id))
+        return ["the source's token"], 0
+
+    monkeypatch.setattr(user_merge_listeners, "collect_revocations", collect)
+    monkeypatch.setattr(
+        user_merge_listeners, "revoke_in_background", lambda revocations, *, unread=0: revoked.append(list(revocations))
+    )
+
+    preview = _merge(client, master_key_header, target=world.account, source=LEGACY, preview=True)
+    assert preview.json()["moved"]["mcp_user_connections"] == 0
+    assert revoked == []
+
+    response = _merge(client, master_key_header, target=world.account, source=LEGACY)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert collected == [({server_id}, LEGACY)]
+    assert revoked == [["the source's token"]]
+    db_session.expire_all()
+    owners = db_session.execute(text("SELECT user_id, encrypted_access_token FROM mcp_user_connections")).all()
+    assert [tuple(row) for row in owners] == [(world.account, "theirs")]
 
 
 def test_a_preview_says_what_moves_and_changes_nothing(
@@ -344,7 +518,7 @@ def test_a_preview_says_what_moves_and_changes_nothing(
     body = preview.json()
     assert body["preview"] is True
     assert (body["moved"]["api_keys"], body["moved"]["usage_logs"], body["moved"]["model_aliases"]) == (2, 1, 1)
-    assert (body["spend"], body["tokens"], body["requests"]) == (2.25, 40, 3)
+    assert "spend" not in body
     assert body["user"]["spend"] == 1.5
     assert _owners(db_session_factory, APIKey).count(LEGACY) == 2
     assert _user(db_session_factory, LEGACY).deleted_at is None
@@ -396,13 +570,95 @@ def test_the_merge_is_recorded_on_the_retired_user(
     assert uuid.UUID(metadata["merged_by"])
 
 
-def test_a_retired_user_cannot_be_merged_again(
-    client: TestClient, master_key_header: dict[str, str], world: _World
+def _usage_row(workspace_id: uuid.UUID, user_id: str, *, age: timedelta) -> UsageLog:
+    return UsageLog(
+        id=str(uuid.uuid4()),
+        workspace_id=workspace_id,
+        user_id=user_id,
+        model="m",
+        provider="p",
+        endpoint="/v1/chat/completions",
+        source="gateway",
+        status="success",
+        timestamp=datetime.now(UTC) - age,
+    )
+
+
+def test_running_the_merge_again_sweeps_what_reached_the_retired_user_since(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
 ) -> None:
     assert _merge(client, master_key_header, target=world.account, source=LEGACY).status_code == status.HTTP_200_OK
+    retired = _user(db_session_factory, LEGACY).metadata_
+    # The log writer's batch lands a row on the source after it was retired.
+    _add(db_session_factory, _usage_row(world.workspace_id, LEGACY, age=timedelta(hours=1)))
 
     again = _merge(client, master_key_header, target=world.account, source=LEGACY)
-    assert again.status_code == status.HTTP_404_NOT_FOUND, again.text
+
+    assert again.status_code == status.HTTP_200_OK, again.text
+    assert again.json()["resumed"] is True
+    assert again.json()["moved"]["usage_logs"] == 1
+    assert LEGACY not in _owners(db_session_factory, UsageLog)
+    source = _user(db_session_factory, LEGACY)
+    # Left retired as it was: the first merge's record stands.
+    assert source.deleted_at is not None
+    assert source.metadata_ == retired
+    target = _user(db_session_factory, world.account)
+    assert (target.spend, target.current_requests) == (Decimal("1.50"), 2)
+
+
+def test_a_retired_user_cannot_be_merged_into_anyone_else(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    assert _merge(client, master_key_header, target=world.account, source=LEGACY).status_code == status.HTTP_200_OK
+    _add(db_session_factory, User(user_id="someone-else", alias="Someone"))
+
+    again = _merge(client, master_key_header, target="someone-else", source=LEGACY, preview=True)
+
+    assert again.status_code == status.HTTP_409_CONFLICT, again.text
+    assert _user(db_session_factory, LEGACY).metadata_["merged_into"] == world.account
+
+
+def test_a_source_still_sending_requests_refuses_the_merge(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    _add(db_session_factory, _usage_row(world.workspace_id, LEGACY, age=timedelta(minutes=1)))
+
+    response = _merge(client, master_key_header, target=world.account, source=LEGACY, preview=True)
+
+    assert response.status_code == status.HTTP_409_CONFLICT, response.text
+    assert "last 5 minutes" in response.json()["detail"]
+    assert _owners(db_session_factory, APIKey).count(LEGACY) == 2
+
+
+def test_a_routing_condition_naming_the_source_refuses_the_merge(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    """A ``when.user_id`` condition stops matching once the requests bill someone else, so it is changed first."""
+    spec = {
+        "select": [
+            {"when": {"user_id": ["someone", LEGACY]}, "target": "openai:gpt-4o-mini"},
+            {"default": "openai:gpt-4o"},
+        ]
+    }
+    _add(db_session_factory, RoutingPolicy(name="pat-cheap", spec=spec, workspace_id=world.workspace_id))
+
+    response = _merge(client, master_key_header, target=world.account, source=LEGACY, preview=True)
+
+    assert response.status_code == status.HTTP_409_CONFLICT, response.text
+    assert "pat-cheap" in response.json()["detail"]
+    assert _owners(db_session_factory, APIKey).count(LEGACY) == 2
 
 
 def test_a_same_named_per_user_routing_policy_refuses_the_merge(
@@ -424,3 +680,59 @@ def test_a_same_named_per_user_routing_policy_refuses_the_merge(
     assert preview.status_code == status.HTTP_409_CONFLICT, preview.text
     assert "mine" in preview.json()["detail"]
     assert _owners(db_session_factory, APIKey).count(LEGACY) == 2
+
+
+def test_a_source_another_organization_also_uses_refuses_the_merge(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    session = db_session_factory()
+    try:
+        other = Organization(name="Other", slug="other")
+        session.add(other)
+        session.commit()
+        session.refresh(other)
+        workspace = Workspace(name="Other one", organization_id=other.id)
+        session.add(workspace)
+        session.commit()
+        session.refresh(workspace)
+        session.add(
+            APIKey(
+                id=str(uuid.uuid4()),
+                workspace_id=workspace.id,
+                key_hash="hash-other",
+                key_prefix="gw-other",
+                user_id=LEGACY,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    response = _merge(client, master_key_header, target=world.account, source=LEGACY, preview=True)
+
+    assert response.status_code == status.HTTP_409_CONFLICT, response.text
+    assert "another organization" in response.json()["detail"]
+    assert _owners(db_session_factory, APIKey).count(LEGACY) == 3
+
+
+def test_the_shared_default_user_cannot_be_the_source(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+    world: _World,
+) -> None:
+    session = db_session_factory()
+    try:
+        if session.get(User, "default") is None:
+            session.add(User(user_id="default", alias="Default"))
+            session.commit()
+    finally:
+        session.close()
+
+    response = _merge(client, master_key_header, target=world.account, source="default", preview=True)
+
+    assert response.status_code == status.HTTP_409_CONFLICT, response.text
+    assert _user(db_session_factory, "default").deleted_at is None

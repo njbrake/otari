@@ -787,6 +787,13 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             .execution_options(synchronize_session=False)
         )
 
+    async def has_rows_since(self, user_id: str, since: datetime) -> bool:
+        """Whether any usage row of ``user_id`` was recorded at or after ``since``."""
+        found = await self.db.execute(
+            select(UsageLog.id).where(UsageLog.user_id == user_id, UsageLog.timestamp >= since).limit(1)
+        )
+        return found.first() is not None
+
     async def add_many(self, rows: list[UsageLog]) -> None:
         """Stage usage rows together in the current transaction."""
         if not rows:

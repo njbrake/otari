@@ -11,6 +11,11 @@ class ApiKeyUserMergeListener:
     def __init__(self, repositories: ApiKeyRepositories) -> None:
         self._keys = repositories.keys
 
-    async def user_merged(self, from_user_id: str, to_user_id: str) -> Mapping[str, int]:
-        """Point every key of ``from_user_id`` at ``to_user_id``."""
+    async def user_merged(self, from_user_id: str, to_user_id: str, *, preview: bool) -> Mapping[str, int]:
+        """Point every key of ``from_user_id`` at ``to_user_id``, or with ``preview`` count them."""
+        if preview:
+            return {"api_keys": await self._keys.count_naming_user(from_user_id)}
         return {"api_keys": await self._keys.reassign_user(from_user_id, to_user_id)}
+
+    async def merge_committed(self) -> None:
+        """Nothing to do once the merge commits."""

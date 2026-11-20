@@ -133,6 +133,12 @@ class BaseRepository(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         )
         return cast("CursorResult[Any]", result).rowcount or 0
 
+    async def count_naming_user(self, user_id: str, *, column: str = "user_id") -> int:
+        """How many rows name ``user_id`` in ``column``: what :meth:`reassign_user` would move."""
+        owner = getattr(self.model_class, column)
+        result = await self.db.execute(select(func.count()).select_from(self.model_class).where(owner == user_id))
+        return int(result.scalar_one())
+
     async def shared_with_user(
         self, from_user_id: str, to_user_id: str, *, by: tuple[str, ...]
     ) -> list[tuple[Any, ...]]:

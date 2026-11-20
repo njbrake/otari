@@ -132,6 +132,13 @@ class BudgetRepository(BaseRepository[Budget, Never, Never]):
         )
         return list(result.scalars().all())
 
+    async def count_reset_logs(self, user_id: str) -> int:
+        """How many reset history rows are recorded for ``user_id``."""
+        result = await self.db.execute(
+            select(func.count()).select_from(BudgetResetLog).where(BudgetResetLog.user_id == user_id)
+        )
+        return int(result.scalar_one())
+
     async def reassign_reset_logs(self, from_user_id: str, to_user_id: str) -> int:
         """Stage pointing the reset history recorded for ``from_user_id`` at ``to_user_id``; how many rows moved."""
         result = await self.db.execute(

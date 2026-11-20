@@ -8082,17 +8082,23 @@ export interface paths {
          *     usage history, agent telemetry, traces, files, batches, budget reservations
          *     and resets, per-user aliases, routing policies and provider endpoints, MCP
          *     grants and connections, sandbox leases, video jobs, idempotency records and
-         *     the end users its service keys bill. The source's spend, token and request
-         *     counters are added to this user's, and the source is soft-deleted with
+         *     the end users its service keys bill. The source is soft-deleted with
          *     ``merged_into``, ``merged_at`` and ``merged_by`` in its metadata. This user
-         *     keeps its own budget, access lists and blocked flag. Where both users hold
-         *     an MCP grant or connection for one server, this user's is kept and the
-         *     source's dropped.
+         *     keeps its own budget, access lists, blocked flag and spend, token and
+         *     request counters, which count its own budget window; the moved usage rows
+         *     carry the source's history. Where both users hold an MCP grant or
+         *     connection for one server, this user's is kept and the source's dropped,
+         *     and the dropped connection's tokens are revoked. A preview counts and
+         *     changes nothing. Running the merge again for a source already merged into
+         *     this user moves what reached the source since.
          *
          *     Refused with 400 for a merge of a user into itself, and with 409 when the
-         *     source is the user a sign-in account bills through, has a budget
-         *     reservation in flight, or shares with this user a per-user alias, routing
-         *     policy or provider endpoint name in one workspace, or an end user id.
+         *     source is the user a sign-in account bills through or the shared
+         *     ``default`` user, is also used in another organization, sent a request in
+         *     the last five minutes, has a budget reservation in flight, is named by a
+         *     routing policy's ``when.user_id`` condition, or shares with this user a
+         *     per-user alias, routing policy or provider endpoint name in one workspace,
+         *     or an end user id.
          */
         post: operations["users-merge_user"];
         delete?: never;
@@ -17271,22 +17277,12 @@ export interface components {
             /** Preview */
             preview: boolean;
             /**
-             * Requests
-             * @description The source's request counter, added to this user's.
+             * Resumed
+             * @description The source was already merged into this user; this moved what reached it since and left it retired as it was.
              */
-            requests: number;
+            resumed: boolean;
             /** Source User Id */
             source_user_id: string;
-            /**
-             * Spend
-             * @description The source's spend, added to this user's.
-             */
-            spend: number;
-            /**
-             * Tokens
-             * @description The source's token counter, added to this user's.
-             */
-            tokens: number;
             /** @description This user, after the merge; unchanged on a preview. */
             user: components["schemas"]["UserResponse"];
         };
