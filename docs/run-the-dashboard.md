@@ -11,6 +11,11 @@ one of its own routes with the dashboard, so a reverse proxy in front of it has
 to forward every path, not only `/`. A link from an older release, written as
 `http://localhost:8000/#/organization/provider-keys`, still works: the dashboard
 moves it to the path it names.
+A bookmark of the retired Usage or Activity page keeps its filters too. A Usage
+link opens Home on the nearest period and breakdown, or **Requests** when it
+filters by a model, key, person, provider or policy, or **Sessions** when it was
+broken down by session; an Activity link opens **Requests** with the filters it
+carried.
 
 The dashboard reads `GET /api/v1/bootstrap` before it renders anything. If the
 gateway does not answer (it is down, restarting, or too slow to answer within 8
