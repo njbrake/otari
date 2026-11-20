@@ -11,13 +11,27 @@ import { KpiStrip } from "@/design-system/metrics/KpiStrip"
 import { MemberAvatar } from "@/features/account/avatar/MemberAvatar"
 import { membershipLabel } from "@/features/organization/roles"
 import { ChangeRoleDialog } from "@/features/people/ChangeRoleDialog"
+import { PersonBreakdown } from "@/features/people/PersonBreakdown"
 import { PersonBudget } from "@/features/people/PersonBudget"
-import { PersonModels } from "@/features/people/PersonModels"
 import { PersonSessions } from "@/features/people/PersonSessions"
 import { activeKeysOf } from "@/features/people/people"
 import { personActions } from "@/features/people/personActions"
+import {
+  DEFAULT_PERSON_CUT,
+  personCutOf,
+  splitTotals,
+} from "@/features/people/personBreakdown"
+import {
+  DEFAULT_PERSON_PERIOD,
+  PERSON_PERIODS,
+  personPeriodFromUrl,
+} from "@/features/people/personPeriod"
 import { RemovePersonDialog } from "@/features/people/RemovePersonDialog"
-import { useMonth, usePeople } from "@/features/people/usePeople"
+import { usePeople } from "@/features/people/usePeople"
+import { usePersonSpend } from "@/features/people/usePersonSpend"
+import { figureLabel, windowOf, windowWords } from "@/features/spend/period"
+import { SpendPeriodPicker } from "@/features/spend/SpendPeriodPicker"
+import { usePageClock } from "@/features/spend/usePageClock"
 import { useKeys } from "@/shared/api/apiKeys"
 import {
   useOrganizationContext,
@@ -30,17 +44,33 @@ import {
   formatTokens,
   formatUsd,
 } from "@/shared/helpers/format"
+import { useUrlState } from "@/shared/helpers/urlState"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
 
+/** "In the last 7 days", for a line that opens with it. */
+const sentenceCase = (words: string) =>
+  words.charAt(0).toUpperCase() + words.slice(1)
+
+const URL_DEFAULTS = {
+  period: DEFAULT_PERSON_PERIOD,
+  by: DEFAULT_PERSON_CUT,
+}
+
 /**
- * One person: their month as Home reads it (spend, tokens, sessions,
- * refusals) with their API keys beside it, the spend rule that applies to
- * them, the models the month went to, and their sessions. A deployment that
- * records no sessions shows none of them.
+ * One person over a window, this month unless the URL picks another: their
+ * spend as Home reads it (what counts toward their budgets, and what is only
+ * tracked), tokens, sessions and refusals, with their API keys beside it, the
+ * spend rule that applies to them, where the spend went, and their sessions.
+ * A deployment that records no sessions shows none of them.
  */
 export function PersonPage({ personId }: { personId: string }) {
   const hasSessions = useSurfaces()("traces")
-  const { window, now } = useMonth()
+  // One clock for the page's life, so its windows and query keys hold still.
+  const [now, refreshClock] = usePageClock()
+  const { get, patch } = useUrlState(URL_DEFAULTS)
+  const period = personPeriodFromUrl(get("period"))
+  const cut = personCutOf(get("by")).value
+  const window = windowOf(period, now)
   const people = usePeople(window, now, { personId })
   const context = useOrganizationContext().data
   const members = useOrganizationMembers().data ?? []
@@ -49,6 +79,9 @@ export function PersonPage({ personId }: { personId: string }) {
   const [isRemoveOpen, setRemoveOpen] = useState(false)
   const [isRoleOpen, setRoleOpen] = useState(false)
   const person = people.rows.find((row) => row.id === personId)
+  const userId = person && !person.isOutsideView ? person.userId : undefined
+  const spend = usePersonSpend(userId ?? "", window, cut, Boolean(userId))
+  const split = splitTotals(spend.budgeted?.totals, spend.exempt?.totals)
 
   if (people.isLoading) return <PageLoading />
   if (!person) {
@@ -88,18 +121,24 @@ export function PersonPage({ personId }: { personId: string }) {
       <PageIntro
         title={person.name}
         action={
-          canChangeRole || canRemove ? (
-            <span className="flex flex-wrap gap-2">
-              {canChangeRole ? (
-                <Button onPress={() => setRoleOpen(true)}>Change role</Button>
-              ) : null}
-              {canRemove ? (
-                <Button variant="danger" onPress={() => setRemoveOpen(true)}>
-                  Remove from organization
-                </Button>
-              ) : null}
-            </span>
-          ) : undefined
+          <span className="flex flex-wrap items-center justify-end gap-2">
+            <SpendPeriodPicker
+              value={period}
+              options={PERSON_PERIODS}
+              onChange={(next) => {
+                refreshClock()
+                patch({ period: next })
+              }}
+            />
+            {canChangeRole ? (
+              <Button onPress={() => setRoleOpen(true)}>Change role</Button>
+            ) : null}
+            {canRemove ? (
+              <Button variant="danger" onPress={() => setRemoveOpen(true)}>
+                Remove from organization
+              </Button>
+            ) : null}
+          </span>
         }
         detail={
           <span className="inline-flex flex-wrap items-center gap-2">
@@ -124,14 +163,21 @@ export function PersonPage({ personId }: { personId: string }) {
 
       <KpiStrip isEmpty={false} columns={hasSessions ? 5 : 4}>
         <KpiCell
-          label="Spent this month"
-          value={
-            hidden ?? (person.unread.spend ? "—" : formatUsd(person.spend))
+          label={figureLabel("Spent", window)}
+          value={hidden ?? (split ? formatUsd(split.budgeted) : "—")}
+          subline={
+            hiddenWhy ??
+            (!split
+              ? spend.error
+                ? "Could not load"
+                : "Loading"
+              : split.exemptRequests > 0
+                ? `+${formatUsd(split.exempt)} not charged`
+                : window.label)
           }
-          subline={hiddenWhy ?? window.label}
         />
         <KpiCell
-          label="Tokens this month"
+          label={figureLabel("Tokens", window)}
           value={
             hidden ?? (person.unread.spend ? "—" : formatTokens(person.tokens))
           }
@@ -144,7 +190,7 @@ export function PersonPage({ personId }: { personId: string }) {
         />
         {hasSessions ? (
           <KpiCell
-            label="Sessions this month"
+            label={figureLabel("Sessions", window)}
             value={
               hidden ??
               (person.unread.sessions ? "—" : formatNumber(person.sessions))
@@ -163,7 +209,7 @@ export function PersonPage({ personId }: { personId: string }) {
               ? { status: "warn", word: "Review" }
               : undefined
           }
-          subline={hiddenWhy ?? "This month"}
+          subline={hiddenWhy ?? sentenceCase(windowWords(window))}
         />
         <KpiCell
           label="Active API keys"
@@ -206,23 +252,27 @@ export function PersonPage({ personId }: { personId: string }) {
         isReadFailed={Boolean(people.error)}
       />
 
-      {person.userId && !person.isOutsideView ? (
+      {userId ? (
         <>
-          <PersonModels userId={person.userId} window={window} />
+          <PersonBreakdown
+            person={person}
+            userId={userId}
+            window={window}
+            cut={cut}
+            onCutChange={(next) => patch({ by: next })}
+            spend={spend}
+            keys={keys.data ?? []}
+          />
           {hasSessions ? (
-            <PersonSessions
-              person={person}
-              userId={person.userId}
-              window={window}
-            />
+            <PersonSessions person={person} userId={userId} window={window} />
           ) : null}
         </>
       ) : (
         <p className="text-body text-muted">
           {person.isOutsideView
             ? hasSessions
-              ? "Their models and sessions are in workspaces you are not in."
-              : "Their models are in workspaces you are not in."
+              ? "Their spend and sessions are in workspaces you are not in."
+              : "Their spend is in workspaces you are not in."
             : hasSessions
               ? "No sessions yet."
               : "No requests yet."}

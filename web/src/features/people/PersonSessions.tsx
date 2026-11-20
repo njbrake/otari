@@ -6,21 +6,26 @@ import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import type { PersonRow } from "@/features/people/people"
-import { type SpendWindow, sessionsSearchFor } from "@/features/spend/period"
+import { useTheirWorkspace } from "@/features/people/useTheirWorkspace"
+import {
+  figureLabel,
+  type SpendWindow,
+  sessionsSearchFor,
+  windowWords,
+} from "@/features/spend/period"
 import { columns } from "@/features/traces/sessionColumns"
 import { useTraces } from "@/shared/api/traces"
 import { Band } from "@/shared/components/Band"
 import { anyHarnessMark } from "@/shared/components/marks/BrandMark"
-import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 
 /** As many as a glance takes; the rest are a click away in Sessions. */
 const SHOWN = 10
 
 /**
- * A person's sessions this month, latest first, as the Sessions page lists
- * them: its columns and cells, without the User column, which would name the
- * same person on every row. A row opens the session in Sessions; All sessions
- * opens Sessions on this person and this month.
+ * A person's sessions over the page's window, latest first, as the Sessions
+ * page lists them: its columns and cells, without the User column, which would
+ * name the same person on every row. A row opens the session in Sessions; All
+ * sessions opens Sessions on this person and this window.
  */
 export function PersonSessions({
   person,
@@ -32,11 +37,12 @@ export function PersonSessions({
   window: SpendWindow
 }) {
   const navigate = useNavigate()
-  const { selected, memberships, select } = useSelectedWorkspace()
+  const workspace = useTheirWorkspace(person)
   const traces = useTraces(
     {
       workspaceId: "",
       start: window.start,
+      end: window.end || undefined,
       q: "",
       userIds: [userId],
     },
@@ -66,35 +72,18 @@ export function PersonSessions({
     [withMarks],
   )
   const search = { ...sessionsSearchFor(window), user_id: userId }
-
-  // Sessions lists one workspace: open it on one of theirs the caller is in,
-  // keeping the current one when it is.
-  const isMine = (workspaceId: string) =>
-    memberships.some((one) => one.workspace_id === workspaceId)
-  const showWorkspace = (workspaceId: string | undefined) => {
-    if (workspaceId && workspaceId !== selected?.workspace_id) {
-      if (isMine(workspaceId)) select(workspaceId)
-    }
-  }
-  const theirs = (person.member.workspaces ?? []).map(
-    (place) => place.workspace_id,
-  )
-  const onOpenAll = () => {
-    if (!selected || !theirs.includes(selected.workspace_id)) {
-      showWorkspace(theirs.find(isMine))
-    }
-  }
   const rows = traces.data?.items ?? []
+  const title = figureLabel("Sessions", window)
 
   return (
     <Band
-      title="Sessions this month"
+      title={title}
       count={person.unread.sessions ? undefined : person.sessions}
       action={
         <Link
           to="/sessions"
           search={search}
-          onClick={onOpenAll}
+          onClick={workspace.selectTheirs}
           className="inline-flex min-h-11 items-center text-sm text-link underline"
         >
           All sessions
@@ -105,7 +94,7 @@ export function PersonSessions({
       <ErrorBanner error={traces.error} />
       <TableScrollFrame className="">
         <DataTable
-          ariaLabel={`${person.name}'s sessions this month`}
+          ariaLabel={`${person.name}'s ${title.toLowerCase()}`}
           columns={tableColumns}
           rows={rows}
           isLoading={traces.isLoading}
@@ -113,7 +102,7 @@ export function PersonSessions({
           onRowAction={(traceId) => {
             const session = rows.find((one) => one.trace_id === traceId)
             if (!session) return
-            showWorkspace(session.workspace_id)
+            workspace.select(session.workspace_id)
             void navigate({
               to: "/sessions",
               search: {
@@ -127,7 +116,7 @@ export function PersonSessions({
             traces.error ? (
               ""
             ) : (
-              <EmptyMessage>No sessions this month.</EmptyMessage>
+              <EmptyMessage>No sessions {windowWords(window)}.</EmptyMessage>
             )
           }
           mobileLayout="cards"

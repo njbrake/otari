@@ -135,6 +135,9 @@ export interface UsageFilters {
   // rows that still need pricing. A row charged only for gateway-run tool calls
   // counts as needing pricing, so a tool charge cannot hide it from that view.
   priced?: boolean
+  // Budget standing: true = only rows that count toward a budget, false = only
+  // the rows that do not (a budget-exempt key's, imported usage).
+  counts_toward_budget?: boolean
   // Gateway-run tool usage. "any" matches any tool (including MCP tools, whose
   // names come from the caller's server); a name matches that tool specifically.
   // "any" matches any tool; anything else is a specific tool name. Not a literal

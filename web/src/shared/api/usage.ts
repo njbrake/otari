@@ -53,6 +53,9 @@ function usageParams(filters: UsageFilters): URLSearchParams {
   if (filters.source_label) params.set("source_label", filters.source_label)
   if (filters.tool) params.set("tool", filters.tool)
   if (filters.priced !== undefined) params.set("priced", String(filters.priced))
+  if (filters.counts_toward_budget !== undefined) {
+    params.set("counts_toward_budget", String(filters.counts_toward_budget))
+  }
   appendAll("exclude_model", filters.exclude_model)
   appendAll("exclude_user_id", filters.exclude_user_id)
   appendAll("exclude_api_key_id", filters.exclude_api_key_id)

@@ -23,6 +23,7 @@ import { busiestWorkspace } from "@/features/home/busiestWorkspace"
 import { canOpenInKeys } from "@/features/home/keyAccess"
 import { useHomeAccount } from "@/features/home/overlayHomeAccount"
 import { hasProviderSlot, ProviderSlot } from "@/features/home/ProviderSlot"
+import { RowOpenLink } from "@/features/home/RowOpenLink"
 import { ShareCell } from "@/features/home/ShareCell"
 import { limitDialogCopy } from "@/features/spend/limitCopy"
 import {
@@ -149,6 +150,13 @@ function paceLine(limit: AppliedLimit, now: number): string {
   return pace
     ? `${line}, on pace for ${formatUsd(pace.projected).replace(/\.\d+$/, "")}`
     : line
+}
+
+/** A roster member's row: the id their own page is at; "" for anyone else. */
+function personIdOf(row: SpendRow): string {
+  return row.isMember && row.id.startsWith("person:")
+    ? row.id.slice("person:".length)
+    : ""
 }
 
 function LimitCell({ row }: { row: SpendRow }) {
@@ -328,6 +336,18 @@ export function TeamHome({
     return busiestWorkspace(candidates, costs)
   }
 
+  /** Where a row's link points: the destination `open` lands on. */
+  const searchFor = (row: SpendRow): Record<string, string | string[]> =>
+    cut.value === "workspaces"
+      ? {
+          period,
+          workspace: row.filterKey ?? "",
+          by: "people",
+        }
+      : cut.filter
+        ? { ...sessionsSearchFor(window), [cut.filter]: filterValues(row) }
+        : {}
+
   const open = async (row: SpendRow) => {
     if (cut.value === "workspaces") {
       // A workspace opens as its own people, which is the next question.
@@ -404,6 +424,33 @@ export function TeamHome({
     return actions
   }
 
+  /** What a row ran, named on the row, or nothing for a row that is no one spender. */
+  const openLink = (row: SpendRow) =>
+    canOpenRows && row.filterKey ? (
+      <span className="flex">
+        <RowOpenLink
+          to={
+            cut.value === "workspaces"
+              ? "/"
+              : cut.value === "providers"
+                ? "/requests"
+                : "/sessions"
+          }
+          search={searchFor(row)}
+          label={
+            cut.value === "workspaces"
+              ? "People"
+              : cut.value === "providers"
+                ? "Requests"
+                : "Sessions"
+          }
+          subject={row.name}
+          onOpen={() => void open(row)}
+          isCompact={!isMobile}
+        />
+      </span>
+    ) : null
+
   const columns: DataTableColumn<SpendRow>[] = [
     {
       id: "name",
@@ -420,16 +467,30 @@ export function TeamHome({
           ) : null}
           <span className="flex min-w-0 flex-col">
             {/* A model is told apart by its whole name, so a long id wraps,
-                to two lines; the title holds every id it ran as. */}
-            <span
-              className={`text-foreground ${cut.value === "models" ? "line-clamp-2 [overflow-wrap:anywhere]" : "truncate"}`}
-              title={row.spellings?.join("\n")}
-            >
-              {row.name}
-            </span>
+                to two lines; the title holds every id it ran as. A person's
+                name opens their page. */}
+            {personIdOf(row) ? (
+              <Link
+                to="/people/$personId"
+                params={{ personId: personIdOf(row) }}
+                className="truncate text-foreground underline underline-offset-4 hover:text-link max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
+              >
+                {row.name}
+              </Link>
+            ) : (
+              <span
+                className={`text-foreground ${cut.value === "models" ? "line-clamp-2 [overflow-wrap:anywhere]" : "truncate"}`}
+                title={row.spellings?.join("\n")}
+              >
+                {row.name}
+              </span>
+            )}
             {row.detail && cut.value !== "people" ? (
               <span className="truncate text-caption">{row.detail}</span>
             ) : null}
+            {/* Under the name on a desk, where the trailing lane can be
+                scrolled out of view; beside the card's title on a phone. */}
+            {isMobile ? null : openLink(row)}
           </span>
         </span>
       ),
@@ -508,7 +569,10 @@ export function TeamHome({
       header: <span className="sr-only">Actions</span>,
       align: "end",
       cell: (row) => (
-        <RowMenu label={`Actions for ${row.name}`} actions={menuFor(row)} />
+        <span className="inline-flex items-center justify-end gap-3">
+          {isMobile ? openLink(row) : null}
+          <RowMenu label={`Actions for ${row.name}`} actions={menuFor(row)} />
+        </span>
       ),
     },
   ]
@@ -765,44 +829,19 @@ export function TeamHome({
                       : "Nothing was spent in this window. Pick a longer one above."}
                 </EmptyMessage>
               }
-              onRowAction={
-                canOpenRows
-                  ? (key) => {
-                      const row = rows.find((one) => one.id === key)
-                      if (row?.filterKey) void open(row)
-                    }
-                  : undefined
-              }
-              // A row that opens nothing (the rest, summed) keeps the arrow.
-              rowClassName={(row) =>
-                row.filterKey ? undefined : "cursor-default!"
-              }
               mobileLayout="cards"
             />
           )}
         </TableScrollFrame>
-        <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2 text-sm">
-          {!isLoading && hidden > 0 ? (
-            <button
-              type="button"
-              onClick={() => setShowingAll(true)}
-              className="text-link underline max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
-            >
-              Show all {rows.length} {cut.plural}
-            </button>
-          ) : (
-            <span />
-          )}
-          <span className="text-muted">
-            {!canOpenRows
-              ? null
-              : cut.value === "workspaces"
-                ? "A row opens that workspace’s people."
-                : cut.value === "providers"
-                  ? "A row opens its requests."
-                  : "A row opens its sessions."}
-          </span>
-        </div>
+        {!isLoading && hidden > 0 ? (
+          <button
+            type="button"
+            onClick={() => setShowingAll(true)}
+            className="self-start text-sm text-link underline max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
+          >
+            Show all {rows.length} {cut.plural}
+          </button>
+        ) : null}
         {isTeam || spend.isLoading || spend.reads.roster !== "ready" ? null : (
           <p className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4 text-sm">
             <span className="text-muted">

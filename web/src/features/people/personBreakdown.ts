@@ -1,0 +1,245 @@
+import type {
+  ApiKey,
+  SummaryDimension,
+  UsageGroupRow,
+  UsageSummary,
+  UsageTotals,
+} from "@/client"
+import { describeSource } from "@/features/activity/activityModel"
+import { keyName } from "@/features/spend/names"
+import { groupModels, OTHER } from "@/features/usage/modelGroups"
+import { providerDisplayName } from "@/shared/helpers/providers"
+
+export type PersonCut = "models" | "keys" | "providers" | "sources"
+
+/**
+ * The cuts of a person's spend, each one summary dimension, and the page and
+ * filter a row opens: Sessions where it filters on that value, else Requests.
+ */
+export const PERSON_CUTS: {
+  value: PersonCut
+  label: string
+  /** The first column's head. */
+  noun: string
+  dimension: SummaryDimension
+  field: "by_model" | "by_api_key" | "by_provider" | "by_source"
+  to: "/sessions" | "/requests"
+  filter: "model" | "api_key_id" | "provider" | "source"
+}[] = [
+  {
+    value: "models",
+    label: "Models",
+    noun: "Model",
+    dimension: "model",
+    field: "by_model",
+    to: "/sessions",
+    filter: "model",
+  },
+  {
+    value: "keys",
+    label: "API keys",
+    noun: "API key",
+    dimension: "api_key",
+    field: "by_api_key",
+    to: "/sessions",
+    filter: "api_key_id",
+  },
+  {
+    value: "providers",
+    label: "Providers",
+    noun: "Provider",
+    dimension: "provider",
+    field: "by_provider",
+    to: "/requests",
+    filter: "provider",
+  },
+  {
+    value: "sources",
+    label: "Sources",
+    noun: "Source",
+    dimension: "source",
+    field: "by_source",
+    to: "/requests",
+    filter: "source",
+  },
+]
+
+export const DEFAULT_PERSON_CUT: PersonCut = "models"
+
+export function personCutOf(value: string): (typeof PERSON_CUTS)[number] {
+  return (
+    PERSON_CUTS.find((cut) => cut.value === value) ??
+    PERSON_CUTS.find((cut) => cut.value === DEFAULT_PERSON_CUT) ??
+    PERSON_CUTS[0]
+  )
+}
+
+/** A person's spend over a window, apart by whether it counts toward a budget. */
+export interface SpendSplit {
+  /** What counts toward their budgets: the spend that is charged. */
+  budgeted: number
+  /** What is recorded and not charged: a budget-exempt key's, imported usage. */
+  exempt: number
+  total: number
+  requests: number
+  exemptRequests: number
+}
+
+/** The two summaries' totals as one split; undefined until both are read. */
+export function splitTotals(
+  budgeted: UsageTotals | undefined,
+  exempt: UsageTotals | undefined,
+): SpendSplit | undefined {
+  if (!budgeted || !exempt) return undefined
+  return {
+    budgeted: budgeted.cost,
+    exempt: exempt.cost,
+    total: budgeted.cost + exempt.cost,
+    requests: budgeted.request_count + exempt.request_count,
+    exemptRequests: exempt.request_count,
+  }
+}
+
+/** One row of "Where it went": a value of the cut, its spend split in two. */
+export interface BreakdownRow {
+  id: string
+  name: string
+  detail?: string
+  /** What a row's filter takes; empty for a row that opens nothing. */
+  filterValues: string[]
+  requests: number
+  tokens: number
+  budgeted: number
+  exempt: number
+  /** An API key flagged `exclude_from_budget`. */
+  isExemptKey: boolean
+  /** The server's fold of its smallest rows. */
+  isOther: boolean
+}
+
+interface Part {
+  id: string
+  name: string
+  detail?: string
+  filterValues: string[]
+  isOther: boolean
+  isExemptKey: boolean
+  cost: number
+  tokens: number
+  requests: number
+}
+
+/** A value's id, name and filter, by cut; ids no value can take for the fold and for none. */
+function partsOf(
+  cut: PersonCut,
+  rows: readonly UsageGroupRow[],
+  keys: readonly ApiKey[],
+): Part[] {
+  if (cut === "models") {
+    // One row per model however many ids it ran as, as every model cut is.
+    return groupModels(rows).map((model) => ({
+      id: model.id,
+      name: model.name,
+      filterValues: model.isOther ? [] : model.spellings,
+      isOther: model.isOther,
+      isExemptKey: false,
+      cost: model.cost,
+      tokens: model.tokens,
+      requests: model.requests,
+    }))
+  }
+  return rows.map((row) => {
+    const base = {
+      cost: row.cost,
+      tokens: row.tokens,
+      requests: row.requests,
+      isOther: row.is_other ?? false,
+      filterValues: row.is_other || row.key === null ? [] : [row.key],
+    }
+    const id = row.is_other
+      ? `${cut}::other`
+      : row.key === null
+        ? `${cut}::none`
+        : `${cut}:${row.key}`
+    if (row.is_other) {
+      return { ...base, id, name: OTHER, isExemptKey: false }
+    }
+    if (cut === "keys") {
+      const key = keys.find((one) => one.id === row.key)
+      return {
+        ...base,
+        id,
+        name:
+          row.key === null
+            ? "No key"
+            : key
+              ? keyName(key)
+              : row.label || "A deleted key",
+        detail: row.key === null ? "The Playground or imported" : undefined,
+        isExemptKey: key?.exclude_from_budget ?? false,
+      }
+    }
+    return {
+      ...base,
+      id,
+      name:
+        row.key === null
+          ? cut === "providers"
+            ? "Unknown provider"
+            : "Unknown source"
+          : cut === "providers"
+            ? providerDisplayName(row.key)
+            : describeSource(row.key),
+      isExemptKey: false,
+    }
+  })
+}
+
+/**
+ * The cut's rows from the budgeted and the exempt summaries, one per value
+ * with both figures, the costliest overall first, then the most tokens. A
+ * value with neither spend nor requests is left out.
+ */
+export function splitRows(
+  cut: PersonCut,
+  budgeted: UsageSummary | undefined,
+  exempt: UsageSummary | undefined,
+  keys: readonly ApiKey[],
+): BreakdownRow[] {
+  const field = personCutOf(cut).field
+  const merged = new Map<string, BreakdownRow>()
+  const add = (parts: Part[], side: "budgeted" | "exempt") => {
+    for (const part of parts) {
+      const row = merged.get(part.id) ?? {
+        id: part.id,
+        name: part.name,
+        detail: part.detail,
+        filterValues: [],
+        requests: 0,
+        tokens: 0,
+        budgeted: 0,
+        exempt: 0,
+        isExemptKey: part.isExemptKey,
+        isOther: part.isOther,
+      }
+      row.requests += part.requests
+      row.tokens += part.tokens
+      row[side] += part.cost
+      for (const value of part.filterValues) {
+        if (!row.filterValues.includes(value)) row.filterValues.push(value)
+      }
+      merged.set(part.id, row)
+    }
+  }
+  add(partsOf(cut, budgeted?.[field] ?? [], keys), "budgeted")
+  add(partsOf(cut, exempt?.[field] ?? [], keys), "exempt")
+  return [...merged.values()]
+    .filter((row) => row.requests > 0 || row.budgeted + row.exempt > 0)
+    .sort(
+      (a, b) =>
+        // The fold is no one value, so it closes the list whatever it sums to.
+        Number(a.isOther) - Number(b.isOther) ||
+        b.budgeted + b.exempt - (a.budgeted + a.exempt) ||
+        b.tokens - a.tokens,
+    )
+}

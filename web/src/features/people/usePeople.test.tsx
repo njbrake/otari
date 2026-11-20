@@ -345,7 +345,7 @@ describe("People, in a workspace", () => {
       { seen, selected: "ws-data" },
     )
     await screen.findByRole("heading", { name: "Wei Zhang" })
-    await screen.findByRole("heading", { name: "Models this month" })
+    await screen.findByRole("heading", { name: "Where it went" })
     const reads = figureReads(seen)
     // Spend, refusals, the session count, the models and the sessions list.
     expect(reads.length).toBeGreaterThanOrEqual(5)
