@@ -8,6 +8,7 @@ from typing import NamedTuple, Never
 from sqlalchemy import Select, String, and_, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
 
@@ -402,6 +403,30 @@ class UserAccessRepository(BaseRepository[User, Never, Never]):
             .with_for_update()
         )
         return list((await self.db.execute(statement)).scalars().all())
+
+    async def lock_live(self, user_ids: Collection[str]) -> dict[str, User]:
+        """Lock these users' rows, in id order so two lockers never wait on each other; the live ones by id."""
+        statement = (
+            select(User)
+            .where(User.user_id.in_(sorted(user_ids)), User.deleted_at.is_(None))
+            .order_by(User.user_id)
+            .with_for_update()
+        )
+        return {user.user_id: user for user in (await self.db.execute(statement)).scalars().all()}
+
+    async def shared_end_users(self, from_user_id: str, to_user_id: str) -> list[str]:
+        """The external ids both users bill an end user under, which are unique per billing user."""
+        theirs = aliased(User)
+        rows = await self.db.execute(
+            select(User.external_id)
+            .join(theirs, theirs.external_id == User.external_id)
+            .where(User.parent_user_id == from_user_id, theirs.parent_user_id == to_user_id)
+        )
+        return sorted(str(external_id) for external_id in rows.scalars().all())
+
+    async def flush(self) -> None:
+        """Stage the changes made to loaded users."""
+        await self.db.flush()
 
     async def add_tombstone(self) -> str:
         """Stage a new deleted user with no name, for rows kept after the users they belonged to are gone."""

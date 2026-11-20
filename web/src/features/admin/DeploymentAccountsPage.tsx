@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import {
   FiAnchor,
   FiCheckCircle,
+  FiGitMerge,
   FiKey,
   FiShield,
   FiSlash,
@@ -43,6 +44,7 @@ import {
 } from "./accounts"
 import { BlockedEmailsSection } from "./BlockedEmailsSection"
 import { BootstrapHandoverDialog } from "./BootstrapHandoverDialog"
+import { MergeUserRecordDialog } from "./MergeUserRecordDialog"
 import { PasswordLinkDialog } from "./PasswordLinkDialog"
 
 // Every account on the deployment, which is the one identity list that is not
@@ -55,7 +57,8 @@ import { PasswordLinkDialog } from "./PasswordLinkDialog"
 // account's dashboard sessions), reactivate, grant or remove operator access,
 // send a password link to someone who cannot sign in, hand the bootstrap
 // operator role to another operator (offered to the bootstrap operator alone,
-// the one account the gateway lets do it), and keep the email blocklist
+// the one account the gateway lets do it), fold a user record typed before
+// sign-in into the account's own, and keep the email blocklist
 // (`BlockedEmailsSection`). Creating an account
 // is not here, because an account without a
 // membership can do nothing and memberships are the organization surface's; nor
@@ -107,6 +110,7 @@ export function DeploymentAccountsPage() {
   const [deactivating, setDeactivating] = useState<DeploymentUser>()
   const [handingTo, setHandingTo] = useState<DeploymentUser>()
   const [linkFor, setLinkFor] = useState<DeploymentUser>()
+  const [mergeInto, setMergeInto] = useState<DeploymentUser>()
 
   const rows = accounts.data?.data ?? []
 
@@ -198,6 +202,12 @@ export function DeploymentAccountsPage() {
                 isDisabled={linkBlocked !== undefined}
                 ariaLabel={`Send ${accountLabel(account)} a password link${linkBlocked ? ` (${linkBlocked})` : ""}`}
                 onPress={() => setLinkFor(account)}
+              />
+              <RowAction
+                icon={FiGitMerge}
+                label="Merge user record…"
+                ariaLabel={`Merge another user record into ${accountLabel(account)}`}
+                onPress={() => setMergeInto(account)}
               />
               {/* The reason is folded into each control's own name, as the
                   organization roster does it: a disabled control is not
@@ -391,6 +401,11 @@ export function DeploymentAccountsPage() {
       <PasswordLinkDialog
         account={linkFor}
         onClose={() => setLinkFor(undefined)}
+      />
+
+      <MergeUserRecordDialog
+        account={mergeInto}
+        onClose={() => setMergeInto(undefined)}
       />
     </div>
   )

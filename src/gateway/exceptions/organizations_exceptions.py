@@ -532,6 +532,17 @@ class SignupRegistrationUnresolvedError(TenancyError):
         super().__init__("A signup address was released while it was being registered")
 
 
+class UserMergeRefusedError(TenancyConflictError):
+    """A user merge was refused before anything moved, for the reason the message gives."""
+
+
+class UserMergeIntoItselfError(TenancyValidationError):
+    """A user merge named the same user as its source and its target."""
+
+    def __init__(self) -> None:
+        super().__init__("A user cannot be merged into itself")
+
+
 __all__ = [
     "AccountDeletionLastOwnerError",
     "AddressAlreadyInvitedError",
@@ -578,6 +589,8 @@ __all__ = [
     "SignupRegistrationUnresolvedError",
     "TooManyOrganizationDomainsError",
     "UnregistrableDomainError",
+    "UserMergeIntoItselfError",
+    "UserMergeRefusedError",
     "WorkspaceActivationUnavailableError",
     "WorkspaceAlreadyActivatedError",
     "WorkspaceAlreadyExistsError",

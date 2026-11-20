@@ -90,3 +90,51 @@ export function organizationSummary(account: DeploymentUser): string {
     )
     .join(", ")
 }
+
+/** What each table a user merge moves rows in is called in the merge dialog. */
+const MERGED_ROWS: Record<string, [one: string, many: string]> = {
+  api_keys: ["API key", "API keys"],
+  usage_logs: ["usage row", "usage rows"],
+  agent_telemetry: ["agent telemetry event", "agent telemetry events"],
+  traces: ["agent trace", "agent traces"],
+  file_objects: ["file", "files"],
+  batches: ["batch", "batches"],
+  budget_reservations: [
+    "settled budget reservation",
+    "settled budget reservations",
+  ],
+  budget_reset_logs: ["budget reset record", "budget reset records"],
+  model_aliases: ["personal alias", "personal aliases"],
+  routing_policies: ["personal routing policy", "personal routing policies"],
+  provider_endpoints: [
+    "personal provider endpoint",
+    "personal provider endpoints",
+  ],
+  workspace_mcp_server_grants: ["MCP server grant", "MCP server grants"],
+  mcp_user_connections: ["MCP connection", "MCP connections"],
+  mcp_oauth_flows: ["MCP sign-in in progress", "MCP sign-ins in progress"],
+  sandbox_containers: ["sandbox session", "sandbox sessions"],
+  video_jobs: ["video job", "video jobs"],
+  idempotency_keys: ["idempotency record", "idempotency records"],
+  end_users: [
+    "end user its service keys bill",
+    "end users its service keys bill",
+  ],
+}
+
+/**
+ * The lines a merge preview lists: each kind of row that moves, with how many,
+ * most first. A table with nothing to move is left out, and one this build has
+ * no words for is named by its table.
+ */
+export function mergedRowLines(
+  moved: Record<string, number>,
+): { key: string; count: number; label: string }[] {
+  return Object.entries(moved)
+    .filter(([, count]) => count > 0)
+    .map(([key, count]) => {
+      const [one, many] = MERGED_ROWS[key] ?? [key, key]
+      return { key, count, label: count === 1 ? one : many }
+    })
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+}

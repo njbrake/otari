@@ -52,6 +52,7 @@ from gateway.services.routing._service import (
     RoutingService,
     StepOutcome,
 )
+from gateway.services.routing._user_merge import RoutingUserMergeListener
 from gateway.services.routing.backends import (
     PRIORITY_BACKEND,
     WEIGHTED_BACKEND,
@@ -86,6 +87,7 @@ from gateway.services.routing.recommend import (
 from gateway.types.budget_state import BudgetState
 
 __all__ = [
+    "RoutingUserMergeListener",
     "AutomaticObservation",
     "AutomaticRouter",
     "preferred_region",

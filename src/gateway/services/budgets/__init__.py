@@ -32,8 +32,10 @@ from gateway.services.budgets._retiming import cadence_of, retime_ceilings_for_b
 from gateway.services.budgets._scoped_enforcement import ApplicableBudget, BudgetScopeRequest
 from gateway.services.budgets._scopes import lock_workspace_for_scope
 from gateway.services.budgets._service import BudgetService
+from gateway.services.budgets._user_merge import BudgetUserMergeListener
 
 __all__ = [
+    "BudgetUserMergeListener",
     "ZERO",
     "AbandonedStreamRow",
     "ApplicableBudget",

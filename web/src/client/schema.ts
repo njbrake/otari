@@ -8065,6 +8065,42 @@ export interface paths {
         patch: operations["users-update_user"];
         trace?: never;
     };
+    "/api/v1/users/{user_id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge User
+         * @description Merge another user in the caller's organization into this one, or with ``preview`` say what would move.
+         *
+         *     Moves every row that names the source user onto this one: its API keys,
+         *     usage history, agent telemetry, traces, files, batches, budget reservations
+         *     and resets, per-user aliases, routing policies and provider endpoints, MCP
+         *     grants and connections, sandbox leases, video jobs, idempotency records and
+         *     the end users its service keys bill. The source's spend, token and request
+         *     counters are added to this user's, and the source is soft-deleted with
+         *     ``merged_into``, ``merged_at`` and ``merged_by`` in its metadata. This user
+         *     keeps its own budget, access lists and blocked flag. Where both users hold
+         *     an MCP grant or connection for one server, this user's is kept and the
+         *     source's dropped.
+         *
+         *     Refused with 400 for a merge of a user into itself, and with 409 when the
+         *     source is the user a sign-in account bills through, has a budget
+         *     reservation in flight, or shares with this user a per-user alias, routing
+         *     policy or provider endpoint name in one workspace, or an end user id.
+         */
+        post: operations["users-merge_user"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/{user_id}/usage": {
         parameters: {
             query?: never;
@@ -17202,6 +17238,57 @@ export interface components {
             workspace_member_id: string;
             /** Workspace Name */
             workspace_name: string;
+        };
+        /**
+         * MergeUserRequest
+         * @description Which user to fold into this one.
+         */
+        MergeUserRequest: {
+            /**
+             * Preview
+             * @description Say what would move and change nothing, so the merge can be confirmed first.
+             * @default false
+             */
+            preview: boolean;
+            /**
+             * Source User Id
+             * @description The user whose rows move onto this one, and which is then retired.
+             */
+            source_user_id: string;
+        };
+        /**
+         * MergeUserResponse
+         * @description What a merge moved, or on a preview would move.
+         */
+        MergeUserResponse: {
+            /**
+             * Moved
+             * @description Rows per table that names a user, every such table listed with the rows that moved or would.
+             */
+            moved: {
+                [key: string]: number;
+            };
+            /** Preview */
+            preview: boolean;
+            /**
+             * Requests
+             * @description The source's request counter, added to this user's.
+             */
+            requests: number;
+            /** Source User Id */
+            source_user_id: string;
+            /**
+             * Spend
+             * @description The source's spend, added to this user's.
+             */
+            spend: number;
+            /**
+             * Tokens
+             * @description The source's token counter, added to this user's.
+             */
+            tokens: number;
+            /** @description This user, after the merge; unchanged on a preview. */
+            user: components["schemas"]["UserResponse"];
         };
         /**
          * Message
@@ -39205,6 +39292,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "users-merge_user": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergeUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeUserResponse"];
                 };
             };
             /** @description Validation Error */

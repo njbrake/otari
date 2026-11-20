@@ -16200,6 +16200,78 @@
         "title": "MemberWorkspacePlacementPublic",
         "type": "object"
       },
+      "MergeUserRequest": {
+        "description": "Which user to fold into this one.",
+        "properties": {
+          "preview": {
+            "default": false,
+            "description": "Say what would move and change nothing, so the merge can be confirmed first.",
+            "title": "Preview",
+            "type": "boolean"
+          },
+          "source_user_id": {
+            "description": "The user whose rows move onto this one, and which is then retired.",
+            "title": "Source User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_user_id"
+        ],
+        "title": "MergeUserRequest",
+        "type": "object"
+      },
+      "MergeUserResponse": {
+        "description": "What a merge moved, or on a preview would move.",
+        "properties": {
+          "moved": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Rows per table that names a user, every such table listed with the rows that moved or would.",
+            "title": "Moved",
+            "type": "object"
+          },
+          "preview": {
+            "title": "Preview",
+            "type": "boolean"
+          },
+          "requests": {
+            "description": "The source's request counter, added to this user's.",
+            "title": "Requests",
+            "type": "integer"
+          },
+          "source_user_id": {
+            "title": "Source User Id",
+            "type": "string"
+          },
+          "spend": {
+            "description": "The source's spend, added to this user's.",
+            "title": "Spend",
+            "type": "number"
+          },
+          "tokens": {
+            "description": "The source's token counter, added to this user's.",
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserResponse",
+            "description": "This user, after the merge; unchanged on a preview."
+          }
+        },
+        "required": [
+          "user",
+          "source_user_id",
+          "moved",
+          "spend",
+          "tokens",
+          "requests",
+          "preview"
+        ],
+        "title": "MergeUserResponse",
+        "type": "object"
+      },
       "Message": {
         "description": "A human-readable acknowledgment for an operation with nothing to return.",
         "properties": {
@@ -65949,6 +66021,67 @@
           }
         ],
         "summary": "Update User",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/{user_id}/merge": {
+      "post": {
+        "description": "Merge another user in the caller's organization into this one, or with ``preview`` say what would move.\n\nMoves every row that names the source user onto this one: its API keys,\nusage history, agent telemetry, traces, files, batches, budget reservations\nand resets, per-user aliases, routing policies and provider endpoints, MCP\ngrants and connections, sandbox leases, video jobs, idempotency records and\nthe end users its service keys bill. The source's spend, token and request\ncounters are added to this user's, and the source is soft-deleted with\n``merged_into``, ``merged_at`` and ``merged_by`` in its metadata. This user\nkeeps its own budget, access lists and blocked flag. Where both users hold\nan MCP grant or connection for one server, this user's is kept and the\nsource's dropped.\n\nRefused with 400 for a merge of a user into itself, and with 409 when the\nsource is the user a sign-in account bills through, has a budget\nreservation in flight, or shares with this user a per-user alias, routing\npolicy or provider endpoint name in one workspace, or an end user id.",
+        "operationId": "users-merge_user",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeUserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Merge User",
         "tags": [
           "users"
         ]

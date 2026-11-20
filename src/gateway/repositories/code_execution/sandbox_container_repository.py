@@ -147,3 +147,16 @@ async def expired_container_ids(uow: UnitOfWork, *, now: datetime, batch_size: i
         .limit(batch_size)
     )
     return list(result.scalars().all())
+
+
+async def reassign_container_owner(uow: UnitOfWork, from_user_id: str, to_user_id: str) -> int:
+    """Point a user's leases at another, returning how many moved. Flushes; the caller's block commits."""
+    db = session_for(uow)
+    result = cast(
+        "CursorResult[Any]",
+        await db.execute(
+            update(SandboxContainer).where(SandboxContainer.user_id == from_user_id).values(user_id=to_user_id)
+        ),
+    )
+    await db.flush()
+    return result.rowcount or 0

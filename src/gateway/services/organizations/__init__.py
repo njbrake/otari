@@ -19,6 +19,7 @@ from gateway.services.organizations._invitation_facts import InvitationFactsRead
 from gateway.services.organizations._invitation_mail_limit import InvitationMailLimit
 from gateway.services.organizations._sso_enforcement import SsoEnforcement
 from gateway.services.organizations._user_access import UserAccess
+from gateway.services.organizations._user_merge import UserMerge, UserMergeListener, UserMergeService
 
 __all__ = [
     "AccountRelease",
@@ -37,4 +38,7 @@ __all__ = [
     "OrganizationClaimedDomains",
     "SsoEnforcement",
     "UserAccess",
+    "UserMerge",
+    "UserMergeListener",
+    "UserMergeService",
 ]

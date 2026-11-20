@@ -1,8 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { UpdateUserRequest, User } from "@/client"
+import type {
+  MergeUserRequest,
+  MergeUserResponse,
+  UpdateUserRequest,
+  User,
+} from "@/client"
 import { apiFetch } from "@/shared/api/client"
 import { fetchAllRows } from "@/shared/api/paging"
-import { BUDGETS, USERS } from "@/shared/api/queryKeys"
+import { BUDGETS, DEPLOYMENT_ADMIN, USERS } from "@/shared/api/queryKeys"
 
 const fetchAllUsers = () => fetchAllRows<User>("/users")
 
@@ -34,5 +39,27 @@ export function useUpdateUser() {
         body: JSON.stringify(body),
       }),
     onSuccess: () => invalidateUserViews(queryClient),
+  })
+}
+
+/**
+ * Fold one user record into another, or with `preview` say what would move.
+ *
+ * A preview changes nothing, so only a merge refreshes the views a merge
+ * changes: the users list, budgets whose spend moved, and the accounts list.
+ */
+export function useMergeUser() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: MergeUserRequest }) =>
+      apiFetch<MergeUserResponse>(`/users/${encodeURIComponent(id)}/merge`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (result) => {
+      if (result.preview) return
+      invalidateUserViews(queryClient)
+      void queryClient.invalidateQueries({ queryKey: [DEPLOYMENT_ADMIN] })
+    },
   })
 }

@@ -45,6 +45,7 @@ from gateway.repositories.code_execution import (
     claim_container_row,
     delete_container_rows,
     get_container_row,
+    reassign_container_owner,
     release_container_claim,
     upsert_container_row,
 )
@@ -335,3 +336,14 @@ def _lease_from_row(row: SandboxContainerRow) -> ContainerLease:
         hard_expires_at=row.hard_expires_at,
         image=row.session_image,
     )
+
+
+class SandboxContainerUserMergeListener:
+    """Moves a merged user's sandbox leases inside the caller's Unit of Work block, for the user merged into."""
+
+    def __init__(self, uow: UnitOfWork) -> None:
+        self._uow = uow
+
+    async def user_merged(self, from_user_id: str, to_user_id: str) -> Mapping[str, int]:
+        """Point every lease of ``from_user_id`` at ``to_user_id``."""
+        return {"sandbox_containers": await reassign_container_owner(self._uow, from_user_id, to_user_id)}

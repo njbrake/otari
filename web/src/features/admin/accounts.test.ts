@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   accountLabel,
   accountLockoutReason,
+  mergedRowLines,
   organizationSummary,
 } from "@/features/admin/accounts"
 import { deploymentUser } from "@/tests/fixtures"
@@ -90,5 +91,23 @@ describe("organizationSummary", () => {
     expect(organizationSummary(account)).toBe(
       "Acme (owner), Umbrella (member, suspended)",
     )
+  })
+})
+
+describe("mergedRowLines", () => {
+  it("lists what moves, most first, and leaves out what does not", () => {
+    expect(
+      mergedRowLines({ api_keys: 2, usage_logs: 140, traces: 0, end_users: 1 }),
+    ).toEqual([
+      { key: "usage_logs", count: 140, label: "usage rows" },
+      { key: "api_keys", count: 2, label: "API keys" },
+      { key: "end_users", count: 1, label: "end user its service keys bill" },
+    ])
+  })
+
+  it("names a table this build has no words for by the table", () => {
+    expect(mergedRowLines({ new_table: 3 })).toEqual([
+      { key: "new_table", count: 3, label: "new_table" },
+    ])
   })
 })

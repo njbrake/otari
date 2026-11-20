@@ -41,12 +41,15 @@ acting deployment-wide, and the default workspace is where its writes land too.
 
 import asyncio
 import uuid
+from collections.abc import Mapping
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from gateway.core.config import GatewayConfig
 from gateway.core.database import create_session
+from gateway.exceptions.organizations_exceptions import UserMergeRefusedError
 from gateway.log_config import logger
 from gateway.models.providers import ModelAlias
 from gateway.services.workspace_scope import lookup_default_workspace_id
@@ -224,3 +227,34 @@ async def load_aliases_at_startup(db: AsyncSession) -> None:
             scoped,
             len(set(_cache) | set(_user_cache)),
         )
+
+
+class AliasUserMergeListener:
+    """Moves a merged user's per-user aliases inside the caller's transaction.
+
+    The caller refreshes the alias cache once the merge commits.
+    """
+
+    def __init__(self, db: AsyncSession) -> None:
+        self._db = db
+
+    async def user_merged(self, from_user_id: str, to_user_id: str) -> Mapping[str, int]:
+        """Point the aliases at ``to_user_id``, refusing where both users hold one of a name in one workspace."""
+        theirs = aliased(ModelAlias)
+        shared = await self._db.execute(
+            select(ModelAlias.name)
+            .join(theirs, and_(theirs.workspace_id == ModelAlias.workspace_id, theirs.name == ModelAlias.name))
+            .where(ModelAlias.user_id == from_user_id, theirs.user_id == to_user_id)
+        )
+        names = sorted(shared.scalars().all())
+        if names:
+            raise UserMergeRefusedError(
+                "Both users have an alias of the same name in one workspace: " + ", ".join(names)
+            )
+        result = await self._db.execute(
+            update(ModelAlias)
+            .where(ModelAlias.user_id == from_user_id)
+            .values(user_id=to_user_id)
+            .execution_options(synchronize_session=False)
+        )
+        return {"model_aliases": getattr(result, "rowcount", 0) or 0}

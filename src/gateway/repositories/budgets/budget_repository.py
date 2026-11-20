@@ -132,6 +132,16 @@ class BudgetRepository(BaseRepository[Budget, Never, Never]):
         )
         return list(result.scalars().all())
 
+    async def reassign_reset_logs(self, from_user_id: str, to_user_id: str) -> int:
+        """Stage pointing the reset history recorded for ``from_user_id`` at ``to_user_id``; how many rows moved."""
+        result = await self.db.execute(
+            update(BudgetResetLog)
+            .where(BudgetResetLog.user_id == from_user_id)
+            .values(user_id=to_user_id)
+            .execution_options(synchronize_session=False)
+        )
+        return getattr(result, "rowcount", 0) or 0
+
     async def remove_reset_logs(self, budget_id: str) -> None:
         """Stage the deletion of the budget's reset history.
 

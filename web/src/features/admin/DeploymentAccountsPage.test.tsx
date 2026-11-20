@@ -4,11 +4,17 @@ import userEvent from "@testing-library/user-event"
 import type { ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { BlockedEmail, DeploymentUser, PasswordLink } from "@/client"
+import type {
+  BlockedEmail,
+  DeploymentUser,
+  MergeUserResponse,
+  PasswordLink,
+} from "@/client"
 import { DeploymentAccountsPage } from "@/features/admin/DeploymentAccountsPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
+  user as billingUser,
   bootstrap,
   deploymentUser,
   organizationContext,
@@ -45,6 +51,7 @@ function mockApi(opts: {
   blocked?: BlockedEmail[]
   blockedCount?: number
   blockedAccountCount?: number
+  merge?: (preview: boolean) => Response
 }) {
   const granted = opts.granted ?? true
   const accounts = opts.accounts ?? [deploymentUser()]
@@ -94,6 +101,16 @@ function mockApi(opts: {
         ...organizationContext().caller,
         has_password: opts.hasPassword ?? false,
       })
+    }
+    if (url.endsWith("/merge") && opts.merge) {
+      const body = init?.body ? JSON.parse(String(init.body)) : {}
+      return opts.merge(body.preview === true)
+    }
+    if (url.includes(`${API_ROOT}/users?`)) {
+      return jsonResponse([
+        billingUser({ user_id: "pat-old", alias: "Pat (old id)" }),
+        billingUser({ user_id: ANALYST.id, alias: "analyst@example.com" }),
+      ])
     }
     if (url.endsWith("/password-link")) {
       return jsonResponse(opts.passwordLink, 201)
@@ -646,6 +663,126 @@ describe("DeploymentAccountsPage", () => {
         request.url.includes(`${API_ROOT}/admin/users`),
       ),
     ).toBe(false)
+  })
+})
+
+describe("Merge user record", () => {
+  function merged(preview: boolean): MergeUserResponse {
+    return {
+      user: billingUser({ user_id: ANALYST.id }),
+      source_user_id: "pat-old",
+      moved: { api_keys: 2, usage_logs: 140, traces: 0 },
+      spend: 3.5,
+      tokens: 1200,
+      requests: 9,
+      preview,
+    }
+  }
+
+  it("shows what moves before it merges, then merges on confirm", async () => {
+    const requests = mockApi({
+      accounts: [ANALYST],
+      merge: (preview) => jsonResponse(merged(preview)),
+    })
+    await renderPage(<DeploymentAccountsPage />)
+
+    const user = userEvent.setup()
+    await screen.findByText("Analyst")
+    await pressRowAction(user, "Merge another user record into Analyst")
+    const dialog = await screen.findByRole("dialog")
+    const field = within(dialog).getByRole("combobox", {
+      name: /Record to merge in/,
+    })
+    await user.click(field)
+    await user.click(
+      await screen.findByRole("option", { name: /Pat \(old id\)/ }),
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Show what moves" }),
+    )
+
+    const list = await within(dialog).findByRole("list", { name: "What moves" })
+    expect(list).toHaveTextContent("usage rows140")
+    expect(list).toHaveTextContent("API keys2")
+    expect(list).not.toHaveTextContent("agent traces")
+    const merges = () => requests.filter((r) => r.url.endsWith("/merge"))
+    expect(merges()).toHaveLength(1)
+    expect(merges()[0].url).toContain(`${API_ROOT}/users/${ANALYST.id}/merge`)
+    expect(merges()[0].body).toEqual({
+      source_user_id: "pat-old",
+      preview: true,
+    })
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "Merge records" }),
+    )
+
+    expect(await screen.findByText(/is merged into/)).toBeInTheDocument()
+    expect(merges()).toHaveLength(2)
+    expect(merges()[1].body).toEqual({
+      source_user_id: "pat-old",
+      preview: false,
+    })
+  })
+
+  it("does not offer the account's own record to merge into itself", async () => {
+    mockApi({
+      accounts: [ANALYST],
+      merge: (preview) => jsonResponse(merged(preview)),
+    })
+    await renderPage(<DeploymentAccountsPage />)
+
+    const user = userEvent.setup()
+    await screen.findByText("Analyst")
+    await pressRowAction(user, "Merge another user record into Analyst")
+    const dialog = await screen.findByRole("dialog")
+    await user.click(
+      within(dialog).getByRole("combobox", { name: /Record to merge in/ }),
+    )
+
+    expect(
+      await screen.findByRole("option", { name: /Pat \(old id\)/ }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("option", { name: /analyst@example.com/ }),
+    ).toBeNull()
+  })
+
+  it("says why a merge is refused and merges nothing", async () => {
+    const requests = mockApi({
+      accounts: [ANALYST],
+      merge: () =>
+        jsonResponse(
+          {
+            detail:
+              "Both users have an alias of the same name in one workspace: fast",
+          },
+          409,
+        ),
+    })
+    await renderPage(<DeploymentAccountsPage />)
+
+    const user = userEvent.setup()
+    await screen.findByText("Analyst")
+    await pressRowAction(user, "Merge another user record into Analyst")
+    const dialog = await screen.findByRole("dialog")
+    await user.click(
+      within(dialog).getByRole("combobox", { name: /Record to merge in/ }),
+    )
+    await user.click(
+      await screen.findByRole("option", { name: /Pat \(old id\)/ }),
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Show what moves" }),
+    )
+
+    expect(
+      await within(dialog).findByText(/alias of the same name/),
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole("button", { name: "Merge records" }),
+    ).toBeNull()
+    expect(requests.filter((r) => r.url.endsWith("/merge"))).toHaveLength(1)
   })
 })
 

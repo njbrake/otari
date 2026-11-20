@@ -344,3 +344,11 @@ class TelemetryStoragePort(Protocol):
         filter, so a caller cannot narrow it by accident and leave data behind.
         """
         ...
+
+    async def reassign_user(self, *, from_user_id: str, to_user_id: str) -> int:
+        """Attribute every row of ``from_user_id`` to ``to_user_id`` instead, and report how many moved.
+
+        For merging one user into another. Settles before returning, like
+        :meth:`record`, and moving rows that already moved moves none.
+        """
+        ...

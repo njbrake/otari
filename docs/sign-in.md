@@ -298,6 +298,8 @@ operator can:
   them.
 - grant or remove operator access.
 - send a password link.
+- merge another user record into the account's own (see
+  [Merging user records](#merging-user-records)).
 
 The bootstrap operator can also hand that role to another operator (see
 [The bootstrap operator](#the-bootstrap-operator)).
@@ -360,6 +362,37 @@ from a forgotten password on a deployment without mail.
 account: an address sent with it is the operator's sign-in address, and on an
 unclaimed deployment it claims the deployment. It refuses an address another
 account holds, pointing to the password link.
+
+#### Merging user records
+
+Keys and usage recorded under a user id typed before sign-in existed (`pat`)
+stay apart from the record a sign-in account bills through, its own id. On
+**Accounts**, **Merge user record…** folds such a record into the account's own:
+pick the record, read what moves, then confirm.
+
+`POST /api/v1/users/{user_id}/merge` with `source_user_id` does the same for an
+operator, in one transaction, and with `"preview": true` answers what would
+move and changes nothing. A merge:
+
+- moves every row that names the source onto this user: API keys, usage,
+  agent telemetry, traces, files, batches, budget reservations and resets,
+  per-user aliases, routing policies and provider endpoints, MCP grants and
+  connections, sandbox sessions, video jobs, idempotency records, and the end
+  users the source's service keys bill. `moved` counts each table, none moved
+  included;
+- adds the source's spend, token and request counters to this user's, which
+  keeps its own budget, model access and blocked flag;
+- keeps this user's MCP grant or connection where both hold one for a server,
+  and drops the source's;
+- soft-deletes the source, recording `merged_into`, `merged_at` and `merged_by`
+  (the operator's account id) in its metadata, and logs the merge with what it
+  moved.
+
+It is refused with 400 for a user merged into itself, and with 409 when the
+source is a sign-in account's own record (merge the other way round), has a
+budget reservation in flight, or shares with this user a per-user alias,
+routing policy or provider endpoint name in one workspace, or an end user id.
+A merge cannot be undone.
 
 #### Blocking email addresses
 

@@ -19,7 +19,7 @@ from gateway.models.inference import BatchRecord
 
 if TYPE_CHECKING:
     import uuid
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,3 +105,20 @@ async def claim_batch_accounting(db: AsyncSession, batch_id: str) -> bool:
     # getattr with a default: mypy sees .execute() as Result (no rowcount);
     # rowcount lives on CursorResult. Matches reserve_budget/_cas_reset_user_budget.
     return bool(getattr(result, "rowcount", 0))
+
+
+class BatchUserMergeListener:
+    """Moves a merged user's batch records inside the caller's transaction, so the user merged into owns the batches."""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self._db = db
+
+    async def user_merged(self, from_user_id: str, to_user_id: str) -> Mapping[str, int]:
+        """Point every batch of ``from_user_id`` at ``to_user_id``."""
+        result = await self._db.execute(
+            update(BatchRecord)
+            .where(BatchRecord.user_id == from_user_id)
+            .values(user_id=to_user_id)
+            .execution_options(synchronize_session=False)
+        )
+        return {"batches": getattr(result, "rowcount", 0) or 0}

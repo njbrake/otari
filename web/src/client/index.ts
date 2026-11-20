@@ -223,6 +223,8 @@ export type UsageFilterKeysArePinned = Assert<
 // ---------------------------------------------------------------------------
 export type User = Schemas["UserResponse"]
 export type UpdateUserRequest = Schemas["UpdateUserRequest"]
+export type MergeUserRequest = Schemas["MergeUserRequest"]
+export type MergeUserResponse = Schemas["MergeUserResponse"]
 export type ApiKey = Schemas["KeyInfo"]
 export type ApiKeyDisabledReason = Schemas["DisabledReason"]
 export type KeyScope = Schemas["KeyScope"]
