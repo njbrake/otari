@@ -1,4 +1,11 @@
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactElement } from "react"
 import { useState } from "react"
@@ -81,6 +88,15 @@ function mockMatchMedia(matches: boolean, options: { legacy?: boolean } = {}) {
   }
   vi.stubGlobal("matchMedia", vi.fn().mockReturnValue(mql))
   return { mql, listeners }
+}
+
+/** The expanded width the shell publishes for the rail and `--rail-width`. */
+function railWidth(container: HTMLElement): string {
+  return (
+    container
+      .querySelector<HTMLElement>("[data-rail]")
+      ?.style.getPropertyValue("--rail-expanded-width") ?? ""
+  )
 }
 
 // AppShell is the root route's component in the real tree, so it renders its
@@ -386,28 +402,40 @@ describe("AppShell responsive layout", () => {
     ).not.toHaveAttribute("aria-current")
   })
 
-  it("renders the rail at one fixed width (not a drawer) on desktop", async () => {
+  it("renders the rail in flow at the design's width on desktop", async () => {
     mockMatchMedia(false)
     const { container } = await renderShell()
 
     const aside = container.querySelector("aside")
-    // Desktop keeps the in-flow rail rather than an overlay, and it is one
-    // width: no inline style, because nothing drags it any more.
+    // Desktop keeps the in-flow rail rather than an overlay, at 264px until
+    // somebody drags it.
     expect(aside?.className).not.toContain("absolute")
-    expect(aside?.className).toContain("w-[16.5rem]")
-    expect(aside?.getAttribute("style")).toBeNull()
+    expect(aside?.className).toContain("w-(--rail-expanded-width)")
+    expect(railWidth(container)).toBe("264px")
     expect(
-      screen.queryByRole("separator", { name: "Resize sidebar" }),
-    ).toBeNull()
+      screen.getByRole("separator", { name: "Resize sidebar" }),
+    ).toHaveAttribute("aria-valuenow", "264")
   })
 
-  it("collapses to the narrow rail rather than to a remembered width", async () => {
+  it("collapses to the narrow rail with no resize handle", async () => {
     mockMatchMedia(false)
     const user = userEvent.setup()
     const { container } = await renderShell()
 
     await user.click(screen.getByRole("button", { name: "Collapse sidebar" }))
     expect(container.querySelector("aside")?.className).toContain("w-[4.5rem]")
+    expect(
+      screen.queryByRole("separator", { name: "Resize sidebar" }),
+    ).toBeNull()
+  })
+
+  it("offers no resize handle in the mobile drawer", async () => {
+    mockMatchMedia(true)
+    await renderShell()
+
+    expect(
+      screen.queryByRole("separator", { name: "Resize sidebar" }),
+    ).toBeNull()
   })
 
   it("resets the submenu and preserves focus across the mobile breakpoint", async () => {
@@ -617,6 +645,156 @@ describe("AppShell responsive layout", () => {
     expect(
       screen.getByRole("button", { name: "Open navigation" }),
     ).toHaveAttribute("aria-expanded", "false")
+  })
+})
+
+describe("the resizable rail", () => {
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+    window.localStorage.clear()
+  })
+
+  // jsdom implements neither pointer capture nor layout, so both are stood in
+  // for on the handle and the rail it measures from.
+  const handle = () => {
+    const element = screen.getByRole("separator", { name: "Resize sidebar" })
+    Object.assign(element, {
+      setPointerCapture: vi.fn(),
+      releasePointerCapture: vi.fn(),
+    })
+    return element
+  }
+
+  it("is a focusable vertical separator with its range", async () => {
+    mockMatchMedia(false)
+    await renderShell()
+
+    expect(handle()).toHaveAttribute("aria-orientation", "vertical")
+    expect(handle()).toHaveAttribute("aria-valuemin", "200")
+    expect(handle()).toHaveAttribute("aria-valuemax", "480")
+    expect(handle()).toHaveAttribute("tabindex", "0")
+  })
+
+  it("nudges the width from the keyboard and remembers it", async () => {
+    mockMatchMedia(false)
+    const user = userEvent.setup()
+    const { container } = await renderShell()
+
+    handle().focus()
+    await user.keyboard("{ArrowRight}{ArrowRight}")
+    expect(handle()).toHaveAttribute("aria-valuenow", "296")
+    expect(railWidth(container)).toBe("296px")
+    expect(window.localStorage.getItem("otari.dashboard.sidebarWidth")).toBe(
+      "296",
+    )
+
+    await user.keyboard("{ArrowLeft}")
+    expect(handle()).toHaveAttribute("aria-valuenow", "280")
+    expect(railWidth(container)).toBe("280px")
+  })
+
+  it("stops at the top of its range", async () => {
+    mockMatchMedia(false)
+    const user = userEvent.setup()
+    window.localStorage.setItem("otari.dashboard.sidebarWidth", "470")
+    const { container } = await renderShell()
+
+    handle().focus()
+    await user.keyboard("{ArrowRight}{ArrowRight}")
+    expect(handle()).toHaveAttribute("aria-valuenow", "480")
+    expect(railWidth(container)).toBe("480px")
+  })
+
+  it("stops at the bottom of its range", async () => {
+    mockMatchMedia(false)
+    const user = userEvent.setup()
+    window.localStorage.setItem("otari.dashboard.sidebarWidth", "210")
+    const { container } = await renderShell()
+
+    handle().focus()
+    await user.keyboard("{ArrowLeft}{ArrowLeft}")
+    expect(handle()).toHaveAttribute("aria-valuenow", "200")
+    expect(railWidth(container)).toBe("200px")
+  })
+
+  it("clamps a stored width outside the range and ignores a garbled one", async () => {
+    mockMatchMedia(false)
+    window.localStorage.setItem("otari.dashboard.sidebarWidth", "9000")
+    const { unmount } = await renderShell()
+    expect(handle()).toHaveAttribute("aria-valuenow", "480")
+    unmount()
+
+    window.localStorage.setItem("otari.dashboard.sidebarWidth", "wide")
+    await renderShell()
+    expect(handle()).toHaveAttribute("aria-valuenow", "264")
+  })
+
+  it("restores the remembered width on the next visit", async () => {
+    mockMatchMedia(false)
+    window.localStorage.setItem("otari.dashboard.sidebarWidth", "360")
+    const { container } = await renderShell()
+
+    expect(handle()).toHaveAttribute("aria-valuenow", "360")
+    expect(railWidth(container)).toBe("360px")
+  })
+
+  it("goes back to the default on a double-click and forgets the width", async () => {
+    mockMatchMedia(false)
+    const user = userEvent.setup()
+    window.localStorage.setItem("otari.dashboard.sidebarWidth", "400")
+    const { container } = await renderShell()
+
+    await user.dblClick(handle())
+    expect(handle()).toHaveAttribute("aria-valuenow", "264")
+    expect(railWidth(container)).toBe("264px")
+    expect(window.localStorage.getItem("otari.dashboard.sidebarWidth")).toBe(
+      null,
+    )
+  })
+
+  it("follows a pointer drag with no transition and no text selection", async () => {
+    mockMatchMedia(false)
+    const { container } = await renderShell()
+    const aside = container.querySelector("aside") as HTMLElement
+    aside.getBoundingClientRect = () => ({ left: 0 }) as DOMRect
+    const shell = container.firstElementChild as HTMLElement
+
+    fireEvent.pointerDown(handle(), { pointerId: 1, clientX: 264 })
+    expect(aside.className).not.toContain("transition-[width]")
+    expect(shell.className).toContain("select-none")
+
+    fireEvent.pointerMove(handle(), { pointerId: 1, clientX: 340 })
+    await waitFor(() =>
+      expect(handle()).toHaveAttribute("aria-valuenow", "340"),
+    )
+    // Not written mid-drag, only once it settles.
+    expect(window.localStorage.getItem("otari.dashboard.sidebarWidth")).toBe(
+      null,
+    )
+    fireEvent.pointerMove(handle(), { pointerId: 1, clientX: 900 })
+    await waitFor(() =>
+      expect(handle()).toHaveAttribute("aria-valuenow", "480"),
+    )
+
+    fireEvent.pointerUp(handle(), { pointerId: 1, clientX: 900 })
+    expect(railWidth(container)).toBe("480px")
+    expect(aside.className).toContain("transition-[width]")
+    expect(shell.className).not.toContain("select-none")
+    expect(window.localStorage.getItem("otari.dashboard.sidebarWidth")).toBe(
+      "480",
+    )
+  })
+
+  it("keeps the width across a collapse and an expand", async () => {
+    mockMatchMedia(false)
+    const user = userEvent.setup()
+    window.localStorage.setItem("otari.dashboard.sidebarWidth", "320")
+    await renderShell()
+
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }))
+    await user.click(screen.getByRole("button", { name: "Expand sidebar" }))
+    expect(handle()).toHaveAttribute("aria-valuenow", "320")
   })
 })
 

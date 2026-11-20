@@ -97,8 +97,12 @@ transparent when unselected, so a selection adds no width and nothing shifts.
 Every row is `min-h-11` (44px) rather than vertical padding, so a two-line label
 grows the row instead of breaking the touch floor.
 
-Expanded rail is `16.5rem`, collapsed is `4.5rem` with icons centered in a 44px row
-and labels in a tooltip. The states are the same values; only the label goes.
+Expanded rail opens at `16.5rem` and, from `md` up, drags between 200 and 480px
+from the separator on its right edge (arrow keys nudge it 16px, a double-click
+resets it); the width is remembered per browser. Collapsed is `4.5rem`, with no
+handle, icons centered in a 44px row and labels in a tooltip. The states are the
+same values at every width; only the label goes. Every label in a row truncates,
+so a narrow rail shortens labels rather than wrapping or overflowing.
 
 Never hand-write a nav row. `rowStyles.ts` owns the classes and
 `rowStyles.test.ts` asserts them; a page adds a route to the registry instead.
