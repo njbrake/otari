@@ -11,6 +11,20 @@ one of its own routes with the dashboard, so a reverse proxy in front of it has
 to forward every path, not only `/`. A link from an older release, written as
 `http://localhost:8000/#/organization/provider-keys`, still works: the dashboard
 moves it to the path it names.
+A bookmark of the retired Usage or Activity page keeps its filters too. A Usage
+link opens Home on the nearest period and breakdown, or **Requests** when it
+filters by a model, key, person, provider or policy, or **Sessions** when it was
+broken down by session; an Activity link opens **Requests** with the filters it
+carried.
+
+The dashboard reads `GET /api/v1/bootstrap` before it renders anything. If the
+gateway does not answer (it is down, restarting, or too slow to answer within 8
+seconds), the dashboard does not guess what it is connected to. It says the
+gateway is unreachable, keeps trying in the background with a growing wait of up
+to 30 seconds, tries again at once when the browser comes back online or the tab
+is shown again, and offers a **Retry** button. It opens as soon as an attempt
+answers, with no reload. A refusal such as a 404 is not retried on its own; use
+**Retry** once the address is fixed.
 
 ## Sign-in and secrets
 
@@ -260,4 +274,4 @@ service and privacy notice. The account menu links each one set; see
 The dashboard source is under `web/`, and the Docker image includes the
 bundle. From a source checkout, run `make dashboard` for the gateway to serve
 it, or `pnpm --dir web dev` for frontend development. See
-[web/README.md](https://github.com/mozilla-ai/otari/blob/465c698f52d320b8626cf486cae4f62fb8d6c4dd/web/README.md).
+[web/README.md](https://github.com/mozilla-ai/otari/blob/c2384c1111773197ea26a87c6efff3cd13a55ac0/web/README.md).
