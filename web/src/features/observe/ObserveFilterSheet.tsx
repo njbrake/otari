@@ -139,7 +139,7 @@ function SortSection({ state }: { state: ObserveFilterState }) {
         heading={
           <span className="flex min-w-0 items-center gap-2">
             Sort
-            <span className="truncate text-caption text-muted">{label}</span>
+            <span className="truncate text-caption">{label}</span>
           </span>
         }
         isExpanded={isExpanded}
