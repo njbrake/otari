@@ -581,6 +581,15 @@ export type PreferenceKey = Schemas["PreferenceKey"]
 export type UserPreference = Schemas["UserPreferencePublic"]
 
 // ---------------------------------------------------------------------------
+// Saved views of the Sessions and Requests pages
+// ---------------------------------------------------------------------------
+export type SavedViewPage = Schemas["SavedViewPage"]
+export type SavedView = Schemas["SavedViewPublic"]
+export type SavedViews = Schemas["SavedViewsPublic"]
+export type CreateSavedViewRequest = Schemas["SavedViewCreate"]
+export type UpdateSavedViewRequest = Schemas["SavedViewUpdate"]
+
+// ---------------------------------------------------------------------------
 // Search tools
 // ---------------------------------------------------------------------------
 export type SearchProviderInfo = Schemas["SearchProviderSchema"]

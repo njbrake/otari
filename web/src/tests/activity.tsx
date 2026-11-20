@@ -7,6 +7,7 @@ import type {
   DeploymentBootstrap,
   InFlightResponse,
   OrganizationMember,
+  SavedView,
   ScopedBudget,
   TraceDetail,
   TraceSummary,
@@ -112,9 +113,14 @@ export function mockApi(
     ceilings?: ScopedBudget[]
     // The signed-in person's stored preferences, by key; a write replaces one.
     preferences?: Record<string, unknown>
+    // A page's views, built in and saved; a write adds, changes or removes one.
+    savedViews?: SavedView[]
+    // Whether the caller manages the workspace, so may share a view.
+    canShareViews?: boolean
   } = {},
 ) {
   const preferences = new Map(Object.entries(opts.preferences ?? {}))
+  let savedViews = [...(opts.savedViews ?? [])]
   const rows = opts.rows ?? []
   const total = () => {
     const t = opts.total ?? rows.length
@@ -137,6 +143,44 @@ export function mockApi(
         body: typeof init?.body === "string" ? init.body : undefined,
       })
 
+      const savedView = url.match(/\/saved-views(?:\/([^?]+))?(?:\?|$)/)
+      if (savedView) {
+        const id = savedView[1] ? decodeURIComponent(savedView[1]) : ""
+        const body =
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined
+        if (method === "POST") {
+          const created: SavedView = {
+            id: `saved-${savedViews.length + 1}`,
+            page: body.page,
+            name: body.name,
+            query: body.query,
+            built_in: false,
+            shared: body.shared ?? false,
+            is_mine: true,
+            owner_name: "You",
+            can_edit: true,
+            can_delete: true,
+            updated_at: new Date().toISOString(),
+          }
+          savedViews = [...savedViews, created]
+          return jsonResponse(created, 201)
+        }
+        if (method === "PATCH") {
+          savedViews = savedViews.map((one) =>
+            one.id === id ? { ...one, ...body } : one,
+          )
+          return jsonResponse(savedViews.find((one) => one.id === id))
+        }
+        if (method === "DELETE") {
+          savedViews = savedViews.filter((one) => one.id !== id)
+          return new Response(null, { status: 204 })
+        }
+        const page = new URL(url, "http://localhost").searchParams.get("page")
+        return jsonResponse({
+          data: savedViews.filter((one) => one.page === page),
+          can_share: opts.canShareViews ?? false,
+        })
+      }
       const preference = url.match(/\/me\/preferences\/([^?]+)$/)
       if (preference) {
         const key = decodeURIComponent(preference[1])
