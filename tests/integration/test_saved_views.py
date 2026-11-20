@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.api.deps import get_membership_listener
 from gateway.core.config import API_ROOT
 from gateway.core.unit_of_work import UnitOfWork
-from gateway.exceptions.organizations_exceptions import WorkspaceNotFoundError
+from gateway.exceptions.organizations_exceptions import UserMergeRefusedError, WorkspaceNotFoundError
 from gateway.exceptions.saved_views_exceptions import (
     SavedViewLimitReachedError,
     SavedViewNameTakenError,
@@ -30,7 +30,7 @@ from gateway.models.tenancy import Organization, User, Workspace
 from gateway.repositories.saved_views import SavedViewRepository
 from gateway.repositories.tenancy import WorkspaceMemberRepository
 from gateway.schemas.saved_views import SavedViewCreate, SavedViewUpdate
-from gateway.services.saved_views import SavedViewService
+from gateway.services.saved_views import SavedViewService, SavedViewUserMergeListener
 from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_service import WorkspaceService
@@ -327,3 +327,36 @@ def test_a_workspace_that_does_not_exist_is_not_found(client: TestClient, master
         f"{API_ROOT}/workspaces/{uuid.uuid4()}/saved-views", params={"page": "requests"}, headers=master_key_header
     )
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_user_merge_moves_views_onto_the_target_and_refuses_a_shared_name(async_db: AsyncSession) -> None:
+    organization, workspace, manager, member = await _world(async_db, "views-merge")
+    service = _service(async_db)
+    await service.create_view(user=member, workspace_id=workspace.id, request=_create("Slow"))
+    await service.create_view(user=member, workspace_id=workspace.id, request=_create("Errors"))
+    uow = UnitOfWork(async_db)
+    listener = SavedViewUserMergeListener(SavedViewRepository(uow))
+
+    async def merged(source: str, target: str, *, preview: bool) -> object:
+        async with uow:
+            return await listener.user_merged(source, target, preview=preview, resumed=False)
+
+    async def elsewhere(user_id: str, workspace_ids: list[uuid.UUID]) -> list[str]:
+        async with uow:
+            return await listener.rows_elsewhere(user_id, workspace_ids)
+
+    assert await merged("legacy-id", str(manager.id), preview=True) == {"saved_views": 0}
+    assert await elsewhere(str(member.id), [workspace.id]) == []
+    assert await elsewhere(str(member.id), [uuid.uuid4()]) == ["saved_views"]
+    assert await merged(str(member.id), str(manager.id), preview=True) == {"saved_views": 2}
+
+    await service.create_view(user=manager, workspace_id=workspace.id, request=_create("slow"))
+    with pytest.raises(UserMergeRefusedError):
+        await merged(str(member.id), str(manager.id), preview=True)
+    await _reload(async_db)
+
+    other = await create_member(async_db, organization, role="member", full_name="Other")
+    assert await merged(str(member.id), str(other.id), preview=False) == {"saved_views": 2}
+    owners = (await async_db.execute(select(SavedView.user_id).where(SavedView.user_id == other.id))).scalars().all()
+    assert len(owners) == 2

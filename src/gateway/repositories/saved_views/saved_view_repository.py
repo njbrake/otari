@@ -4,9 +4,10 @@ import uuid
 from collections.abc import Collection
 from typing import Any, Never
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
 
 from gateway.core.sql import dialect_name
@@ -107,3 +108,40 @@ class SavedViewRepository(BaseRepository[SavedView, Never, Never]):
             delete(SavedView).where(SavedView.user_id == user_id, SavedView.workspace_id.in_(list(workspace_ids)))
         )
         await self.db.flush()
+
+    async def count_owned_by(self, user_id: uuid.UUID) -> int:
+        """Count every view this person saved, on any page of any workspace."""
+        result = await self.db.execute(select(func.count()).select_from(SavedView).where(SavedView.user_id == user_id))
+        return result.scalar_one()
+
+    async def owned_outside(self, user_id: uuid.UUID, workspace_ids: Collection[uuid.UUID]) -> bool:
+        """Whether this person saved a view in a workspace other than these."""
+        result = await self.db.execute(
+            select(SavedView.id)
+            .where(SavedView.user_id == user_id, SavedView.workspace_id.not_in(list(workspace_ids)))
+            .limit(1)
+        )
+        return result.first() is not None
+
+    async def names_owned_by_both(self, first: uuid.UUID, second: uuid.UUID) -> list[str]:
+        """The view names both people saved on one page of one workspace, ignoring case."""
+        other = aliased(SavedView)
+        result = await self.db.execute(
+            select(SavedView.name)
+            .join(
+                other,
+                (other.workspace_id == SavedView.workspace_id)
+                & (other.page == SavedView.page)
+                & (func.lower(other.name) == func.lower(SavedView.name)),
+            )
+            .where(SavedView.user_id == first, other.user_id == second)
+        )
+        return sorted(set(result.scalars().all()))
+
+    async def reassign_owner(self, from_user_id: uuid.UUID, to_user_id: uuid.UUID) -> int:
+        """Stage moving every view one person saved onto another; the number moved."""
+        result = await self.db.execute(
+            update(SavedView).where(SavedView.user_id == from_user_id).values(user_id=to_user_id)
+        )
+        await self.db.flush()
+        return int(getattr(result, "rowcount", 0) or 0)

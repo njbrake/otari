@@ -384,7 +384,7 @@ member once a workspace manager shares it. The pages are a closed vocabulary in
 `models/saved_views.py`, with the query keys each one keeps in a view, and each
 page's built-in views are the service's own, never stored. A view goes with its
 owner, with its workspace, and with its owner's membership of that workspace
-(`SavedViewMembershipListener`).
+(`SavedViewMembershipListener`), and follows a merged user (`SavedViewUserMergeListener`).
 
 Built in the target shape from the start.
 

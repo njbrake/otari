@@ -54,7 +54,7 @@ from gateway.services.organizations import (
 from gateway.services.policy_store import refresh_policy_cache
 from gateway.services.providers import ProviderEndpointUserMergeListener, refresh_provider_endpoint_cache
 from gateway.services.routing import RoutingUserMergeListener
-from gateway.services.saved_views import SavedViewMembershipListener
+from gateway.services.saved_views import SavedViewMembershipListener, SavedViewUserMergeListener
 from gateway.services.tenancy import (
     InvitationClaimSettings,
     MembershipListener,
@@ -240,6 +240,7 @@ def get_user_merge_service(
             SandboxContainerUserMergeListener(uow),
             AliasUserMergeListener(db),
             BatchUserMergeListener(db),
+            SavedViewUserMergeListener(SavedViewRepository(uow)),
         ),
     )
 
