@@ -67,7 +67,9 @@ import { PostSignInGate } from "@/app/overlayPostSignInGate"
 import { ShellBanner } from "@/app/overlayShellBanner"
 import { PendingPage } from "@/app/PendingPage"
 import { TelemetryIdentity } from "@/app/TelemetryIdentity"
+import { usePageLoading } from "@/app/usePageLoading"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
+import { LoadingBar } from "@/design-system/feedback/LoadingBar"
 import { useAdoptBrowserAvatar } from "@/features/account/avatar/avatarChoice"
 import { CreateKeyHost } from "@/features/keys/CreateKeyHost"
 import { useOpenCreateKey } from "@/features/keys/openCreateKey"
@@ -1325,7 +1327,8 @@ function AppShellChrome() {
           <header
             // The design's top bar sits on the page ground rather than on a
             // card fill, so the rail is the only chrome that reads as a surface.
-            className="flex min-h-14 shrink-0 items-center gap-4 border-b border-border bg-background pr-5 pl-4"
+            // `relative` so the page's loading bar can lie over its bottom rule.
+            className="relative flex min-h-14 shrink-0 items-center gap-4 border-b border-border bg-background pr-5 pl-4"
           >
             <div className="flex min-w-0 flex-1 items-center gap-4">
               <button
@@ -1374,6 +1377,7 @@ function AppShellChrome() {
               <MobileWalletNavSlot />
             </div>
             <TopBarActions />
+            <PageLoadingBar />
           </header>
           <main
             ref={mainRef}
@@ -1486,4 +1490,13 @@ function AppShellChrome() {
       </div>
     </div>
   )
+}
+
+/**
+ * The page's loading bar, apart from the chrome: `usePageLoading` re-renders
+ * on every first read that starts or settles anywhere, and the rest of the
+ * shell has no reason to render again with it.
+ */
+function PageLoadingBar() {
+  return <LoadingBar isActive={usePageLoading()} />
 }
