@@ -1,5 +1,6 @@
 import { Spinner, Table } from "@heroui/react"
 import type {
+  CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactNode,
@@ -82,9 +83,14 @@ export interface DataTableColumn<Row> {
    * header row and leave it out.
    */
   headerAction?: ReactNode
-  /** Fixed/initial pixel width; only meaningful when the table is `resizable`. */
+  /**
+   * Pixel width. In a resizable table it is the default a drag starts from, and
+   * a column without one shares whatever width is left.
+   */
   width?: number
   minWidth?: number
+  /** The widest a resizable table lets this column be dragged. */
+  maxWidth?: number
 }
 
 export interface DataTableProps<Row> {
@@ -112,6 +118,17 @@ export interface DataTableProps<Row> {
   rowClassName?: (row: Row) => string | undefined
   /** Enables draggable column resize handles. */
   isResizable?: boolean
+  /**
+   * Pixel widths by column id, over each column's own `width`, for a resizable
+   * table whose layout is kept elsewhere. Without it the table keeps what a
+   * drag leaves for as long as it is mounted.
+   */
+  columnWidths?: Record<string, number>
+  /**
+   * Told the pixel width of every column a drag left sized, once it ends.
+   * Columns still sharing the leftover width are not in it.
+   */
+  onColumnResizeEnd?: (widths: Record<string, number>) => void
   /**
    * Inline detail: when `detailKey` matches a row's key, `renderDetail(row)`
    * renders as a full-width row directly under that row (accordion style), so
@@ -435,6 +452,8 @@ function DataTableGrid<Row extends object>({
   onRowAction,
   rowClassName,
   isResizable = false,
+  columnWidths,
+  onColumnResizeEnd,
   detailKey = null,
   renderDetail,
 }: DataTableProps<Row>) {
@@ -443,6 +462,48 @@ function DataTableGrid<Row extends object>({
     ? Table.ResizableContainer
     : Table.ScrollContainer
   const columnCount = columns.length + (showSelection ? 1 : 0)
+
+  // While a drag runs, the widths it reports; once it ends, the caller's
+  // (`columnWidths`), or this table's own when the caller keeps none. Widths
+  // are controlled throughout, so the row cache is never rebuilt by a drag.
+  const [dragWidths, setDragWidths] = useState<Record<string, number> | null>(
+    null,
+  )
+  const [ownWidths, setOwnWidths] = useState<Record<string, number>>({})
+  const widths = dragWidths ?? columnWidths ?? ownWidths
+  const columnIds = new Set(columns.map((col) => col.id))
+  const pixelWidths = (map: Map<Key, unknown>) => {
+    const out: Record<string, number> = {}
+    for (const [key, width] of map) {
+      if (typeof width === "number" && columnIds.has(String(key)))
+        out[String(key)] = width
+    }
+    return out
+  }
+  const resizeProps = isResizable
+    ? {
+        onResize: (map: Map<Key, unknown>) => setDragWidths(pixelWidths(map)),
+        onResizeEnd: (map: Map<Key, unknown>) => {
+          const ended = pixelWidths(map)
+          setDragWidths(null)
+          setOwnWidths(ended)
+          onColumnResizeEnd?.(ended)
+        },
+      }
+    : {}
+  // Where each column starts, as `--table-column-start-<id>`, for a stylesheet
+  // that pins a column: the offset follows a drag and a hidden column. Only
+  // as far as every column before it has a pixel width.
+  const columnStarts: Record<string, string> = {}
+  if (isResizable) {
+    let start: number | undefined = showSelection ? SELECTION_COLUMN_WIDTH : 0
+    for (const col of columns) {
+      if (start === undefined) break
+      columnStarts[`--table-column-start-${col.id}`] = `${start}px`
+      const width = widths[col.id] ?? col.width
+      start = width === undefined ? undefined : start + width
+    }
+  }
 
   const rootRef = useRef<HTMLDivElement | null>(null)
 
@@ -707,8 +768,13 @@ function DataTableGrid<Row extends object>({
   )
 
   return (
-    <Table.Root ref={rootRef} className="otari-table">
+    <Table.Root
+      ref={rootRef}
+      className="otari-table"
+      style={isResizable ? (columnStarts as CSSProperties) : undefined}
+    >
       <Container
+        {...resizeProps}
         className="overflow-x-auto"
         onPointerDownCapture={startPress}
         onMouseDownCapture={startPress}
@@ -784,8 +850,9 @@ function DataTableGrid<Row extends object>({
                 id={col.id}
                 isRowHeader={col.isRowHeader}
                 allowsSorting={col.allowsSorting}
-                width={col.width}
+                width={widths[col.id] ?? col.width}
                 minWidth={col.minWidth}
+                maxWidth={col.maxWidth}
                 className={`group/column${col.align === "end" ? " text-right" : ""}`}
               >
                 {({ sortDirection }) => (
@@ -842,7 +909,12 @@ function DataTableGrid<Row extends object>({
                       </span>
                     ) : null}
                     {isResizable ? (
-                      <Table.ColumnResizer className="ml-auto cursor-col-resize px-1" />
+                      // react-aria names the handle by this and by the
+                      // header it sits in, so "Resize" reads "Resize Cost".
+                      <Table.ColumnResizer
+                        aria-label="Resize"
+                        className="ml-auto cursor-col-resize px-1"
+                      />
                     ) : null}
                   </div>
                 )}

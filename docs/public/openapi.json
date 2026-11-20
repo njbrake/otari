@@ -13474,6 +13474,7 @@
         "title": "InviteOrganizationMemberResultPublic",
         "type": "object"
       },
+      "JsonValue": {},
       "JudgeVerdictRequest": {
         "additionalProperties": false,
         "description": "One judge gate's verdict, as the caller's own model call produced it.",
@@ -21973,6 +21974,15 @@
         ],
         "title": "PolicyResponse",
         "type": "object"
+      },
+      "PreferenceKey": {
+        "description": "Every preference a person can store. A new one is added here, so nothing else can be written.",
+        "enum": [
+          "table:sessions",
+          "table:requests"
+        ],
+        "title": "PreferenceKey",
+        "type": "string"
       },
       "PricingDriftRow": {
         "description": "A stored deployment rate beside the default it shadows.",
@@ -30802,6 +30812,78 @@
           "total"
         ],
         "title": "UsageValueGroups",
+        "type": "object"
+      },
+      "UserPreferencePublic": {
+        "description": "One of the caller's preferences, or the key alone when nothing is stored under it.",
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/PreferenceKey"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it was last written, or null when nothing is stored.",
+            "title": "Updated At"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the dashboard stored, or null when nothing is, so the dashboard uses its defaults.",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "updated_at"
+        ],
+        "title": "UserPreferencePublic",
+        "type": "object"
+      },
+      "UserPreferenceUpdate": {
+        "additionalProperties": false,
+        "description": "The whole value to store under a key, replacing whatever was there.",
+        "example": {
+          "value": {
+            "hidden": [
+              "routing"
+            ],
+            "widths": {
+              "model": 240
+            }
+          }
+        },
+        "properties": {
+          "value": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "A JSON object of the dashboard's own shape, at most 16384 bytes as compact JSON. The gateway stores it as given and never reads inside it.",
+            "title": "Value",
+            "type": "object"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "UserPreferenceUpdate",
         "type": "object"
       },
       "UserResponse": {
@@ -44372,6 +44454,155 @@
         ],
         "x-otari-key-scopes": [
           "mcp:read"
+        ]
+      }
+    },
+    "/api/v1/me/preferences/{key}": {
+      "delete": {
+        "description": "Forget what the caller stored under ``key``, so the dashboard's defaults apply again.",
+        "operationId": "preferences-delete_own_preference",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PreferenceKey"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Delete Own Preference",
+        "tags": [
+          "preferences"
+        ]
+      },
+      "get": {
+        "description": "Read what the caller stored under ``key``. Nothing stored answers 200 with a null value.",
+        "operationId": "preferences-get_own_preference",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PreferenceKey"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPreferencePublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Own Preference",
+        "tags": [
+          "preferences"
+        ]
+      },
+      "put": {
+        "description": "Store a value under ``key`` for the caller, replacing what was there. Over 16 KiB answers 422.",
+        "operationId": "preferences-put_own_preference",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PreferenceKey"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPreferenceUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPreferencePublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Put Own Preference",
+        "tags": [
+          "preferences"
         ]
       }
     },

@@ -110,8 +110,11 @@ export function mockApi(
     tools?: string[]
     // The deployment's spend ceilings, which the session panel reads per key.
     ceilings?: ScopedBudget[]
+    // The signed-in person's stored preferences, by key; a write replaces one.
+    preferences?: Record<string, unknown>
   } = {},
 ) {
+  const preferences = new Map(Object.entries(opts.preferences ?? {}))
   const rows = opts.rows ?? []
   const total = () => {
     const t = opts.total ?? rows.length
@@ -134,6 +137,22 @@ export function mockApi(
         body: typeof init?.body === "string" ? init.body : undefined,
       })
 
+      const preference = url.match(/\/me\/preferences\/([^?]+)$/)
+      if (preference) {
+        const key = decodeURIComponent(preference[1])
+        if (method === "PUT" && typeof init?.body === "string") {
+          preferences.set(key, JSON.parse(init.body).value)
+        }
+        if (method === "DELETE") {
+          preferences.delete(key)
+          return new Response(null, { status: 204 })
+        }
+        return jsonResponse({
+          key,
+          value: preferences.get(key) ?? null,
+          updated_at: null,
+        })
+      }
       if (url.endsWith(`${API_ROOT}/usage`) && method === "DELETE") {
         return jsonResponse({ deleted: 1 })
       }

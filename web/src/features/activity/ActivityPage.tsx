@@ -25,6 +25,10 @@ import {
 import { ObserveColumnFilter } from "@/features/observe/ObserveColumnFilter"
 import { funnelFor } from "@/features/observe/observeColumnFilters"
 import { readThreshold } from "@/features/observe/observeFilters"
+import {
+  laidOutColumns,
+  useObserveTableLayout,
+} from "@/features/observe/observeTableLayout"
 import { useObserveScope } from "@/features/observe/useObserveScope"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { userDisplay } from "@/features/users/userDisplay"
@@ -773,6 +777,15 @@ function ActivityPageContent({
       },
     ]
   }, [groupOutcomes, memberLabels, funnels])
+  // On a desk the person's own layout: their widths, without the columns they
+  // hid. The phone's cards keep every field, since nothing there can bring a
+  // hidden one back.
+  const layout = useObserveTableLayout("requests")
+  const shownColumns = useMemo(
+    () =>
+      isMobile ? columns : laidOutColumns("requests", columns, layout.hidden),
+    [isMobile, columns, layout.hidden],
+  )
 
   return (
     <div className="flex flex-col">
@@ -878,7 +891,10 @@ function ActivityPageContent({
             <DataTable
               mobileLayout="cards"
               ariaLabel="Activity log"
-              columns={columns}
+              columns={shownColumns}
+              isResizable
+              columnWidths={layout.widths}
+              onColumnResizeEnd={layout.resize}
               rows={rows}
               getRowKey={getActivityRowKey}
               isLoading={usage.isLoading}

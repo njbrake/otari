@@ -2,6 +2,7 @@ import { useState } from "react"
 import { FiSliders } from "react-icons/fi"
 
 import { Button } from "@/design-system/actions/Button"
+import { ColumnPicker } from "@/design-system/data/ColumnPicker"
 import { useIsMobile } from "@/design-system/hooks/useIsMobile"
 import {
   type FilterChip,
@@ -27,6 +28,30 @@ import {
   useValueOptions,
 } from "./observeFilters"
 import { type ObserveView, rangesFor } from "./observeSearch"
+import {
+  type LayoutView,
+  OBSERVE_TABLE_LAYOUTS,
+  useObserveTableLayout,
+} from "./observeTableLayout"
+
+const isLayoutView = (view: ObserveView): view is LayoutView =>
+  Object.hasOwn(OBSERVE_TABLE_LAYOUTS, view)
+
+/** The Columns control for a tab's table: which columns it shows, and a reset of its layout. */
+function ObserveColumnsControl({ view }: { view: LayoutView }) {
+  const layout = useObserveTableLayout(view)
+  return (
+    <ColumnPicker
+      columns={OBSERVE_TABLE_LAYOUTS[view].columns}
+      hidden={layout.hidden}
+      onHiddenChange={layout.setHidden}
+      onReset={layout.reset}
+      canReset={layout.isCustomized}
+      // Level with the select's box rather than its box and label.
+      className="self-end"
+    />
+  )
+}
 
 const labelFrom = (
   options: { value: string; label: string }[],
@@ -294,6 +319,10 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
               onChange={pickRange}
               options={rangeOptions}
             />
+            {/* The phone's cards have no columns to size or hide. */}
+            {!isMobile && isLayoutView(view) ? (
+              <ObserveColumnsControl view={view} />
+            ) : null}
             {offersSheet ? (
               <Button
                 size="sm"

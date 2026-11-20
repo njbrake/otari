@@ -130,6 +130,7 @@ from gateway.api.deps.ports import (
     get_telemetry_storage_port,
     model_provider_port_on,
 )
+from gateway.api.deps.preferences import PreferenceServiceDep, get_preference_service
 from gateway.api.deps.tools import (
     CodeExecutionEnvironmentServiceDep,
     DirectToolAvailabilityDep,
@@ -1251,6 +1252,7 @@ __all__ = [
     "TelemetryStoragePortDep",
     "ToolPorts",
     "ToolPortsDep",
+    "PreferenceServiceDep",
     "TraceServiceDep",
     "UnitOfWorkDep",
     "UpdateCheckServiceDep",
@@ -1283,6 +1285,7 @@ __all__ = [
     "build_unavailable_model_reporter",
     "build_update_check_service",
     "build_usage_rollup_service",
+    "get_preference_service",
     "catalog_reader_operates_deployment",
     "catalog_reader_organization",
     "cookie_may_authenticate",

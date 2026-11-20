@@ -489,6 +489,33 @@
 .otari-table .table__column::after {
   content: none;
 }
+/* A resizable column's handle. HeroUI draws it at rest as the short separator
+   the rule above takes away, which would put the vertical rules data.md forbids
+   back between the headers, so it is clear until its column is hovered and
+   keeps HeroUI's own accent while hovered, dragged or focused. A rule into the
+   library's DOM because the separator's fill is the only thing no variable
+   reaches without recoloring every separator.
+
+   Half of the handle lies over the next header, which paints later and would
+   otherwise take the press. */
+.otari-table .table__column-resizer {
+  z-index: 2;
+}
+.otari-table
+  .table__column-resizer:not([data-hovered="true"]):not(
+    [data-resizing="true"]
+  ):not([data-focus-visible="true"]) {
+  background-color: transparent;
+}
+@media (hover: hover) {
+  .otari-table
+    .table__column:hover
+    .table__column-resizer:not([data-hovered="true"]):not(
+      [data-resizing="true"]
+    ) {
+    background-color: var(--color-border);
+  }
+}
 /* The faint tier, because rows inside one group are divided rather than fenced.
    This said `--color-border` and all sixteen per-table classes overrode it to
    `--color-border-subtle`, so the base was simply the wrong value: sixteen

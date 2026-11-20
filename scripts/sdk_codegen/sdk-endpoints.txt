@@ -272,6 +272,12 @@ PUT /api/v1/auth/password                           # dashboard-only
 GET /api/v1/auth/profile                            # dashboard-only
 PATCH /api/v1/auth/profile                          # dashboard-only
 PUT /api/v1/auth/profile/avatar                     # dashboard-only
+# The signed-in person's dashboard preferences (a table's column widths and
+# hidden columns). The value is the dashboard's own document, so there is
+# nothing here for an SDK to wrap.
+GET /api/v1/me/preferences/{key}                    # dashboard-only
+PUT /api/v1/me/preferences/{key}                    # dashboard-only
+DELETE /api/v1/me/preferences/{key}                 # dashboard-only
 # Deleting the signed-in account: the account page's Danger Zone. It confirms with
 # the person's own address and password, which no SDK caller holds.
 DELETE /api/v1/auth/account                         # dashboard-only

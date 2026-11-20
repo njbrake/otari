@@ -18,6 +18,10 @@ import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { ActivityTimeline } from "@/features/activity/ActivityTimeline"
 import { ObserveColumnFilter } from "@/features/observe/ObserveColumnFilter"
 import { funnelFor } from "@/features/observe/observeColumnFilters"
+import {
+  laidOutColumns,
+  useObserveTableLayout,
+} from "@/features/observe/observeTableLayout"
 import { useObserveScope } from "@/features/observe/useObserveScope"
 import { useOrganizationContext } from "@/shared/api/organizations"
 import {
@@ -339,6 +343,17 @@ function SessionsPageContent({ embedded }: { embedded: boolean }) {
       }),
     [peekId, withMarks, embedded],
   )
+  // On a desk the person's own layout: their widths, without the columns they
+  // hid. The phone's cards keep every field, since nothing there can bring a
+  // hidden one back.
+  const layout = useObserveTableLayout("sessions")
+  const shownColumns = useMemo(
+    () =>
+      isMobile
+        ? tableColumns
+        : laidOutColumns("sessions", tableColumns, layout.hidden),
+    [isMobile, tableColumns, layout.hidden],
+  )
   const openIndex = rows.findIndex((session) => session.trace_id === peekId)
   // The read's own summary once it lands: the list is a snapshot, and a
   // session still running has moved on since. Until then, the row on screen.
@@ -494,7 +509,10 @@ function SessionsPageContent({ embedded }: { embedded: boolean }) {
           <TableScrollFrame className="otari-sessions-table">
             <DataTable
               ariaLabel="Sessions"
-              columns={tableColumns}
+              columns={shownColumns}
+              isResizable
+              columnWidths={layout.widths}
+              onColumnResizeEnd={layout.resize}
               rows={rows}
               getRowKey={(session) => session.trace_id}
               sortDescriptor={sortDescriptor}

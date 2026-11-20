@@ -553,6 +553,12 @@ export type CreateRateLimitRuleRequest = Schemas["RateLimitRuleCreate"]
 export type UpdateRateLimitRuleRequest = Schemas["RateLimitRuleUpdate"]
 
 // ---------------------------------------------------------------------------
+// The signed-in person's dashboard preferences
+// ---------------------------------------------------------------------------
+export type PreferenceKey = Schemas["PreferenceKey"]
+export type UserPreference = Schemas["UserPreferencePublic"]
+
+// ---------------------------------------------------------------------------
 // Search tools
 // ---------------------------------------------------------------------------
 export type SearchProviderInfo = Schemas["SearchProviderSchema"]

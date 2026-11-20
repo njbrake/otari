@@ -81,6 +81,14 @@ holding what that column's funnel holds. Expand a section to load its values;
 changes apply as you make them. **Done** closes the sheet and **Clear all**
 removes every filter.
 
+On a desktop, drag the edge of a column's header to resize it, and use
+**Columns** at the end of the filter row to hide or show columns; the column
+that names each row (**Model** on Requests, **Name** on Sessions) is always
+shown. A filter on a hidden column stays in the chip row and still applies.
+**Reset columns** returns the widths and the columns to the defaults. The
+layout is saved to your account, per view, so it follows you to another browser
+or device. Phones show every field on the cards.
+
 **Status** narrows Requests, and Sessions for errors and successes. Exclusions,
 **Provider**, tool, source, pricing, routing and thresholds narrow Requests only, so they stay behind
 when you switch to Sessions. On Requests, dragging across the chart narrows the

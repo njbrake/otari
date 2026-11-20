@@ -270,6 +270,27 @@ export const Resizable: Story = {
   args: { isResizable: true },
 }
 
+/**
+ * Widths kept by the caller: `columnWidths` sizes Owner, and
+ * `onColumnResizeEnd` hears what each drag leaves, as a page saving its layout
+ * would.
+ */
+export const ResizableKept: Story = {
+  render: (args) => {
+    const [widths, setWidths] = useState<Record<string, number>>({
+      owner: 240,
+    })
+    return (
+      <DataTable
+        {...args}
+        isResizable
+        columnWidths={widths}
+        onColumnResizeEnd={setWidths}
+      />
+    )
+  },
+}
+
 /** `rowClassName` tints a row from the row's own data. */
 export const RowClassName: Story = {
   args: {

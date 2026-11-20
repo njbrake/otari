@@ -2680,14 +2680,14 @@ body {
 .otari-activity-table .table__column[data-key="user"],
 .otari-activity-table .table__cell[data-column="user"] {
   position: sticky;
-  left: 5.25rem;
+  left: var(--table-column-start-user, 5.25rem);
   z-index: 1;
   background-color: var(--color-background);
 }
 .otari-activity-table .table__column[data-key="model"],
 .otari-activity-table .table__cell[data-column="model"] {
   position: sticky;
-  left: 13.25rem;
+  left: var(--table-column-start-model, 13.25rem);
   z-index: 1;
   background-color: var(--color-background);
 }
@@ -2755,7 +2755,7 @@ body {
   .otari-sessions-table .table__column[data-key="name"],
   .otari-sessions-table .table__cell[data-column="name"] {
     position: sticky;
-    left: 11.375rem;
+    left: var(--table-column-start-name, 11.375rem);
     z-index: 1;
     background-color: var(--color-background);
   }
@@ -2763,6 +2763,18 @@ body {
   .otari-sessions-table[data-scrolled="true"] .table__cell[data-column="name"] {
     border-right: 1px solid var(--color-control-border);
   }
+}
+/* Both tables are resizable on a desk, where the widths above are only the
+   defaults: `DataTable` writes each column's width on the header, and where
+   each column starts as `--table-column-start-<id>`, which the pins read so they
+   follow a drag and a hidden column. The floors move into the columns' own
+   `minWidth`, since a CSS one would hold a header wider than react-aria laid
+   it out and slide every pin after it. */
+.otari-activity-table .table__resizable-container .table__content {
+  min-width: 0;
+}
+.otari-sessions-table .table__resizable-container .table__column[data-key] {
+  min-width: 0;
 }
 /* The row open in the panel. On the cells, pinned ones included: every cell
    paints its own background over the row's. */
