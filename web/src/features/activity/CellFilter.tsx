@@ -5,6 +5,12 @@ import { FiFilter, FiSlash } from "react-icons/fi"
 import { RowMenuItemContent } from "@/design-system/actions/RowMenuItemContent"
 import type { CellFilterMode } from "./cellFilters"
 
+/** The keys that open a focused cell's filter, as `aria-keyshortcuts` spells them. */
+export const CELL_FILTER_KEYS = "Shift+F10 ContextMenu"
+
+const opensFilter = (event: KeyboardEvent) =>
+  event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")
+
 /**
  * A cell's value with a filter on it beside: only the rows with this value, or
  * every row but those. The control shows while the pointer is over the cell or
@@ -16,12 +22,6 @@ import type { CellFilterMode } from "./cellFilters"
  * a cell the grid's arrow keys reach, the context-menu key or Shift+F10 opens
  * it (`CELL_FILTER_KEYS`), which the cell announces.
  */
-/** The keys that open a focused cell's filter, as `aria-keyshortcuts` spells them. */
-export const CELL_FILTER_KEYS = "Shift+F10 ContextMenu"
-
-const opensFilter = (event: KeyboardEvent) =>
-  event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")
-
 export function CellFilter({
   value,
   label,
