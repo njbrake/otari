@@ -364,6 +364,18 @@ often one caller may send, and hands each message to `FeedbackDeliveryPort`,
 whose core adapter forwards it to otari.ai without the caller's credentials. It
 is a core feature, switched by `feedback_enabled`, which is off by default.
 
+### preferences
+
+What a signed-in person chose about how the dashboard looks to them, such as a
+table's column widths and the columns it hides, kept on the server so it
+follows them to another browser (`user_preferences`). Each row belongs to one
+identity and goes with it. The keys are a closed vocabulary in
+`models/preferences.py`; a value is the dashboard's own JSON document, which the
+gateway bounds in size and never reads inside. Every route acts on the caller
+alone and takes no identity id.
+
+Built in the target shape from the start.
+
 ### Shared
 
 Cross-cutting modules that several domains import. They stay where they are.

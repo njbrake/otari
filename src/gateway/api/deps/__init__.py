@@ -130,6 +130,7 @@ from gateway.api.deps.ports import (
     get_telemetry_storage_port,
     model_provider_port_on,
 )
+from gateway.api.deps.preferences import PreferenceServiceDep, get_preference_service
 from gateway.api.deps.tools import (
     CodeExecutionEnvironmentServiceDep,
     DirectToolAvailabilityDep,
@@ -1236,6 +1237,7 @@ __all__ = [
     "PlatformConnectServiceDep",
     "PlaygroundToolOfferDep",
     "PortSessionDep",
+    "PreferenceServiceDep",
     "RateLimitServiceDep",
     "RequestSessionBillingPortDep",
     "RequestSessionModelProviderPortDep",
@@ -1327,6 +1329,7 @@ __all__ = [
     "get_platform_break_glass",
     "get_platform_client",
     "get_playground_tool_offer",
+    "get_preference_service",
     "get_request_session_billing_port",
     "get_request_session_model_provider_port",
     "get_search_catalog_caller",

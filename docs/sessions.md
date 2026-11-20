@@ -24,7 +24,9 @@ panel names the client with its version where the client gives one, such as
 The **Sessions** and **Requests** views share one time range and the user, API
 key, model and status filters, set from the funnel in a column's header, or
 on a phone from the **Filters** sheet (see
-[Requests](review-usage-and-requests.md#requests)). A session opens on **At a glance**, which splits
+[Requests](review-usage-and-requests.md#requests)). On a desktop each view's
+columns can be resized and hidden, and the layout is saved to your account (same
+section). A session opens on **At a glance**, which splits
 its time and cost, and shows what filled the model's context window. Pick a span
 to see its details, or switch to the timeline or the flat log. From the
 **Requests** view, **View trace** on a request opens its session on that call.

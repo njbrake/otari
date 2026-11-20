@@ -3155,6 +3155,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/preferences/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Own Preference
+         * @description Read what the caller stored under ``key``. Nothing stored answers 200 with a null value.
+         */
+        get: operations["preferences-get_own_preference"];
+        /**
+         * Put Own Preference
+         * @description Store a value under ``key`` for the caller, replacing what was there. Over 16 KiB answers 422.
+         */
+        put: operations["preferences-put_own_preference"];
+        post?: never;
+        /**
+         * Delete Own Preference
+         * @description Forget what the caller stored under ``key``, so the dashboard's defaults apply again.
+         */
+        delete: operations["preferences-delete_own_preference"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/messages": {
         parameters: {
             query?: never;
@@ -15708,6 +15736,7 @@ export interface components {
              */
             status: "invited";
         };
+        JsonValue: unknown;
         /**
          * JudgeVerdictRequest
          * @description One judge gate's verdict, as the caller's own model call produced it.
@@ -19874,6 +19903,12 @@ export interface components {
             workspace_id?: string | null;
         };
         /**
+         * PreferenceKey
+         * @description Every preference a person can store. A new one is added here, so nothing else can be written.
+         * @enum {string}
+         */
+        PreferenceKey: "table:sessions" | "table:requests";
+        /**
          * PricingDriftRow
          * @description A stored deployment rate beside the default it shadows.
          */
@@ -23599,6 +23634,48 @@ export interface components {
             start_date: string;
             /** Total */
             total: number;
+        };
+        /**
+         * UserPreferencePublic
+         * @description One of the caller's preferences, or the key alone when nothing is stored under it.
+         */
+        UserPreferencePublic: {
+            key: components["schemas"]["PreferenceKey"];
+            /**
+             * Updated At
+             * @description When it was last written, or null when nothing is stored.
+             */
+            updated_at: string | null;
+            /**
+             * Value
+             * @description What the dashboard stored, or null when nothing is, so the dashboard uses its defaults.
+             */
+            value: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+        };
+        /**
+         * UserPreferenceUpdate
+         * @description The whole value to store under a key, replacing whatever was there.
+         * @example {
+         *       "value": {
+         *         "hidden": [
+         *           "routing"
+         *         ],
+         *         "widths": {
+         *           "model": 240
+         *         }
+         *       }
+         *     }
+         */
+        UserPreferenceUpdate: {
+            /**
+             * Value
+             * @description A JSON object of the dashboard's own shape, at most 16384 bytes as compact JSON. The gateway stores it as given and never reads inside it.
+             */
+            value: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
         };
         /**
          * UserResponse
@@ -30238,6 +30315,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpErrorBody"];
+                };
+            };
+        };
+    };
+    "preferences-get_own_preference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: components["schemas"]["PreferenceKey"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPreferencePublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "preferences-put_own_preference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: components["schemas"]["PreferenceKey"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserPreferenceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPreferencePublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "preferences-delete_own_preference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: components["schemas"]["PreferenceKey"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

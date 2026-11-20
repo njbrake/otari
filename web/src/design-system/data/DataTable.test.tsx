@@ -972,3 +972,123 @@ describe('DataTable on a phone with mobileLayout="cards"', () => {
     )
   })
 })
+
+describe("DataTable resizing", () => {
+  const SIZED: DataTableColumn<Row>[] = [
+    {
+      id: "when",
+      header: "When",
+      cell: (r) => r.id,
+      width: 90,
+      minWidth: 60,
+    },
+    { id: "name", header: "Name", cell: (r) => r.name, isRowHeader: true },
+    {
+      id: "cost",
+      header: "Cost",
+      cell: (r) => r.cost,
+      width: 100,
+      minWidth: 60,
+      maxWidth: 400,
+    },
+  ]
+
+  // A resizable header's name ends with its handle's label.
+  const header = (name: string) =>
+    screen.getByRole("columnheader", { name: new RegExp(`^${name}`) })
+
+  it("draws a column at the width it is given, over its own default", () => {
+    render(
+      <DataTable
+        {...base({
+          columns: SIZED,
+          isResizable: true,
+          columnWidths: { cost: 150 },
+        })}
+      />,
+    )
+    // The header carries the laid-out width, which jsdom cannot compute.
+    expect(header("Cost")).toHaveStyle({ width: "150px" })
+    expect(header("When")).toHaveStyle({ width: "90px" })
+  })
+
+  it("publishes where each column starts, as far as the widths before it are known", () => {
+    render(
+      <DataTable
+        {...base({
+          columns: SIZED,
+          isResizable: true,
+          columnWidths: { when: 120 },
+        })}
+      />,
+    )
+    const table = screen.getByRole("grid", { name: "Test table" })
+    const root = table.closest(".otari-table") as HTMLElement
+    // A stylesheet pins a column from these: they are the layout fact itself.
+    expect(root.style.getPropertyValue("--table-column-start-when")).toBe("0px")
+    expect(root.style.getPropertyValue("--table-column-start-name")).toBe(
+      "120px",
+    )
+    // Name shares the leftover width, so nothing after it has a known start.
+    expect(root.style.getPropertyValue("--table-column-start-cost")).toBe("")
+  })
+
+  it("reports the widths a drag leaves, once it ends, and keeps them", () => {
+    const onColumnResizeEnd = vi.fn()
+    render(
+      <DataTable
+        {...base({ columns: SIZED, isResizable: true, onColumnResizeEnd })}
+      />,
+    )
+    const handle = screen.getByRole("slider", { name: /^Resize Cost/ })
+    // The handle's own box, which holds the visually hidden slider.
+    const grip = handle.parentElement as HTMLElement
+    const at = (x: number) => ({
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+      pageX: x,
+      clientX: x,
+    })
+    fireEvent.pointerDown(grip, at(100))
+    fireEvent.pointerMove(window, at(130))
+    fireEvent.pointerMove(window, at(160))
+    fireEvent.pointerUp(window, at(160))
+
+    expect(onColumnResizeEnd).toHaveBeenCalledOnce()
+    expect(onColumnResizeEnd.mock.lastCall?.[0]).toMatchObject({ cost: 160 })
+    // With nobody keeping the widths, the table keeps its own.
+    expect(header("Cost")).toHaveStyle({ width: "160px" })
+  })
+
+  it("leaves a column that shares the leftover width out of a drag to its right", () => {
+    const onColumnResizeEnd = vi.fn()
+    render(
+      <DataTable
+        {...base({ columns: SIZED, isResizable: true, onColumnResizeEnd })}
+      />,
+    )
+    const handle = screen.getByRole("slider", { name: /^Resize Cost/ })
+    const grip = handle.parentElement as HTMLElement
+    const at = (x: number) => ({
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+      pageX: x,
+      clientX: x,
+    })
+    fireEvent.pointerDown(grip, at(100))
+    fireEvent.pointerMove(window, at(160))
+    fireEvent.pointerUp(window, at(160))
+
+    // react-stately freezes Name at its pixel width for the drag; it had none
+    // before, so it goes back to sharing what is left.
+    expect(onColumnResizeEnd.mock.lastCall?.[0]).not.toHaveProperty("name")
+    expect(onColumnResizeEnd.mock.lastCall?.[0]).toMatchObject({ cost: 160 })
+  })
+
+  it("offers no resize handle unless the table is resizable", () => {
+    render(<DataTable {...base({ columns: SIZED })} />)
+    expect(screen.queryByRole("slider", { hidden: true })).toBeNull()
+  })
+})
