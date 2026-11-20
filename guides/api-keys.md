@@ -164,7 +164,7 @@ Membership changes switch keys off:
 - Keys made before Otari recorded who made them are left alone on a demotion.
   When you demote someone to viewer, check the keys billed to them.
 
-The key routes are in the [OpenAPI specification](https://github.com/mozilla-ai/otari/blob/d2fd147574eb225f25806d15a682da43b8e97b88/docs/public/openapi.json).
+The key routes are in the [OpenAPI specification](https://github.com/mozilla-ai/otari/blob/10daee76bb352e0efee034d222e4f72413db131c/docs/public/openapi.json).
 
 ### What a key sends
 
@@ -178,10 +178,10 @@ policies and the names with no backup, with **Set up routing**.
 
 The same read is `GET /api/v1/keys/routing` for the operator and
 `GET /api/v1/organizations/me/keys/routing` for anyone else, over the keys their
-list shows them. A name is what routing recorded the request was sent as: the
-routing policy or catalog ID where routing compiled a plan for it, and
-otherwise the `provider:model` that served it, so a request that named an
-alias reads as the offering the alias pointed at.
+list shows them. A name is the one the request was sent with, so a request
+that named an alias reads as the alias. A request logged before that name was
+recorded reads as the routing policy or catalog ID routing compiled a plan
+for, and otherwise as the `provider:model` that served it.
 
 ### Model and search tool access
 
@@ -282,7 +282,7 @@ answer rather than the caller's. A call that attaches a stored file by its
 container, because the container still holds what earlier runs staged into it.
 A key without `files:read` can still open a fresh container; only resuming an
 existing one is refused. The master key holds
-every scope. Each operation in the [OpenAPI specification](https://github.com/mozilla-ai/otari/blob/d2fd147574eb225f25806d15a682da43b8e97b88/docs/public/openapi.json)
+every scope. Each operation in the [OpenAPI specification](https://github.com/mozilla-ai/otari/blob/10daee76bb352e0efee034d222e4f72413db131c/docs/public/openapi.json)
 lists the scope it asks of every caller in `x-otari-key-scopes`, empty where
 every key may call it. A scope a request needs only for something it asked for,
 such as `files:read` for a `file_id` or a container, is named in this page
