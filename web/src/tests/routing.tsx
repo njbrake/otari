@@ -4,9 +4,11 @@ import type { ReactElement } from "react"
 import { vi } from "vitest"
 
 import type {
+  ApiKey,
   AutomaticFallback,
   CatalogModelSummary,
   ExplainPolicyResponse,
+  NameTraffic,
   OrganizationContext,
   OrganizationMember,
   PolicySpec,
@@ -170,6 +172,10 @@ export function mockApi(
     fallbacks?: AutomaticFallback[]
     // What either surface's policy explain answers.
     explain?: ExplainPolicyResponse
+    // What /api/v1/organizations/me/routing-policies/traffic answers.
+    traffic?: NameTraffic[]
+    // The keys either key surface lists, which name the Sent by filter's options.
+    keys?: ApiKey[]
   } = {},
 ) {
   let list = [...policies]
@@ -192,6 +198,14 @@ export function mockApi(
         url.endsWith(`${API_ROOT}/routing/policies/explain`)
       ) {
         return jsonResponse(opts.explain ?? EXPLAINED)
+      }
+      if (
+        url.includes(`${API_ROOT}/organizations/me/routing-policies/traffic`)
+      ) {
+        return jsonResponse({ window_days: 30, names: opts.traffic ?? [] })
+      }
+      if (/\/api\/v1\/(?:organizations\/me\/)?keys(?:\?|$)/.test(url)) {
+        return jsonResponse(opts.keys ?? [])
       }
       if (url.includes(`${API_ROOT}/organizations/me/routing-policies`)) {
         if (method === "POST") {

@@ -141,6 +141,16 @@ class PinnedTrafficPublic(BaseModel):
     requests: int
 
 
+class KeyRequestsPublic(BaseModel):
+    """How many requests one API key sent."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    api_key_id: str
+    key_name: str | None = Field(description="The key's name, or null where it has none or was deleted.")
+    requests: int
+
+
 class AutomaticFallbackPublic(BaseModel):
     """One model the caller's organization used in the window, and the fallback a catalog ID gives it."""
 
@@ -165,6 +175,10 @@ class AutomaticFallbackPublic(BaseModel):
         description="`pinned` by API key and the provider that served it, most first. "
         "Includes requests that named a policy, which may have fallen back within it."
     )
+    sent_by: list[KeyRequestsPublic] = Field(
+        description="The keys that sent `requests`, most first: everyone's to an organization owner or admin, a "
+        "workspace's to its own owners and admins, and otherwise the caller's own keys alone."
+    )
 
 
 class AutomaticFallbacksResponse(BaseModel):
@@ -172,6 +186,50 @@ class AutomaticFallbacksResponse(BaseModel):
 
     window_days: int = Field(description="How many days of traffic the counts cover.")
     models: list[AutomaticFallbackPublic] = Field(description="Most requested first.")
+
+
+class StepOutcomePublic(BaseModel):
+    """What one target of a plan did in one role in the window.
+
+    By target and role rather than by place in the plan: a router ranks its pool
+    per request and the compiler drops candidates a key may not reach, so one
+    place names different targets from request to request.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    target: str = Field(description="The offering tried, as `provider:model`.")
+    role: Literal["default", "routed", "condition", "on_failure", "catalog", "other"] = Field(
+        description="Why the plan tried it: the default target, a router's pick, a budget tier-down, a backup "
+        "after a failure, a catalog offering, or a reason this build does not know."
+    )
+    router: str | None = Field(description="The router that picked it, when `role` is `routed`.")
+    position: int = Field(description="The earliest place in a plan it was tried, 1 for the first.")
+    served: int = Field(description="Requests it answered: a success, or a stream the client abandoned.")
+    failed: int = Field(description="Attempts on it that failed, whether a later target recovered or not.")
+
+
+class NameTrafficPublic(BaseModel):
+    """The traffic sent under one routing policy name in one workspace."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    workspace_id: uuid.UUID
+    name: str = Field(description="The policy name the requests sent as `model`.")
+    requests: int = Field(description="Requests in the window, each counted once however many attempts.")
+    sent_by: list[KeyRequestsPublic] = Field(description="The keys that sent them, most first.")
+    steps: list[StepOutcomePublic] = Field(description="By earliest place tried, then by role and target.")
+
+
+class RoutingTrafficResponse(BaseModel):
+    """The traffic sent under the routing policies the caller may see."""
+
+    window_days: int = Field(description="How many days of traffic the counts cover.")
+    names: list[NameTrafficPublic] = Field(
+        description="One entry per workspace and policy name, over the requests the caller may see as someone's: "
+        "everyone's to an organization owner or admin, a workspace's to its own owners and admins, and otherwise "
+        "the caller's own."
+    )
 
 
 class KeyModelPublic(BaseModel):

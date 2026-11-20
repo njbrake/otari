@@ -9,25 +9,33 @@ import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
+import { DismissChip } from "@/design-system/indicators/DismissChip"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { DocsLink } from "@/design-system/navigation/DocsLink"
+import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { RulesFrame } from "@/features/rules/RulesFrame"
+import { useKeys } from "@/shared/api/apiKeys"
 import {
   useAutomaticFallbacks,
   useDeleteAlias,
   useDeleteOrganizationAlias,
   useDeleteOrganizationRoutingPolicy,
   useDeleteRoutingPolicy,
+  useRoutingTraffic,
 } from "@/shared/api/routing"
 import { docsSourceHref } from "@/shared/helpers/docs"
-import { useUrlValue } from "@/shared/helpers/urlState"
+import { formatCount } from "@/shared/helpers/format"
+import { useUrlState, useUrlValue } from "@/shared/helpers/urlState"
 import { useNarrowingWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { AutomaticFallbacks } from "./AutomaticFallbacks"
 import { CreatePolicyDialog } from "./CreatePolicyDialog"
-import { BackupsCell, MainModelCell } from "./PolicyCells"
+import { SentByCell, TriedInOrderCell } from "./PolicyCells"
 import type { Intent } from "./policyDraft"
 import { isEditableInForm, type RoutingRow, rowKeyOf } from "./policyModel"
+import { namesSent, trafficForRow } from "./routingTraffic"
 import { useRoutingRows } from "./useRoutingRows"
+
+const ROUTING_URL_DEFAULTS = { key: "" }
 
 export function RoutingPage() {
   const navigate = useNavigate()
@@ -43,6 +51,30 @@ export function RoutingPage() {
   const deleteAlias = useDeleteAlias()
   const deleteOrgPolicy = useDeleteOrganizationRoutingPolicy()
   const deleteOrgAlias = useDeleteOrganizationAlias()
+  // One key at a time, from the filter or a link that names it.
+  const url = useUrlState(ROUTING_URL_DEFAULTS)
+  const keyFilter = url.get("key")
+  const apiKeyIds = keyFilter ? [keyFilter] : []
+  const traffic = useRoutingTraffic(writeWorkspaceId, apiKeyIds)
+  const names = traffic.data?.names ?? []
+  const keys = useKeys(writeWorkspaceId ?? undefined, writeWorkspaceId !== null)
+  const keyOptions = [
+    { value: "", label: "Every key" },
+    ...(keys.data ?? [])
+      .map((apiKey) => ({
+        value: apiKey.id,
+        label: apiKey.key_name ?? apiKey.id,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label)),
+  ]
+  // A key filter leaves the rows its traffic was sent under.
+  const sent = namesSent(names)
+  const shownRows = keyFilter ? rows.filter((row) => sent.has(row.name)) : rows
+  // Until the key's own traffic is in, the list it narrows to is unknown, not empty.
+  const isTrafficSettling =
+    keyFilter !== "" &&
+    writeWorkspaceId !== null &&
+    (traffic.isPending || traffic.isPlaceholderData)
   // A deep link may pre-fill a new fallback with ?target=provider:model.
   const initialTarget = useUrlValue("target")
   const [adding, setAdding] = useState(initialTarget !== "")
@@ -87,14 +119,9 @@ export function RoutingPage() {
         ),
       },
       {
-        id: "main",
-        header: "Main model",
-        cell: (row) => <MainModelCell row={row} />,
-      },
-      {
-        id: "backups",
-        header: "Backups",
-        cell: (row) => <BackupsCell row={row} />,
+        id: "order",
+        header: "Tried in order",
+        cell: (row) => <TriedInOrderCell row={row} />,
       },
       {
         id: "scope",
@@ -104,6 +131,29 @@ export function RoutingPage() {
             <span className="text-muted">Every caller</span>
           ) : (
             <CopyableValue value={policy.user_id ?? ""} label="user id" />
+          ),
+      },
+      {
+        id: "sentBy",
+        header: "Sent by",
+        cell: (row) =>
+          row.kind === "alias" ? (
+            <span className="text-muted">Not recorded</span>
+          ) : (
+            <SentByCell sentBy={trafficForRow(row, names).sentBy} />
+          ),
+      },
+      {
+        id: "requests",
+        header: "Requests (30d)",
+        align: "end",
+        cell: (row) =>
+          row.kind === "alias" ? (
+            <span className="text-muted">—</span>
+          ) : (
+            <span className="text-sm tabular-nums text-muted">
+              {formatCount(trafficForRow(row, names).requests)}
+            </span>
           ),
       },
     ]
@@ -140,7 +190,7 @@ export function RoutingPage() {
       },
     })
     return base
-  }, [canEdit, openPolicy])
+  }, [canEdit, openPolicy, names])
 
   // Which of the four delete surfaces a row goes to. Both name the workspace the
   // row lives in; only the deployment-wide pair carries the user scope, which
@@ -202,6 +252,31 @@ export function RoutingPage() {
           onClose={closeCreate}
         />
 
+        {rows.length > 0 && keyOptions.length > 2 ? (
+          <div className="otari-toolbar flex flex-wrap items-end gap-3">
+            <FilterSelect
+              label="Sent by key"
+              value={keyFilter}
+              onChange={(next) => url.patch({ key: next })}
+              options={keyOptions}
+            />
+          </div>
+        ) : keyFilter ? (
+          // A link can name a key while the filter has too few to offer, so the
+          // narrowing still says what it is and how to drop it.
+          <div className="otari-toolbar flex flex-wrap items-center gap-2">
+            <DismissChip
+              label="Sent by key"
+              value={
+                keyOptions.find((option) => option.value === keyFilter)
+                  ?.label ?? keyFilter
+              }
+              onDismiss={() => url.patch({ key: "" })}
+              dismissLabel="Show every key"
+            />
+          </div>
+        ) : null}
+
         {rows.length === 0 && !isListLoading ? (
           canEdit ? (
             <EmptyState
@@ -241,15 +316,19 @@ export function RoutingPage() {
               ariaLabel="Routing policies"
               mobileLayout="cards"
               columns={columns}
-              rows={rows}
+              rows={shownRows}
               getRowKey={rowKeyOf}
-              isLoading={isListLoading}
-              emptyContent="No routing policies yet."
+              isLoading={isListLoading || isTrafficSettling}
+              emptyContent={
+                keyFilter
+                  ? "This key sent no requests under a policy in the last 30 days."
+                  : "No routing policies yet."
+              }
             />
           </TableScrollFrame>
         )}
 
-        <AutomaticFallbacksSection />
+        <AutomaticFallbacksSection apiKeyIds={apiKeyIds} />
 
         <ConfirmDialog
           isOpen={pendingDelete !== undefined}
@@ -310,8 +389,12 @@ export function RoutingPage() {
 }
 
 /** The models callers used in the last 30 days, as the gateway reports them. */
-function AutomaticFallbacksSection() {
-  const fallbacks = useAutomaticFallbacks(useNarrowingWorkspace())
+function AutomaticFallbacksSection({
+  apiKeyIds,
+}: {
+  apiKeyIds: readonly string[]
+}) {
+  const fallbacks = useAutomaticFallbacks(useNarrowingWorkspace(), apiKeyIds)
   return (
     <AutomaticFallbacks
       fallbacks={fallbacks.data?.models ?? []}

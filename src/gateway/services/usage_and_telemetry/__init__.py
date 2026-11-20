@@ -9,7 +9,9 @@ the domain does.
 
 from gateway.repositories.usage_and_telemetry import (
     KeyNameTraffic,
+    NameAttempts,
     ServedTraffic,
+    TrafficReader,
     UsageFilters,
     UsageRefinements,
     UsageScope,
@@ -33,9 +35,11 @@ __all__ = [
     "SERIES_TOP_N",
     "HeavyUsageReads",
     "KeyNameTraffic",
+    "NameAttempts",
     "RetentionSweep",
     "ServedTraffic",
     "TelemetryRetentionService",
+    "TrafficReader",
     "UsageRollupService",
     "UsageFilters",
     "UsageRefinements",

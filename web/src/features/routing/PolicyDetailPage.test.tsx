@@ -2,10 +2,11 @@ import { screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { PolicySpec } from "@/client"
+import type { PolicySpec, StepOutcome } from "@/client"
 import { PolicyDetailPage } from "@/features/routing/PolicyDetailPage"
 import { API_ROOT } from "@/shared/api/client"
 import {
+  ADMIN_WORKSPACE,
   adminContext,
   CHAIN,
   EXPLAINED,
@@ -67,7 +68,116 @@ function lastWrite(calls: { url: string; method: string; body: unknown }[]) {
   return writes[writes.length - 1]
 }
 
+function step(
+  target: string,
+  role: StepOutcome["role"],
+  position: number,
+  served: number,
+  failed: number,
+  router: string | null = null,
+): StepOutcome {
+  return { target, role, router, position, served, failed }
+}
+
+function renderTraffic(name: string) {
+  renderInWorkspace(<PolicyDetailPage name={name} />, `/routing/${name}`, [
+    { path: "/routing/$name", element: <p>Moved</p> },
+  ])
+}
+
+async function targetRows() {
+  const table = await screen.findByRole("table", {
+    name: "What each target did",
+  })
+  return within(table).getAllByRole("row")
+}
+
 describe("PolicyDetailPage", () => {
+  it("says what each target of the plan did in the last 30 days", async () => {
+    mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [policy("fast", CHAIN)],
+      traffic: [
+        {
+          workspace_id: ADMIN_WORKSPACE,
+          name: "fast",
+          requests: 40,
+          sent_by: [{ api_key_id: "k1", key_name: "ci-bot", requests: 40 }],
+          steps: [
+            step("openai:gpt-5-mini", "default", 1, 36, 4),
+            step("anthropic:claude-haiku-4-5", "on_failure", 2, 4, 0),
+          ],
+        },
+      ],
+    })
+    renderTraffic("fast")
+
+    expect(await screen.findByText("ci-bot")).toBeInTheDocument()
+    const rows = await targetRows()
+    // A plan with no router tries its targets in one order, so the place says something.
+    expect(rows[1]).toHaveTextContent("1gpt-5-mini · OpenAIMain model364")
+    expect(rows[2]).toHaveTextContent("2claude-haiku-4-5 · AnthropicBackup 140")
+  })
+
+  it("names a weighted router's picks by what served, then its backup", async () => {
+    const SPLIT: PolicySpec = {
+      ...WEIGHTED,
+      on_failure: ["anthropic:claude-haiku-4-5"],
+    }
+    mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [policy("split", SPLIT, { is_dynamic: true })],
+      traffic: [
+        {
+          workspace_id: ADMIN_WORKSPACE,
+          name: "split",
+          requests: 10,
+          sent_by: [],
+          steps: [
+            step("openai:gpt-5", "routed", 1, 6, 1, "weighted"),
+            step("openai:gpt-5-mini", "routed", 1, 3, 1, "weighted"),
+            step("anthropic:claude-haiku-4-5", "on_failure", 3, 1, 0),
+          ],
+        },
+      ],
+    })
+    renderTraffic("split")
+
+    const rows = await targetRows()
+    // A router ranks per request, so no place is shown.
+    expect(screen.queryByRole("columnheader", { name: "Tried" })).toBeNull()
+    expect(rows[1]).toHaveTextContent("gpt-5 · OpenAIRouted pick (weighted)61")
+    expect(rows[2]).toHaveTextContent(
+      "gpt-5-mini · OpenAIRouted pick (weighted)31",
+    )
+    expect(rows[3]).toHaveTextContent("claude-haiku-4-5 · AnthropicBackup 110")
+  })
+
+  it("names the default a declined router fell to, and a backup that ran first", async () => {
+    mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [policy("fast", CHAIN)],
+      traffic: [
+        {
+          workspace_id: ADMIN_WORKSPACE,
+          name: "fast",
+          requests: 3,
+          sent_by: [],
+          steps: [
+            step("openai:gpt-5-mini", "default", 1, 1, 1),
+            // A key that may not reach the default compiles to the backup alone.
+            step("anthropic:claude-haiku-4-5", "on_failure", 1, 2, 0),
+          ],
+        },
+      ],
+    })
+    renderTraffic("fast")
+
+    const rows = await targetRows()
+    expect(rows[1]).toHaveTextContent("Main model")
+    expect(rows[2]).toHaveTextContent("1claude-haiku-4-5 · AnthropicBackup 120")
+  })
+
   it("opens a policy naming an unknown router read-only", async () => {
     const { calls } = mockApi([
       policy("smart", UNKNOWN_ROUTER, { is_dynamic: true }),

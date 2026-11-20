@@ -31,6 +31,7 @@ const FLASH: AutomaticFallback = {
   pinned: 0,
   pinned_provider: null,
   pinned_keys: [],
+  sent_by: [],
 }
 
 const PINNED: AutomaticFallback = {
