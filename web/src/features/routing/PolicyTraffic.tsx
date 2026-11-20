@@ -2,11 +2,7 @@ import type { NameTraffic, StepOutcome } from "@/client"
 import { SettingsGroup } from "@/design-system/layout/SettingsGroup"
 import { formatCount } from "@/shared/helpers/format"
 import { SentByCell, selectorText } from "./PolicyCells"
-import {
-  findBudgetConditions,
-  findCandidates,
-  type RoutingRow,
-} from "./policyModel"
+import type { RoutingRow } from "./policyModel"
 import { trafficForRow } from "./routingTraffic"
 
 /**
@@ -35,14 +31,14 @@ export function roleLabel(step: StepOutcome, row: RoutingRow): string {
 
 /**
  * Whether the place a target was first tried says something: in a plan with
- * no router and no tier-down every request tries the same targets in the same
- * order, so place 2 is the first backup. A router ranks its pool per request
- * and a tier-down swaps the head, so there it would mislead.
+ * no router and no `when` entry every request tries the same targets in the
+ * same order, so place 2 is the first backup. A router ranks its pool per
+ * request and any `when` entry (a budget, a key or a user) swaps the head for
+ * some requests, so there it would mislead.
  */
 function isFixedOrder(row: RoutingRow): boolean {
-  return (
-    findCandidates(row.spec).length === 0 &&
-    findBudgetConditions(row.spec).length === 0
+  return row.spec.select.every(
+    (entry) => entry.router === undefined && entry.when === undefined,
   )
 }
 

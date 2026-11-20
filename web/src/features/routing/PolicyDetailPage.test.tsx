@@ -178,6 +178,37 @@ describe("PolicyDetailPage", () => {
     expect(rows[2]).toHaveTextContent("1claude-haiku-4-5 · AnthropicBackup 120")
   })
 
+  it("shows no place for a plan whose key condition swaps the head", async () => {
+    const BY_KEY: PolicySpec = {
+      select: [
+        { when: { key_id: "k1" }, target: "openai:gpt-5-nano" },
+        { default: "openai:gpt-5-mini" },
+      ],
+      on_failure: ["anthropic:claude-haiku-4-5"],
+    }
+    mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [policy("keyed", BY_KEY)],
+      traffic: [
+        {
+          workspace_id: ADMIN_WORKSPACE,
+          name: "keyed",
+          requests: 4,
+          sent_by: [],
+          steps: [
+            step("openai:gpt-5-nano", "condition", 1, 2, 0),
+            step("openai:gpt-5-mini", "default", 1, 2, 0),
+          ],
+        },
+      ],
+    })
+    renderTraffic("keyed")
+
+    const rows = await targetRows()
+    expect(screen.queryByRole("columnheader", { name: "Tried" })).toBeNull()
+    expect(rows[1]).toHaveTextContent("gpt-5-nano · OpenAITier-down20")
+  })
+
   it("opens a policy naming an unknown router read-only", async () => {
     const { calls } = mockApi([
       policy("smart", UNKNOWN_ROUTER, { is_dynamic: true }),
