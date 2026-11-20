@@ -42,6 +42,7 @@ export function RecentFailures({
   workspaceId,
   userId,
   total,
+  canSeeAll = true,
   onOpen,
 }: {
   window: SpendWindow
@@ -52,6 +53,8 @@ export function RecentFailures({
   userId?: string
   /** How many failed in the window, from the page's figures. */
   total: number | undefined
+  /** Whether one Requests page lists all of `total`. */
+  canSeeAll?: boolean
   /** Runs before a row's link opens, to point the shell at the page's workspace. */
   onOpen?: () => void
 }) {
@@ -77,7 +80,7 @@ export function RecentFailures({
     <section aria-label="Recent failures" className="flex flex-col gap-2">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="text-title">Recent failures</h2>
-        {total && total > rows.length ? (
+        {canSeeAll && total && total > rows.length ? (
           <Link
             to="/requests"
             search={allSearch}

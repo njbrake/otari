@@ -652,6 +652,14 @@ describe("Home, the window", () => {
         return Response.json({ data: [ADA, WEI], count: 2 })
       }
       if (path === "/organizations/me/usage/summary") {
+        // Nothing was refused.
+        if (url.searchParams.get("status_code") === "403") {
+          return Response.json({
+            totals: usageTotals({ request_count: 0 }),
+            series: [],
+            by_user: [],
+          })
+        }
         return Response.json({
           totals: usageTotals({
             cost: 4,
@@ -720,8 +728,14 @@ describe("Home, the window", () => {
 
   it("counts one failed request in the singular", async () => {
     mockApi({ errors: 1 })
-    await renderHome("/?period=today")
+    await renderHome("/?period=today&workspace=ws-a")
     expect(await screen.findByRole("link", { name: "1 failed" })).toBeVisible()
+  })
+  it("links no count across every workspace, since Requests lists one", async () => {
+    mockApi({ errors: 1 })
+    await renderHome("/?period=today")
+    expect(await screen.findByText("1 failed")).toBeVisible()
+    expect(screen.queryByRole("link", { name: "1 failed" })).toBeNull()
   })
   it("ends every read of yesterday at midnight, so none counts today", async () => {
     const asked = mockApi()
@@ -776,6 +790,19 @@ describe("Home, the window", () => {
         String(url),
       ).toBeTruthy()
     }
+  })
+
+  it("reads the last day once for the organization while nothing failed", async () => {
+    // Two workspaces, no failures and no refusals: the band's two reads are
+    // the organization's, and none is repeated workspace by workspace.
+    const asked = mockApi()
+    await renderHome("/?period=7d")
+    await screen.findByText("Nothing needs you right now.")
+    const band = asked.filter(isBandRead)
+    expect(band.length).toBeGreaterThanOrEqual(2)
+    expect(band.filter((url) => url.searchParams.get("workspace_id"))).toEqual(
+      [],
+    )
   })
 
   it("opens on 30 days, and moves to today by the hour in the URL", async () => {
@@ -931,9 +958,8 @@ describe("Home, the figures and what needs attention", () => {
   it("splits Spent into what was charged and what was not", async () => {
     mockApi()
     await renderHome()
-    expect(
-      await screen.findByText(/\$30\.00 charged · \$20\.00 not charged/),
-    ).toBeVisible()
+    expect(await screen.findByText("$30.00 charged")).toBeVisible()
+    expect(screen.getByText("+$20.00 not charged")).toBeVisible()
   })
 
   it("judges the failure rate and links the counts to Requests", async () => {

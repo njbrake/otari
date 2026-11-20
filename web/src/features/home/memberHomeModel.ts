@@ -15,13 +15,14 @@ import {
   countedFailures,
   readsOf,
 } from "@/features/home/attention"
+import {
+  calendarDaysUntil,
+  DAY_MS,
+  EXPIRY_WARN_DAYS,
+} from "@/features/home/days"
 import { keyState } from "@/features/keys/keyList"
 import { perWords } from "@/features/spend/limits"
 import { formatNumber, formatPct } from "@/shared/helpers/format"
-
-const DAY_MS = 86_400_000
-/** How far ahead a key's expiry is worth saying, and how long after. */
-const EXPIRY_DAYS = 7
 
 /**
  * The caller's limit in a team, from what a member may read: their own row on
@@ -334,19 +335,6 @@ const DATE = new Intl.DateTimeFormat("en-US", {
 const keyName = (key: MemberAttentionKey) =>
   key.key_name || `ending ${key.key_suffix ?? ""}`.trim()
 
-/** Whole local days from `now` to `at`: 0 today, 1 tomorrow. */
-function calendarDaysUntil(at: number, now: number): number {
-  const day = (time: number) => {
-    const date = new Date(time)
-    return new Date(
-      date.getFullYear(),
-      date.getMonth(),
-      date.getDate(),
-    ).getTime()
-  }
-  return Math.round((day(at) - day(now)) / DAY_MS)
-}
-
 function keyItems(
   keys: readonly MemberAttentionKey[],
   now: number,
@@ -373,7 +361,7 @@ function keyItems(
     if (!key.expires_at) continue
     const at = Date.parse(key.expires_at)
     if (at <= now) {
-      if (now - at > EXPIRY_DAYS * DAY_MS) continue
+      if (now - at > EXPIRY_WARN_DAYS * DAY_MS) continue
       items.push({
         id: `key-expired:${key.id}`,
         isUrgent: true,
@@ -386,7 +374,7 @@ function keyItems(
       })
       continue
     }
-    if (!key.is_active || at - now > EXPIRY_DAYS * DAY_MS) continue
+    if (!key.is_active || at - now > EXPIRY_WARN_DAYS * DAY_MS) continue
     const days = calendarDaysUntil(at, now)
     items.push({
       id: `key-expiring:${key.id}`,

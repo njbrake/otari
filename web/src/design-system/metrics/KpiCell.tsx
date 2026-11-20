@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react"
 import { Skeleton } from "@/design-system/feedback/Skeleton"
+import { InlineList } from "@/design-system/layout/InlineList"
 import { type Severity, SeverityMark } from "./SeverityMark"
 
 export function KpiCell({
@@ -20,7 +21,7 @@ export function KpiCell({
    * whether the number is missing or zero, and the empty state is simply the
    * case where every cell has something to say.
    */
-  subline?: ReactNode
+  subline?: ReactNode | ReactNode[]
   delta?: ReactNode
   graphic?: ReactNode
   /**
@@ -74,31 +75,35 @@ export function KpiCell({
         </span>
       </span>
       {/* Most-judged to least, left to right: a severity, then the comparison,
-          then the raw fact. The severity and the delta hold their width; the
+          then the raw facts. The severity and the delta hold their width; the
           subline wraps under them when the line runs out, and the subgrid
           gives that height to every cell in the strip's row so their parts
-          still line up. On a phone the subline takes a line of its own. */}
-      <span className="flex min-h-[1.125rem] min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted max-sm:content-start">
+          still line up. The middots between them never hang at a wrap
+          (`InlineList`). A subline given as a list keeps each fact whole and
+          breaks only between them. */}
+      <span className="flex min-h-[1.125rem] min-w-0 items-center text-xs text-muted">
         {isLoading ? (
           <Skeleton className="h-3 w-24 max-w-full" />
         ) : (
-          <>
+          <InlineList isNowrapItems={false}>
             {severity ? <SeverityMark severity={severity} /> : null}
-            {severity && delta ? <Separator /> : null}
             {delta ? (
               <span className="flex max-w-full shrink-0 items-center whitespace-nowrap">
                 {delta}
               </span>
             ) : null}
-            {(severity || delta) && subline ? (
-              <Separator className="max-sm:hidden" />
-            ) : null}
-            {subline ? (
-              <span className="min-w-0 [overflow-wrap:anywhere] max-sm:basis-full">
+            {Array.isArray(subline) ? (
+              subline.map((fact, index) => (
+                <span key={index} className="whitespace-nowrap">
+                  {fact}
+                </span>
+              ))
+            ) : subline ? (
+              <span className="min-w-0 [overflow-wrap:anywhere]">
                 {subline}
               </span>
             ) : null}
-          </>
+          </InlineList>
         )}
       </span>
       {/* Reserved rather than conditional: an absent sparkline must not make one
@@ -108,14 +113,5 @@ export function KpiCell({
         <span className="flex min-h-10 min-w-0 items-center">{graphic}</span>
       ) : null}
     </div>
-  )
-}
-
-/** The middot between two things sharing the line under a value. */
-function Separator({ className }: { className?: string }) {
-  return (
-    <span aria-hidden className={`shrink-0 text-subtle ${className ?? ""}`}>
-      ·
-    </span>
   )
 }

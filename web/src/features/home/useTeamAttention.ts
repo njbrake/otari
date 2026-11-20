@@ -1,7 +1,10 @@
+import type { UsageSummary } from "@/client"
 import {
+  type AttentionDay,
   type AttentionInput,
   type AttentionResult,
   attention,
+  countedFailures,
 } from "@/features/home/attention"
 import { useHomeAccount } from "@/features/home/overlayHomeAccount"
 import { type LimitTarget, perWords } from "@/features/spend/limits"
@@ -14,7 +17,11 @@ import { useAllSpendCeilings } from "@/shared/api/budgets"
 import { useDeploymentAdminAccess } from "@/shared/api/deployment"
 import { useOrganizationMembers } from "@/shared/api/organizations"
 import { useProviderHealth } from "@/shared/api/providers"
-import { useWorkspaceSummaries } from "@/shared/api/usage"
+import {
+  useRefusalsSince,
+  useUsageSummary,
+  useWorkspaceSummaries,
+} from "@/shared/api/usage"
 import { useWorkspaces } from "@/shared/api/workspaces"
 
 const DAY_MS = 86_400_000
@@ -47,10 +54,26 @@ export function useTeamAttention(spend: Spend, now: number): AttentionResult {
   const health = useProviderHealth(isOperator)
   const since = new Date(toMinute(now) - DAY_MS).toISOString()
   const workspaceIds = (workspaces.data ?? []).map((one) => one.id)
+  const isSplit = workspaceIds.length > 1
+  // The organization first, two reads whatever its size. Requests lists one
+  // workspace, so a count it would link to is read again workspace by
+  // workspace, but only once there is something to link to: failures past a
+  // threshold, or any refusal at all.
+  const orgDay = useUsageSummary(
+    { start_date: since },
+    "hour",
+    ["status_code"],
+    true,
+    "organization",
+  )
+  const orgRefused = useRefusalsSince(since)
+  const orgDayFigures = dayOf(orgDay.data)
+  const hasFailures = countedFailures(orgDayFigures) !== undefined
+  const hasRefusals = (orgRefused.data?.totals.request_count ?? 0) > 0
   const days = useWorkspaceSummaries(
     workspaceIds,
     { start_date: since, bucket: "hour", dimensions: "status_code" },
-    workspaces.data !== undefined,
+    isSplit && hasFailures,
   )
   const refused = useWorkspaceSummaries(
     workspaceIds,
@@ -60,7 +83,7 @@ export function useTeamAttention(spend: Spend, now: number): AttentionResult {
       bucket: "day",
       dimensions: "user",
     },
-    workspaces.data !== undefined,
+    isSplit && hasRefusals,
   )
 
   const subjects = new Map<string, string>()
@@ -131,9 +154,17 @@ export function useTeamAttention(spend: Spend, now: number): AttentionResult {
         ? "loading"
         : readState(ceilings),
     refusals:
-      workspaces.data === undefined ? readState(workspaces) : statesOf(refused),
+      workspaces.data === undefined
+        ? readState(workspaces)
+        : isSplit && hasRefusals
+          ? statesOf(refused)
+          : readState(orgRefused),
     failures:
-      workspaces.data === undefined ? readState(workspaces) : statesOf(days),
+      workspaces.data === undefined
+        ? readState(workspaces)
+        : isSplit && hasFailures
+          ? statesOf(days)
+          : readState(orgDay),
     keys: readState(keys),
     // Not asked of anyone but the operator, which is an answer, not a wait.
     providers: isOperator
@@ -153,19 +184,28 @@ export function useTeamAttention(spend: Spend, now: number): AttentionResult {
     targets,
     peopleOf,
     account,
-    days: workspaceIds.map((workspaceId, index) => {
-      const summary = days[index]?.data
-      return {
-        workspaceId,
-        requests: summary?.totals.request_count ?? 0,
-        errors: (summary?.errors_by_status_code ?? []).map((row) => ({
-          errorClass: row.error_class,
-          requests: row.requests,
-        })),
-      }
-    }),
-    refusals: workspaceIds.flatMap((workspaceId, index) =>
-      (refused[index]?.data?.by_user ?? []).map((row) => ({
+    orgDay: orgDayFigures,
+    days: isSplit
+      ? hasFailures
+        ? workspaceIds.map((workspaceId, index) => ({
+            workspaceId,
+            ...dayOf(days[index]?.data),
+          }))
+        : []
+      : workspaceIds.map((workspaceId) => ({ workspaceId, ...orgDayFigures })),
+    refusals: (isSplit
+      ? hasRefusals
+        ? workspaceIds.map((workspaceId, index) => ({
+            workspaceId,
+            rows: refused[index]?.data?.by_user ?? [],
+          }))
+        : []
+      : workspaceIds.map((workspaceId) => ({
+          workspaceId,
+          rows: orgRefused.data?.by_user ?? [],
+        }))
+    ).flatMap(({ workspaceId, rows }) =>
+      rows.map((row) => ({
         workspaceId,
         userId: row.is_other ? null : row.key,
         name:
@@ -190,4 +230,15 @@ export function useTeamAttention(spend: Spend, now: number): AttentionResult {
           .map((one) => ({ name: one.instance, error: one.error ?? "" }))
       : [],
   })
+}
+
+/** A summary's day as the rules read it. */
+function dayOf(summary: UsageSummary | undefined): AttentionDay {
+  return {
+    requests: summary?.totals.request_count ?? 0,
+    errors: (summary?.errors_by_status_code ?? []).map((row) => ({
+      errorClass: row.error_class,
+      requests: row.requests,
+    })),
+  }
 }

@@ -52,12 +52,13 @@ describe("failureSeverity", () => {
     expect(failureSeverity(99, 1000).word).toBe("Elevated")
   })
 
-  it("is High at 10%", () => {
+  it("is High at 10% with 20 or more requests, as Needs attention judges it", () => {
     expect(failureSeverity(100, 1000)).toEqual({
       status: "alert",
       word: "High",
     })
-    expect(failureSeverity(5, 5).word).toBe("High")
+    expect(failureSeverity(5, 20).word).toBe("High")
+    expect(failureSeverity(5, 19).word).toBe("Elevated")
   })
 })
 

@@ -35,7 +35,7 @@ describe("KpiCell", () => {
       />,
     )
     const line = cell(container).children[2] as HTMLElement
-    expect(line).toHaveClass("flex-wrap")
+    expect(line.querySelector(".flex-wrap")).not.toBeNull()
     expect(line).not.toHaveClass("text-nowrap")
     expect(getByText(subline)).not.toHaveClass("truncate")
   })
@@ -59,5 +59,17 @@ describe("KpiCell", () => {
     expect(cell(container)).toHaveAttribute("aria-busy", "true")
     expect(getByText("Loading")).toHaveClass("sr-only")
     expect(queryByText("—")).toBeNull()
+  })
+
+  it("keeps each fact of a listed subline whole", () => {
+    const { getByText } = render(
+      <KpiCell
+        label="Spent"
+        value="$2.88"
+        subline={["$1.92 charged", "+$0.96 not charged"]}
+      />,
+    )
+    expect(getByText("$1.92 charged")).toHaveClass("whitespace-nowrap")
+    expect(getByText("+$0.96 not charged")).toHaveClass("whitespace-nowrap")
   })
 })

@@ -22,9 +22,12 @@ Each line says what is wrong and ends with the link or dialog that fixes it:
 
 - a spend limit that is reached, at 80% or more, or on pace to run out before it
   resets (**Raise the limit**);
-- requests the gateway refused, and failures at 2% or more of a workspace's
-  requests (**See the refusals**, **See the failures**). Each is counted per
-  workspace, and its link opens **Requests** on that workspace;
+- requests the gateway refused, and failures of the gateway or a provider
+  (not the caller's own mistakes) at 2% or more of requests, five at least
+  (**See the refusals**, **See the failures**). Each is named by workspace,
+  and its link opens **Requests** on that workspace; failures spread across
+  workspaces with none past the threshold on its own are one row for the
+  organization, opening the workspace with the most;
 - an API key in use that expires within 7 days (**Open in API keys**);
 - for the deployment operator, a provider the gateway cannot reach
   (**Check the provider**).
@@ -35,13 +38,16 @@ With nothing to act on it says so in one line. The figures follow:
   yesterday up to the same time of day), with spend per hour or per day. When
   part of it never counted toward a budget (an API key marked exempt from
   budget, or imported usage), the line under it splits it
-  (**$30.00 charged · $20.00 not charged**), and a window longer than today
-  adds what was spent today.
+  (**$30.00 charged · +$20.00 not charged**); otherwise a window longer than
+  today says what was spent today.
 - How much of the organization's spend limit is used, and what the period is on
   pace to cost. With no limit set, **Set a team budget** sets one.
-- **Failures**: the share of requests that failed, judged **Healthy**,
-  **Elevated** (2% or more, and at least five failures) or **High** (10% or
-  more). **N failed** and **N unpriced** open those requests in **Requests**.
+- **Failures** over the window: the share of requests that failed, judged by
+  the thresholds **Needs attention** uses: **Healthy**, **Elevated** (2% or
+  more, and at least five failures) or **High** (10% or more, over at least
+  20 requests). It counts every failed request, the caller's own mistakes
+  included. **N failed** and **N unpriced** open those requests in **Requests**
+  when Home shows one workspace, since **Requests** lists one at a time.
 - Billed tokens, and how much of the input was read from cache.
 - **People active**: how many members spent anything in the window, and how
   many sessions ran. **See the sessions** opens them.
@@ -62,7 +68,8 @@ menu sets or changes its spend limit, and a key's row can be opened in
 
 **Recent failures** lists the window's latest failed requests: when, the
 model, the key and the error. Each one opens that request in **Requests**, and
-**See all** opens every failure of the window.
+**See all** opens every failure of the window, again when Home shows one
+workspace.
 
 **Providers** names the provider each request went to, or the instance an
 operator named, which is the figure to match against each provider's own bill

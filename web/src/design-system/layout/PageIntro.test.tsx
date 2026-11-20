@@ -49,16 +49,22 @@ describe("PageIntro", () => {
     ).toHaveClass("pb-5")
   })
 
-  it("stacks on a narrow viewport and turns into a row above it", () => {
+  it("is one row that wraps, so the action goes under the title when it does not fit", () => {
+    // Not a breakpoint: a header with a picker and a refresh control
+    // overflowed the content column from `sm` to about 1100px with the rail
+    // open, because a row above `sm` never wrapped. What fits depends on the
+    // column, so the row decides by wrapping.
     const { container } = render(
       <PageIntro
         title="API keys"
         action={<button type="button">New key</button>}
       />,
     )
-    expect([...header(container).classList]).toContain("flex-col")
-    expect([...header(container).classList]).toContain("sm:flex-row")
-    expect([...header(container).classList]).toContain("sm:items-start")
+    const classes = [...header(container).classList]
+    expect(classes).toContain("flex-wrap")
+    expect(classes).toContain("justify-between")
+    expect(classes).not.toContain("flex-col")
+    expect(classes.some((one) => one.startsWith("sm:"))).toBe(false)
   })
 
   it("sets a detail line under the title when given one", () => {
@@ -82,7 +88,7 @@ describe("PageIntro", () => {
     expect([...column.classList]).toContain("max-w-[38.75rem]")
   })
 
-  it("puts the action beside the opening and refuses to let it shrink", () => {
+  it("lets the action narrow to the column rather than push past it", () => {
     const { container } = render(
       <PageIntro
         title="API keys"
@@ -91,7 +97,13 @@ describe("PageIntro", () => {
     )
     const action = screen.getByRole("button", { name: "New key" })
       .parentElement as HTMLElement
-    expect([...action.classList]).toContain("shrink-0")
+    // Wrapped onto its own line and still wider than the column, the action
+    // shrinks to it and its own controls wrap; `shrink-0` was what made the
+    // header overflow.
+    expect([...action.classList]).not.toContain("shrink-0")
+    expect([...action.classList]).toEqual(
+      expect.arrayContaining(["min-w-0", "max-w-full", "ml-auto"]),
+    )
     expect(action.parentElement).toBe(header(container))
   })
 

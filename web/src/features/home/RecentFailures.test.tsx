@@ -98,6 +98,27 @@ describe("RecentFailures", () => {
     expect(read?.searchParams.get("start_date")).toBe(window.start)
   })
 
+  it("offers no See all where one Requests page cannot list the total", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json([entry({ id: "row-1" })]),
+    )
+    await renderWithRouter(
+      <RecentFailures
+        window={windowOf("7d", NOW)}
+        now={NOW}
+        workspaceId=""
+        total={12}
+        canSeeAll={false}
+      />,
+      { shell },
+    )
+    const section = await screen.findByRole("region", {
+      name: "Recent failures",
+    })
+    await within(section).findByRole("link", { name: /^Failed request to/ })
+    expect(within(section).queryByRole("link", { name: /^See all/ })).toBeNull()
+  })
+
   it("says so when nothing failed", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json([]),

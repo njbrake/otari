@@ -238,15 +238,16 @@ export function MemberHome({
   const words = windowWords(window)
   const isReading = !spend.totals && usage === "loading"
   const split = spendSplit(total, detail.charged)
-  const spentFacts = [
-    ...(split
-      ? [
-          `${formatUsd(split.charged)} charged`,
-          `${formatUsd(split.notCharged)} not charged`,
-        ]
-      : []),
-    ...(detail.today !== undefined ? [`${formatUsd(detail.today)} today`] : []),
-  ]
+  // Charged and not charged lead, and stay whole: they reconcile Spent with
+  // the person page's Charged. Today's spend only where nothing else is said.
+  const spentFacts = split
+    ? [
+        `${formatUsd(split.charged)} charged`,
+        `+${formatUsd(split.notCharged)} not charged`,
+      ]
+    : detail.today !== undefined
+      ? [`${formatUsd(detail.today)} today`]
+      : []
   const failed = spend.totals?.error_count ?? 0
   const hasRequests = hasSurface("usage")
   // A cell with no graphic still holds the row, or its figure drops off the
@@ -533,7 +534,7 @@ export function MemberHome({
                 ? undefined
                 : unreadLine
               : spentFacts.length > 0
-                ? spentFacts.join(" · ")
+                ? spentFacts
                 : delta !== null
                   ? undefined
                   : requestCount > 0
@@ -640,7 +641,7 @@ export function MemberHome({
         ) : (
           // The owner's Home has this cell, so the strip keeps its four.
           <KpiCell
-            label="Failures"
+            label={figureLabel("Failures", window)}
             value={
               spend.totals
                 ? formatPct(

@@ -5,16 +5,13 @@
  */
 
 import type { Severity } from "@/design-system/metrics/SeverityMark"
+import { judgeFailures } from "@/features/home/attention"
 import {
-  MIN_FAILURE_RATE,
-  MIN_FAILURES,
-  URGENT_FAILURE_RATE,
-} from "@/features/home/attention"
+  calendarDaysUntil,
+  DAY_MS,
+  EXPIRY_WARN_DAYS,
+} from "@/features/home/days"
 import { formatRelative } from "@/shared/helpers/format"
-
-const DAY_MS = 86_400_000
-/** A key this close to its expiry is worth a warning on its row. */
-export const EXPIRY_WARN_DAYS = 7
 
 /** Spend under half a cent is rounding, not spend. */
 const NOTHING = 0.005
@@ -36,18 +33,16 @@ export function spendSplit(
 }
 
 /**
- * How bad a window's failure rate is. Healthy below the attention band's
- * threshold (2%, or fewer than five failures), High at the rate the band calls
- * urgent (10%), Elevated between.
+ * How bad a window's failure rate is, by the thresholds Needs attention uses
+ * (`judgeFailures`): Healthy, Elevated, or High.
  */
 export function failureSeverity(failed: number, requests: number): Severity {
-  const rate = requests > 0 ? failed / requests : 0
-  if (failed < MIN_FAILURES || rate < MIN_FAILURE_RATE) {
-    return { status: "ok", word: "Healthy" }
-  }
-  return rate >= URGENT_FAILURE_RATE
+  const { level } = judgeFailures(failed, requests)
+  return level === "high"
     ? { status: "alert", word: "High" }
-    : { status: "warn", word: "Elevated" }
+    : level === "elevated"
+      ? { status: "warn", word: "Elevated" }
+      : { status: "ok", word: "Healthy" }
 }
 
 const DAY_LABEL = new Intl.DateTimeFormat("en-US", {
@@ -58,17 +53,6 @@ const TIME_LABEL = new Intl.DateTimeFormat("en-US", {
   hour: "numeric",
   minute: "2-digit",
 })
-
-/** Local midnight of the day `time` falls on. */
-function dayOf(time: number): number {
-  const date = new Date(time)
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
-}
-
-/** Whole local days from `now` to `at`: 0 today, 1 tomorrow. */
-function calendarDaysUntil(at: number, now: number): number {
-  return Math.round((dayOf(at) - dayOf(now)) / DAY_MS)
-}
 
 /**
  * When a limit starts over, as its row says it: "Resets at 3:00 PM" later

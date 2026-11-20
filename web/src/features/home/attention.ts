@@ -39,6 +39,11 @@
 
 import type { ReactNode } from "react"
 import type { OrganizationSpendCeiling } from "@/client"
+import {
+  calendarDaysUntil,
+  DAY_MS,
+  EXPIRY_WARN_DAYS,
+} from "@/features/home/days"
 import type { HomeAccount } from "@/features/home/overlayHomeAccount"
 import {
   type LimitTarget,
@@ -50,18 +55,15 @@ import { paceOf } from "@/features/spend/pace"
 import type { ReadState } from "@/features/spend/useSpend"
 import { formatNumber, formatPct, formatUsd } from "@/shared/helpers/format"
 
-const DAY_MS = 86_400_000
 /** A limit this far along is worth a look before it refuses someone. */
 const NEAR_LIMIT = 0.8
 /** Near-limit rows shown before the rest fold. */
 const NEAR_ROWS_SHOWN = 3
 
-export const MIN_FAILURES = 5
-export const MIN_FAILURE_RATE = 0.02
-export const URGENT_FAILURE_RATE = 0.1
+const MIN_FAILURES = 5
+const MIN_FAILURE_RATE = 0.02
+const URGENT_FAILURE_RATE = 0.1
 const URGENT_FAILURE_REQUESTS = 20
-/** A key this close to its expiry gets a row. */
-const KEY_EXPIRY_DAYS = 7
 /** Expiring keys shown one by one; more fold into one row. */
 const KEY_ROWS_SHOWN = 3
 
@@ -142,7 +144,12 @@ export interface AttentionInput {
   peopleOf: ReadonlyMap<string, readonly string[]>
   /** What the edition holding the organization's money adds, if any. */
   account: Pick<HomeAccount, "sourceName" | "attention" | "quietClause">
-  /** The last 24 hours of each workspace, by error class. */
+  /** The whole organization's last 24 hours, by error class. */
+  orgDay: AttentionDay
+  /**
+   * The same, workspace by workspace: read only once the organization's own
+   * figures cross a threshold, and for one workspace its organization's.
+   */
   days: readonly (AttentionDay & { workspaceId: string })[]
   /**
    * The 403s of the last 24 hours, by workspace and user; a null user id is
@@ -407,22 +414,59 @@ function refusedRows(
 export function countedFailures(
   day: AttentionDay,
 ): { failed: number; rate: number; isUrgent: boolean } | undefined {
-  const { requests, errors } = day
-  const failed = errors
+  const failed = day.errors
     .filter((row) => COUNTED_ERROR_CLASSES.includes(row.errorClass))
     .reduce((sum, row) => sum + row.requests, 0)
-  if (requests <= 0 || failed < MIN_FAILURES) return undefined
-  const rate = failed / requests
-  if (rate < MIN_FAILURE_RATE) return undefined
+  const judged = judgeFailures(failed, day.requests)
+  if (judged.level === "healthy") return undefined
+  return { failed, rate: judged.rate, isUrgent: judged.level === "high" }
+}
+
+/**
+ * How bad a failure count is, by the one set of thresholds Home uses: below
+ * five failures or 2% it is healthy, from 10% with 20 or more requests it is
+ * high, and elevated between. The band and the Failures figure both judge
+ * with it, so they cannot call the same numbers different things.
+ */
+export function judgeFailures(
+  failed: number,
+  requests: number,
+): { rate: number; level: "healthy" | "elevated" | "high" } {
+  const rate = requests > 0 ? failed / requests : 0
+  if (failed < MIN_FAILURES || rate < MIN_FAILURE_RATE) {
+    return { rate, level: "healthy" }
+  }
   return {
-    failed,
     rate,
-    isUrgent:
-      rate >= URGENT_FAILURE_RATE && requests >= URGENT_FAILURE_REQUESTS,
+    level:
+      rate >= URGENT_FAILURE_RATE && requests >= URGENT_FAILURE_REQUESTS
+        ? "high"
+        : "elevated",
   }
 }
 
+/** The counted failures of a day, whatever the thresholds say. */
+function failedOf(day: AttentionDay): number {
+  return day.errors
+    .filter((row) => COUNTED_ERROR_CLASSES.includes(row.errorClass))
+    .reduce((sum, row) => sum + row.requests, 0)
+}
+
+const failureAction = (workspaceId?: string): AttentionAction => ({
+  label: "See the failures",
+  to: "/requests",
+  search: { status: "error", range: "24h" },
+  ...(workspaceId ? { workspaceId } : {}),
+})
+
+/**
+ * A row per workspace past the thresholds. Failures spread thin across
+ * workspaces can cross them for the organization while no workspace does:
+ * that is one row for the organization, opening the workspace with the most.
+ */
 function failureRows(input: AttentionInput): Ranked[] {
+  const org = countedFailures(input.orgDay)
+  if (!org) return []
   const ranked: Ranked[] = []
   for (const day of input.days) {
     const counted = countedFailures(day)
@@ -436,16 +480,29 @@ function failureRows(input: AttentionInput): Ranked[] {
         id: `failures:${day.workspaceId}`,
         isUrgent: counted.isUrgent,
         text: `${formatNumber(failed)} of ${formatNumber(day.requests)} requests${inWorkspace(input, day.workspaceId)} failed in the last 24 hours (${formatPct(rate)}).`,
-        action: {
-          label: "See the failures",
-          to: "/requests",
-          search: { status: "error", range: "24h" },
-          workspaceId: day.workspaceId,
-        },
+        action: failureAction(day.workspaceId),
       },
     })
   }
-  return ranked
+  if (ranked.length > 0) return ranked
+  const worst = [...input.days].sort((a, b) => failedOf(b) - failedOf(a))[0]
+  const most =
+    worst && failedOf(worst) > 0
+      ? input.workspaceNames.get(worst.workspaceId)
+      : undefined
+  return [
+    {
+      type: 4,
+      scopeRank: 0,
+      used: org.rate,
+      item: {
+        id: "failures",
+        isUrgent: org.isUrgent,
+        text: `${formatNumber(org.failed)} of ${formatNumber(input.orgDay.requests)} requests across all workspaces failed in the last 24 hours (${formatPct(org.rate)}).${most ? ` The most were in the ${most} workspace.` : ""}`,
+        action: failureAction(most ? worst?.workspaceId : undefined),
+      },
+    },
+  ]
 }
 
 function unreachableRows(input: AttentionInput): Ranked[] {
@@ -462,19 +519,6 @@ function unreachableRows(input: AttentionInput): Ranked[] {
   }))
 }
 
-/** Whole local days from `now` to `at`: 0 today, 1 tomorrow. */
-function calendarDaysUntil(at: number, now: number): number {
-  const day = (time: number) => {
-    const date = new Date(time)
-    return new Date(
-      date.getFullYear(),
-      date.getMonth(),
-      date.getDate(),
-    ).getTime()
-  }
-  return Math.round((day(at) - day(now)) / DAY_MS)
-}
-
 /**
  * Keys someone is using that stop working within the week. A key never used
  * refuses nobody when it expires, so it is left to the Keys page.
@@ -485,7 +529,7 @@ function keyRows(input: AttentionInput): Ranked[] {
     .filter((key) => {
       if (!key.isActive || !key.lastUsedAt || !key.expiresAt) return false
       const at = Date.parse(key.expiresAt)
-      return at > now && at - now <= KEY_EXPIRY_DAYS * DAY_MS
+      return at > now && at - now <= EXPIRY_WARN_DAYS * DAY_MS
     })
     .sort(
       (a, b) => Date.parse(a.expiresAt ?? "") - Date.parse(b.expiresAt ?? ""),
@@ -499,7 +543,7 @@ function keyRows(input: AttentionInput): Ranked[] {
         item: {
           id: "keys-expiring",
           isUrgent: false,
-          text: `${formatNumber(expiring.length)} API keys in use expire within ${KEY_EXPIRY_DAYS} days.`,
+          text: `${formatNumber(expiring.length)} API keys in use expire within ${EXPIRY_WARN_DAYS} days.`,
           action: { label: "Open API keys", to: "/keys" },
         },
       },
@@ -531,7 +575,7 @@ function quietLine(input: AttentionInput): { lead: string; detail: string } {
   const clauses = [
     `No limit is past ${wholePct(NEAR_LIMIT)}`,
     "nothing was refused in the last 24 hours",
-    `no key in use expires within ${KEY_EXPIRY_DAYS} days`,
+    `no key in use expires within ${EXPIRY_WARN_DAYS} days`,
   ]
   if (input.checksProviders) clauses.push("every provider is reachable")
   if (input.account.quietClause) clauses.push(input.account.quietClause)

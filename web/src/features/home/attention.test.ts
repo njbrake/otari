@@ -62,6 +62,7 @@ function input(overrides: Partial<AttentionInput> = {}): AttentionInput {
     targets: new Map(),
     peopleOf: new Map(),
     account: { sourceName: "The balance" },
+    orgDay: { requests: 100, errors: [] },
     days: [{ workspaceId: "w1", requests: 100, errors: [] }],
     refusals: [],
     keys: [],
@@ -265,8 +266,12 @@ describe("type 4, failures", () => {
     requests: number,
     errors: { errorClass: string; requests: number }[],
   ) =>
-    attention(input({ days: [{ workspaceId: "w1", requests, errors }] }))
-      .items[0]
+    attention(
+      input({
+        orgDay: { requests, errors },
+        days: [{ workspaceId: "w1", requests, errors }],
+      }),
+    ).items[0]
 
   it("counts only server-side classes", () => {
     expect(
@@ -479,6 +484,10 @@ describe("order and fold", () => {
         refusals: [
           { workspaceId: "w1", userId: "u9", name: "Eli", requests: 2 },
         ],
+        orgDay: {
+          requests: 100,
+          errors: [{ errorClass: "unknown", requests: 6 }],
+        },
         days: [
           {
             workspaceId: "w1",
@@ -711,6 +720,10 @@ describe("each row's workspace", () => {
     const items = attention(
       input({
         workspaceNames: twoWorkspaces,
+        orgDay: {
+          requests: 150,
+          errors: [{ errorClass: "provider_error", requests: 7 }],
+        },
         days: [
           {
             workspaceId: "w1",
@@ -732,15 +745,42 @@ describe("each row's workspace", () => {
     expect(items[0]?.action.workspaceId).toBe("w2")
   })
 
-  it("does not add up workspaces that are each under the threshold", () => {
-    const quiet = { errorClass: "provider_error", requests: 3 }
+  it("names the organization when failures cross only across workspaces", () => {
+    // Three in each: no workspace reaches five, the organization has six.
+    const some = { errorClass: "provider_error", requests: 3 }
+    const [item] = attention(
+      input({
+        workspaceNames: twoWorkspaces,
+        orgDay: {
+          requests: 200,
+          errors: [{ errorClass: "provider_error", requests: 6 }],
+        },
+        days: [
+          { workspaceId: "w1", requests: 150, errors: [some] },
+          {
+            workspaceId: "w2",
+            requests: 50,
+            errors: [{ errorClass: "provider_error", requests: 4 }],
+          },
+        ],
+      }),
+    ).items
+    expect(item?.text).toBe(
+      "6 of 200 requests across all workspaces failed in the last 24 hours (3.0%). The most were in the Research workspace.",
+    )
+    expect(item?.action.workspaceId).toBe("w2")
+  })
+
+  it("raises nothing when the organization is under the threshold", () => {
+    // Its workspaces are only read again once it crosses.
     expect(
       texts({
         workspaceNames: twoWorkspaces,
-        days: [
-          { workspaceId: "w1", requests: 100, errors: [quiet] },
-          { workspaceId: "w2", requests: 100, errors: [quiet] },
-        ],
+        orgDay: {
+          requests: 1000,
+          errors: [{ errorClass: "provider_error", requests: 6 }],
+        },
+        days: [],
       }),
     ).toEqual([])
   })

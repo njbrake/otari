@@ -9,6 +9,7 @@ import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { useIsMobile } from "@/design-system/hooks/useIsMobile"
+import { InlineList } from "@/design-system/layout/InlineList"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { Sparkline } from "@/design-system/metrics/charts"
@@ -185,24 +186,22 @@ function LimitFacts({
 }) {
   if (facts.length === 0) return null
   return (
-    <span className="flex flex-wrap gap-x-1.5 text-caption">
-      {facts.map((fact, index) => (
-        <span key={fact.text} className="flex gap-x-1.5 whitespace-nowrap">
-          {index > 0 ? <span aria-hidden>·</span> : null}
-          <span
-            className={
-              fact.tone === "danger"
-                ? "text-danger"
-                : fact.tone === "warning"
-                  ? "text-warning"
-                  : undefined
-            }
-          >
-            {fact.text}
-          </span>
+    <InlineList className="text-caption">
+      {facts.map((fact) => (
+        <span
+          key={fact.text}
+          className={
+            fact.tone === "danger"
+              ? "text-danger"
+              : fact.tone === "warning"
+                ? "text-warning"
+                : undefined
+          }
+        >
+          {fact.text}
         </span>
       ))}
-    </span>
+    </InlineList>
   )
 }
 
@@ -343,6 +342,8 @@ export function TeamHome({
   // Requests lists the shell's workspace: a link out of a figure points it at
   // the one the page picked, where it picked one.
   const pointShell = workspaceId ? () => select(workspaceId) : undefined
+  // Across every workspace, a count has no one Requests page that lists it.
+  const canOpenCounts = hasRequests && (workspaceId !== "" || !hasWorkspaces)
   const sessions = useTraceCount(
     { workspaceId, start: window.start, end: window.end || undefined, q: "" },
     hasSessions,
@@ -699,15 +700,16 @@ export function TeamHome({
   const cacheTotals = cacheSums(spend.series)
   const isReading = !spend.totals && spend.reads.usage === "loading"
   const split = spendSplit(total, detail.charged)
-  const spentFacts = [
-    ...(split
-      ? [
-          `${formatUsd(split.charged)} charged`,
-          `${formatUsd(split.notCharged)} not charged`,
-        ]
-      : []),
-    ...(detail.today !== undefined ? [`${formatUsd(detail.today)} today`] : []),
-  ]
+  // Charged and not charged lead, and stay whole: they reconcile Spent with
+  // the person page's Charged. Today's spend only where nothing else is said.
+  const spentFacts = split
+    ? [
+        `${formatUsd(split.charged)} charged`,
+        `+${formatUsd(split.notCharged)} not charged`,
+      ]
+    : detail.today !== undefined
+      ? [`${formatUsd(detail.today)} today`]
+      : []
   const failed = spend.totals?.error_count ?? 0
   const windowSearch: DashboardSearch = sessionsSearchFor(window)
 
@@ -772,7 +774,7 @@ export function TeamHome({
             !spend.totals
               ? unreadLine
               : spentFacts.length > 0
-                ? spentFacts.join(" · ")
+                ? spentFacts
                 : delta === null
                   ? `${formatNumber(spend.totals.request_count)} requests`
                   : undefined
@@ -839,7 +841,7 @@ export function TeamHome({
           />
         ) : (
           <KpiCell
-            label="Failures"
+            label={figureLabel("Failures", window)}
             value={spend.totals ? formatPct(errorRate) : "—"}
             isLoading={isReading}
             severity={
@@ -854,7 +856,7 @@ export function TeamHome({
                     {
                       text: `${formatNumber(failed)} failed`,
                       search: { ...windowSearch, status: "error" },
-                      isShown: hasRequests,
+                      isShown: canOpenCounts,
                     },
                     {
                       text: `${formatNumber(detail.unpriced ?? 0)} unpriced`,
@@ -863,7 +865,7 @@ export function TeamHome({
                         status: "success",
                         priced: "false",
                       },
-                      isShown: hasRequests && (detail.unpriced ?? 0) > 0,
+                      isShown: canOpenCounts && (detail.unpriced ?? 0) > 0,
                     },
                   ]}
                   fallback={`${formatNumber(failed)} failed`}
@@ -1005,6 +1007,7 @@ export function TeamHome({
           now={now}
           workspaceId={workspaceId}
           total={spend.totals?.error_count}
+          canSeeAll={canOpenCounts}
           onOpen={pointShell}
         />
       ) : null}

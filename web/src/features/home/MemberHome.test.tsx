@@ -379,7 +379,7 @@ describe("MemberHome, sessions", () => {
     ).toBeNull()
     expect(await findRowMenuItem(user, /See its sessions/, table)).toBeNull()
     // The strip keeps four figures: the owner's Failures takes the place.
-    expect(screen.getByText("Failures")).toBeVisible()
+    expect(screen.getByText(/^Failures/)).toBeVisible()
   })
 
   it("counts and links the member's sessions where the deployment records them", async () => {
