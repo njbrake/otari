@@ -85,6 +85,16 @@ export type AttentionSource =
 export type AttentionState = ReadState
 
 /** Whether a source is still being read, and a sentence for each that failed. */
+/**
+ * "the Research workspace", or "the Default workspace" for a workspace whose
+ * name already says it is one, so the noun is not doubled.
+ */
+export function theWorkspace(name: string): string {
+  return /\bworkspace$/i.test(name.trim())
+    ? `the ${name}`
+    : `the ${name} workspace`
+}
+
 export function readsOf<Source extends string>(
   states: Record<Source, AttentionState>,
   names: Record<Source, string>,
@@ -325,7 +335,7 @@ function limitRows(input: AttentionInput): Ranked[] {
         isUrgent: false,
         text: isOrganization
           ? `At this pace the team budget of ${limit} runs out around ${date}, ${plural(before, "day", "days")} before it resets.`
-          : `At this pace the ${name} workspace’s limit of ${limit} runs out around ${date}, ${plural(before, "day", "days")} before it resets.`,
+          : `At this pace ${name ? theWorkspace(name) : "this workspace"}’s limit of ${limit} runs out around ${date}, ${plural(before, "day", "days")} before it resets.`,
         action: dialog(isOrganization ? "Change the limit" : "Raise the limit"),
       },
     })
@@ -353,7 +363,7 @@ function accountRow(input: AttentionInput): Ranked | undefined {
 function inWorkspace(input: AttentionInput, workspaceId: string): string {
   if (input.workspaceNames.size <= 1) return ""
   const name = input.workspaceNames.get(workspaceId)
-  return name ? ` in the ${name} workspace` : " in another workspace"
+  return name ? ` in ${theWorkspace(name)}` : " in another workspace"
 }
 
 function refusedRows(
@@ -498,7 +508,7 @@ function failureRows(input: AttentionInput): Ranked[] {
       item: {
         id: "failures",
         isUrgent: org.isUrgent,
-        text: `${formatNumber(org.failed)} of ${formatNumber(input.orgDay.requests)} requests across all workspaces failed in the last 24 hours (${formatPct(org.rate)}).${most ? ` The most were in the ${most} workspace.` : ""}`,
+        text: `${formatNumber(org.failed)} of ${formatNumber(input.orgDay.requests)} requests across all workspaces failed in the last 24 hours (${formatPct(org.rate)}).${most ? ` The most were in ${theWorkspace(most)}.` : ""}`,
         action: failureAction(most ? worst?.workspaceId : undefined),
       },
     },

@@ -5,6 +5,7 @@ import {
   type AttentionKey,
   type AttentionSource,
   attention,
+  theWorkspace,
 } from "@/features/home/attention"
 import type { LimitTarget } from "@/features/spend/limits"
 
@@ -899,5 +900,12 @@ describe("type 8, a key expiring", () => {
       label: "Open API keys",
       to: "/keys",
     })
+  })
+})
+
+describe("theWorkspace", () => {
+  it("names a workspace without doubling the noun", () => {
+    expect(theWorkspace("Research")).toBe("the Research workspace")
+    expect(theWorkspace("Default workspace")).toBe("the Default workspace")
   })
 })

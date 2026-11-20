@@ -5,6 +5,7 @@ import {
   type AttentionResult,
   attention,
   countedFailures,
+  theWorkspace,
 } from "@/features/home/attention"
 import { useHomeAccount } from "@/features/home/overlayHomeAccount"
 import { type LimitTarget, perWords } from "@/features/spend/limits"
@@ -115,7 +116,7 @@ export function useTeamAttention(spend: Spend, now: number): AttentionResult {
   }
   const workspaceNames = new Map<string, string>()
   for (const workspace of workspaces.data ?? []) {
-    subjects.set(workspace.id, `The ${workspace.name} workspace`)
+    subjects.set(workspace.id, `T${theWorkspace(workspace.name).slice(1)}`)
     workspaceNames.set(workspace.id, workspace.name)
   }
 
