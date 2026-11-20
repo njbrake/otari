@@ -8,7 +8,7 @@ import pytest
 
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.usage_and_telemetry_exceptions import UsageReadsBusyError
-from gateway.repositories.usage_and_telemetry import UsageFilters, UsageLogRepository, UsageScope
+from gateway.repositories.usage_and_telemetry import UsageFilters, UsageLogRepository, UsageRefinements, UsageScope
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.organizations import UserAccess
 from gateway.services.usage_and_telemetry import HeavyUsageReads, UsageService
@@ -152,3 +152,67 @@ def test_a_read_that_waits_too_long_is_refused_and_takes_no_turn() -> None:
     asyncio.run(main())
 
     assert running.most == 1
+
+
+class _Names:
+    """The users' and keys' side of a list read: no names, and none found by a search."""
+
+    def aliases_relation(self) -> None:
+        return None
+
+    def names_relation(self) -> None:
+        return None
+
+    async def aliases(self, user_ids: Any) -> dict[str, str | None]:
+        return {}
+
+    async def key_names(self, key_ids: Any, *, workspace_ids: Any) -> dict[str, str | None]:
+        return {}
+
+    async def ids_aliased_like(self, term: str, *, limit: int, within: Any = None) -> list[str]:
+        return []
+
+    async def ids_named_like(self, term: str, *, limit: int, workspaces: Any = None) -> list[str]:
+        return []
+
+
+class _Pages:
+    async def page(self, filters: Any, scope: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+
+@pytest.mark.parametrize(
+    ("sort", "q", "gated"),
+    [
+        ("timestamp", None, False),
+        ("timestamp", "3f2504e0-4f89-11d3-9a0c-0305e82c3301", False),
+        ("timestamp", "sonnet", True),
+        ("cost", None, True),
+        ("user", None, True),
+    ],
+)
+def test_a_sorted_or_searched_page_waits_its_turn_and_the_newest_page_does_not(
+    sort: Any, q: str | None, gated: bool
+) -> None:
+    gate = HeavyUsageReads(1, wait_s=0.01)
+    connections = _Counter()
+    uow = _FakeUnitOfWork(connections)
+    names = _Names()
+    service = UsageService(
+        cast(UnitOfWork, uow),
+        cast(UsageLogRepository, _Pages()),
+        keys=cast(ApiKeyService, names),
+        users=cast(UserAccess, names),
+        heavy_reads=gate,
+    )
+    filters = UsageFilters(refine=UsageRefinements(q=q))
+
+    async def main() -> None:
+        async with gate.turn(cast(UnitOfWork, _FakeUnitOfWork(connections))):
+            if gated:
+                with pytest.raises(UsageReadsBusyError):
+                    await service.page(filters, UsageScope(workspaces=None), skip=0, limit=50, sort=sort)
+            else:
+                await service.page(filters, UsageScope(workspaces=None), skip=0, limit=50, sort=sort)
+
+    asyncio.run(main())
