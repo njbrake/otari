@@ -7,12 +7,12 @@ import { useUsageSummary } from "@/shared/api/usage"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
 import {
   type ExtraKey,
+  type FilterSection,
   type ObserveFilterState,
   type ObserveUrlKey,
   readThreshold,
   statusOptions,
   THRESHOLDS,
-  type ThresholdKey,
   useObserveFilterState,
   useObserveUsageFilters,
   useValueOptions,
@@ -21,13 +21,6 @@ import {
   valuesOf,
 } from "./observeFilters"
 import type { ObserveView } from "./observeSearch"
-
-/** One part of a column's filter panel. */
-export type FilterSection =
-  | { kind: "values"; dimension: ValueDimension }
-  | { kind: "threshold"; key: ThresholdKey }
-  | { kind: "extra"; key: ExtraKey }
-  | { kind: "tool" }
 
 const TITLES: Record<ValueDimension, string> = {
   model: "Model",
@@ -77,8 +70,20 @@ function offered(section: FilterSection, state: ObserveFilterState): boolean {
   return true
 }
 
-/** The URL keys a section writes, each with its cleared value. */
-function clearedKeys(section: FilterSection): Record<string, string | []> {
+/** The sections of a column this view and caller can apply. */
+export const offeredSections = (
+  sections: readonly FilterSection[],
+  state: ObserveFilterState,
+): FilterSection[] => sections.filter((section) => offered(section, state))
+
+/** The URL keys a column's sections write, each with its cleared value. */
+export function clearedKeys(
+  sections: readonly FilterSection[],
+): Record<string, string | []> {
+  return Object.assign({}, ...sections.map(clearedKeysOf))
+}
+
+function clearedKeysOf(section: FilterSection): Record<string, string | []> {
   if (section.kind === "threshold") return { [section.key]: "" }
   if (section.kind === "extra") return { [EXTRAS[section.key].key]: "" }
   if (section.kind === "tool") return { tool: "" }
@@ -88,6 +93,12 @@ function clearedKeys(section: FilterSection): Record<string, string | []> {
     ...(keys.exclude ? { [keys.exclude]: [] } : {}),
   }
 }
+
+/** Whether any of a column's sections narrows the rows. */
+export const isFiltered = (
+  sections: readonly FilterSection[],
+  state: ObserveFilterState,
+): boolean => sections.some((section) => isActive(section, state))
 
 function isActive(section: FilterSection, state: ObserveFilterState): boolean {
   if (section.kind === "threshold")
@@ -104,14 +115,9 @@ function isActive(section: FilterSection, state: ObserveFilterState): boolean {
 
 /**
  * The funnel in a Sessions or Requests column header, holding that column's
- * filters: a checklist of its values, each of which can also be left out on
- * Requests, thresholds to show only the rows above, and what else the column
- * alone can say (priced or unpriced rows under Cost, direct requests under
- * Routing, a gateway tool under Model, the source under API key).
- *
- * Values load when the panel opens, busiest first, searched on the server.
- * Under Mine a User funnel draws nothing, since the scope already decided whose
- * rows these are, and a section the view cannot apply is left out.
+ * filters (see `ObserveFilterSections`). Under Mine a User funnel draws
+ * nothing, since the scope already decided whose rows these are, and a
+ * section the view cannot apply is left out.
  */
 export function ObserveColumnFilter({
   view,
@@ -126,74 +132,101 @@ export function ObserveColumnFilter({
   placement?: "bottom" | "bottom end"
 }) {
   const state = useObserveFilterState(view)
-  const shown = sections.filter((section) => offered(section, state))
+  const shown = offeredSections(sections, state)
   if (shown.length === 0) return null
-  const hasTitles = shown.length > 1
 
   return (
     <ColumnFilter
       label={label}
       placement={placement}
-      isFiltered={shown.some((section) => isActive(section, state))}
-      onClear={() => state.patch(Object.assign({}, ...shown.map(clearedKeys)))}
+      isFiltered={isFiltered(shown, state)}
+      onClear={() => state.patch(clearedKeys(shown))}
     >
-      {shown.map((section) => {
-        if (section.kind === "values") {
-          return (
-            <ValuesSection
-              key={section.dimension}
-              view={view}
-              state={state}
-              dimension={section.dimension}
-              title={hasTitles ? TITLES[section.dimension] : undefined}
-            />
-          )
-        }
-        if (section.kind === "threshold") {
-          const spec = THRESHOLDS[section.key]
-          const current = readThreshold(state.url.get(section.key))
-          return (
-            <ColumnFilterList
-              key={section.key}
-              label={`${spec.label} above`}
-              title="Show only"
-              selectionMode="single"
-              options={spec.presets.map((value) => ({
-                value: String(value),
-                label: spec.describe(value),
-              }))}
-              selected={current === undefined ? [] : [String(current)]}
-              onChange={(values) =>
-                state.patch({ [section.key]: values[0] ?? "" })
-              }
-            />
-          )
-        }
-        if (section.kind === "tool") {
-          return <ToolSection key="tool" view={view} state={state} />
-        }
-        const extra = EXTRAS[section.key]
-        const value = state.url.get(extra.key)
-        return (
-          <ColumnFilterList
-            key={section.key}
-            label={`More ${label} filters`}
-            selectionMode="single"
-            options={extra.choices.map((choice) => ({
-              value: choice.on,
-              label: choice.label,
-            }))}
-            selected={
-              extra.choices.some((choice) => choice.on === value) ? [value] : []
-            }
-            onChange={(values) =>
-              state.patch({ [extra.key]: values.at(-1) ?? "" })
-            }
-          />
-        )
-      })}
+      <ObserveFilterSections
+        view={view}
+        label={label}
+        sections={shown}
+        state={state}
+      />
     </ColumnFilter>
   )
+}
+
+/**
+ * One column's filters, as its header funnel and the phone's filter sheet both
+ * show them: a checklist of its values, each of which can also be left out on
+ * Requests, thresholds to show only the rows above, and what else the column
+ * alone can say (priced or unpriced rows under Cost, direct requests under
+ * Routing, a gateway tool under Model, the source under API key).
+ *
+ * Values load once this mounts, busiest first, searched on the server, so a
+ * caller mounts it only while its column is open. `sections` are those the
+ * view offers (`offeredSections`).
+ */
+export function ObserveFilterSections({
+  view,
+  label,
+  sections,
+  state,
+}: {
+  view: ObserveView
+  /** The column's name, which names a list that has no title of its own. */
+  label: string
+  sections: readonly FilterSection[]
+  state: ObserveFilterState
+}) {
+  const hasTitles = sections.length > 1
+  return sections.map((section) => {
+    if (section.kind === "values") {
+      return (
+        <ValuesSection
+          key={section.dimension}
+          view={view}
+          state={state}
+          dimension={section.dimension}
+          title={hasTitles ? TITLES[section.dimension] : undefined}
+        />
+      )
+    }
+    if (section.kind === "threshold") {
+      const spec = THRESHOLDS[section.key]
+      const current = readThreshold(state.url.get(section.key))
+      return (
+        <ColumnFilterList
+          key={section.key}
+          label={`${spec.label} above`}
+          title="Show only"
+          selectionMode="single"
+          options={spec.presets.map((value) => ({
+            value: String(value),
+            label: spec.describe(value),
+          }))}
+          selected={current === undefined ? [] : [String(current)]}
+          onChange={(values) => state.patch({ [section.key]: values[0] ?? "" })}
+        />
+      )
+    }
+    if (section.kind === "tool") {
+      return <ToolSection key="tool" view={view} state={state} />
+    }
+    const extra = EXTRAS[section.key]
+    const value = state.url.get(extra.key)
+    return (
+      <ColumnFilterList
+        key={section.key}
+        label={`More ${label} filters`}
+        selectionMode="single"
+        options={extra.choices.map((choice) => ({
+          value: choice.on,
+          label: choice.label,
+        }))}
+        selected={
+          extra.choices.some((choice) => choice.on === value) ? [value] : []
+        }
+        onChange={(values) => state.patch({ [extra.key]: values.at(-1) ?? "" })}
+      />
+    )
+  })
 }
 
 function ValuesSection({

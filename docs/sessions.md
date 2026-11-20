@@ -22,7 +22,8 @@ panel names the client with its version where the client gives one, such as
 `openai 2.30.0`.
 
 The **Sessions** and **Requests** views share one time range and the user, API
-key, model and status filters, set from the funnel in a column's header (see
+key, model and status filters, set from the funnel in a column's header, or
+on a phone from the **Filters** sheet (see
 [Requests](review-usage-and-requests.md#requests)). A session opens on **At a glance**, which splits
 its time and cost, and shows what filled the model's context window. Pick a span
 to see its details, or switch to the timeline or the flat log. From the

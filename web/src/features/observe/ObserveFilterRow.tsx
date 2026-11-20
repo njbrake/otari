@@ -1,3 +1,8 @@
+import { useState } from "react"
+import { FiSliders } from "react-icons/fi"
+
+import { Button } from "@/design-system/actions/Button"
+import { useIsMobile } from "@/design-system/hooks/useIsMobile"
 import {
   type FilterChip,
   FilterChips,
@@ -11,6 +16,8 @@ import {
 } from "@/features/activity/activityModel"
 import { providerDisplayName } from "@/shared/helpers/providers"
 import { findPreset, localMidnightIso } from "@/shared/helpers/timeRange"
+import { ObserveFilterSheet } from "./ObserveFilterSheet"
+import { OBSERVE_FILTER_COLUMNS } from "./observeColumnFilters"
 import {
   type ObserveUrlKey,
   readThreshold,
@@ -65,6 +72,10 @@ const CLEARED: Partial<Record<ObserveUrlKey, string | []>> = {
  * chip row. A filter
  * the current view cannot apply stays visible and removable, marked as not
  * applied, rather than being dropped silently.
+ *
+ * On a phone the table is a list of cards with no headers, so the row carries
+ * a Filters button instead, counting the filters applied, which opens the same
+ * column filters as a sheet (`ObserveFilterSheet`).
  */
 export function ObserveFilterRow({ view }: { view: ObserveView }) {
   const state = useObserveFilterState(view)
@@ -81,6 +92,9 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
     "",
     (!isMine && users.length > 0) || excludedUsers.length > 0,
   )
+  const isMobile = useIsMobile()
+  const [isSheetOpen, setIsSheetOpen] = useState(false)
+  const offersSheet = isMobile && OBSERVE_FILTER_COLUMNS[view].length > 0
   const keyNames = useValueOptions(
     view,
     "api_key",
@@ -262,20 +276,56 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
     ...thresholdChip("latency_ms_gt"),
   ]
 
+  const clearAll = () => patch(CLEARED)
+
   return (
     <div className="pb-3">
       <FilterChips
         chips={chips}
         start={
-          <FilterSelect
-            label="Time range"
-            value={rangeValue}
-            onChange={pickRange}
-            options={rangeOptions}
-          />
+          <>
+            <FilterSelect
+              label="Time range"
+              value={rangeValue}
+              onChange={pickRange}
+              options={rangeOptions}
+            />
+            {offersSheet ? (
+              <Button
+                size="sm"
+                aria-haspopup="dialog"
+                aria-label={
+                  chips.length > 0
+                    ? `Filters, ${chips.length} applied`
+                    : "Filters"
+                }
+                onPress={() => setIsSheetOpen(true)}
+              >
+                <FiSliders aria-hidden className="size-3.5" />
+                Filters
+                {chips.length > 0 ? (
+                  <span
+                    aria-hidden
+                    className="rounded-full bg-primary-subtle px-1.5 text-mono-micro text-primary-subtle-foreground"
+                  >
+                    {chips.length}
+                  </span>
+                ) : null}
+              </Button>
+            ) : null}
+          </>
         }
-        onClearAll={() => patch(CLEARED)}
+        onClearAll={clearAll}
       />
+      {offersSheet ? (
+        <ObserveFilterSheet
+          view={view}
+          isOpen={isSheetOpen}
+          onOpenChange={setIsSheetOpen}
+          onClearAll={clearAll}
+          hasFilters={chips.length > 0}
+        />
+      ) : null}
     </div>
   )
 }

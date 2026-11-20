@@ -22,10 +22,8 @@ import {
   type ManualRates,
   SetPriceDialog,
 } from "@/features/models/SetPriceDialog"
-import {
-  type FilterSection,
-  ObserveColumnFilter,
-} from "@/features/observe/ObserveColumnFilter"
+import { ObserveColumnFilter } from "@/features/observe/ObserveColumnFilter"
+import { funnelFor } from "@/features/observe/observeColumnFilters"
 import { readThreshold } from "@/features/observe/observeFilters"
 import { useObserveScope } from "@/features/observe/useObserveScope"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
@@ -80,33 +78,6 @@ import {
 const NO_BREAKDOWNS: SummaryDimension[] = []
 
 const DEFAULT_PAGE_SIZE = 50
-
-// What each column's funnel filters. Tokens are one threshold over input plus
-// output, so the Input and Output columns carry the same one.
-const FUNNELS = {
-  user: [{ kind: "values", dimension: "user" }],
-  // The Model cell carries the tool marker, so the tool filter is here.
-  model: [
-    { kind: "values", dimension: "model" },
-    { kind: "values", dimension: "provider" },
-    { kind: "tool" },
-  ],
-  routing: [
-    { kind: "values", dimension: "policy" },
-    { kind: "extra", key: "direct" },
-  ],
-  api_key: [
-    { kind: "values", dimension: "api_key" },
-    { kind: "values", dimension: "source" },
-  ],
-  tokens: [{ kind: "threshold", key: "tokens_gt" }],
-  cost: [
-    { kind: "threshold", key: "cost_gt" },
-    { kind: "extra", key: "priced" },
-  ],
-  latency: [{ kind: "threshold", key: "latency_ms_gt" }],
-  status: [{ kind: "values", dimension: "status" }],
-} as const satisfies Record<string, FilterSection[]>
 
 // All filter + pagination state, with defaults, kept in the URL.
 const URL_DEFAULTS = {
@@ -720,33 +691,26 @@ function ActivityPageContent({
   // outcomes, both themselves memoized) so DataTable's per-row cache holds: a
   // fresh array every render would rebuild all rows per click.
   // Inside the Overview the filters are set from the headers: a funnel on each
-  // column a filter reads. The provider has no column, so the Model funnel
-  // carries it. Built apart from the columns, so a funnel is the same element
-  // while the routing outcomes the columns read come in.
+  // column a filter reads (`OBSERVE_FILTER_COLUMNS`). Built apart from the
+  // columns, so a funnel is the same element while the routing outcomes the
+  // columns read come in.
   const funnels = useMemo(() => {
-    const funnel = (
-      label: string,
-      sections: readonly FilterSection[],
-      placement?: "bottom end",
-    ) =>
-      embedded ? (
-        <ObserveColumnFilter
-          view="requests"
-          label={label}
-          sections={[...sections]}
-          placement={placement}
-        />
+    const funnel = (column: string) => {
+      const filter = embedded ? funnelFor("requests", column) : undefined
+      return filter ? (
+        <ObserveColumnFilter view="requests" {...filter} />
       ) : undefined
+    }
     return {
-      user: funnel("User", FUNNELS.user),
-      model: funnel("Model", FUNNELS.model),
-      routing: funnel("Routing", FUNNELS.routing),
-      apiKey: funnel("API key", FUNNELS.api_key),
-      input: funnel("Input", FUNNELS.tokens),
-      output: funnel("Output", FUNNELS.tokens),
-      cost: funnel("Cost", FUNNELS.cost),
-      latency: funnel("Total time", FUNNELS.latency, "bottom end"),
-      status: funnel("Status", FUNNELS.status, "bottom end"),
+      user: funnel("user"),
+      model: funnel("model"),
+      routing: funnel("routing"),
+      apiKey: funnel("api_key"),
+      input: funnel("input_tokens"),
+      output: funnel("output_tokens"),
+      cost: funnel("cost"),
+      latency: funnel("latency"),
+      status: funnel("status"),
     }
   }, [embedded])
   const columns = useMemo<DataTableColumn<UsageEntry>[]>(() => {
