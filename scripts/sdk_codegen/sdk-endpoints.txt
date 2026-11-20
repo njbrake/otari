@@ -280,6 +280,12 @@ PUT /api/v1/auth/profile/avatar                     # dashboard-only
 GET /api/v1/me/preferences/{key}                    # dashboard-only
 PUT /api/v1/me/preferences/{key}                    # dashboard-only
 DELETE /api/v1/me/preferences/{key}                 # dashboard-only
+# A workspace's saved views of the Sessions and Requests pages. A view is the
+# dashboard's own query string, so there is nothing here for an SDK to wrap.
+GET /api/v1/workspaces/{workspace_id}/saved-views              # dashboard-only
+POST /api/v1/workspaces/{workspace_id}/saved-views             # dashboard-only
+PATCH /api/v1/workspaces/{workspace_id}/saved-views/{view_id}  # dashboard-only
+DELETE /api/v1/workspaces/{workspace_id}/saved-views/{view_id} # dashboard-only
 # Deleting the signed-in account: the account page's Danger Zone. It confirms with
 # the person's own address and password, which no SDK caller holds.
 DELETE /api/v1/auth/account                         # dashboard-only

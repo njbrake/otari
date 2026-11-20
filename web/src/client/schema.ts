@@ -9344,6 +9344,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/saved-views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Saved Views
+         * @description List the views the caller may open on a page: the built-in ones, their own, then the workspace's shared ones.
+         */
+        get: operations["saved-views-list_saved_views"];
+        put?: never;
+        /**
+         * Create Saved View
+         * @description Save a view. Sharing it with the workspace takes someone who manages the workspace.
+         */
+        post: operations["saved-views-create_saved_view"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/saved-views/{view_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Saved View
+         * @description Delete one of the caller's views, or a shared one when they manage the workspace.
+         */
+        delete: operations["saved-views-delete_saved_view"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Saved View
+         * @description Rename, re-save or re-share one of the caller's own views.
+         */
+        patch: operations["saved-views-update_saved_view"];
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/trace-content": {
         parameters: {
             query?: never;
@@ -21455,6 +21503,107 @@ export interface components {
          * @enum {string}
          */
         SandboxProvider: "protocol" | "e2b";
+        /**
+         * SavedViewCreate
+         * @description A view to save: the page it belongs to, its name, and the query string it applies.
+         * @example {
+         *       "name": "Failures this week",
+         *       "page": "requests",
+         *       "query": "range=7d&status=error"
+         *     }
+         */
+        SavedViewCreate: {
+            /** Name */
+            name: string;
+            page: components["schemas"]["SavedViewPage"];
+            /**
+             * Query
+             * @description The page's query string, without the leading '?'. Only the keys the page keeps in a view.
+             */
+            query: string;
+            /**
+             * Shared
+             * @description Offer it to every member of the workspace.
+             * @default false
+             */
+            shared: boolean;
+        };
+        /**
+         * SavedViewPage
+         * @description The pages that keep saved views. Closed, so a view cannot be filed under a page that never reads it.
+         * @enum {string}
+         */
+        SavedViewPage: "sessions" | "requests";
+        /**
+         * SavedViewPublic
+         * @description A view as the caller's menu lists it: built in, their own, or shared with the workspace.
+         */
+        SavedViewPublic: {
+            /**
+             * Built In
+             * @description Offered by the page itself, not stored; it cannot be changed or deleted.
+             */
+            built_in: boolean;
+            /** Can Delete */
+            can_delete: boolean;
+            /**
+             * Can Edit
+             * @description The caller may rename it or save the page's current filters over it.
+             */
+            can_edit: boolean;
+            /**
+             * Id
+             * @description The saved view's id, or `built-in:<slug>` for one the page offers itself.
+             */
+            id: string;
+            /**
+             * Is Mine
+             * @description The caller saved it.
+             */
+            is_mine: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Owner Name
+             * @description Who saved it, for a shared view; null for a built-in one.
+             */
+            owner_name: string | null;
+            page: components["schemas"]["SavedViewPage"];
+            /** Query */
+            query: string;
+            /** Shared */
+            shared: boolean;
+            /**
+             * Updated At
+             * @description When it was last saved; null for a built-in one.
+             */
+            updated_at: string | null;
+        };
+        /**
+         * SavedViewUpdate
+         * @description What to change on one of the caller's views. A field left out, or sent as null, is left as it is.
+         */
+        SavedViewUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Query */
+            query?: string | null;
+            /** Shared */
+            shared?: boolean | null;
+        };
+        /**
+         * SavedViewsPublic
+         * @description A page's views in a workspace: the built-in ones, then the caller's own, then those shared with it.
+         */
+        SavedViewsPublic: {
+            /**
+             * Can Share
+             * @description The caller manages the workspace, so may share a view with it.
+             */
+            can_share: boolean;
+            /** Data */
+            data: components["schemas"]["SavedViewPublic"][];
+        };
         /**
          * ScopedBudgetResponse
          * @description One scoped ceiling and its live counters.
@@ -41821,6 +41970,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceProviderPolicyPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "saved-views-list_saved_views": {
+        parameters: {
+            query: {
+                /** @description The dashboard page the views belong to. */
+                page: components["schemas"]["SavedViewPage"];
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedViewsPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "saved-views-create_saved_view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedViewCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedViewPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "saved-views-delete_saved_view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                view_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "saved-views-update_saved_view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                view_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedViewUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedViewPublic"];
                 };
             };
             /** @description Validation Error */

@@ -376,6 +376,18 @@ alone and takes no identity id.
 
 Built in the target shape from the start.
 
+### saved-views
+
+A dashboard page's filters kept under a name (`saved_views`): the page's query
+string, owned by one sign-in identity in one workspace, and offered to every
+member once a workspace manager shares it. The pages are a closed vocabulary in
+`models/saved_views.py`, with the query keys each one keeps in a view, and each
+page's built-in views are the service's own, never stored. A view goes with its
+owner, with its workspace, and with its owner's membership of that workspace
+(`SavedViewMembershipListener`).
+
+Built in the target shape from the start.
+
 ### Shared
 
 Cross-cutting modules that several domains import. They stay where they are.

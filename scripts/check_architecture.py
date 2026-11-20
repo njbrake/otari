@@ -2755,6 +2755,10 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
         "repository": "gateway/repositories/preferences/user_preference_repository.py",
         "baseline": (),
     },
+    "gateway.models.saved_views.SavedView": {
+        "repository": "gateway/repositories/saved_views/saved_view_repository.py",
+        "baseline": (),
+    },
     "gateway.models.rate_limits.StoredRateLimitRule": {
         "repository": "gateway/repositories/rate_limits/rate_limit_rule_repository.py",
         "baseline": ("gateway/services/rate_limits/_service.py",),

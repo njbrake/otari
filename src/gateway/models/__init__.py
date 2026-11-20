@@ -27,6 +27,7 @@ from gateway.models import (  # noqa: F401
     providers,
     rate_limits,
     routing,
+    saved_views,
     tenancy,
     tools,
     traces,
