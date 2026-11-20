@@ -313,6 +313,29 @@ def test_older_rows_count_with_newer_ones_under_the_same_name(routing_client: Te
     assert {"name": "paired", "requests": 3, "deleted": False} in narrow["policies"]
 
 
+def test_an_offering_sent_in_the_legacy_slash_form_is_pinned(
+    routing_client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    session = db_session_factory()
+    try:
+        key = session.get(APIKey, world.keys["idle"])
+        assert key is not None
+        session.add_all(_rows(key.workspace_id, key.id, None, _BEDROCK, requested="bedrock/anthropic.claude-x-1"))
+        session.commit()
+    finally:
+        session.close()
+
+    [idle] = _read_as(routing_client, world, "member", [world.keys["idle"]])
+    [model] = idle["models"]
+    assert model["name"] == "bedrock/anthropic.claude-x-1"
+    assert (model["kind"], model["backup"], model["reason"], model["provider"]) == (
+        "pinned",
+        "no_backup",
+        "pinned",
+        "bedrock",
+    )
+
+
 def test_a_catalog_id_counts_only_the_offerings_the_key_may_reach(routing_client: TestClient, world: _World) -> None:
     [narrow] = _read_as(routing_client, world, "member", [world.keys["narrow"]])
 

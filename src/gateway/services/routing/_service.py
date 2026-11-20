@@ -16,6 +16,7 @@ from gateway.services.api_keys import ApiKeyService, KeyReach
 from gateway.services.catalog import catalog_models, offering_input_rate, resolve_catalog_offerings
 from gateway.services.model_access import workspace_serves_target
 from gateway.services.policy_store import resolve_effective_policy
+from gateway.services.provider_kwargs import split_selector
 from gateway.services.routing.compiler import compile_catalog_plan, reachable_candidates
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tools import provider_tools
@@ -335,6 +336,9 @@ class RoutingService:
         if routed and coverage.kind == "unknown":
             # Routing recorded it, and it is no catalog ID: a policy since deleted or renamed.
             return _Coverage("policy", "unknown")
+        if coverage.kind == "unknown" and (parts := split_selector(name)) is not None:
+            # The legacy ``provider/model`` spelling names an offering outright, as ``provider:model`` does.
+            return _Coverage("pinned", "no_backup", "pinned", parts[0])
         return coverage
 
     def _model_coverage(self, key: KeyReach, selector: str) -> _Coverage:
