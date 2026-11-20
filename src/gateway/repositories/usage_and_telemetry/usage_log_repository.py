@@ -158,7 +158,8 @@ class ServedTraffic:
 
     provider: str | None
     model: str
-    policy_name: str | None
+    sent: str | None
+    """The name sent: the caller's own (``requested_model``), else the one routing recorded on an older row."""
     api_key_id: str | None
     requests: int
     fell_back: int
@@ -193,6 +194,11 @@ class NameAttempts:
     """The earliest place in a plan the target was tried; a row with none recorded is the first."""
     status: str
     attempts: int
+
+
+def _sent_name() -> ColumnElement[str | None]:
+    """The name a request was sent under: the caller's own, else, on a row older than that column, routing's."""
+    return func.coalesce(UsageLog.requested_model, UsageLog.policy_name)
 
 
 def _readable(reader: TrafficReader) -> ColumnElement[bool]:
@@ -291,11 +297,11 @@ class RequestRows:
 class KeyNameTraffic:
     """The requests one key sent under one name.
 
-    The name is what routing recorded the request was sent as (``policy_name``,
-    the routing policy or catalog ID it named) on a row served here, and
-    otherwise the offering it reached, ``provider:model``. Imported usage
-    reports only the model that ran. A request that named an alias reads as
-    the offering the alias pointed at, since no row records the alias.
+    The name is the one the caller sent (``requested_model``) on a row served
+    here, so an alias reads as the alias. A row written before that column
+    falls back to what routing recorded (``policy_name``, the routing policy or
+    catalog ID it named), and then to the offering it reached,
+    ``provider:model``. Imported usage reports only the model that ran.
     """
 
     api_key_id: str
@@ -833,11 +839,12 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         readable = _readable(reader) if reader is not None else true()
         readable_flag = case((readable, True), else_=False)
         fell_back = func.sum(case((and_(UsageLog.status == "success", UsageLog.attempt_position > 1), 1), else_=0))
+        sent = _sent_name()
         stmt = (
             select(
                 UsageLog.provider,
                 UsageLog.model,
-                UsageLog.policy_name,
+                sent.label("sent"),
                 UsageLog.api_key_id,
                 readable_flag.label("readable"),
                 func.count().label("requests"),
@@ -849,7 +856,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 UsageLog.status.in_(_REQUEST_STATUSES),
                 UsageLog.timestamp >= since,
             )
-            .group_by(UsageLog.provider, UsageLog.model, UsageLog.policy_name, UsageLog.api_key_id, readable_flag)
+            .group_by(UsageLog.provider, UsageLog.model, sent, UsageLog.api_key_id, readable_flag)
         )
         if api_key_ids is not None:
             stmt = stmt.where(UsageLog.api_key_id.in_(sorted(api_key_ids)), readable)
@@ -857,7 +864,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             ServedTraffic(
                 provider=row.provider,
                 model=row.model,
-                policy_name=row.policy_name,
+                sent=row.sent,
                 api_key_id=row.api_key_id,
                 requests=int(row.requests),
                 fell_back=int(row.fell_back),
@@ -875,19 +882,23 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         reader: TrafficReader,
         api_key_ids: Collection[str] | None = None,
     ) -> list[NameAttempts]:
-        """The attempts made since ``since`` under these routing names, by workspace, key, target, role and outcome.
+        """The attempts made since ``since`` under these names, by workspace, key, target, role and outcome.
 
-        Only rows ``reader`` may see as someone's, narrowed to ``api_key_ids`` when
-        given. A row with no step recorded is the first step. Imported usage is
-        left out.
+        A name is a routing policy's or an alias's, matched against the name the
+        caller sent, or on a row older than that column against the one routing
+        recorded. Only rows ``reader`` may see as someone's, narrowed to
+        ``api_key_ids`` when given. A row with no step recorded is the first step.
+        Imported usage is left out.
         """
         if not workspace_ids or not names:
             return []
         position = func.min(func.coalesce(UsageLog.attempt_position, 1))
+        sent = _sent_name()
+        wanted = sorted(names)
         stmt = (
             select(
                 UsageLog.workspace_id,
-                UsageLog.policy_name,
+                sent.label("name"),
                 UsageLog.api_key_id,
                 UsageLog.provider,
                 UsageLog.model,
@@ -898,7 +909,11 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             )
             .where(
                 UsageLog.workspace_id.in_(sorted(workspace_ids)),
-                UsageLog.policy_name.in_(sorted(names)),
+                # Spelled as two arms rather than one coalesce so each can use its column's index.
+                or_(
+                    UsageLog.requested_model.in_(wanted),
+                    and_(UsageLog.requested_model.is_(None), UsageLog.policy_name.in_(wanted)),
+                ),
                 UsageLog.source == SERVED_HERE_SLUG,
                 UsageLog.status.in_((*_REQUEST_STATUSES, "absorbed")),
                 UsageLog.timestamp >= since,
@@ -906,7 +921,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             )
             .group_by(
                 UsageLog.workspace_id,
-                UsageLog.policy_name,
+                sent,
                 UsageLog.api_key_id,
                 UsageLog.provider,
                 UsageLog.model,
@@ -919,7 +934,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         return [
             NameAttempts(
                 workspace_id=row.workspace_id,
-                name=row.policy_name,
+                name=row.name,
                 api_key_id=row.api_key_id,
                 provider=row.provider,
                 model=row.model,
@@ -937,13 +952,16 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         """Requests per key and name sent since ``since``, for these keys in these workspaces, most first.
 
         Each request counts once, on the row that ended it: an attempt a later
-        one recovered from is ``absorbed`` and left out.
+        one recovered from is ``absorbed`` and left out. A name is the one the
+        caller sent, falling back as :class:`KeyNameTraffic` says.
         """
         if not key_ids or not workspace_ids:
             return []
         imported = UsageLog.source != SERVED_HERE_SLUG
         reached = case((UsageLog.provider.is_not(None), UsageLog.provider + ":" + UsageLog.model), else_=UsageLog.model)
-        name = case((imported, UsageLog.model), else_=func.coalesce(UsageLog.policy_name, reached))
+        name = case(
+            (imported, UsageLog.model), else_=func.coalesce(UsageLog.requested_model, UsageLog.policy_name, reached)
+        )
         requests = func.count()
         stmt = (
             select(

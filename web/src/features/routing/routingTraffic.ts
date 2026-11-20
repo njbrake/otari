@@ -37,24 +37,20 @@ export function keyRequestLabel(key: KeyRequests): string {
 }
 
 /**
- * The traffic one row of the routing list served. A stored row takes its own
- * workspace's traffic; a config-file row, in force in every workspace, takes
- * any workspace's under its name. Aliases are not recorded on usage rows, so an
- * alias row has none.
+ * The traffic one row of the routing list served, a policy's or an alias's. A
+ * stored row takes its own workspace's traffic; a config-file row, in force in
+ * every workspace, takes any workspace's under its name.
  */
 export function trafficForRow(
   row: RoutingRow,
   traffic: readonly NameTraffic[],
 ): RowTraffic {
   const workspace = row.workspace_id ?? undefined
-  const entries =
-    row.kind === "alias"
-      ? []
-      : traffic.filter(
-          (entry) =>
-            entry.name === row.name &&
-            (workspace === undefined || entry.workspace_id === workspace),
-        )
+  const entries = traffic.filter(
+    (entry) =>
+      entry.name === row.name &&
+      (workspace === undefined || entry.workspace_id === workspace),
+  )
   const keys = new Map<string, KeyRequests>()
   const steps = new Map<string, StepOutcome>()
   for (const entry of entries) {

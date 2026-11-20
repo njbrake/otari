@@ -136,25 +136,17 @@ export function RoutingPage() {
       {
         id: "sentBy",
         header: "Sent by",
-        cell: (row) =>
-          row.kind === "alias" ? (
-            <span className="text-muted">Not recorded</span>
-          ) : (
-            <SentByCell sentBy={trafficForRow(row, names).sentBy} />
-          ),
+        cell: (row) => <SentByCell sentBy={trafficForRow(row, names).sentBy} />,
       },
       {
         id: "requests",
         header: "Requests (30d)",
         align: "end",
-        cell: (row) =>
-          row.kind === "alias" ? (
-            <span className="text-muted">—</span>
-          ) : (
-            <span className="text-sm tabular-nums text-muted">
-              {formatCount(trafficForRow(row, names).requests)}
-            </span>
-          ),
+        cell: (row) => (
+          <span className="text-sm tabular-nums text-muted">
+            {formatCount(trafficForRow(row, names).requests)}
+          </span>
+        ),
       },
     ]
     if (!canEdit) return base

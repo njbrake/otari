@@ -395,13 +395,16 @@ async def read_routing_traffic(
     workspace_id: Annotated[uuid.UUID | None, _WORKSPACE_FILTER] = None,
     api_key_id: Annotated[list[str] | None, _KEY_FILTER] = None,
 ) -> RoutingTrafficResponse:
-    """The last 30 days of traffic sent under each routing policy the caller may see.
+    """The last 30 days of traffic sent under each routing policy and alias the caller may see.
 
-    Per workspace and policy name: the requests, the keys that sent them, and what
+    Per workspace and name: the requests, the keys that sent them, and what
     each step of the plan did (served, or failed and handed on). Whose requests
     count: everyone's to an organization owner or admin, a workspace's to its
-    own owners and admins, and otherwise the caller's own. A stored policy
-    counts in its own workspace, a config-file one in every workspace.
+    own owners and admins, and otherwise the caller's own. A stored policy or
+    alias counts in its own workspace, a config-file one in every workspace.
+    A request counts under the name its caller sent; one logged before that
+    name was recorded counts under the policy routing recorded, so an alias's
+    older traffic is not counted.
     """
     reader = await _traffic_reader(db, current_identity, visible)
     workspaces = sorted(visible.workspace_ids if workspace_id is None else visible.workspace_ids & {workspace_id})
@@ -413,12 +416,19 @@ async def read_routing_traffic(
         .order_by(RoutingPolicy.name, RoutingPolicy.workspace_id)
         .limit(_MAX_ROWS)
     )
+    aliases = await db.execute(
+        select(ModelAlias.workspace_id, ModelAlias.name)
+        .where(col(ModelAlias.workspace_id).in_(workspaces), col(ModelAlias.user_id).is_(None))
+        .distinct()
+        .order_by(ModelAlias.name, ModelAlias.workspace_id)
+        .limit(_MAX_ROWS)
+    )
     by_workspace: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
-    for stored_in, name in pairs.all():
+    for stored_in, name in [*pairs.all(), *aliases.all()]:
         by_workspace[stored_in].add(name)
     traffic = await routing.name_traffic(
         workspace_ids=workspaces,
-        everywhere=set(config.routing.policies),
+        everywhere=set(config.routing.policies) | set(config.aliases),
         by_workspace=by_workspace,
         reader=reader,
         api_key_ids=api_key_id,

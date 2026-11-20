@@ -4,9 +4,11 @@ One organization with two members in one workspace, and a second organization.
 The member's key sends a catalog ID with two offerings, a pinned offering, a
 policy with a backup, a policy without one, a name nothing resolves any more and
 imported usage; a second key of theirs is narrowed to one provider, which leaves
-the catalog ID and the policy one candidate each. A row records the name a
-request was sent as only where routing compiled a plan for it (``policy_name``),
-so a request on the plain path reads as the offering that served it.
+the catalog ID and the policy one candidate each. A row records the name the
+caller sent (``requested_model``), so an alias reads as the alias; a row older
+than that column records it only where routing compiled a plan for it
+(``policy_name``), so such a request on the plain path reads as the offering
+that served it.
 Each assertion names what must be absent as well as what is there.
 """
 
@@ -143,6 +145,7 @@ def _rows(
     status_: str = "success",
     source: str = "gateway",
     age: timedelta = timedelta(hours=1),
+    requested: str | None = None,
 ) -> list[UsageLog]:
     provider, _, model = served.partition(":")
     return [
@@ -153,6 +156,7 @@ def _rows(
             model=model,
             provider=provider,
             policy_name=sent,
+            requested_model=requested,
             endpoint="/v1/chat/completions",
             source=source,
             status=status_,
@@ -211,8 +215,10 @@ def world(
                 *_rows(alpha_one.id, app, "old-name", _ANTHROPIC, age=timedelta(days=40)),
                 *_rows(alpha_one.id, narrow, _CLAUDE, _ANTHROPIC, count=2),
                 *_rows(alpha_one.id, narrow, "paired", _ANTHROPIC),
-                # Routing records no alias today; a row naming one is judged as the alias.
-                *_rows(alpha_one.id, narrow, "fast", _ANTHROPIC),
+                # An alias request: routing compiles no plan, and the row records the name sent.
+                *_rows(alpha_one.id, narrow, None, _ANTHROPIC, requested="fast"),
+                # The same policy, sent before and after the name sent was recorded.
+                *_rows(alpha_one.id, narrow, "paired", _ANTHROPIC, requested="paired", count=2),
                 *_rows(alpha_one.id, theirs, _CLAUDE, _ANTHROPIC),
                 *_rows(beta_one.id, foreign, _CLAUDE, _ANTHROPIC),
             ]
@@ -286,6 +292,47 @@ def test_an_alias_has_no_backup(routing_client: TestClient, world: _World) -> No
         "no_backup",
         "single_target_policy",
         "anthropic",
+    )
+
+
+def test_an_alias_request_reads_as_the_alias_not_its_target(routing_client: TestClient, world: _World) -> None:
+    [narrow] = _read_as(routing_client, world, "member", [world.keys["narrow"]])
+
+    names = {model["name"]: model["requests"] for model in narrow["models"]}
+    assert names["fast"] == 1
+    # The alias's target is not a name the key sent: its one request is the alias's.
+    assert _ANTHROPIC not in names
+
+
+def test_older_rows_count_with_newer_ones_under_the_same_name(routing_client: TestClient, world: _World) -> None:
+    # One "paired" row predates requested_model and two carry it; all three are one name.
+    [narrow] = _read_as(routing_client, world, "member", [world.keys["narrow"]])
+
+    paired = [model for model in narrow["models"] if model["name"] == "paired"]
+    assert [model["requests"] for model in paired] == [3]
+    assert {"name": "paired", "requests": 3, "deleted": False} in narrow["policies"]
+
+
+def test_an_offering_sent_in_the_legacy_slash_form_is_pinned(
+    routing_client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    session = db_session_factory()
+    try:
+        key = session.get(APIKey, world.keys["idle"])
+        assert key is not None
+        session.add_all(_rows(key.workspace_id, key.id, None, _BEDROCK, requested="bedrock/anthropic.claude-x-1"))
+        session.commit()
+    finally:
+        session.close()
+
+    [idle] = _read_as(routing_client, world, "member", [world.keys["idle"]])
+    [model] = idle["models"]
+    assert model["name"] == "bedrock/anthropic.claude-x-1"
+    assert (model["kind"], model["backup"], model["reason"], model["provider"]) == (
+        "pinned",
+        "no_backup",
+        "pinned",
+        "bedrock",
     )
 
 

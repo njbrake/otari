@@ -2,8 +2,9 @@
 
 Alpha has two workspaces. A member and a colleague in the first each send a
 stored policy and a catalog ID; a workspace admin manages the first only; Beta
-is another organization. A row names the policy it was sent as in
-``policy_name``, which is what the read groups by. Whose traffic a caller reads:
+is another organization. A row names what it was sent as in ``requested_model``,
+the caller's own name, which is what the read groups by; a row older than that
+column names a policy in ``policy_name`` alone, which still counts. Whose traffic a caller reads:
 everyone's to an owner or admin, a workspace's to its own owners and admins, and
 otherwise the caller's own, so a member never learns a colleague's keys from it. Each assertion names what must
 be absent as well as what is there.
@@ -24,6 +25,7 @@ from gateway.api.routes import organization_routing
 from gateway.auth.models import hash_key
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.models.api_keys import APIKey
+from gateway.models.providers import ModelAlias
 from gateway.models.routing import PolicySpec, RoutingPolicy
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.models.usage import UsageLog
@@ -565,3 +567,121 @@ def test_a_dropped_candidate_leaves_the_backup_named_as_a_backup(
         (_ANTHROPIC, "default", 1, 1, 0),
         (_BEDROCK, "on_failure", 1, 1, 0),
     ]
+
+
+def _alias_request(world: _World, workspace: str, who: str, name: str, served: str = _ANTHROPIC) -> UsageLog:
+    """A request sent under an alias: no plan compiled, so no policy or step recorded, only the name sent."""
+    row = _attempt(world.workspaces[workspace], world.keys[who], world.users[who], name, served, position=1)
+    row.policy_name = None
+    row.selection_reason = None
+    row.attempt_position = None
+    row.requested_model = name
+    return row
+
+
+def test_a_stored_alias_counts_its_requests_in_its_own_workspace(
+    traffic_client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    session = db_session_factory()
+    try:
+        session.add(ModelAlias(name="quick", target=_ANTHROPIC, workspace_id=world.workspaces["one"]))
+        session.add_all(
+            [
+                _alias_request(world, "one", "member", "quick"),
+                _alias_request(world, "one", "colleague", "quick"),
+                # The same name where no alias claims it is a model name, not this alias's traffic.
+                _alias_request(world, "two", "two_member", "quick"),
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    traffic = _traffic(traffic_client, world, "owner")
+    quick = traffic[("one", "quick")]
+    assert quick["requests"] == 2
+    assert {row["api_key_id"] for row in quick["sent_by"]} == {world.keys["member"], world.keys["colleague"]}
+    assert quick["steps"] == [
+        {"target": _ANTHROPIC, "role": "other", "router": None, "position": 1, "served": 2, "failed": 0}
+    ]
+    assert ("two", "quick") not in traffic
+    # The member reads only their own request under it.
+    member = _traffic(traffic_client, world, "member")[("one", "quick")]
+    assert member["requests"] == 1
+    assert [row["api_key_id"] for row in member["sent_by"]] == [world.keys["member"]]
+
+
+def test_a_configured_alias_counts_in_every_workspace(
+    traffic_client: TestClient,
+    world: _World,
+    test_config: GatewayConfig,
+    db_session_factory: Callable[[], Session],
+) -> None:
+    test_config.aliases["configured-alias"] = _ANTHROPIC
+    try:
+        session = db_session_factory()
+        try:
+            session.add_all(
+                [
+                    _alias_request(world, "one", "member", "configured-alias"),
+                    _alias_request(world, "two", "two_member", "configured-alias"),
+                ]
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        traffic = _traffic(traffic_client, world, "owner")
+        assert traffic[("one", "configured-alias")]["requests"] == 1
+        assert traffic[("two", "configured-alias")]["requests"] == 1
+    finally:
+        del test_config.aliases["configured-alias"]
+
+
+def test_a_policy_counts_rows_from_before_and_after_the_name_sent_was_recorded(
+    traffic_client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """The world's rows predate ``requested_model``; one that records it joins them under the same policy."""
+    row = _attempt(world.workspaces["one"], world.keys["member"], world.users["member"], "fast", _ANTHROPIC, position=1)
+    row.requested_model = "fast"
+    session = db_session_factory()
+    try:
+        session.add(row)
+        session.commit()
+    finally:
+        session.close()
+
+    fast = _traffic(traffic_client, world, "owner")[("one", "fast")]
+    assert fast["requests"] == 5
+    assert fast["steps"][0] == {
+        "target": _ANTHROPIC,
+        "role": "default",
+        "router": None,
+        "position": 1,
+        "served": 3,
+        "failed": 2,
+    }
+
+
+def test_an_alias_onto_a_catalog_offering_is_pinned_in_the_fallbacks(
+    traffic_client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """An alias sends its one target as written, so the catalog never had the chance to fail it over."""
+
+    def claude(who: str) -> dict[str, Any]:
+        models = {model["id"]: model for model in _get(traffic_client, world, who, _FALLBACKS)["models"]}
+        model: dict[str, Any] = models[_CLAUDE]
+        return model
+
+    before = claude("owner")
+    session = db_session_factory()
+    try:
+        session.add(ModelAlias(name="quick", target=_BEDROCK, workspace_id=world.workspaces["one"]))
+        session.add(_alias_request(world, "one", "member", "quick", served=_BEDROCK))
+        session.commit()
+    finally:
+        session.close()
+
+    after = claude("owner")
+    assert after["requests"] == before["requests"] + 1
+    assert after["pinned"] == before["pinned"] + 1

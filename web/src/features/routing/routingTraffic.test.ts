@@ -106,8 +106,10 @@ describe("trafficForRow", () => {
     ])
   })
 
-  it("gives an alias none, since usage rows do not record one", () => {
-    expect(trafficForRow(row({ kind: "alias" }), TRAFFIC).requests).toBe(0)
+  it("gives an alias the traffic sent under its name, like a policy", () => {
+    const traffic = trafficForRow(row({ kind: "alias" }), TRAFFIC)
+    expect(traffic.requests).toBe(10)
+    expect(traffic.sentBy.map((key) => key.api_key_id)).toEqual(["a"])
   })
 })
 
