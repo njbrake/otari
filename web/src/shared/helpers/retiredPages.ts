@@ -36,6 +36,7 @@ const ACTIVITY_ONLY_FILTERS = [
   "source",
   "exclude_source",
   "endpoint",
+  "status_code",
   "tool",
   "priced",
   "routed",
@@ -90,10 +91,15 @@ function first(value: string | string[] | undefined): string {
   return (Array.isArray(value) ? value[0] : value) ?? ""
 }
 
-/** A log page's window: the old one where it still exists, else its own. */
+/**
+ * A log page's window, the old one where it still exists, and its scope: the
+ * caller's own rows (Usage's `you`, Activity's `mine`) stay the caller's own.
+ */
 function logWindow(search: DashboardSearch): DashboardSearch {
   const range = first(search.range)
+  const scope = first(search.scope)
   return {
+    ...(scope === "mine" || scope === "you" ? { scope: "mine" } : {}),
     ...(LOG_RANGES.has(range) ? { range } : {}),
     ...pick(search, WINDOW_BOUNDS),
   }

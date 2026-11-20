@@ -21,8 +21,10 @@ export function swipeDirection(
   return dx > 0 ? "right" : "left"
 }
 
+// `data-owns-swipe` marks a surface drawn over the page inside `<main>`, such
+// as the peek panel, where opening the drawer on top would bury what is open.
 const OWNS_ITS_TOUCHES =
-  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='slider']"
+  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='slider'], [data-owns-swipe]"
 
 /**
  * Whether something between the touched element and `root` already does

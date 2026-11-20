@@ -155,6 +155,22 @@ describe("useDrawerSwipe", () => {
     expect(screen.getByText("drawer closed")).toBeInTheDocument()
   })
 
+  it("leaves a swipe over a surface drawn above the page, such as a peek", () => {
+    render(
+      <Harness>
+        <aside data-owns-swipe>
+          <span>open request</span>
+        </aside>
+      </Harness>,
+    )
+    swipe(
+      screen.getByText("open request"),
+      { x: 100, y: 300 },
+      { x: 300, y: 300 },
+    )
+    expect(screen.getByText("drawer closed")).toBeInTheDocument()
+  })
+
   it("opens from a scroller whose content fits, since it has nothing to pan", () => {
     render(
       <Harness>

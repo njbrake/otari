@@ -103,4 +103,30 @@ describe("retiredActivityTarget", () => {
       },
     })
   })
+
+  it("keeps the caller's own scope and a status code, which Requests reads", () => {
+    expect(
+      retiredActivityTarget({ scope: "mine", status_code: "429" }),
+    ).toEqual({
+      to: "/requests",
+      search: { scope: "mine", status_code: "429" },
+    })
+    expect(retiredActivityTarget({ scope: "everyone" })).toEqual({
+      to: "/requests",
+      search: {},
+    })
+  })
+})
+
+describe("a Usage link scoped to the caller", () => {
+  it("opens the log on the caller's own rows", () => {
+    expect(retiredUsageTarget({ scope: "you", model: "gpt-4o" })).toEqual({
+      to: "/requests",
+      search: { scope: "mine", model: "gpt-4o" },
+    })
+    expect(retiredUsageTarget({ scope: "you", by: "session" })).toEqual({
+      to: "/sessions",
+      search: { scope: "mine" },
+    })
+  })
 })
