@@ -99,8 +99,9 @@ grows the row instead of breaking the touch floor.
 
 Expanded rail opens at `16.5rem` and, from `md` up, drags between 200 and 480px
 from the separator on its right edge (arrow keys nudge it 16px, a double-click
-resets it); the width is remembered per browser. Collapsed is `4.5rem`, with no
-handle, icons centered in a 44px row and labels in a tooltip. The states are the
+resets it); the width is remembered per browser. Dragging it left of 136px, or
+pressing the left arrow at 200px, collapses the rail, and the same handle drags
+or steps it back out. Collapsed is `4.5rem`, icons centered in a 44px row and labels in a tooltip. The states are the
 same values at every width; only the label goes. Every label in a row truncates,
 so a narrow rail shortens labels rather than wrapping or overflowing.
 

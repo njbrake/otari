@@ -89,9 +89,14 @@ import { useTelemetry } from "@/shared/telemetry/overlayTelemetry"
 // `otari-ai/frontend`'s shell is fixed at, and on the desk it can be dragged
 // (or nudged from the keyboard) anywhere from 200 to 480px from the handle on
 // its right edge. The width is remembered per browser; a double-click on the
-// handle forgets it. Collapsed is always 72px and has no handle: collapse and
-// width are separate preferences, so expanding returns to the width left.
+// handle forgets it. Collapsed is always 72px. Dragging the edge left of
+// `COLLAPSE_SIDEBAR_AT` collapses the rail, and dragging a collapsed rail's
+// edge past it expands it again, as do the arrow keys past either end. Collapse
+// and width are separate preferences, so expanding returns to the width left.
 const MIN_SIDEBAR_WIDTH = 200
+const COLLAPSED_SIDEBAR_PX = 72
+// Halfway between the collapsed and the narrowest expanded width.
+const COLLAPSE_SIDEBAR_AT = (COLLAPSED_SIDEBAR_PX + MIN_SIDEBAR_WIDTH) / 2
 const MAX_SIDEBAR_WIDTH = 480
 const DEFAULT_SIDEBAR_WIDTH = 264
 const SIDEBAR_WIDTH_STEP = 16
@@ -660,6 +665,7 @@ function AppShellChrome() {
   // While a drag is in progress the rail follows the pointer with no width
   // transition, and the page's text cannot be selected by the sweep.
   const [resizing, setResizing] = useState(false)
+  const dragStartWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH)
   const [isMobile, setIsMobile] = useState<boolean>(readIsMobile)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   // The organization rail, opened as a level *inside* the drawer rather than by
@@ -1264,24 +1270,50 @@ function AppShellChrome() {
               </div>
             </div>
           </div>
-          {isMobile || collapsed ? null : (
+          {isMobile ? null : (
             <ResizeHandle
               label="Resize sidebar"
               className="-right-1.5"
-              onDragStart={() => setResizing(true)}
+              onDragStart={() => {
+                dragStartWidthRef.current = sidebarWidth
+                setResizing(true)
+              }}
               onDrag={(clientX) => {
                 const left = asideRef.current?.getBoundingClientRect().left ?? 0
-                setSidebarWidth(clampSidebarWidth(Math.round(clientX - left)))
+                const width = Math.round(clientX - left)
+                if (width < COLLAPSE_SIDEBAR_AT) {
+                  // Expanding again returns to the width the drag started at,
+                  // not the narrowest one it passed through on the way.
+                  setSidebarWidth(dragStartWidthRef.current)
+                  setCollapsed(true)
+                } else {
+                  setSidebarWidth(clampSidebarWidth(width))
+                  setCollapsed(false)
+                }
               }}
               onDragEnd={() => setResizing(false)}
-              onStep={(direction) =>
-                setSidebarWidth((width) =>
-                  clampSidebarWidth(width + direction * SIDEBAR_WIDTH_STEP),
-                )
-              }
-              onReset={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
-              valueNow={sidebarWidth}
-              valueMin={MIN_SIDEBAR_WIDTH}
+              onStep={(direction) => {
+                if (collapsed) {
+                  if (direction === 1) setCollapsed(false)
+                } else if (
+                  direction === -1 &&
+                  sidebarWidth === MIN_SIDEBAR_WIDTH
+                ) {
+                  setCollapsed(true)
+                } else {
+                  setSidebarWidth(
+                    clampSidebarWidth(
+                      sidebarWidth + direction * SIDEBAR_WIDTH_STEP,
+                    ),
+                  )
+                }
+              }}
+              onReset={() => {
+                setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)
+                setCollapsed(false)
+              }}
+              valueNow={collapsed ? COLLAPSED_SIDEBAR_PX : sidebarWidth}
+              valueMin={COLLAPSED_SIDEBAR_PX}
               valueMax={MAX_SIDEBAR_WIDTH}
             />
           )}
