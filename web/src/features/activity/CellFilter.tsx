@@ -11,8 +11,8 @@ import type { CellFilterMode } from "./cellFilters"
  * the control has focus, and always under a finger, which has no hover.
  *
  * It is a menu trigger, not a second row action: the table hands a press on a
- * button to the button, so opening it never opens the request, and the grid's
- * arrow keys reach it inside the cell as they reach a row menu.
+ * button to the button, so opening it never opens the request. The grid's
+ * arrow keys move between cells past it; Tab from its cell reaches it.
  */
 export function CellFilter({
   value,

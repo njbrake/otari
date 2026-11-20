@@ -563,8 +563,17 @@ function ActivityPageContent({
     NO_BREAKDOWNS,
   )
   // What the rows add up to over every page, for the strip above the table.
+  // The summary reads an omitted start as the last 30 days, so under "All" the
+  // totals take the year the chart spans, and the two agree.
+  const totalsFilters = useMemo(
+    () =>
+      readFilters.start_date
+        ? readFilters
+        : { ...readFilters, start_date: extentWin.start },
+    [readFilters, extentWin.start],
+  )
   const totalsSummary = useUsageSummary(
-    readFilters,
+    totalsFilters,
     "day",
     NO_BREAKDOWNS,
     true,

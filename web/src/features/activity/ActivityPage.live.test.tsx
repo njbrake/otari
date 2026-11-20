@@ -160,6 +160,25 @@ describe("ActivityPage totals", () => {
   })
 })
 
+describe("ActivityPage totals under All", () => {
+  it("reads the year the chart spans rather than the summary's 30 days", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    await renderRequests("?range=all")
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes("include_p95=true"))).toBe(
+        true,
+      ),
+    )
+    const start = params(
+      calls.find((call) => call.url.includes("include_p95=true"))?.url,
+    ).get("start_date")
+    const days = (Date.now() - Date.parse(start ?? "")) / 86_400_000
+    expect(days).toBeGreaterThan(360)
+    // The list itself stays all-time.
+    expect(params(listCalls(calls).at(-1)).has("start_date")).toBe(false)
+  })
+})
+
 describe("ActivityPage cell filters", () => {
   it("filters to a cell's value or leaves it out, writing the column funnel's keys", async () => {
     const user = userEvent.setup()
