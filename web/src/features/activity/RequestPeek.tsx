@@ -18,7 +18,7 @@ import {
 } from "./activityModel"
 import { RequestDetail } from "./RequestDetail"
 import { RequestTraceLink } from "./RequestTraceLink"
-import { describeTool } from "./requestPanelModel"
+import { describeTool, opensInPlayground } from "./requestPanelModel"
 import { StatusMark } from "./StatusMark"
 
 // The phone touch floor in globals.css reaches HeroUI's Button only.
@@ -141,7 +141,7 @@ function RequestPeekActions({ entry }: { entry: UsageEntry }) {
           {tools.length === 1 ? describeTool(tools[0].tool) : "Tools"}
         </Button>
       ) : null}
-      {hasPlayground && canRun ? (
+      {hasPlayground && canRun && opensInPlayground(entry) ? (
         <Link
           to="/playground"
           // What served it rather than what was asked for: an alias or a

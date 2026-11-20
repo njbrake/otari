@@ -181,7 +181,11 @@ export function RequestDetail({
               <span className="text-caption">· {describeRequested(entry)}</span>
             </DetailField>
           ) : null}
-          <DetailField label="Served by">
+          {/* Only a success was served; a failed attempt or a refusal names
+              what it was routed to. */}
+          <DetailField
+            label={entry.status === "success" ? "Served by" : "Target"}
+          >
             <span className="text-mono-caption">{pricingKey}</span>
           </DetailField>
           {entry.data_location ? (

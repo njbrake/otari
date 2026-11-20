@@ -110,6 +110,25 @@ export function describeRequested(entry: UsageEntry): string | null {
   return `alias → ${findPricingSelector(entry)}`
 }
 
+// The endpoints whose requests are a conversation the Playground can repeat.
+const CHAT_ENDPOINTS = new Set([
+  "/v1/chat/completions",
+  "/v1/messages",
+  "/v1/responses",
+  "/v1/playground/chat/completions",
+])
+
+/**
+ * Whether the Playground can open the model that served this row. An imported
+ * row's model was served elsewhere, and an embedding, search or other non-chat
+ * row names nothing its picker offers, so the link would open another model.
+ */
+export function opensInPlayground(
+  entry: Pick<UsageEntry, "source" | "endpoint">,
+): boolean {
+  return !isImported(entry) && CHAT_ENDPOINTS.has(entry.endpoint)
+}
+
 /**
  * How a request reached the gateway. An imported row's usage was paid for by
  * its source's subscription; a gateway row came in on an API key, or with none,

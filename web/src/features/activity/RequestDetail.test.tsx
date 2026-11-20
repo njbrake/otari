@@ -481,6 +481,24 @@ describe("RequestDetail", () => {
     )
   })
 
+  it("names a failed row's model its target, since nothing served it", async () => {
+    mockApi()
+    renderPage(
+      <RequestDetail
+        entry={entry({
+          status: "error",
+          error_message: "down",
+          status_code: 500,
+        })}
+      />,
+    )
+    await flushRouter()
+    expect(screen.queryByText("Served by")).not.toBeInTheDocument()
+    expect(screen.getByText("Target").parentElement).toHaveTextContent(
+      "openai:gpt-4o",
+    )
+  })
+
   it("leaves out the requested name on a row that never recorded one", async () => {
     mockApi()
     renderPage(<RequestDetail entry={entry({ requested_model: null })} />)

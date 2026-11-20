@@ -8,6 +8,7 @@ import {
   describeChannel,
   describeFailure,
   describeRequested,
+  opensInPlayground,
   pricingRefusal,
   tokenSegments,
 } from "./requestPanelModel"
@@ -118,5 +119,14 @@ describe("token segments", () => {
     expect(
       cacheHitFraction({ ...composition, fresh: 0, cacheRead: 0, total: 50 }),
     ).toBe(0)
+  })
+})
+
+describe("opensInPlayground", () => {
+  it("offers a gateway chat request and nothing the picker cannot name", () => {
+    expect(opensInPlayground(entry())).toBe(true)
+    expect(opensInPlayground(entry({ endpoint: "/v1/messages" }))).toBe(true)
+    expect(opensInPlayground(entry({ endpoint: "/v1/embeddings" }))).toBe(false)
+    expect(opensInPlayground(entry({ source: "claude_code" }))).toBe(false)
   })
 })

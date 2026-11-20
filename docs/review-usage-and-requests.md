@@ -139,8 +139,9 @@ request ID with a copy control and where the request sits in the page (`3 /
   before the one that served, and each failed attempt's error;
 - **Requested as**, the name the caller sent and whether it was a model, an
   alias (with its target) or a routing policy, beside **Served by**, the
-  `instance:model` that answered. Requests logged before Otari recorded the
-  name show only **Served by**;
+  `instance:model` that answered (**Target** on a request nothing served).
+  Requests logged before Otari recorded the name, and batch results, show only
+  the second;
 - **Channel**: an API key, no key (the Playground or the master key), or an
   imported source's subscription, with a chip when the request does not count
   toward budgets;
@@ -152,4 +153,5 @@ request ID with a copy control and where the request sits in the page (`3 /
   compute time where it reports one.
 
 The buttons along the bottom filter the log to the request's session, model or
-gateway tool, and **Open in Playground** opens the model that served it.
+gateway tool, and on a chat request **Open in Playground** opens the model
+that served it.
