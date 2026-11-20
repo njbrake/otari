@@ -214,6 +214,11 @@
   .otari-settings .input {
     font-size: var(--text-base);
   }
+  /* HeroUI draws the search box at 36px whatever the place, so on a phone it
+     sat 8px short of the 44px button beside it and under the touch floor. */
+  .search-field__group {
+    height: 2.75rem;
+  }
 }
 
 /* The dense height is a desktop size, so the phone viewport takes it back off.

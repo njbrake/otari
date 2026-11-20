@@ -50,7 +50,7 @@ export function Segmented({
     <div
       role="radiogroup"
       aria-label={label}
-      className={`max-w-full overflow-x-auto border border-control-border ${
+      className={`max-w-full overflow-x-auto overscroll-x-contain border border-control-border ${
         isFullWidth ? "flex w-full" : "inline-flex w-fit"
       }`}
     >

@@ -1395,7 +1395,9 @@ function AppShellChrome() {
             // carries its own scroller. This is the backstop, not the fix: the
             // 390px e2e check measures overflow under it. Not `overflow-x-clip`,
             // which computes to `hidden` beside `overflow-y: auto` anyway.
-            className="flex-1 overflow-x-hidden overflow-y-auto focus:outline-none"
+            // `overscroll-x-contain` keeps a sideways swipe past the edge from
+            // becoming the browser's back gesture.
+            className="flex-1 overflow-x-hidden overflow-y-auto overscroll-x-contain focus:outline-none"
           >
             <div className="mx-auto flex max-w-[112.5rem] flex-col gap-6 px-4 pt-5 pb-[calc(1.25rem+var(--shell-corner-clearance))] md:px-6 md:pt-6 md:pb-[calc(1.5rem+var(--shell-corner-clearance))]">
               {access === "blocked" ? (

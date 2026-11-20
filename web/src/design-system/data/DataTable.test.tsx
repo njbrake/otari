@@ -73,6 +73,14 @@ describe("DataTable", () => {
     ).toEqual([null, "name", "cost"])
   })
 
+  // jsdom has no layout and no gestures, so this pins the class that causes
+  // the behavior.
+  it("contains a horizontal overscroll, so a swipe past the end is not a back gesture", () => {
+    render(<DataTable {...base({})} />)
+    const scroller = screen.getByRole("grid").parentElement
+    expect(scroller).toHaveClass("overflow-x-auto", "overscroll-x-contain")
+  })
+
   it("shows a loading state with no rows", () => {
     render(<DataTable {...base({ rows: [], isLoading: true })} />)
     expect(screen.getByText("Loading…")).toBeInTheDocument()

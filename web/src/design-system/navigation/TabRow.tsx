@@ -13,7 +13,8 @@ const EDGE_FADE_REM = 3
  * would break the row's height. The row scrolls instead.
  */
 export function tabClassName(isActive: boolean): string {
-  return `shrink-0 px-2.5 py-[0.3125rem] text-sm whitespace-nowrap transition-colors motion-reduce:transition-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 ${
+  // 44px tall on a phone, as a segment is, and dense from `md` up.
+  return `min-h-11 shrink-0 px-2.5 md:min-h-0 py-[0.3125rem] text-sm whitespace-nowrap transition-colors motion-reduce:transition-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 ${
     isActive
       ? "bg-surface-subtle text-foreground"
       : "text-muted not-aria-disabled:hover:text-foreground"

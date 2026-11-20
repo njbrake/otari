@@ -1444,9 +1444,15 @@ describe("the phone viewport's touch-target floor", () => {
     // `[data-slot="button"]` is HeroUI's Button and nothing else, and 767px is
     // AppShell's own MOBILE_QUERY, so the rule turns on exactly where the
     // sidebar becomes a drawer.
+    // `a.button` is a router `Link` dressed as one, which carries the class but
+    // not the slot.
     expect(CSS).toMatch(
-      /@media \(max-width: 767px\) \{\s*\[data-slot="button"\] \{\s*min-height: 2\.75rem;\s*min-width: 2\.75rem;/,
+      /@media \(max-width: 767px\) \{\s*\[data-slot="button"\],\s*a\.button \{\s*min-height: 2\.75rem;\s*min-width: 2\.75rem;/,
     )
+  })
+
+  it("raises HeroUI's 36px search box to the touch floor on a phone", () => {
+    expect(CSS).toMatch(/\.search-field__group \{\s*height: 2\.75rem;/)
   })
 
   it("takes the toolbar's dense field height back off at the same boundary", () => {
