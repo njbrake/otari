@@ -39,7 +39,9 @@ test.describe("Home and Sessions", () => {
     // Tokens and failures come from different parts of the summary payload, so
     // a dash in either is a regression of its own.
     await expect(figure(/^Tokens(, \d+ days| this month)$/)).not.toHaveText("—")
-    await expect(figure(/^Failures$/)).not.toHaveText("—")
+    await expect(figure(/^Failures(, \d+ days| this month)$/)).not.toHaveText(
+      "—",
+    )
 
     const where = page.getByRole("region", { name: "Where it went" })
     // The radio itself is visually hidden behind its label, which is what a
