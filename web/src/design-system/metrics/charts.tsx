@@ -69,6 +69,7 @@ export function ChartTooltip({
   formatValue,
   formatLabel,
   showTotal = false,
+  hint,
 }: {
   active?: boolean
   label?: ReactNode
@@ -81,6 +82,8 @@ export function ChartTooltip({
   formatValue: (value: number) => string
   formatLabel?: (label: string) => string
   showTotal?: boolean
+  /** What the pointer can do here, under the values: "Drag to narrow". */
+  hint?: string
 }) {
   const rows = (payload ?? []).filter(
     (entry) => typeof entry.value === "number",
@@ -121,7 +124,36 @@ export function ChartTooltip({
           </span>
         </div>
       ) : null}
+      {hint ? (
+        <div className="mt-1 border-t border-border pt-1 text-subtle">
+          {hint}
+        </div>
+      ) : null}
     </div>
+  )
+}
+
+/**
+ * Round y-axis ticks from zero past `peak`: a step of 1, 2 or 5 of a power of
+ * ten, about `intervals` of them, so no tick reads like $0.65.
+ */
+export function niceTicks(
+  peak: number,
+  intervals: number,
+  isInteger: boolean,
+): number[] | undefined {
+  if (!(peak > 0) || intervals < 1) return undefined
+  const raw = peak / intervals
+  const magnitude = 10 ** Math.floor(Math.log10(raw))
+  const factor = [1, 2, 5, 10].find((one) => one * magnitude >= raw) ?? 10
+  const step = isInteger
+    ? Math.max(1, Math.ceil(factor * magnitude))
+    : factor * magnitude
+  const count = Math.max(1, Math.ceil(peak / step - 1e-9))
+  // Rounded to the step's own precision, so 3 * 0.1 is 0.3.
+  const digits = Math.max(0, -Math.floor(Math.log10(step)) + 1)
+  return Array.from({ length: count + 1 }, (_, index) =>
+    Number((index * step).toFixed(digits)),
   )
 }
 
@@ -210,6 +242,9 @@ export function TrendChart({
   series,
   formatValue,
   formatXTick,
+  formatYTick,
+  formatTooltipLabel,
+  selectHint,
   ariaLabel,
   height = 200,
   showYAxis = false,
@@ -229,6 +264,12 @@ export function TrendChart({
   series: SeriesDef[]
   formatValue: (value: number) => string
   formatXTick?: (x: string) => string
+  /** The y-axis ticks, where they want a shorter form than the tooltip's. */
+  formatYTick?: (value: number) => string
+  /** The tooltip's heading, where it says more than the axis: "Nov 3 UTC". */
+  formatTooltipLabel?: (x: string) => string
+  /** Said in the tooltip of a selectable chart, so a drag is discoverable. */
+  selectHint?: string
   ariaLabel: string
   height?: number
   showYAxis?: boolean
@@ -287,6 +328,15 @@ export function TrendChart({
       : null
   const showDimming =
     dimmed !== null && (dimmed.startIndex > 0 || dimmed.endIndex < last)
+  const peak = Math.max(
+    0,
+    ...data.map((point) =>
+      series.reduce((sum, one) => sum + (Number(point[one.key]) || 0), 0),
+    ),
+  )
+  const yTicks = showYAxis
+    ? niceTicks(peak, Math.max(1, (yTickCount ?? 5) - 1), integerY)
+    : undefined
 
   return (
     // A static chart is an image to AT; one that owns drag selection is not
@@ -300,11 +350,18 @@ export function TrendChart({
       className={`w-full touch-pan-y select-none ${isSelectable ? "cursor-crosshair" : ""}`}
       // A touch the browser takes back for a scroll selects nothing.
       onTouchCancel={() => setDragBoth(undefined)}
+      // A press does not focus the plot: recharts makes its surface a tab
+      // stop for the arrow-key readout, and a pointer that focused it would
+      // leave a frame around the chart after every click or drag. The keyboard
+      // still reaches it, with the foundation's focus ring.
+      onMouseDownCapture={(event) => event.preventDefault()}
     >
       <ResponsiveContainer width="100%" height={height}>
         <BarChart
           data={data}
-          margin={{ top: 4, right: 0, left: 0, bottom: 0 }}
+          // Room on the right for half the last bucket's label, which is
+          // centered under its bar and would otherwise be cut at the edge.
+          margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
           onMouseDown={(state) => {
             if (isSelectable && !isTouchEcho()) begin(toIndex(state))
           }}
@@ -333,11 +390,15 @@ export function TrendChart({
           {showYAxis ? (
             <YAxis
               tickCount={yTickCount}
+              ticks={yTicks}
+              domain={yTicks ? [0, yTicks[yTicks.length - 1]] : undefined}
               allowDecimals={!integerY}
               width={52}
               tickLine={false}
               axisLine={false}
-              tickFormatter={(value: number) => formatValue(value)}
+              tickFormatter={(value: number) =>
+                (formatYTick ?? formatValue)(value)
+              }
               tick={AXIS_TICK}
             />
           ) : null}
@@ -347,8 +408,9 @@ export function TrendChart({
             content={
               <ChartTooltip
                 formatValue={formatValue}
-                formatLabel={formatXTick}
+                formatLabel={formatTooltipLabel ?? formatXTick}
                 showTotal={showTotal}
+                hint={isSelectable ? selectHint : undefined}
               />
             }
           />

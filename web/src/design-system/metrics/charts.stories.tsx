@@ -119,8 +119,27 @@ export const TrendStacked: Story = {
   ),
 }
 
+/** A y-axis in a shorter form than the tooltip's: "1.2K" on the axis, "1,234" on hover. */
+export const TrendShortAxis: Story = {
+  render: () => (
+    <div className="w-[48rem]">
+      <TrendChart
+        data={SINGLE}
+        series={SINGLE_SERIES}
+        formatValue={count}
+        formatYTick={(value) =>
+          new Intl.NumberFormat("en-US", { notation: "compact" }).format(value)
+        }
+        formatXTick={day}
+        ariaLabel="Requests per day"
+        showYAxis
+      />
+    </div>
+  ),
+}
+
 /**
- * Drag across the plot to select a range. The chart reports bucket indices and
+ * Drag across the plot to select a range; the tooltip says so. The chart reports bucket indices and
  * the caller decides what that means; here it just narrows `window`, which is how
  * the chart renders a selection back.
  */
@@ -137,6 +156,8 @@ export const TrendWithRangeSelection: Story = {
           series={SINGLE_SERIES}
           formatValue={count}
           formatXTick={day}
+          formatTooltipLabel={(x) => `${day(x)} UTC`}
+          selectHint="Drag to narrow the window"
           ariaLabel="Requests per day"
           window={range}
           onSelectRange={(startIndex, endIndex) =>
@@ -232,6 +253,7 @@ export const Tooltips: Story = {
         formatLabel={day}
         formatValue={count}
         showTotal
+        hint="Drag to narrow the window"
         payload={[
           { value: 1284, name: "Succeeded", color: "var(--color-chart-cat-1)" },
           { value: 140, name: "Refused", color: "var(--color-chart-cat-2)" },

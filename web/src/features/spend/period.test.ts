@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest"
 import {
   comparedWith,
+  customWindow,
   DEFAULT_PERIOD,
   figureLabel,
   isPeriodKey,
@@ -268,6 +269,77 @@ describe("the window's words", () => {
   it("says one day, not 1 days, on the first of the month", () => {
     const window = windowOf("month", local(2026, 10, 1, 9))
     expect(comparedWith(window)).toBe("vs prior 1 day")
+  })
+})
+
+describe("customWindow", () => {
+  it("reads a dragged span of UTC days, the one before it as long", () => {
+    const start = new Date(Date.UTC(2026, 10, 3)).toISOString()
+    const end = new Date(Date.UTC(2026, 10, 6)).toISOString()
+    const window = customWindow(start, end, NOW)
+    expect(window).toMatchObject({
+      kind: "custom",
+      start,
+      end,
+      previousStart: new Date(Date.UTC(2026, 9, 31)).toISOString(),
+      previousEnd: start,
+      days: 3,
+      label: "Nov 3 to Nov 5",
+      bucket: "day",
+    })
+    expect(windowWords(window!)).toBe("from Nov 3 to Nov 5")
+    expect(figureLabel("Spent", window!)).toBe("Spent, Nov 3 to Nov 5")
+    expect(comparedWith(window!)).toBe("vs prior 3 days")
+    expect(usageRange(window!)).toEqual({ start_date: start, end_date: end })
+  })
+
+  it("keeps the hours of a span of a day or two, and names them", () => {
+    const window = customWindow(
+      new Date(Date.UTC(2026, 10, 8, 9)).toISOString(),
+      new Date(Date.UTC(2026, 10, 8, 15)).toISOString(),
+      NOW,
+    )
+    expect(window).toMatchObject({
+      bucket: "hour",
+      days: 1,
+      label: "Nov 8, 9 AM to 3 PM UTC",
+      shortLabel: "Nov 8, 9–15h UTC",
+    })
+    expect(
+      customWindow(
+        new Date(Date.UTC(2026, 10, 7, 22)).toISOString(),
+        new Date(Date.UTC(2026, 10, 8, 2)).toISOString(),
+        NOW,
+      )?.label,
+    ).toBe("Nov 7, 10 PM to Nov 8, 2 AM UTC")
+    const late = customWindow(
+      new Date(Date.UTC(2026, 10, 7, 22)).toISOString(),
+      new Date(Date.UTC(2026, 10, 8, 2)).toISOString(),
+      NOW,
+    )!
+    expect(late.shortLabel).toBe("Nov 7 22h–Nov 8 2h UTC")
+    expect(figureLabel("Spent", window!)).toBe("Spent, Nov 8, 9–15h UTC")
+    const evening = customWindow(
+      new Date(Date.UTC(2026, 10, 8, 18)).toISOString(),
+      new Date(Date.UTC(2026, 10, 9)).toISOString(),
+      NOW,
+    )!
+    expect(evening.shortLabel).toBe("Nov 8, 18–24h UTC")
+  })
+
+  it("reads no window from bounds that make none", () => {
+    const start = new Date(Date.UTC(2026, 10, 3)).toISOString()
+    expect(customWindow("", "", NOW)).toBeUndefined()
+    expect(customWindow(start, "bogus", NOW)).toBeUndefined()
+    expect(customWindow(start, start, NOW)).toBeUndefined()
+    // A span that has not begun.
+    expect(
+      customWindow(
+        new Date(Date.UTC(2026, 10, 10)).toISOString(),
+        new Date(Date.UTC(2026, 10, 11)).toISOString(),
+        NOW,
+      ),
+    ).toBeUndefined()
   })
 })
 

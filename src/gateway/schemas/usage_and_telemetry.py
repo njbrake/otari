@@ -193,7 +193,7 @@ UsageChannel = Literal["api", "imported", "playground"]
 # The columns a filter can ask to be empty: no API key, no billed user, no session.
 NullableUsageField = Literal["api_key", "user", "session"]
 
-SeriesGroupBy = Literal["model", "user_id", "api_key_id", "source"]
+SeriesGroupBy = Literal["model", "user_id", "api_key_id", "source", "provider", "workspace_id"]
 
 # Coarse display buckets for a failure's status code. A closed Literal rather than
 # a bare str so the set lands in the OpenAPI schema as an enum and a consumer can

@@ -230,7 +230,7 @@ _VALUE_GROUPS: tuple[ValueGroupBy, ...] = (
     "policy",
 )
 
-_DIMENSIONS = ("model", "user", "api_key", "source", "source_label", "endpoint", "provider")
+_DIMENSIONS = ("model", "user", "api_key", "source", "source_label", "endpoint", "provider", "workspace")
 
 
 def _scopes(workspace_id: uuid.UUID) -> list[UsageScope]:
@@ -278,9 +278,12 @@ async def _read_all(repo: UsageLogRepository, filters: UsageFilters, scope: Usag
     for bucket in ("hour", "day"):
         points = await repo.series(filters, scope, bucket=bucket)
         out[f"series:{bucket}"] = sorted((point.model_dump() for point in points), key=lambda p: p["bucket_start"])
+    workspace_keys = {str(one) for one in scope.workspaces} if isinstance(scope.workspaces, list) else set()
     grids: tuple[tuple[Bucket, str, set[str], bool], ...] = (
         ("day", "model", {"gpt-4o"}, False),
         ("hour", "user", {"u1"}, True),
+        ("day", "provider", {"openai"}, True),
+        ("hour", "workspace", workspace_keys, False),
     )
     for bucket, dimension, named, keeps_null in grids:
         cells = await repo.grouped_series(

@@ -22,8 +22,11 @@ export function toMinute(now: number): number {
 
 export type PeriodKey = "today" | "yesterday" | "7d" | "30d" | "3m" | "6m"
 
-/** Every window there is: the picker's, and the calendar month so far. */
-export type WindowKind = PeriodKey | "month"
+/**
+ * Every window there is: the picker's, the calendar month so far, and a span
+ * dragged out on a chart.
+ */
+export type WindowKind = PeriodKey | "month" | "custom"
 
 export const PERIODS: { value: PeriodKey; label: string }[] = [
   { value: "today", label: "Today" },
@@ -64,6 +67,12 @@ export interface SpendWindow {
   days: number
   /** "Nov 1 to Nov 9", or "Nov 9" for one day, for a figure's subline. */
   label: string
+  /**
+   * The label as a figure's heading carries it, where the room is a few
+   * words: "Nov 8, 9–15h UTC" for "Nov 8, 9 AM to 3 PM UTC". Unset where the
+   * label is short already.
+   */
+  shortLabel?: string
   /** The series' granularity: hours across a single day, days otherwise. */
   bucket: UsageBucket
 }
@@ -105,6 +114,86 @@ export function windowOf(kind: WindowKind, now: number): SpendWindow {
             bounds.end ? lastDay : clock,
           )}`,
     bucket: kind === "today" || kind === "yesterday" ? "hour" : "day",
+  }
+}
+
+/** The longest span a dragged window keeps its hours for, as Today does. */
+const HOURLY_SPAN_MS = 2 * DAY_MS
+
+// A dragged span is a run of the chart's buckets, which are UTC days and
+// hours, so it is named and counted in UTC, as the bars under it are.
+const UTC_DAY_LABEL = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+})
+const UTC_HOUR_LABEL = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  timeZone: "UTC",
+})
+
+/** "Nov 3 to Nov 5" for whole UTC days, "Nov 8, 9 AM to 3 PM UTC" otherwise. */
+function spanLabel(from: number, to: number): string {
+  const firstDay = Math.floor(from / DAY_MS)
+  const lastDay = Math.floor((to - 1) / DAY_MS)
+  if (from % DAY_MS === 0 && to % DAY_MS === 0) {
+    return firstDay === lastDay
+      ? UTC_DAY_LABEL.format(from)
+      : `${UTC_DAY_LABEL.format(from)} to ${UTC_DAY_LABEL.format(to - 1)}`
+  }
+  const end =
+    Math.floor(to / DAY_MS) === firstDay
+      ? UTC_HOUR_LABEL.format(to)
+      : `${UTC_DAY_LABEL.format(to)}, ${UTC_HOUR_LABEL.format(to)}`
+  return `${UTC_DAY_LABEL.format(from)}, ${UTC_HOUR_LABEL.format(from)} to ${end} UTC`
+}
+
+const UTC_HOUR = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  hourCycle: "h23",
+  timeZone: "UTC",
+})
+
+/**
+ * A dragged span of hours in a heading's few words: "Nov 8, 9–15h UTC" within
+ * a day, "Nov 7 22h–Nov 8 2h UTC" across midnight. Undefined for whole days,
+ * whose label is short already.
+ */
+function shortSpanLabel(from: number, to: number): string | undefined {
+  if (from % DAY_MS === 0 && to % DAY_MS === 0) return undefined
+  const hour = (at: number) => Number(UTC_HOUR.format(at)) % 24
+  const endHour = hour(to) === 0 ? 24 : hour(to)
+  const firstDay = Math.floor(from / DAY_MS)
+  return Math.floor((to - 1) / DAY_MS) === firstDay
+    ? `${UTC_DAY_LABEL.format(from)}, ${hour(from)}–${endHour}h UTC`
+    : `${UTC_DAY_LABEL.format(from)} ${hour(from)}h–${UTC_DAY_LABEL.format(to - 1)} ${endHour}h UTC`
+}
+
+/**
+ * A window dragged out on a chart, from its two ISO bounds (the end
+ * exclusive), or undefined when they do not make one: unparsable, empty, or
+ * starting after `now`. The window before it is as long as it is.
+ */
+export function customWindow(
+  start: string,
+  end: string,
+  now: number,
+): SpendWindow | undefined {
+  const from = Date.parse(start)
+  const to = Date.parse(end)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return undefined
+  if (to <= from || from > now) return undefined
+  const length = to - from
+  return {
+    kind: "custom",
+    start: iso(from),
+    end: iso(to),
+    previousStart: iso(from - length),
+    previousEnd: iso(from),
+    days: Math.floor((to - 1) / DAY_MS) - Math.floor(from / DAY_MS) + 1,
+    label: spanLabel(from, to),
+    shortLabel: shortSpanLabel(from, to),
+    bucket: length <= HOURLY_SPAN_MS ? "hour" : "day",
   }
 }
 
@@ -185,6 +274,7 @@ export function windowSpan(window: SpendWindow): string {
   const { kind } = window
   if (kind === "today" || kind === "yesterday") return kind
   if (kind === "month") return "this month"
+  if (kind === "custom") return window.shortLabel ?? window.label
   const months = MONTHS_BACK[kind]
   return months ? plural(months, "month") : plural(window.days, "day")
 }
@@ -192,6 +282,7 @@ export function windowSpan(window: SpendWindow): string {
 /** "today", "in the last 7 days": the window inside a sentence. */
 export function windowWords(window: SpendWindow): string {
   const { kind } = window
+  if (kind === "custom") return `from ${window.label}`
   return kind === "today" || kind === "yesterday" || kind === "month"
     ? windowSpan(window)
     : `in the last ${windowSpan(window)}`
@@ -216,7 +307,9 @@ export function comparedWith(window: SpendWindow): string {
   if (window.kind === "yesterday") {
     return `vs ${WEEKDAY.format(new Date(window.previousStart))}`
   }
-  if (window.kind === "month") return `vs prior ${plural(window.days, "day")}`
+  if (window.kind === "month" || window.kind === "custom") {
+    return `vs prior ${plural(window.days, "day")}`
+  }
   // In the picker's own words, which keeps the change inside its figure at 1280px.
   const months = MONTHS_BACK[window.kind]
   return months ? `vs prior ${months}M` : `vs prior ${windowSpan(window)}`

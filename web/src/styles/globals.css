@@ -3699,3 +3699,19 @@ body {
 .otari-spend-table .table__column[data-key="model"] {
   min-width: 10.375rem;
 }
+
+/* Home's budget chart: the days still to come, at the month's pace so far, as
+   a hatch rather than a fill, so a projection never reads as spend. Over the
+   budget it takes the danger hue. A gradient no utility can express. */
+.otari-hatch {
+  --hatch: var(--color-chart-cat-1);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--hatch) 0 1px,
+    transparent 1px 5px
+  );
+  box-shadow: inset 0 1px 0 var(--hatch);
+}
+.otari-hatch--over {
+  --hatch: var(--color-danger);
+}

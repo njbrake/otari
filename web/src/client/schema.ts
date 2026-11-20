@@ -23673,7 +23673,7 @@ export interface components {
              * Group By
              * @enum {string}
              */
-            group_by: "model" | "user_id" | "api_key_id" | "source";
+            group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id";
             /** Groups */
             groups: components["schemas"]["UsageGroupRow"][];
             /** Points */
@@ -29552,7 +29552,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Dimension to split the series by */
-                group_by: "model" | "user_id" | "api_key_id" | "source";
+                group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -35089,7 +35089,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Dimension to split the series by */
-                group_by: "model" | "user_id" | "api_key_id" | "source";
+                group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -39042,7 +39042,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Dimension to split the series by */
-                group_by: "model" | "user_id" | "api_key_id" | "source";
+                group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */

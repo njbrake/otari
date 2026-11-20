@@ -8,6 +8,7 @@ import { SelectedWorkspaceProvider } from "@/shared/hooks/SelectedWorkspace"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
   bootstrap,
+  groupedSeries,
   organizationContext,
   organizationMember,
   SURFACES,
@@ -154,6 +155,9 @@ describe("Home, Where it went by model", () => {
       }
       if (path.endsWith("/traces/count")) return Response.json({ count: 3 })
       if (path === "/workspaces") return Response.json({ data: [], count: 0 })
+      if (path.endsWith("/usage/series")) {
+        return Response.json(groupedSeries())
+      }
       return Response.json([])
     })
     await renderWithRouter(<TeamHome />, {
@@ -269,6 +273,9 @@ describe("Home, People active", () => {
         return Response.json({ data: [], count: 0 })
       }
       if (path === "/workspaces") return Response.json({ data: [], count: 0 })
+      if (path.endsWith("/usage/series")) {
+        return Response.json(groupedSeries())
+      }
       return Response.json([])
     })
     return counts
@@ -442,6 +449,9 @@ describe("Home, by provider", () => {
           { id: "ws-b", name: "Data" },
         ].slice(0, workspaces)
         return Response.json({ data: all, count: all.length })
+      }
+      if (path.endsWith("/usage/series")) {
+        return Response.json(groupedSeries())
       }
       return Response.json([])
     })
@@ -685,6 +695,9 @@ describe("Home, the window", () => {
           ],
           count: 2,
         })
+      }
+      if (path.endsWith("/usage/series")) {
+        return Response.json(groupedSeries())
       }
       return Response.json([])
     })
@@ -935,6 +948,9 @@ describe("Home, the figures and what needs attention", () => {
           data: [workspace({ id: "ws-a", name: "Platform" })],
           count: 1,
         })
+      }
+      if (path.endsWith("/usage/series")) {
+        return Response.json(groupedSeries())
       }
       return Response.json([])
     })

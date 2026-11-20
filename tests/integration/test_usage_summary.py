@@ -883,7 +883,7 @@ def test_grouped_series_requires_master_key_and_group_by(client: TestClient) -> 
 
 
 def test_grouped_series_rejects_unknown_group_by(client: TestClient, master_key_header: dict[str, str]) -> None:
-    assert client.get(SERIES_PATH, headers=master_key_header, params={"group_by": "provider"}).status_code == 422
+    assert client.get(SERIES_PATH, headers=master_key_header, params={"group_by": "endpoint"}).status_code == 422
     # group_by is required.
     assert client.get(SERIES_PATH, headers=master_key_header).status_code == 422
 
@@ -926,6 +926,64 @@ def test_grouped_series_by_model_reconciles(
     # The stack reconciles with the window totals.
     assert sum(p["cost"] for p in body["points"]) == pytest.approx(0.60)
     assert sum(p["requests"] for p in body["points"]) == 3
+
+
+def test_grouped_series_by_provider_reconciles(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    ts = datetime(2025, 4, 5, 9, 0, tzinfo=UTC)
+    _make_log(db_session, user_id="prov", timestamp=ts, provider="openai", cost=0.30)
+    _make_log(db_session, user_id="prov", timestamp=ts, provider="anthropic", cost=0.10)
+    _make_log(db_session, user_id="prov", timestamp=ts + timedelta(days=1), provider="openai", cost=0.20)
+    db_session.commit()
+
+    body = client.get(
+        SERIES_PATH,
+        headers=master_key_header,
+        params={
+            "group_by": "provider",
+            "user_id": "prov",
+            "start_date": "2025-04-05T00:00:00Z",
+            "end_date": "2025-04-07T00:00:00Z",
+        },
+    ).json()
+
+    assert body["group_by"] == "provider"
+    assert [g["key"] for g in body["groups"]] == ["openai", "anthropic"]
+    by_cell = {(p["bucket_start"], p["key"]): p["cost"] for p in body["points"]}
+    assert by_cell == {
+        ("2025-04-05T00:00:00Z", "openai"): pytest.approx(0.30),
+        ("2025-04-05T00:00:00Z", "anthropic"): pytest.approx(0.10),
+        ("2025-04-06T00:00:00Z", "openai"): pytest.approx(0.20),
+    }
+
+
+def test_grouped_series_by_workspace_keys_each_workspace_by_its_id(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    default = seed_workspace_id(db_session)
+    other = _make_workspace(client, master_key_header, "Series team")
+    ts = datetime(2025, 9, 3, 12, 0, tzinfo=UTC)
+    _make_log(db_session, user_id="wsg", timestamp=ts, cost=0.10, workspace_id=default)
+    _make_log(db_session, user_id="wsg", timestamp=ts, cost=0.25, workspace_id=uuid.UUID(other))
+    db_session.commit()
+
+    body = client.get(
+        SERIES_PATH,
+        headers=master_key_header,
+        params={
+            "group_by": "workspace_id",
+            "user_id": "wsg",
+            "start_date": "2025-09-03T00:00:00Z",
+            "end_date": "2025-09-04T00:00:00Z",
+        },
+    ).json()
+
+    assert [g["key"] for g in body["groups"]] == [other, str(default)]
+    assert {p["key"]: p["cost"] for p in body["points"]} == {
+        other: pytest.approx(0.25),
+        str(default): pytest.approx(0.10),
+    }
 
 
 def test_grouped_series_folds_past_top_n_and_null_groups(

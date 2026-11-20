@@ -87,7 +87,14 @@ _ALL_SUMMARY_DIMENSIONS: set[str] = set(_SUMMARY_DIMENSIONS) | {_ERROR_TAXONOMY_
 _MAX_NAMED_BY_SEARCH = 500
 
 # A grouped series names its dimension by the column; a breakdown by the response field.
-_SERIES_DIMENSIONS: dict[str, str] = {"model": "model", "user_id": "user", "api_key_id": "api_key", "source": "source"}
+_SERIES_DIMENSIONS: dict[str, str] = {
+    "model": "model",
+    "user_id": "user",
+    "api_key_id": "api_key",
+    "source": "source",
+    "provider": "provider",
+    "workspace_id": "workspace",
+}
 
 
 class UsageService:

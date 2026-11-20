@@ -37,6 +37,7 @@ import type {
   PricingResponse,
   ScopedBudget,
   UpdateCheckStatus,
+  UsageGroupedSeries,
   UsageTotals,
   User,
   Workspace,
@@ -119,6 +120,21 @@ export function usageTotals(overrides: Partial<UsageTotals> = {}): UsageTotals {
     incomplete_count: 0,
     imported_cost: 0,
     p95_latency_ms: null,
+    ...overrides,
+  }
+}
+
+/** A grouped usage series with nothing in it, unless the overrides say otherwise. */
+export function groupedSeries(
+  overrides: Partial<UsageGroupedSeries> = {},
+): UsageGroupedSeries {
+  return {
+    start_date: "2026-01-01T00:00:00+00:00",
+    end_date: "2026-01-02T00:00:00+00:00",
+    bucket: "day",
+    group_by: "model",
+    groups: [],
+    points: [],
     ...overrides,
   }
 }

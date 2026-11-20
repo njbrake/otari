@@ -20,6 +20,7 @@ import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
   apiKey,
   bootstrap,
+  groupedSeries,
   organizationContext,
   organizationMember,
   SURFACES,
@@ -151,6 +152,8 @@ async function renderMemberHome({
         return Response.json([refusal])
       case "/organizations/me/traces/count":
         return Response.json({ count: 3 })
+      case "/organizations/me/usage/series":
+        return Response.json(groupedSeries())
       case "/organizations/me/usage/summary": {
         const start = query.get("start_date") ?? ""
         const isWindow =
