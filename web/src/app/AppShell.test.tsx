@@ -417,7 +417,7 @@ describe("AppShell responsive layout", () => {
     ).toHaveAttribute("aria-valuenow", "264")
   })
 
-  it("collapses to the narrow rail with no resize handle", async () => {
+  it("collapses to the narrow rail, which keeps its resize handle", async () => {
     mockMatchMedia(false)
     const user = userEvent.setup()
     const { container } = await renderShell()
@@ -425,8 +425,8 @@ describe("AppShell responsive layout", () => {
     await user.click(screen.getByRole("button", { name: "Collapse sidebar" }))
     expect(container.querySelector("aside")?.className).toContain("w-[4.5rem]")
     expect(
-      screen.queryByRole("separator", { name: "Resize sidebar" }),
-    ).toBeNull()
+      screen.getByRole("separator", { name: "Resize sidebar" }),
+    ).toHaveAttribute("aria-valuenow", "72")
   })
 
   it("offers no resize handle in the mobile drawer", async () => {
@@ -671,7 +671,7 @@ describe("the resizable rail", () => {
     await renderShell()
 
     expect(handle()).toHaveAttribute("aria-orientation", "vertical")
-    expect(handle()).toHaveAttribute("aria-valuemin", "200")
+    expect(handle()).toHaveAttribute("aria-valuemin", "72")
     expect(handle()).toHaveAttribute("aria-valuemax", "480")
     expect(handle()).toHaveAttribute("tabindex", "0")
   })
@@ -706,16 +706,26 @@ describe("the resizable rail", () => {
     expect(railWidth(container)).toBe("480px")
   })
 
-  it("stops at the bottom of its range", async () => {
+  it("collapses from the keyboard past the narrowest width", async () => {
     mockMatchMedia(false)
     const user = userEvent.setup()
     window.localStorage.setItem("otari.dashboard.sidebarWidth", "210")
     const { container } = await renderShell()
 
     handle().focus()
-    await user.keyboard("{ArrowLeft}{ArrowLeft}")
+    await user.keyboard("{ArrowLeft}")
     expect(handle()).toHaveAttribute("aria-valuenow", "200")
     expect(railWidth(container)).toBe("200px")
+
+    await user.keyboard("{ArrowLeft}")
+    expect(handle()).toHaveAttribute("aria-valuenow", "72")
+    expect(container.querySelector("aside")?.className).toContain("w-[4.5rem]")
+    expect(
+      window.localStorage.getItem("otari.dashboard.sidebarCollapsed"),
+    ).toBe("1")
+
+    await user.keyboard("{ArrowRight}")
+    expect(handle()).toHaveAttribute("aria-valuenow", "200")
   })
 
   it("clamps a stored width outside the range and ignores a garbled one", async () => {
@@ -784,6 +794,62 @@ describe("the resizable rail", () => {
     expect(window.localStorage.getItem("otari.dashboard.sidebarWidth")).toBe(
       "480",
     )
+  })
+
+  it("collapses when dragged far enough left, and expands when dragged back", async () => {
+    mockMatchMedia(false)
+    window.localStorage.setItem("otari.dashboard.sidebarWidth", "320")
+    const { container } = await renderShell()
+    const aside = container.querySelector("aside") as HTMLElement
+    aside.getBoundingClientRect = () => ({ left: 0 }) as DOMRect
+
+    fireEvent.pointerDown(handle(), { pointerId: 1, clientX: 320 })
+    fireEvent.pointerMove(handle(), { pointerId: 1, clientX: 150 })
+    await waitFor(() =>
+      expect(handle()).toHaveAttribute("aria-valuenow", "200"),
+    )
+    fireEvent.pointerMove(handle(), { pointerId: 1, clientX: 90 })
+    await waitFor(() => expect(aside.className).toContain("w-[4.5rem]"))
+    expect(handle()).toHaveAttribute("aria-valuenow", "72")
+
+    // The same drag, still held, brings it back out.
+    fireEvent.pointerMove(handle(), { pointerId: 1, clientX: 260 })
+    await waitFor(() =>
+      expect(handle()).toHaveAttribute("aria-valuenow", "260"),
+    )
+    fireEvent.pointerMove(handle(), { pointerId: 1, clientX: 40 })
+    await waitFor(() => expect(aside.className).toContain("w-[4.5rem]"))
+    fireEvent.pointerUp(handle(), { pointerId: 1, clientX: 40 })
+
+    expect(
+      window.localStorage.getItem("otari.dashboard.sidebarCollapsed"),
+    ).toBe("1")
+    // Expanding returns to the width the drag started from.
+    expect(window.localStorage.getItem("otari.dashboard.sidebarWidth")).toBe(
+      "320",
+    )
+  })
+
+  it("expands a collapsed rail dragged past the threshold", async () => {
+    mockMatchMedia(false)
+    window.localStorage.setItem("otari.dashboard.sidebarCollapsed", "1")
+    const { container } = await renderShell()
+    const aside = container.querySelector("aside") as HTMLElement
+    aside.getBoundingClientRect = () => ({ left: 0 }) as DOMRect
+
+    fireEvent.pointerDown(handle(), { pointerId: 1, clientX: 72 })
+    fireEvent.pointerMove(handle(), { pointerId: 1, clientX: 120 })
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(aside.className).toContain("w-[4.5rem]")
+
+    fireEvent.pointerMove(handle(), { pointerId: 1, clientX: 300 })
+    await waitFor(() =>
+      expect(handle()).toHaveAttribute("aria-valuenow", "300"),
+    )
+    fireEvent.pointerUp(handle(), { pointerId: 1, clientX: 300 })
+    expect(
+      window.localStorage.getItem("otari.dashboard.sidebarCollapsed"),
+    ).toBe("0")
   })
 
   it("keeps the width across a collapse and an expand", async () => {
