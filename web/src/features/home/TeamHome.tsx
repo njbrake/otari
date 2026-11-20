@@ -783,7 +783,7 @@ export function TeamHome({
                   {
                     label: figureLabel("Spent", window),
                     value: spend.totals ? formatUsd(total) : "—",
-                    subline: spentFacts.join(", ") || undefined,
+                    subline: spentFacts[0],
                   },
                   {
                     label: organization

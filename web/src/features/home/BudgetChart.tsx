@@ -262,7 +262,7 @@ export function BudgetChart({
                 {LABELED_DAYS.has(index + 1) ? (
                   <span
                     className={`absolute left-1/2 -translate-x-1/2 ${
-                      index + 1 === 8 || index + 1 === 22 ? "max-sm:hidden" : ""
+                      [8, 22, 29].includes(index + 1) ? "max-sm:hidden" : ""
                     }`}
                   >
                     {dayLabel(month, index + 1)}

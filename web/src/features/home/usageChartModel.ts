@@ -8,6 +8,7 @@ import type { SpendWindow } from "@/features/spend/period"
 import {
   formatCount,
   formatTokens,
+  formatTokensCompact,
   formatUsd,
   formatUsdCompact,
 } from "@/shared/helpers/format"
@@ -44,7 +45,7 @@ export function formatMetricAxis(metric: Metric, value: number): string {
   return metric === "cost"
     ? formatUsdCompact(value)
     : metric === "tokens"
-      ? formatTokens(value)
+      ? formatTokensCompact(value)
       : formatCount(value)
 }
 

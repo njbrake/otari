@@ -70,7 +70,13 @@ export function useBreakdownChart({
     "organization",
   )
   const starts = bucketStarts(window, now)
-  const data = grouped.isPlaceholderData ? undefined : grouped.data
+  // Another window's or breakdown's answer stands in while this one loads, and
+  // an answer without groups is no breakdown at all (a mock, or a proxy's
+  // page): either way the placeholder bars stay up.
+  const data =
+    grouped.isPlaceholderData || !Array.isArray(grouped.data?.groups)
+      ? undefined
+      : grouped.data
   const chart = data
     ? foldSeries({ data, starts, metric, labelOf })
     : placeholderSeries({
@@ -165,7 +171,6 @@ export function UsageBreakdownChart({
             height={180}
             showYAxis
             showTotal
-            yTickCount={4}
             integerY={metric !== "cost"}
             onSelectRange={(lo, hi) => {
               const span = draggedSpan(starts, window.bucket, lo, hi)

@@ -555,7 +555,7 @@ export function MemberHome({
                     {
                       label: figureLabel("Spent", window),
                       value: spend.totals ? formatUsd(total) : "—",
-                      subline: spentFacts.join(", ") || undefined,
+                      subline: spentFacts[0],
                     },
                     {
                       label: figureLabel("Tokens", window),

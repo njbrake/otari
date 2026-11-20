@@ -78,12 +78,11 @@ export function MonthBudget({
   )
   const facts: string[] = []
   if (data) {
-    facts.push(`${formatUsd(spent)} charged`)
-    if (cap !== undefined) {
-      facts.push(
-        `of ${formatUsd(cap)} ${month.isCurrent ? capLabel.toLowerCase() : `${capLabel.toLowerCase()} today`}`,
-      )
-    }
+    facts.push(
+      cap === undefined
+        ? `${formatUsd(spent)} charged`
+        : `${formatUsd(spent)} charged of ${formatUsd(cap)} ${(month.isCurrent ? capLabel : `${capLabel} today`).toLowerCase()}`,
+    )
     if (canProject(month, now) && projection.projected.length > 0) {
       facts.push(`on pace for ${formatUsd(projection.end)}`)
     }

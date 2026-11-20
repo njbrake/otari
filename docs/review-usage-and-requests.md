@@ -11,7 +11,9 @@ Pick the window at the top: **Today**, **Yesterday**, **7D**, **30D**, **3M** or
 runs from midnight to now and **Yesterday** is the whole day before it, both
 read by the hour; the others are whole days ending with today. On a phone the
 same windows are in a select. **Refresh**, beside the window, reads every
-figure again, and the time beside it says when they were last read. What Home
+figure again, and the time beside it says when they were last read. **Share**
+paints the figures and the usage chart (below) into a PNG to download or copy
+to the clipboard; it is drawn in your browser and nothing is uploaded. What Home
 shows depends on your role.
 
 An organization owner or admin sees the whole organization, or one workspace
@@ -52,6 +54,18 @@ With nothing to act on it says so in one line. The figures follow:
 - **People active**: how many members spent anything in the window, and how
   many sessions ran. **See the sessions** opens them.
 
+**Month against the budget** reads one calendar month at a time: its charged
+spend (what counted toward a budget) as a running total, a bar a day, against
+the team's monthly budget, or the picked workspace's. Months are UTC, as budgets
+reset on the 1st in UTC. While the month runs, the days still to come are
+hatched at the month's pace so far (once it has run a day and a tenth of the
+month), **Today** marks where the month stands, and **Over budget** marks the
+day the total crosses the budget, with a ~ where that day is projected. The
+picker reaches back eleven months; an earlier month is drawn against the budget
+as it stands today. A budget that resets on another cadence draws no line, and
+the band says so. Point at a day, or focus the chart and use the arrow keys, to
+read it.
+
 **Where it went** then breaks the window's spend down by **People**,
 **API keys**, **Models**, **Providers** or **Workspaces** (offered when there is
 more than one workspace). Each row shows what it spent, its tokens and its share
@@ -65,6 +79,14 @@ page (see [One person's spend](#one-persons-spend)). At the end of each row,
 requests, and **People** narrows the table to that workspace's people. A row's
 menu sets or changes its spend limit, and a key's row can be opened in
 **API keys**.
+
+Above the table, a chart stacks each hour or day of the window from the
+breakdown's four largest rows by spend and **Other** for the rest. It shows
+**Cost**, **Tokens** or **Requests**; when part of the window was not charged,
+**Include not charged** leaves that spend in or takes it out. Drag across the
+bars, or click one, to narrow the window to that span: every figure and table
+on the page follows, and the span shows beside the window picker until you
+clear it or pick a window. The chart's days and hours are UTC.
 
 **Recent failures** lists the window's latest failed requests: when, the
 model, the key and the error. Each one opens that request in **Requests**, and
@@ -85,8 +107,10 @@ own refused and failed requests of the last 24 hours and their own keys that
 expire within the week, and **Recent failures** lists their own failed
 requests.
 **Where it went** breaks their spend down by **API keys**, **Models** or
-**Providers**, and each row ends with **Sessions**, or **Requests** for a
-provider, which opens what it ran.
+**Providers**, with the same chart over it, and each row ends with **Sessions**,
+or **Requests** for a provider, which opens what it ran. **Month against the
+budget** reads their own charged spend, against the workspace's limit for each
+person when that resets monthly.
 Someone with no active key and no session yet is offered
 **Create API key**; someone who may not create keys is told whom to ask.
 
