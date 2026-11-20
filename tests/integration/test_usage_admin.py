@@ -818,13 +818,14 @@ def test_the_imported_usage_cards_count_is_what_its_writes_reach(
     )
     _make_log(db_session, log_id="served", counts_toward_budget=True, source=SERVED_HERE_SLUG)
     db_session.commit()
-    scope = {"start_date": "2026-06-01T00:00:00Z", "source": "claude_code", "priced": False}
+    start = "2026-06-01T00:00:00Z"
+    scope: dict[str, object] = {"start_date": start, "source": "claude_code", "priced": False}
 
     counted = client.get(
         COUNT_PATH,
         params={
             "counts_toward_budget": "false",
-            "start_date": scope["start_date"],
+            "start_date": start,
             "source": "claude_code",
             "priced": "false",
         },
@@ -841,7 +842,8 @@ def test_the_imported_usage_cards_count_is_what_its_writes_reach(
     assert recost.status_code == 200, recost.text
     assert recost.json()["matched"] == 1
     db_session.expire_all()
-    assert _get(db_session, "in-window").cost is not None
+    recosted = _get(db_session, "in-window")
+    assert recosted is not None and recosted.cost is not None
 
     # Recosted, the row has a cost now, so the same unpriced scope reaches nothing.
     deleted = client.request("DELETE", DELETE_PATH, json={"by_filter": True, **scope}, headers=master_key_header)
