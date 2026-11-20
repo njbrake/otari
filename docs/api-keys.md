@@ -142,12 +142,12 @@ See [Workload identity](workload-identity.md).
   they list, edit (name, budget, models, tools, expiry), disable, enable and
   delete them. They never hold a colleague's secret: a key acts as its owner,
   reaching that person's files, batches and MCP connections, so creating a key
-  for someone else, regenerating a colleague's key and giving it a workload
-  identity rule are refused with `403`. Their role is read on every request, so
-  lowering it takes those keys away at once. They cannot exempt a key from
-  budget, and a budget-exempt key, an operator's service key, or a key billed
-  to someone outside the organization stays out of their view unless it is
-  their own. They also create the organization's own
+  for someone else and regenerating a colleague's key are refused with `403`,
+  and a workload identity rule on a colleague's key answers `404`. Their role
+  is read on every request, so lowering it takes those keys away at once. They
+  cannot exempt a key from budget, and a budget-exempt key, an operator's
+  service key, or a key billed to someone outside the organization stays out
+  of their view unless it is their own. They also create the organization's own
   [service keys](end-users.md#2-create-the-service-key).
 - **Viewers** can list their keys but cannot create, edit, regenerate or delete
   one. An operator can issue a key to a viewer.
