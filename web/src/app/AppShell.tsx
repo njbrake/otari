@@ -91,8 +91,9 @@ import { useTelemetry } from "@/shared/telemetry/overlayTelemetry"
 // its right edge. The width is remembered per browser; a double-click on the
 // handle forgets it. Collapsed is always 72px. Dragging the edge left of
 // `COLLAPSE_SIDEBAR_AT` collapses the rail, and dragging a collapsed rail's
-// edge past it expands it again, as do the arrow keys past either end. Collapse
-// and width are separate preferences, so expanding returns to the width left.
+// edge past it expands it again; the left arrow at 200px collapses it and the
+// right arrow expands it. Collapse and width are separate preferences, so
+// expanding returns to the width left.
 const MIN_SIDEBAR_WIDTH = 200
 const COLLAPSED_SIDEBAR_PX = 72
 // Halfway between the collapsed and the narrowest expanded width.
