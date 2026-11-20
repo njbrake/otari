@@ -5025,13 +5025,16 @@ export interface paths {
         };
         /**
          * Read Routing Traffic
-         * @description The last 30 days of traffic sent under each routing policy the caller may see.
+         * @description The last 30 days of traffic sent under each routing policy and alias the caller may see.
          *
-         *     Per workspace and policy name: the requests, the keys that sent them, and what
+         *     Per workspace and name: the requests, the keys that sent them, and what
          *     each step of the plan did (served, or failed and handed on). Whose requests
          *     count: everyone's to an organization owner or admin, a workspace's to its
-         *     own owners and admins, and otherwise the caller's own. A stored policy
-         *     counts in its own workspace, a config-file one in every workspace.
+         *     own owners and admins, and otherwise the caller's own. A stored policy or
+         *     alias counts in its own workspace, a config-file one in every workspace.
+         *     A request counts under the name its caller sent; one logged before that
+         *     name was recorded counts under the policy routing recorded, so an alias's
+         *     older traffic is not counted.
          */
         get: operations["routing-read_routing_traffic"];
         put?: never;
@@ -16019,7 +16022,7 @@ export interface components {
             kind: "policy" | "alias" | "catalog" | "pinned" | "unknown";
             /**
              * Name
-             * @description What the key's requests were sent as: the routing policy or catalog ID routing recorded, and otherwise the `provider:model` that served them. A request naming an alias reads as the offering it pointed at. For imported usage, the model that ran.
+             * @description What the key's requests were sent as, an alias included. A request logged before that was recorded reads as the routing policy or catalog ID routing recorded, and otherwise the `provider:model` that served it. For imported usage, the model that ran.
              */
             name: string;
             /**
@@ -17616,12 +17619,12 @@ export interface components {
         };
         /**
          * NameTrafficPublic
-         * @description The traffic sent under one routing policy name in one workspace.
+         * @description The traffic sent under one routing policy or alias name in one workspace.
          */
         NameTrafficPublic: {
             /**
              * Name
-             * @description The policy name the requests sent as `model`.
+             * @description The policy or alias name the requests sent as `model`.
              */
             name: string;
             /**
@@ -22304,7 +22307,7 @@ export interface components {
             position: number;
             /**
              * Role
-             * @description Why the plan tried it: the default target, a router's pick, a budget tier-down, a backup after a failure, a catalog offering, or a reason this build does not know.
+             * @description Why the plan tried it: the default target, a router's pick, a budget tier-down, a backup after a failure, a catalog offering, or `other`: an alias's one target, or a reason this build does not know.
              * @enum {string}
              */
             role: "default" | "routed" | "condition" | "on_failure" | "catalog" | "other";

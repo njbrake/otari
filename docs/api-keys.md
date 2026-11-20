@@ -178,10 +178,10 @@ policies and the names with no backup, with **Set up routing**.
 
 The same read is `GET /api/v1/keys/routing` for the operator and
 `GET /api/v1/organizations/me/keys/routing` for anyone else, over the keys their
-list shows them. A name is what routing recorded the request was sent as: the
-routing policy or catalog ID where routing compiled a plan for it, and
-otherwise the `provider:model` that served it, so a request that named an
-alias reads as the offering the alias pointed at.
+list shows them. A name is the one the request was sent with, so a request
+that named an alias reads as the alias. A request logged before that name was
+recorded reads as the routing policy or catalog ID routing compiled a plan
+for, and otherwise as the `provider:model` that served it.
 
 ### Model and search tool access
 

@@ -235,7 +235,8 @@ class UsageLog(Base):
     # The model name the caller sent, before an alias or a policy resolved it into
     # ``model``. Null on rows written before the column, and on rows that bill
     # something other than the completion the caller named (a vision side-call).
-    requested_model: Mapped[str | None] = mapped_column()
+    # Indexed because the routing traffic read matches policy and alias names on it.
+    requested_model: Mapped[str | None] = mapped_column(index=True)
     selection_reason: Mapped[str | None] = mapped_column()
     attempt_position: Mapped[int | None] = mapped_column()
     attempt_count: Mapped[int | None] = mapped_column()

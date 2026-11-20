@@ -16,6 +16,7 @@ from gateway.services.api_keys import ApiKeyService, KeyReach
 from gateway.services.catalog import catalog_models, offering_input_rate, resolve_catalog_offerings
 from gateway.services.model_access import workspace_serves_target
 from gateway.services.policy_store import resolve_effective_policy
+from gateway.services.provider_kwargs import split_selector
 from gateway.services.routing.compiler import compile_catalog_plan, reachable_candidates
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tools import provider_tools
@@ -335,6 +336,9 @@ class RoutingService:
         if routed and coverage.kind == "unknown":
             # Routing recorded it, and it is no catalog ID: a policy since deleted or renamed.
             return _Coverage("policy", "unknown")
+        if coverage.kind == "unknown" and (parts := split_selector(name)) is not None:
+            # The legacy ``provider/model`` spelling names an offering outright, as ``provider:model`` does.
+            return _Coverage("pinned", "no_backup", "pinned", parts[0])
         return coverage
 
     def _model_coverage(self, key: KeyReach, selector: str) -> _Coverage:
@@ -371,10 +375,10 @@ class RoutingService:
         reader: TrafficReader,
         api_key_ids: Collection[str] | None = None,
     ) -> list[NameTraffic]:
-        """The traffic sent under routing policy names in the window, per workspace, among the rows ``reader`` sees.
+        """The traffic sent under policy and alias names in the window, per workspace, among the rows ``reader`` sees.
 
         A name counts in a workspace where it routes: everywhere for one
-        ``everywhere`` holds (the configured policies), and in its own workspace
+        ``everywhere`` holds (the configured policies and aliases), and in its own workspace
         for one ``by_workspace`` lists there. The same name sent where nothing
         claims it is a plain model name, not this traffic.
 
@@ -456,7 +460,7 @@ class RoutingService:
         The catalog order is a baseline; automatic selection can reorder it
         per request. A catalog request moves to the next offering when one fails;
         one that named an offering itself
-        (``bedrock:…``) or a routing policy is counted as pinned. A row is
+        (``bedrock:…``), an alias or a routing policy is counted as pinned. A row is
         matched to a model by the catalog ID it sent, else by the offering it
         reached, so traffic on an offering the catalog no longer serves is left
         out. The order is the catalog's, before a key's allow-list or a missing
@@ -485,7 +489,7 @@ class RoutingService:
         model_of = {selector: model.id for model in models.values() for selector in model.offerings}
         tallies: dict[str, _Tally] = {}
         for row in traffic:
-            sent = (row.policy_name or "").lower()
+            sent = (row.sent or "").lower()
             reached = next((selector for selector in _served_selectors(row) if selector in model_of), None)
             model_id = sent if sent in models else model_of.get(reached or "")
             if model_id is None:

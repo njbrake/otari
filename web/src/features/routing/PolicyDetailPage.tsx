@@ -124,14 +124,11 @@ export function PolicyDetailPage({ name }: { name: string }) {
         />
       ) : null}
 
-      {/* Aliases are not recorded on usage rows, so they have no traffic to show. */}
-      {row.kind === "policy" ? (
-        <PolicyTraffic
-          row={row}
-          traffic={traffic.data?.names ?? []}
-          isPending={traffic.isPending && writeWorkspaceId !== null}
-        />
-      ) : null}
+      <PolicyTraffic
+        row={row}
+        traffic={traffic.data?.names ?? []}
+        isPending={traffic.isPending && writeWorkspaceId !== null}
+      />
 
       {!isEditable ? (
         <PolicyReadOnly row={row} />
