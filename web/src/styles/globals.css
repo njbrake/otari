@@ -2776,6 +2776,27 @@ body {
 .otari-sessions-table .table__resizable-container .table__column[data-key] {
   min-width: 0;
 }
+/* A column's handle half covers the next header, and a pinned header is a
+   stacking context of its own, so the handle under it never takes a press. Each
+   pinned header sits above the one after it, and above a scrolled column's
+   handle (z-index 2). */
+.otari-activity-table .table__column[data-key="time"] {
+  z-index: 5;
+}
+.otari-activity-table .table__column[data-key="user"] {
+  z-index: 4;
+}
+.otari-activity-table .table__column[data-key="model"] {
+  z-index: 3;
+}
+@media (min-width: 48rem) {
+  .otari-sessions-table .table__column[data-key="last_activity"] {
+    z-index: 4;
+  }
+  .otari-sessions-table .table__column[data-key="name"] {
+    z-index: 3;
+  }
+}
 /* The row open in the panel. On the cells, pinned ones included: every cell
    paints its own background over the row's. */
 .otari-sessions-table .table__row.is-peeked .table__cell {

@@ -7,6 +7,7 @@ import {
   readTableLayout,
   type TableLayoutColumn,
   tableLayoutDocument,
+  withoutDefaultWidths,
 } from "./tableLayout"
 
 const COLUMNS: TableLayoutColumn[] = [
@@ -85,5 +86,18 @@ describe("isCustomLayout", () => {
     expect(isCustomLayout(DEFAULT_TABLE_LAYOUT)).toBe(false)
     expect(isCustomLayout({ widths: { time: 90 }, hidden: [] })).toBe(true)
     expect(isCustomLayout({ widths: {}, hidden: ["cost"] })).toBe(true)
+  })
+})
+
+describe("withoutDefaultWidths", () => {
+  it("drops widths still at their column's default", () => {
+    const columns: TableLayoutColumn[] = [
+      { id: "cost", label: "Cost", isHideable: true, width: 104, minWidth: 64 },
+      { id: "model", label: "Model", isHideable: true, minWidth: 120 },
+    ]
+    expect(withoutDefaultWidths({ cost: 104, model: 240 }, columns)).toEqual({
+      model: 240,
+    })
+    expect(withoutDefaultWidths({ cost: 150 }, columns)).toEqual({ cost: 150 })
   })
 })

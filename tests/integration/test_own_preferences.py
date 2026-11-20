@@ -54,9 +54,7 @@ def _stored(session_factory: Callable[[], Session], identity_id: uuid.UUID) -> l
         session.close()
 
 
-def test_an_unset_preference_reads_as_no_value(
-    client: TestClient, db_session_factory: Callable[[], Session]
-) -> None:
+def test_an_unset_preference_reads_as_no_value(client: TestClient, db_session_factory: Callable[[], Session]) -> None:
     _, token = _identity(db_session_factory, "ada@example.com")
     response = _as(client, token).get(SESSIONS)
     assert response.status_code == 200, response.text
@@ -144,9 +142,7 @@ def test_preferences_need_a_dashboard_credential(client: TestClient, api_key_hea
     assert client.get(SESSIONS, headers=api_key_header).status_code == 401
 
 
-def test_an_identitys_preferences_go_with_it(
-    client: TestClient, db_session_factory: Callable[[], Session]
-) -> None:
+def test_an_identitys_preferences_go_with_it(client: TestClient, db_session_factory: Callable[[], Session]) -> None:
     identity_id, token = _identity(db_session_factory, "ada@example.com")
     assert _as(client, token).put(SESSIONS, json={"value": LAYOUT}).status_code == 200
     assert len(_stored(db_session_factory, identity_id)) == 1

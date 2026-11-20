@@ -56,6 +56,20 @@ export function sanitizeWidths(
 }
 
 /**
+ * `widths` without the ones still at their column's default, so a later change
+ * to a default reaches someone who never sized that column.
+ */
+export function withoutDefaultWidths(
+  widths: Record<string, number>,
+  columns: readonly TableLayoutColumn[],
+): Record<string, number> {
+  const defaults = new Map(columns.map((column) => [column.id, column.width]))
+  return Object.fromEntries(
+    Object.entries(widths).filter(([id, width]) => defaults.get(id) !== width),
+  )
+}
+
+/**
  * The layout a stored document describes, for these columns.
  *
  * Anything it cannot use is dropped rather than refused: a column this build no

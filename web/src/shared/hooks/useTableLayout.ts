@@ -14,6 +14,7 @@ import {
   type TableLayout,
   type TableLayoutColumn,
   tableLayoutDocument,
+  withoutDefaultWidths,
 } from "@/shared/helpers/tableLayout"
 
 /** How long after the last change a layout is saved, so a drag sends one write and not one per frame. */
@@ -88,7 +89,10 @@ export function useTableLayout(
     resize: (widths: Record<string, number>) =>
       apply({
         ...layout,
-        widths: { ...layout.widths, ...sanitizeWidths(widths, columns) },
+        widths: withoutDefaultWidths(
+          { ...layout.widths, ...sanitizeWidths(widths, columns) },
+          columns,
+        ),
       }),
     setHidden: (id: string, isHidden: boolean) => {
       const hidden = new Set(layout.hidden)

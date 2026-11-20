@@ -1061,6 +1061,32 @@ describe("DataTable resizing", () => {
     expect(header("Cost")).toHaveStyle({ width: "160px" })
   })
 
+  it("leaves a column that shares the leftover width out of a drag to its right", () => {
+    const onColumnResizeEnd = vi.fn()
+    render(
+      <DataTable
+        {...base({ columns: SIZED, isResizable: true, onColumnResizeEnd })}
+      />,
+    )
+    const handle = screen.getByRole("slider", { name: /^Resize Cost/ })
+    const grip = handle.parentElement as HTMLElement
+    const at = (x: number) => ({
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+      pageX: x,
+      clientX: x,
+    })
+    fireEvent.pointerDown(grip, at(100))
+    fireEvent.pointerMove(window, at(160))
+    fireEvent.pointerUp(window, at(160))
+
+    // react-stately freezes Name at its pixel width for the drag; it had none
+    // before, so it goes back to sharing what is left.
+    expect(onColumnResizeEnd.mock.lastCall?.[0]).not.toHaveProperty("name")
+    expect(onColumnResizeEnd.mock.lastCall?.[0]).toMatchObject({ cost: 160 })
+  })
+
   it("offers no resize handle unless the table is resizable", () => {
     render(<DataTable {...base({ columns: SIZED })} />)
     expect(screen.queryByRole("slider", { hidden: true })).toBeNull()

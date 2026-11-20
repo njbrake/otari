@@ -480,11 +480,25 @@ function DataTableGrid<Row extends object>({
     }
     return out
   }
+  // A drag freezes every column left of the dragged one at its pixel width.
+  // One that had no width before and did not move goes back to sharing what is
+  // left, so a single drag does not pin the table to this viewport's width.
+  const dragStart = useRef<Record<string, number>>({})
   const resizeProps = isResizable
     ? {
+        onResizeStart: (map: Map<Key, unknown>) => {
+          dragStart.current = pixelWidths(map)
+        },
         onResize: (map: Map<Key, unknown>) => setDragWidths(pixelWidths(map)),
         onResizeEnd: (map: Map<Key, unknown>) => {
+          const before = columnWidths ?? ownWidths
           const ended = pixelWidths(map)
+          for (const col of columns) {
+            const wasSized =
+              before[col.id] !== undefined || col.width !== undefined
+            if (!wasSized && ended[col.id] === dragStart.current[col.id])
+              delete ended[col.id]
+          }
           setDragWidths(null)
           setOwnWidths(ended)
           onColumnResizeEnd?.(ended)
