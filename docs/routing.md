@@ -440,20 +440,22 @@ The Routing page manages stored policies.
 - A policy from `config.yml`, or one using options the page cannot show, opens
   read-only with its spec in full.
 - The list shows what each policy tries in order, warns **No backup** where a
-  failure has nowhere to go, and gives each policy's **Sent by** keys and
-  **Requests (30d)**. **Sent by key** narrows the list, and the automatic
+  failure has nowhere to go, and gives each policy's and alias's **Sent by**
+  keys and **Requests (30d)**. **Sent by key** narrows the list, and the automatic
   fallbacks below it, to one key's traffic. A policy's page adds **Last 30
   days**: its requests, the keys that sent them, and each target it tried with
-  its role (main model, routed pick, tier-down, backup) and how often it served
-  or failed and handed on. Targets are counted by what served rather than by
+  its role (main model, routed pick, tier-down, backup, or an alias's target)
+  and how often it served or failed and handed on. Targets are counted by what served rather than by
   place in the plan, since a router ranks its pool per request and a key that
   may not reach a target skips it.
 
 `GET /api/v1/organizations/me/routing-policies/traffic` serves that read, per
-workspace and policy name, and `GET /api/v1/organizations/me/automatic-fallbacks`
+workspace and policy or alias name, and `GET /api/v1/organizations/me/automatic-fallbacks`
 names each model's keys in `sent_by`; both take `api_key_id` to narrow to given
 keys. Whose requests either names: everyone's to an organization owner or
 admin, a workspace's to its own owners and admins, and otherwise the caller's
-own. The traffic is grouped by the name routing
-recorded (`policy_name`), so a request sent under an alias is not counted under
-the alias.
+own. The traffic is grouped by the name the caller sent (`requested_model`), so
+a request sent under an alias counts under the alias, and an automatic
+fallback counts it as pinned to the alias's target. A row logged before that
+name was recorded counts under the policy routing recorded (`policy_name`), so
+a policy's older traffic still counts and an alias's does not.

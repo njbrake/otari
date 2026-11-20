@@ -762,6 +762,29 @@ describe("PolicyDetailPage for an alias", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("says what the alias's one target did in the last 30 days", async () => {
+    mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [],
+      memberAliases: [{ ...ALIAS, workspace_id: ADMIN_WORKSPACE }],
+      traffic: [
+        {
+          workspace_id: ADMIN_WORKSPACE,
+          name: "legacy",
+          requests: 7,
+          sent_by: [{ api_key_id: "k1", key_name: "ci-bot", requests: 7 }],
+          steps: [step("openai:gpt-4o-mini", "other", 1, 7, 0)],
+        },
+      ],
+    })
+    renderTraffic("legacy")
+
+    expect(await screen.findByText("ci-bot")).toBeInTheDocument()
+    const rows = await targetRows()
+    expect(rows[1]).toHaveTextContent("Alias target")
+    expect(rows[1]).toHaveTextContent("7")
+  })
+
   it("writes an alias edit back to the alias's own workspace", async () => {
     const OTHER_WORKSPACE = "66666666-6666-6666-6666-666666666666"
     const { calls } = mockApi([], null, [], {

@@ -201,7 +201,8 @@ class StepOutcomePublic(BaseModel):
     target: str = Field(description="The offering tried, as `provider:model`.")
     role: Literal["default", "routed", "condition", "on_failure", "catalog", "other"] = Field(
         description="Why the plan tried it: the default target, a router's pick, a budget tier-down, a backup "
-        "after a failure, a catalog offering, or a reason this build does not know."
+        "after a failure, a catalog offering, or `other`: an alias's one target, or a reason this build does not "
+        "know."
     )
     router: str | None = Field(description="The router that picked it, when `role` is `routed`.")
     position: int = Field(description="The earliest place in a plan it was tried, 1 for the first.")
@@ -210,12 +211,12 @@ class StepOutcomePublic(BaseModel):
 
 
 class NameTrafficPublic(BaseModel):
-    """The traffic sent under one routing policy name in one workspace."""
+    """The traffic sent under one routing policy or alias name in one workspace."""
 
     model_config = ConfigDict(from_attributes=True)
 
     workspace_id: uuid.UUID
-    name: str = Field(description="The policy name the requests sent as `model`.")
+    name: str = Field(description="The policy or alias name the requests sent as `model`.")
     requests: int = Field(description="Requests in the window, each counted once however many attempts.")
     sent_by: list[KeyRequestsPublic] = Field(description="The keys that sent them, most first.")
     steps: list[StepOutcomePublic] = Field(description="By earliest place tried, then by role and target.")
@@ -238,9 +239,9 @@ class KeyModelPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     name: str = Field(
-        description="What the key's requests were sent as: the routing policy or catalog ID routing recorded, and "
-        "otherwise the `provider:model` that served them. A request naming an alias reads as the offering it "
-        "pointed at. For imported usage, the model that ran."
+        description="What the key's requests were sent as, an alias included. A request logged before that was "
+        "recorded reads as the routing policy or catalog ID routing recorded, and otherwise the `provider:model` "
+        "that served it. For imported usage, the model that ran."
     )
     requests: int = Field(description="Requests in the window, each counted once however many attempts.")
     kind: Literal["policy", "alias", "catalog", "pinned", "unknown"] = Field(

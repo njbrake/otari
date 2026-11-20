@@ -178,3 +178,17 @@ def test_a_passthrough_request_records_the_alias(client: TestClient) -> None:
     (row,) = _rows(client)
     assert row["requested_model"] == "embedder"
     assert row["model"] == "text-embedding-3-small"
+
+
+def test_an_aliased_completion_counts_under_the_alias_on_the_routing_traffic_read(client: TestClient) -> None:
+    with patch("gateway.api.routes.chat.acompletion", new=AsyncMock(return_value=_completion())):
+        resp = _chat(client, "myopusmodel")
+    assert resp.status_code == 200, resp.text
+
+    resp = client.get(f"{API_ROOT}/organizations/me/routing-policies/traffic", headers=HEADERS)
+    assert resp.status_code == 200, resp.text
+    names = {item["name"]: item for item in resp.json()["names"]}
+    assert names["myopusmodel"]["requests"] == 1
+    assert [step["target"] for step in names["myopusmodel"]["steps"]] == ["anthropic:claude-opus-4"]
+    # The alias's target is no name of its own here.
+    assert "anthropic:claude-opus-4" not in names

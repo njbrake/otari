@@ -11,6 +11,8 @@ import { trafficForRow } from "./routingTraffic"
  * there; one since removed from the chain is a backup alone.
  */
 export function roleLabel(step: StepOutcome, row: RoutingRow): string {
+  // An alias is sent to its one target as written, with no plan to give it a role.
+  if (row.kind === "alias") return "Alias target"
   switch (step.role) {
     case "routed":
       return step.router ? `Routed pick (${step.router})` : "Routed pick"
@@ -43,7 +45,7 @@ function isFixedOrder(row: RoutingRow): boolean {
 }
 
 /**
- * A policy's last 30 days: how many requests it took, which keys sent them,
+ * A policy's or an alias's last 30 days: how many requests it took, which keys sent them,
  * and what each target did, served or failed and handed on, by the role the
  * plan gave it. Grouped by what served rather than by place in the plan,
  * because a place names different targets from request to request.
@@ -62,7 +64,9 @@ export function PolicyTraffic({
   return (
     <SettingsGroup title="Last 30 days">
       {isPending ? (
-        <p className="text-caption">Reading this policy’s traffic…</p>
+        <p className="text-caption">
+          Reading this {row.kind === "alias" ? "alias" : "policy"}’s traffic…
+        </p>
       ) : summary.requests === 0 ? (
         <p className="text-caption">No requests sent under this name.</p>
       ) : (
