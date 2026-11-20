@@ -2285,9 +2285,14 @@ body {
  * Button, which is why the hook is narrow enough to be safe.
  *
  * 767px is the shell's own MOBILE_QUERY boundary (`AppShell`), so the rule
- * applies exactly where the sidebar has already become a drawer. */
+ * applies exactly where the sidebar has already become a drawer.
+ *
+ * `a.button` is the other half: a router `Link` dressed with `buttonVariants`
+ * carries the class but not the slot, so a link beside a row of buttons came
+ * out 8px shorter than they did. */
 @media (max-width: 767px) {
-  [data-slot="button"] {
+  [data-slot="button"],
+  a.button {
     min-height: 2.75rem;
     min-width: 2.75rem;
   }
@@ -2584,6 +2589,18 @@ body {
   left: 0;
   z-index: 1;
   background-color: var(--color-background);
+}
+/* A held first lane follows its row's hover fill. Its own fill is written at
+   the same weight as the shared hover rule and later, so without this the
+   lane stayed on the page ground while the rest of the row lit up. */
+@media (hover: hover) {
+  .otari-breakdown .table__row:hover .table__cell:first-child,
+  .otari-providers-table .table__row:hover .table__cell:first-child,
+  .otari-routing-table .table__row:hover .table__cell:first-child,
+  .otari-offerings-table .table__row:hover .table__cell:first-child,
+  .otari-budgets-table .table__row:hover .table__cell:first-child {
+    background-color: var(--color-surface-muted);
+  }
 }
 /* The offerings table sits on the model page's surface frame rather than on
    the page ground, so its held lane takes the frame's fill. */

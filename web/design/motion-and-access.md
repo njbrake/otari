@@ -28,6 +28,10 @@ canvas the stylesheet cannot reach, so `SetupOrb` reads the preference itself
 and passes `paused`. Anything else that would animate forever is decoration. See
 [feedback.md](feedback.md).
 
+The shell's `LoadingBar` is not an exception to this, since it does not run
+forever: it runs only until the page's code and first reads answer, and it holds
+still under `prefers-reduced-motion`.
+
 **One transition answers the wait, on the same surface.** When the request the
 sheet is watching for arrives, a wave rises from the listening panel and carries
 the sheet into its payoff in the same frame (`setupTransition`, on the vendored

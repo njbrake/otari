@@ -787,9 +787,11 @@ function DataTableGrid<Row extends object>({
       className="otari-table"
       style={isResizable ? (columnStarts as CSSProperties) : undefined}
     >
+      {/* `overscroll-x-contain`: a swipe that runs past the last column stops
+          here instead of turning into the browser's back gesture. */}
       <Container
         {...resizeProps}
-        className="overflow-x-auto"
+        className="overflow-x-auto overscroll-x-contain"
         onPointerDownCapture={startPress}
         onMouseDownCapture={startPress}
         onClickCapture={(event: ReactMouseEvent) => {

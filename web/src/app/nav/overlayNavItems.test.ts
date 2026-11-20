@@ -60,6 +60,7 @@ describe("a build that replaces the nav-item module", () => {
       "Sessions",
       "People",
       "Rules",
+      "Routing",
       "Models",
       "Tools",
       "API keys",

@@ -55,6 +55,7 @@ describe("nav registry", () => {
       "/sessions",
       "/people",
       "/rules",
+      "/routing",
       "/models",
       "/tools",
       "/keys",
@@ -89,12 +90,12 @@ describe("nav registry", () => {
     expect(NAV_ITEMS.map((item) => item.label)).toEqual([
       "Playground",
       "Members",
-      "Routing",
       "Guardrails",
       "Home",
       "Sessions",
       "People",
       "Rules",
+      "Routing",
       "Models",
       "Tools",
       "API keys",
@@ -472,6 +473,7 @@ describe("nav registry", () => {
       "Sessions",
       "People",
       "Rules",
+      "Routing",
       "Models",
       "Tools",
       "API keys",
@@ -861,16 +863,20 @@ describe("navPageForPath", () => {
 })
 
 describe("destinations with no row", () => {
-  it("selects Rules on the Routing pages and the workspace's guardrails", () => {
-    for (const path of ["/routing", "/routing/coding", "/tools/guardrails"]) {
-      expect(railPathForPath(path)).toBe("/rules")
-      expect(railLabelForPath(path)).toBe("Rules")
-      expect(navContextForPath(path)).toBe("workspace")
-    }
-    // Gated as their own entries, not as Rules.
-    expect(navItemForPath("/routing")?.surface).toBe("routing")
-    expect(navItemForPath("/routing/coding")?.surface).toBe("routing")
+  it("selects Rules on the workspace's guardrails", () => {
+    expect(railPathForPath("/tools/guardrails")).toBe("/rules")
+    expect(railLabelForPath("/tools/guardrails")).toBe("Rules")
+    expect(navContextForPath("/tools/guardrails")).toBe("workspace")
+    // Gated as its own entry, not as Rules.
     expect(navItemForPath("/tools/guardrails")?.surface).toBe("tools")
+  })
+
+  it("selects Routing's own row on the Routing pages", () => {
+    for (const path of ["/routing", "/routing/coding"]) {
+      expect(railPathForPath(path)).toBe("/routing")
+      expect(railLabelForPath(path)).toBeUndefined()
+      expect(navItemForPath(path)?.surface).toBe("routing")
+    }
   })
 
   it("selects People on the workspace roster", () => {
@@ -891,7 +897,7 @@ describe("destinations with no row", () => {
         (item.children ?? []).map((child) => child.to),
       ),
     ])
-    for (const path of ["/routing", "/tools/guardrails", "/members"]) {
+    for (const path of ["/tools/guardrails", "/members"]) {
       expect(rows).not.toContain(path)
     }
   })

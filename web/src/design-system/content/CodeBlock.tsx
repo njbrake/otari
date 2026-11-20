@@ -86,7 +86,7 @@ export function CodeBlock({
       tabIndex={0}
       role="region"
       aria-label={label ? `${label} code` : "Code"}
-      className={`border-code-border bg-code-surface text-mono-micro text-code-foreground overflow-x-auto border px-4 py-3.5 leading-[1.0625rem] whitespace-pre-wrap ${
+      className={`border-code-border bg-code-surface text-mono-micro text-code-foreground overflow-x-auto overscroll-x-contain border px-4 py-3.5 leading-[1.0625rem] whitespace-pre-wrap ${
         arrangement === "labeled" ? "border-t-0" : ""
       } ${isBounded ? "h-56 overflow-y-auto" : ""} ${
         arrangement === "bare" && canCopy ? "pr-14" : ""

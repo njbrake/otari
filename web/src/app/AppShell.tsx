@@ -67,7 +67,10 @@ import { PostSignInGate } from "@/app/overlayPostSignInGate"
 import { ShellBanner } from "@/app/overlayShellBanner"
 import { PendingPage } from "@/app/PendingPage"
 import { TelemetryIdentity } from "@/app/TelemetryIdentity"
+import { useDrawerSwipe } from "@/app/useDrawerSwipe"
+import { usePageLoading } from "@/app/usePageLoading"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
+import { LoadingBar } from "@/design-system/feedback/LoadingBar"
 import { useAdoptBrowserAvatar } from "@/features/account/avatar/avatarChoice"
 import { CreateKeyHost } from "@/features/keys/CreateKeyHost"
 import { useOpenCreateKey } from "@/features/keys/openCreateKey"
@@ -645,13 +648,9 @@ function AppShellChrome() {
   const asideRef = useRef<HTMLElement>(null)
   const mainRef = useRef<HTMLElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
-  // Tracks the touch that began a swipe gesture, so the end handler can
-  // measure displacement without storing intermediate move coordinates.
-  // The identifier ties the end event to the same contact that started it,
-  // so a second finger lifting does not trigger the drawer.
-  const swipeStartXRef = useRef<number | null>(null)
-  const swipeStartYRef = useRef<number | null>(null)
-  const swipeTouchIdRef = useRef<number | null>(null)
+  // The row holding the rail and the page: a swipe anywhere in it opens or
+  // closes the phone drawer.
+  const rowRef = useRef<HTMLDivElement>(null)
   const orgNavTriggerRef = useRef<HTMLButtonElement>(null)
   const railBackRef = useRef<HTMLButtonElement>(null)
   // Which level was last open, read on the way out when the level itself is
@@ -693,6 +692,13 @@ function AppShellChrome() {
     setMobileNavOpen(false)
     setMobileRailLevel(undefined)
   }, [])
+
+  useDrawerSwipe(rowRef, {
+    enabled: isMobile,
+    isOpen: mobileNavOpen,
+    onOpen: () => setMobileNavOpen(true),
+    onClose: closeMobileNav,
+  })
 
   // Which of the two rails is drawn. The route decides it, except on mobile,
   // where the drawer can be one level down inside the organization rail while
@@ -914,6 +920,7 @@ function AppShellChrome() {
           it. The connection status is out of flow and carries its own fill, so
           it does not enter into this. */}
       <div
+        ref={rowRef}
         className="relative flex min-h-0 flex-1"
         // What the rail costs the content beside it, for a `position: fixed`
         // overlay that has to center on that content rather than on the
@@ -1325,7 +1332,8 @@ function AppShellChrome() {
           <header
             // The design's top bar sits on the page ground rather than on a
             // card fill, so the rail is the only chrome that reads as a surface.
-            className="flex min-h-14 shrink-0 items-center gap-4 border-b border-border bg-background pr-5 pl-4"
+            // `relative` so the page's loading bar can lie over its bottom rule.
+            className="relative flex min-h-14 shrink-0 items-center gap-4 border-b border-border bg-background pr-5 pl-4"
           >
             <div className="flex min-w-0 flex-1 items-center gap-4">
               <button
@@ -1374,6 +1382,7 @@ function AppShellChrome() {
               <MobileWalletNavSlot />
             </div>
             <TopBarActions />
+            <PageLoadingBar />
           </header>
           <main
             ref={mainRef}
@@ -1386,79 +1395,9 @@ function AppShellChrome() {
             // carries its own scroller. This is the backstop, not the fix: the
             // 390px e2e check measures overflow under it. Not `overflow-x-clip`,
             // which computes to `hidden` beside `overflow-y: auto` anyway.
-            className="flex-1 overflow-x-hidden overflow-y-auto focus:outline-none"
-            onTouchStart={
-              isMobile && !mobileNavOpen
-                ? (e) => {
-                    // Ignore multi-touch; clear any stale gesture first.
-                    swipeStartXRef.current = null
-                    swipeStartYRef.current = null
-                    swipeTouchIdRef.current = null
-                    if (e.touches.length !== 1) return
-                    const touch = e.touches[0]
-                    // Only begin tracking a swipe that starts near the left
-                    // edge (within 30px), where a nav-open gesture belongs.
-                    if (!touch || touch.clientX > 30) return
-                    // Skip if the touch lands inside a horizontally scrollable
-                    // element, so a table or chart swipe does not also open the
-                    // drawer. Walk the target's ancestor chain looking for any
-                    // element that scrolls horizontally.
-                    let node = e.target as Element | null
-                    while (node && node !== e.currentTarget) {
-                      const style = window.getComputedStyle(node)
-                      const overflowX = style.overflowX
-                      if (
-                        (overflowX === "auto" || overflowX === "scroll") &&
-                        node.scrollWidth > node.clientWidth
-                      ) {
-                        return
-                      }
-                      node = node.parentElement
-                    }
-                    swipeStartXRef.current = touch.clientX
-                    swipeStartYRef.current = touch.clientY
-                    swipeTouchIdRef.current = touch.identifier
-                  }
-                : undefined
-            }
-            onTouchEnd={
-              isMobile && !mobileNavOpen
-                ? (e) => {
-                    const startX = swipeStartXRef.current
-                    const startY = swipeStartYRef.current
-                    const touchId = swipeTouchIdRef.current
-                    swipeStartXRef.current = null
-                    swipeStartYRef.current = null
-                    swipeTouchIdRef.current = null
-                    if (startX === null || startY === null || touchId === null)
-                      return
-                    // Match the ending contact to the one that started the
-                    // gesture by identifier, so a second finger lifting does
-                    // not trigger the drawer.
-                    const touch = Array.from(e.changedTouches).find(
-                      (t) => t.identifier === touchId,
-                    )
-                    if (!touch) return
-                    // Open the drawer when the finger has moved at least 50px
-                    // to the right without drifting more than 75px vertically,
-                    // so an upward scroll near the edge does not trigger it.
-                    const dx = touch.clientX - startX
-                    const dy = Math.abs(touch.clientY - startY)
-                    if (dx >= 50 && dy < 75) {
-                      setMobileNavOpen(true)
-                    }
-                  }
-                : undefined
-            }
-            onTouchCancel={
-              isMobile && !mobileNavOpen
-                ? () => {
-                    swipeStartXRef.current = null
-                    swipeStartYRef.current = null
-                    swipeTouchIdRef.current = null
-                  }
-                : undefined
-            }
+            // `overscroll-x-contain` keeps a sideways swipe past the edge from
+            // becoming the browser's back gesture.
+            className="flex-1 overflow-x-hidden overflow-y-auto overscroll-x-contain focus:outline-none"
           >
             <div className="mx-auto flex max-w-[112.5rem] flex-col gap-6 px-4 pt-5 pb-[calc(1.25rem+var(--shell-corner-clearance))] md:px-6 md:pt-6 md:pb-[calc(1.5rem+var(--shell-corner-clearance))]">
               {access === "blocked" ? (
@@ -1486,4 +1425,13 @@ function AppShellChrome() {
       </div>
     </div>
   )
+}
+
+/**
+ * The page's loading bar, apart from the chrome: `usePageLoading` re-renders
+ * on every first read that starts or settles anywhere, and the rest of the
+ * shell has no reason to render again with it.
+ */
+function PageLoadingBar() {
+  return <LoadingBar isActive={usePageLoading()} />
 }

@@ -304,6 +304,7 @@ describe("AppShell responsive layout", () => {
       "Sessions",
       "People",
       "Rules",
+      "Routing",
       "Models",
       "Tools",
       "API keys",
@@ -1013,6 +1014,7 @@ describe("AppShell surface gating", () => {
       "Sessions",
       "People",
       "Rules",
+      "Routing",
       "Models",
       "Tools",
       "API keys",
@@ -1156,6 +1158,7 @@ describe("AppShell entitlement gating", () => {
       "Sessions",
       "People",
       "Rules",
+      "Routing",
       "Models",
       "Tools",
       "API keys",
@@ -2001,6 +2004,7 @@ const WORKSPACE_RAIL = [
   "/sessions",
   "/people",
   "/rules",
+  "/routing",
   "/models",
   "/tools",
   "/keys",
@@ -2067,8 +2071,6 @@ describe("the workspace rail, per role", () => {
   // The workspace's guardrails open to owners and admins only, so that page is
   // checked as an owner.
   for (const [path, page, role] of [
-    ["/routing", "Routing", "member"],
-    ["/routing/coding", "Routing", "member"],
     ["/tools/guardrails", "Guardrails", "owner"],
   ] as const) {
     it(`selects Rules on ${path} and names it in the breadcrumb`, async () => {
@@ -2098,6 +2100,8 @@ describe("the workspace rail, per role", () => {
   }
 
   for (const [path, row] of [
+    ["/routing", "Routing"],
+    ["/routing/coding", "Routing"],
     ["/members", "People"],
     ["/requests", "Sessions"],
     ["/tools/web-search", "Tools"],

@@ -228,6 +228,8 @@ export function PeekPanel({
       ref={panelRef}
       aria-label={label}
       tabIndex={-1}
+      // Over the page inside `<main>`, so a swipe here is not the drawer's.
+      data-owns-swipe
       style={{ "--peek-width": `${shownWidth}px` } as React.CSSProperties}
       // No left rule on a phone, where the panel is the screen's full width.
       className={`fixed top-14 right-0 bottom-0 z-30 flex w-full flex-col border-border-strong bg-surface md:border-l outline-none transition-transform duration-250 ease-out-fluid motion-reduce:transition-none md:w-(--peek-width) ${

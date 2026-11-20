@@ -141,6 +141,19 @@ describe("Tab", () => {
     expect([...tab.classList]).toContain("shrink-0")
     expect([...tab.classList]).toContain("whitespace-nowrap")
   })
+
+  it("reaches the 44px touch floor below md and stays dense above it", () => {
+    // A tab is a `<button>`, not HeroUI's Button, so the stylesheet's
+    // `[data-slot="button"]` floor never reaches it.
+    render(
+      <Tab isActive={false} onPress={() => undefined}>
+        24h
+      </Tab>,
+    )
+    const tab = screen.getByRole("button")
+    expect([...tab.classList]).toContain("min-h-11")
+    expect([...tab.classList]).toContain("md:min-h-0")
+  })
 })
 
 describe("a disabled Tab", () => {
@@ -279,6 +292,14 @@ describe("Segmented", () => {
     )
     return { onChange, view, user: userEvent.setup() }
   }
+
+  it("contains a horizontal overscroll, so a swipe past its end is not a back gesture", () => {
+    setup()
+    expect(screen.getByRole("radiogroup")).toHaveClass(
+      "overflow-x-auto",
+      "overscroll-x-contain",
+    )
+  })
 
   it("hugs its labels by default and fills its row on request", () => {
     const { view } = setup()
