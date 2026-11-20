@@ -147,8 +147,10 @@ the row under the controls that removes it; **Clear all** removes them
 together.
 
 You can also filter from a cell: point at a user, model, routing policy, API
-key or status (or move to it with the arrow keys) and press the funnel beside
-it for **Only** that value or **Exclude** it. An empty cell offers only its own
+key or status and press the funnel beside it for **Only** that value or
+**Exclude** it. From the keyboard, move to the cell with the arrow keys and
+press Shift+F10 or the context-menu key; the funnels take no Tab stop of their
+own. An empty cell offers only its own
 rows. Pressing a request's tool marker in **Model** keeps the requests that ran
 those tools. These write the same filters as the column's funnel, so they show
 in it and in the chip row.
@@ -189,9 +191,11 @@ percentile of total time.
 The log is live by default: on the first page, with no request open and a
 window that runs to now, the newest rows and the count catch up every ten
 seconds, and the totals and the chart every minute. It pauses by itself on a
-later page, while a request is open and on a window that has ended, so nothing
+later page, while a request is open, while the log is sorted by a column, and
+on a window that has ended, so nothing
 moves while you read. **Live** beside the refresh control pauses and resumes
-it; while paused it says why, and pressing it goes back to the newest requests.
+it; while paused it says why, and pressing it goes back to the newest requests,
+newest first.
 While paused, a **new · load** button says how many requests have landed since.
 
 On a desktop, drag the edge of a column's header to resize it, and use

@@ -43,6 +43,7 @@ import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { userDisplay } from "@/features/users/userDisplay"
 import { useSetPricing } from "@/shared/api/pricing"
 import {
+  NEWEST_FIRST,
   useInFlightRequests,
   useLiveClock,
   useLiveUsageCount,
@@ -437,7 +438,9 @@ function ActivityPageContent({
       ? "request"
       : page > 0
         ? "page"
-        : ""
+        : sort.sort !== NEWEST_FIRST.sort || sort.order !== NEWEST_FIRST.order
+          ? "sort"
+          : ""
   const isLive = liveWanted && livePause === ""
   const liveRefetch = isLive ? LIVE_ROWS_MS : false
   // The rows and the count re-read every ten seconds over the window they have;
@@ -488,8 +491,10 @@ function ActivityPageContent({
   // bring newer rows into view (they land at the top of page 1), so a badge
   // offering to load them would be a promise the button does not keep; a window
   // that ends in the past can gain no rows at all, so the poll would be pure cost.
-  // While live the rows themselves catch up, so the badge has nothing to say.
-  const newRowsRelevant = page === 0 && !filters.end_date && !isLive
+  // While live the rows themselves catch up, so the badge has nothing to say,
+  // and under a column sort newer rows land anywhere but the top.
+  const newRowsRelevant =
+    page === 0 && !filters.end_date && !isLive && livePause !== "sort"
   const liveCount = useLiveUsageCount(filters, newRowsRelevant)
 
   // The timeline histogram spans the whole preset *extent* (the rolling preset
@@ -1047,7 +1052,9 @@ function ActivityPageContent({
         pause={livePause}
         onChange={(wanted, resume) => {
           setLiveWanted(wanted)
-          if (resume) url.patch({ page: 0, request: "" })
+          // Resuming clears what held it: the first page of the newest
+          // requests, newest first, with nothing open.
+          if (resume) url.patch({ page: 0, request: "", sort: "", order: "" })
         }}
       />
       {newRows > 0 ? (

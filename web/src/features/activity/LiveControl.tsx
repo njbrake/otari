@@ -5,12 +5,13 @@ import { Dot } from "@/design-system/indicators/Dot"
 import { Tooltip } from "@/design-system/overlays/Tooltip"
 
 /** Why live mode is holding still on its own, or "" when nothing holds it. */
-export type LivePause = "" | "page" | "request" | "ended"
+export type LivePause = "" | "page" | "request" | "sort" | "ended"
 
 const PAUSE_REASONS: Record<Exclude<LivePause, "">, string> = {
   page: "Paused while you read a later page. Press to go back to the newest requests.",
   request:
     "Paused while a request is open. Press to close it and follow new requests.",
+  sort: "Paused while the log is sorted by a column: new requests would land anywhere in it. Press to go back to newest first and follow them.",
   ended: "This window has ended, so there is nothing new to follow.",
 }
 
@@ -19,7 +20,7 @@ const PAUSE_REASONS: Record<Exclude<LivePause, "">, string> = {
  *
  * Live brings the newest rows and the count up to date every ten seconds and
  * the totals and chart every minute. It holds still on its own while the reader
- * pages back, has a request open, or looks at a window that has ended, so a row
+ * pages back, has a request open, sorts by a column, or looks at a window that has ended, so a row
  * never moves under someone reading it; the control says which, and pressing
  * it resumes where that can be done. Named for what it switches, so its
  * pressed state carries on or off rather than a label that flips as well.

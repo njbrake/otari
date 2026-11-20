@@ -1,5 +1,5 @@
 import { useLocation } from "@tanstack/react-router"
-import { screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -109,6 +109,24 @@ describe("ActivityPage live mode", () => {
 
     await vi.advanceTimersByTimeAsync(25_000)
     expect(listCalls(calls).length).toBe(lists)
+  })
+
+  it("holds still under a column sort, and resumes newest first", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const { calls } = mockApi({ rows: [entry()] })
+    await renderRequests("?sort=cost&order=desc")
+    const control = await liveControl()
+    expect(control).toHaveAttribute("aria-pressed", "false")
+    expect(control).toHaveAccessibleDescription(/sorted by a column/)
+    const lists = listCalls(calls).length
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(listCalls(calls).length).toBe(lists)
+
+    await user.click(control)
+    await waitFor(() => expect(urlParams().has("sort")).toBe(false))
+    expect(urlParams().has("order")).toBe(false)
+    await waitFor(() => expect(control).toHaveAttribute("aria-pressed", "true"))
   })
 
   it("cannot follow a window that has ended", async () => {
@@ -227,6 +245,36 @@ describe("ActivityPage cell filters", () => {
     await waitFor(() =>
       expect(urlParams().getAll("is_null")).toEqual(["api_key"]),
     )
+  })
+
+  it("takes no Tab stop per cell, and opens from the focused cell on Shift+F10 or the context-menu key", async () => {
+    mockApi({ rows: [entry()] })
+    await renderRequests()
+    const trigger = screen.getByRole("button", {
+      name: "Only or exclude gpt-4o",
+    })
+    expect(trigger).toHaveAttribute("tabindex", "-1")
+    const cell = trigger.closest(
+      '[role="gridcell"], [role="rowheader"]',
+    ) as HTMLElement
+    expect(cell).toHaveAttribute("aria-keyshortcuts", "Shift+F10 ContextMenu")
+
+    cell.focus()
+    fireEvent.keyDown(cell, { key: "F10", shiftKey: true })
+    expect(
+      await screen.findByRole("menuitem", { name: "Only gpt-4o" }),
+    ).toBeInTheDocument()
+    await userEvent.setup().keyboard("{Escape}")
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("menuitem", { name: "Only gpt-4o" }),
+      ).toBeNull(),
+    )
+    fireEvent.keyDown(cell, { key: "ContextMenu" })
+    expect(
+      await screen.findByRole("menuitem", { name: "Exclude gpt-4o" }),
+    ).toBeInTheDocument()
+    expect(urlParams().has("request")).toBe(false)
   })
 
   it("does not open the request when the cell's filter is pressed", async () => {

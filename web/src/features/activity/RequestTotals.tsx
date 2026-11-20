@@ -3,6 +3,7 @@ import { Fragment, type ReactNode } from "react"
 
 import type { UsageTotals } from "@/client"
 import { Skeleton } from "@/design-system/feedback/Skeleton"
+import { InlineList } from "@/design-system/layout/InlineList"
 import { billedTokenTotal } from "@/features/usage/usageTotals"
 import {
   formatLatency,
@@ -122,20 +123,17 @@ export function RequestTotals({
   }
   return (
     <section aria-label="Totals" className="otari-request-totals">
-      <span className="text-caption whitespace-nowrap text-foreground">
-        {formatNumber(totals.request_count)}{" "}
-        {totals.request_count === 1 ? "request" : "requests"}
-      </span>
-      {parts.map((part) => (
-        <Fragment key={part.key}>
-          <span aria-hidden className="text-subtle">
-            ·
-          </span>
-          <span className="text-mono-caption whitespace-nowrap text-muted">
-            {part.node}
-          </span>
-        </Fragment>
-      ))}
+      {/* Each fact keeps its separator and never breaks inside, so a narrow
+          line wraps whole facts rather than leaving a label alone. */}
+      <InlineList className="text-mono-caption text-muted">
+        <span className="text-caption text-foreground">
+          {formatNumber(totals.request_count)}{" "}
+          {totals.request_count === 1 ? "request" : "requests"}
+        </span>
+        {parts.map((part) => (
+          <Fragment key={part.key}>{part.node}</Fragment>
+        ))}
+      </InlineList>
     </section>
   )
 }
