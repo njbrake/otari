@@ -6,7 +6,7 @@ import {
   useLocation,
   useNavigate,
 } from "@tanstack/react-router"
-import type { MouseEvent as ReactMouseEvent } from "react"
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { IconType } from "react-icons"
 import {
@@ -77,6 +77,7 @@ import { useCanCreateKey } from "@/features/organization/access"
 import { UpdateCheckPrompt } from "@/features/updateCheck/UpdateCheckPrompt"
 import { UpdateNotice } from "@/features/updateCheck/UpdateNotice"
 import { useOrganizationContext } from "@/shared/api/organizations"
+import { ResizeHandle } from "@/shared/components/PeekPanel"
 import { BreadcrumbLeafProvider } from "@/shared/hooks/BreadcrumbLeaf"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useDocumentTitle } from "@/shared/hooks/useDocumentTitle"
@@ -84,15 +85,18 @@ import { useEntitlements } from "@/shared/hooks/useEntitlements"
 import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import { useTelemetry } from "@/shared/telemetry/overlayTelemetry"
 
-// One width, not a range. The rail used to be draggable between 200 and 480px
-// and to remember where it was left; it is now the design's 264px, or 72px
-// collapsed, which is also what `otari-ai/frontend`'s shell is fixed at
-// (`w-[16.5rem]` / `w-[4.5rem]`). Collapse is the only size control, and the
-// only one either rail needs: the rows inside are a fixed layout, so the width
-// between those two values buys a longer truncation point and nothing else,
-// while a drag handle on the page's main seam is a thing to catch by accident.
-const SIDEBAR_WIDTH = "w-[16.5rem]"
+// The expanded rail opens at the design's 264px, which is also what
+// `otari-ai/frontend`'s shell is fixed at, and on the desk it can be dragged
+// (or nudged from the keyboard) anywhere from 200 to 480px from the handle on
+// its right edge. The width is remembered per browser; a double-click on the
+// handle forgets it. Collapsed is always 72px and has no handle: collapse and
+// width are separate preferences, so expanding returns to the width left.
+const MIN_SIDEBAR_WIDTH = 200
+const MAX_SIDEBAR_WIDTH = 480
+const DEFAULT_SIDEBAR_WIDTH = 264
+const SIDEBAR_WIDTH_STEP = 16
 const COLLAPSED_SIDEBAR_WIDTH = "w-[4.5rem]"
+const SIDEBAR_WIDTH_KEY = "otari.dashboard.sidebarWidth"
 const SIDEBAR_COLLAPSED_KEY = "otari.dashboard.sidebarCollapsed"
 
 // Below this width the sidebar's fixed footprint squashes page content, so it
@@ -104,6 +108,25 @@ function readIsMobile(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function")
     return false
   return window.matchMedia(MOBILE_QUERY).matches
+}
+
+function clampSidebarWidth(width: number): number {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width))
+}
+
+function readStoredSidebarWidth(): number {
+  if (typeof window === "undefined") return DEFAULT_SIDEBAR_WIDTH
+  try {
+    const parsed = Number.parseInt(
+      window.localStorage.getItem(SIDEBAR_WIDTH_KEY) ?? "",
+      10,
+    )
+    return Number.isNaN(parsed)
+      ? DEFAULT_SIDEBAR_WIDTH
+      : clampSidebarWidth(parsed)
+  } catch {
+    return DEFAULT_SIDEBAR_WIDTH
+  }
 }
 
 function readStoredCollapsed(): boolean {
@@ -631,6 +654,12 @@ function AppShellChrome() {
   const accountTriggerRef = useRef<HTMLButtonElement>(null)
   const restoreSidebarFocusRef = useRef(false)
   const [collapsed, setCollapsed] = useState<boolean>(readStoredCollapsed)
+  const [sidebarWidth, setSidebarWidth] = useState<number>(
+    readStoredSidebarWidth,
+  )
+  // While a drag is in progress the rail follows the pointer with no width
+  // transition, and the page's text cannot be selected by the sweep.
+  const [resizing, setResizing] = useState(false)
   const [isMobile, setIsMobile] = useState<boolean>(readIsMobile)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   // The organization rail, opened as a level *inside* the drawer rather than by
@@ -796,6 +825,21 @@ function AppShellChrome() {
     }
   }, [collapsed])
 
+  // Written once a drag settles rather than on every frame of it. The default
+  // is stored as no entry, so someone who never dragged follows the design.
+  useEffect(() => {
+    if (resizing) return
+    try {
+      if (sidebarWidth === DEFAULT_SIDEBAR_WIDTH) {
+        window.localStorage.removeItem(SIDEBAR_WIDTH_KEY)
+      } else {
+        window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
+      }
+    } catch {
+      // Ignore storage errors; the width still applies for this session.
+    }
+  }, [sidebarWidth, resizing])
+
   // Move focus (and scroll) to the page's main region, past the header and the
   // whole nav. A plain anchor to `#main-content` would leave a fragment in the
   // address and a history entry under it. Focusing the ref directly keeps the
@@ -824,7 +868,12 @@ function AppShellChrome() {
     // NOTE: This clips rather than hides. `overflow: hidden` makes a box a
     // scroll container, and a control's real input is positioned against this
     // box, so one past the fold gives it a scroll range that focus scrolls.
-    <div className="relative flex h-full flex-col overflow-clip">
+    <div
+      className={cn(
+        "relative flex h-full flex-col overflow-clip",
+        resizing && "cursor-ew-resize select-none",
+      )}
+    >
       {/* The first tab stop: a keyboard user can jump straight to the page body
           instead of tabbing through the whole nav on every route. Visually hidden
           until focused, then pinned top-left over the header (z above it). Goes
@@ -878,6 +927,12 @@ function AppShellChrome() {
         // declarations out. Saying which of the three it is keeps each end
         // correct on its own.
         data-rail={isMobile ? "drawer" : collapsed ? "collapsed" : "expanded"}
+        // The expanded width, for the rail below and for `--rail-width`.
+        style={
+          {
+            "--rail-expanded-width": `${sidebarWidth}px`,
+          } as CSSProperties
+        }
       >
         <aside
           ref={asideRef}
@@ -919,8 +974,12 @@ function AppShellChrome() {
               : cn(
                   // 150ms, which is what `otari-ai/frontend`'s shell collapses
                   // its own rail in.
-                  "relative shrink-0 transition-[width] duration-150 motion-reduce:transition-none",
-                  collapsed ? COLLAPSED_SIDEBAR_WIDTH : SIDEBAR_WIDTH,
+                  "relative shrink-0",
+                  !resizing &&
+                    "transition-[width] duration-150 motion-reduce:transition-none",
+                  collapsed
+                    ? COLLAPSED_SIDEBAR_WIDTH
+                    : "w-(--rail-expanded-width)",
                 ),
           )}
         >
@@ -1205,6 +1264,27 @@ function AppShellChrome() {
               </div>
             </div>
           </div>
+          {isMobile || collapsed ? null : (
+            <ResizeHandle
+              label="Resize sidebar"
+              className="-right-1.5"
+              onDragStart={() => setResizing(true)}
+              onDrag={(clientX) => {
+                const left = asideRef.current?.getBoundingClientRect().left ?? 0
+                setSidebarWidth(clampSidebarWidth(Math.round(clientX - left)))
+              }}
+              onDragEnd={() => setResizing(false)}
+              onStep={(direction) =>
+                setSidebarWidth((width) =>
+                  clampSidebarWidth(width + direction * SIDEBAR_WIDTH_STEP),
+                )
+              }
+              onReset={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
+              valueNow={sidebarWidth}
+              valueMin={MIN_SIDEBAR_WIDTH}
+              valueMax={MAX_SIDEBAR_WIDTH}
+            />
+          )}
         </aside>
         {/* The right-hand pane: the header sits beside the rail rather than above
             it, which is what lets the sidebar run the full height of the window. */}

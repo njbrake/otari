@@ -36,14 +36,16 @@ function defaultWidth(): number {
 /**
  * A 4px bar in a 12px strip straddling an edge: transparent at rest, drawn on
  * hover, focus and drag. A drag writes at most once a frame, from the last
- * pointer position.
+ * pointer position. `onReset`, when given, is what a double-click does.
  */
 export function ResizeHandle({
   label,
   className,
   onDragStart,
   onDrag,
+  onDragEnd,
   onStep,
+  onReset,
   valueNow,
   valueMin,
   valueMax,
@@ -52,7 +54,9 @@ export function ResizeHandle({
   className: string
   onDragStart?: () => void
   onDrag: (clientX: number) => void
+  onDragEnd?: () => void
   onStep: (direction: -1 | 1) => void
+  onReset?: () => void
   valueNow: number
   valueMin: number
   valueMax: number
@@ -86,8 +90,15 @@ export function ResizeHandle({
           onDrag(latestX.current)
         })
       }}
-      onPointerUp={() => setDragging(false)}
-      onPointerCancel={() => setDragging(false)}
+      onPointerUp={() => {
+        setDragging(false)
+        onDragEnd?.()
+      }}
+      onPointerCancel={() => {
+        setDragging(false)
+        onDragEnd?.()
+      }}
+      onDoubleClick={onReset}
       onKeyDown={(event) => {
         if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
           event.preventDefault()

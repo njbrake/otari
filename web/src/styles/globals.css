@@ -3302,7 +3302,8 @@ body {
 /* The rail's footprint, published by the shell (`data-rail`) so a fixed overlay
  * can center on the content beside the rail instead of on the viewport. Zero by
  * default, which is what every surface without the shell gets and what the
- * off-canvas drawer costs the content below `md`.
+ * off-canvas drawer costs the content below `md`. Expanded, it is whatever width
+ * the rail was dragged to, which the shell sets as `--rail-expanded-width`.
  *
  * The media query is belt and braces rather than the thing that makes this
  * correct: the shell says `drawer` below `md`, so the zero above already
@@ -3313,7 +3314,7 @@ body {
 }
 @media (min-width: 48rem) {
   [data-rail="expanded"] {
-    --rail-width: 16.5rem;
+    --rail-width: var(--rail-expanded-width, 16.5rem);
   }
   [data-rail="collapsed"] {
     --rail-width: 4.5rem;
