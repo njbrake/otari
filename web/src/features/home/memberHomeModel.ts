@@ -10,7 +10,7 @@ import type {
   WorkspaceBudgetDefault,
 } from "@/client"
 import {
-  type AttentionInput,
+  type AttentionDay,
   type AttentionState,
   countedFailures,
   readsOf,
@@ -272,6 +272,28 @@ export type MemberAttentionKey = Pick<
   | "disabled_reason"
 >
 
+/**
+ * The keys a member's band speaks of as theirs: issued under one of their own
+ * ids. The keys list a member reads also carries the workspace's service keys
+ * and, for a workspace admin, other people's keys, none of which is "your key"
+ * or the member's to renew.
+ */
+export function ownKeys<
+  Key extends Pick<
+    ApiKey,
+    "user_id" | "is_service_key" | "is_organization_service_key"
+  >,
+>(keys: readonly Key[], userIds: readonly (string | undefined)[]): Key[] {
+  const ids = new Set(userIds.filter((id): id is string => Boolean(id)))
+  return keys.filter(
+    (key) =>
+      !key.is_service_key &&
+      !key.is_organization_service_key &&
+      key.user_id !== null &&
+      ids.has(key.user_id),
+  )
+}
+
 export interface MemberAttentionInput {
   now: number
   /** The caller, for the Requests filter an item opens. */
@@ -284,7 +306,7 @@ export interface MemberAttentionInput {
   /** The caller's requests the gateway refused with a 403 in the last 24 hours. */
   refused: number
   /** The caller's requests in the last 24 hours, by error class. */
-  day: AttentionInput["day"]
+  day: AttentionDay
   /** The caller's own keys in the team. */
   keys: readonly MemberAttentionKey[]
 }

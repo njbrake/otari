@@ -1,7 +1,8 @@
 import { Link, useNavigate } from "@tanstack/react-router"
 import { type ReactNode, useState } from "react"
 import { FiDollarSign, FiKey, FiLayers, FiUsers } from "react-icons/fi"
-import type { UsageSummary } from "@/client"
+import type { ApiKey, UsageSummary } from "@/client"
+import { RefreshButton } from "@/design-system/actions/RefreshButton"
 import { RowMenu, type RowMenuAction } from "@/design-system/actions/RowMenu"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
@@ -20,11 +21,23 @@ import { Segmented } from "@/design-system/navigation/Segmented"
 import { MemberAvatar } from "@/features/account/avatar/MemberAvatar"
 import { breakdownCut } from "@/features/home/breakdownCut"
 import { busiestWorkspace } from "@/features/home/busiestWorkspace"
+import { FigureLinks } from "@/features/home/FigureLinks"
+import {
+  expiryNote,
+  failureSeverity,
+  lastUsedLine,
+  resetsLabel,
+  spendSplit,
+} from "@/features/home/homeFigures"
 import { canOpenInKeys } from "@/features/home/keyAccess"
 import { useHomeAccount } from "@/features/home/overlayHomeAccount"
 import { hasProviderSlot, ProviderSlot } from "@/features/home/ProviderSlot"
+import { RecentFailures } from "@/features/home/RecentFailures"
 import { RowOpenLink } from "@/features/home/RowOpenLink"
 import { ShareCell } from "@/features/home/ShareCell"
+import { TeamAttentionBand } from "@/features/home/TeamAttentionBand"
+import { useHomeRefresh } from "@/features/home/useHomeRefresh"
+import { useSpendDetail } from "@/features/home/useSpendDetail"
 import { personPeriodFromUrl } from "@/features/people/personPeriod"
 import { limitDialogCopy } from "@/features/spend/limitCopy"
 import {
@@ -71,6 +84,7 @@ import {
   formatUsd,
   formatUsdHeadline,
 } from "@/shared/helpers/format"
+import type { DashboardSearch } from "@/shared/helpers/search"
 import { useUrlState } from "@/shared/helpers/urlState"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
@@ -160,12 +174,65 @@ function personIdOf(row: SpendRow): string {
     : ""
 }
 
-function LimitCell({ row }: { row: SpendRow }) {
+/**
+ * What a limit row says beyond the meter: when the limit starts over, and for
+ * a key, when it expires (a warning within a week) and when it was last used.
+ */
+function LimitFacts({
+  facts,
+}: {
+  facts: { text: string; tone?: "danger" | "warning" }[]
+}) {
+  if (facts.length === 0) return null
+  return (
+    <span className="flex flex-wrap gap-x-1.5 text-caption">
+      {facts.map((fact, index) => (
+        <span key={fact.text} className="flex gap-x-1.5 whitespace-nowrap">
+          {index > 0 ? <span aria-hidden>·</span> : null}
+          <span
+            className={
+              fact.tone === "danger"
+                ? "text-danger"
+                : fact.tone === "warning"
+                  ? "text-warning"
+                  : undefined
+            }
+          >
+            {fact.text}
+          </span>
+        </span>
+      ))}
+    </span>
+  )
+}
+
+function LimitCell({
+  row,
+  now,
+  apiKey,
+}: {
+  row: SpendRow
+  now: number
+  /** The key a key row is, for its expiry and last use. */
+  apiKey?: ApiKey
+}) {
   if (row.limits.isUnknown) {
     return <span className="text-caption">Not loaded</span>
   }
   const limit = row.limits.binding
-  if (!limit) return <span className="text-muted">No limit</span>
+  const expiry = apiKey ? expiryNote(apiKey.expires_at, now) : undefined
+  const keyFacts = [
+    ...(expiry ? [expiry] : []),
+    ...(apiKey ? [{ text: lastUsedLine(apiKey.last_used_at, now) }] : []),
+  ]
+  if (!limit) {
+    return (
+      <span className="flex min-w-0 flex-col gap-1">
+        <span className="text-muted">No limit</span>
+        <LimitFacts facts={keyFacts} />
+      </span>
+    )
+  }
   const more = row.limits.count - 1
   // Whose limit it is when a person has one of their own or shares one, then
   // how many others reach the row: the one shown is the closest to its cap.
@@ -179,6 +246,7 @@ function LimitCell({ row }: { row: SpendRow }) {
   ]
     .filter(Boolean)
     .join(" · ")
+  const resets = resetsLabel(limit.ceiling.period_end, now)
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <span className="flex min-w-0 flex-wrap items-baseline gap-x-2.5">
@@ -195,6 +263,9 @@ function LimitCell({ row }: { row: SpendRow }) {
         ariaLabel={`${row.name}: limit spent`}
         className="max-w-[16rem]"
       />
+      <LimitFacts
+        facts={[...(resets ? [{ text: resets }] : []), ...keyFacts]}
+      />
     </div>
   )
 }
@@ -204,12 +275,15 @@ function LimitCell({ row }: { row: SpendRow }) {
  * the limit, and where it went, with the limit each person, key and workspace
  * works under on its own row.
  *
- * Each band answers one question. Needs attention (`TeamAttentionBand`) is
- * held back until it reads each row's scope right; it is not mounted.
+ * Each band answers one question.
+ * - Needs attention (`TeamAttentionBand`): what an owner or admin has to act
+ *   on now, each item with the link or dialog that fixes it.
  * - The figures: how much, against what limit, how many requests failed (or
  *   a figure the edition adds, `overlayHomeAccount.tsx`), and how much of the
  *   team is using it.
  * - Where it went: who or what spent it, and what stops each of them.
+ * - Recent failures: the window's latest failed requests, each one press from
+ *   its detail in Requests.
  */
 export function TeamHome({
   notice,
@@ -232,6 +306,8 @@ export function TeamHome({
   const isMobile = useIsMobile()
   // The list `useSpend` reads, so this asks nothing new.
   const keys = useKeys()
+  const keyById = new Map((keys.data ?? []).map((key) => [key.id, key]))
+  const { refresh, isFetching } = useHomeRefresh(refreshClock)
 
   const period = periodFromUrl(get("period"))
   const window = windowOf(period, now)
@@ -263,6 +339,10 @@ export function TeamHome({
   const hasSurface = useSurfaces()
   const hasSessions = hasSurface("traces")
   const hasRequests = hasSurface("usage")
+  const detail = useSpendDetail({ window, now, workspaceId })
+  // Requests lists the shell's workspace: a link out of a figure points it at
+  // the one the page picked, where it picked one.
+  const pointShell = workspaceId ? () => select(workspaceId) : undefined
   const sessions = useTraceCount(
     { workspaceId, start: window.start, end: window.end || undefined, q: "" },
     hasSessions,
@@ -562,7 +642,17 @@ export function TeamHome({
           {
             id: "limit",
             header: "Limit",
-            cell: (row) => <LimitCell row={row} />,
+            cell: (row) => (
+              <LimitCell
+                row={row}
+                now={now}
+                apiKey={
+                  cut.value === "keys" && row.filterKey
+                    ? keyById.get(row.filterKey)
+                    : undefined
+                }
+              />
+            ),
           },
         ] satisfies DataTableColumn<SpendRow>[])
       : []),
@@ -607,6 +697,19 @@ export function TeamHome({
     : 0
   const sessionCount = sessions.data?.count
   const cacheTotals = cacheSums(spend.series)
+  const isReading = !spend.totals && spend.reads.usage === "loading"
+  const split = spendSplit(total, detail.charged)
+  const spentFacts = [
+    ...(split
+      ? [
+          `${formatUsd(split.charged)} charged`,
+          `${formatUsd(split.notCharged)} not charged`,
+        ]
+      : []),
+    ...(detail.today !== undefined ? [`${formatUsd(detail.today)} today`] : []),
+  ]
+  const failed = spend.totals?.error_count ?? 0
+  const windowSearch: DashboardSearch = sessionsSearchFor(window)
 
   return (
     <div className="flex flex-col gap-6">
@@ -614,6 +717,11 @@ export function TeamHome({
         title="Home"
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <RefreshButton
+              onRefresh={refresh}
+              isFetching={isFetching}
+              updatedAt={now}
+            />
             <SpendPeriodPicker
               value={period}
               onChange={(next) => {
@@ -645,10 +753,12 @@ export function TeamHome({
           (cut.value === "workspaces" ? byWorkspace.error : undefined)
         }
       />
+      <TeamAttentionBand spend={spend} now={now} onSetLimit={setEditing} />
       <KpiStrip isEmpty={false} columns={5}>
         <KpiCell
           label={figureLabel("Spent", window)}
           value={spend.totals ? formatUsd(total) : "—"}
+          isLoading={isReading}
           delta={
             delta !== null ? (
               <TrendChip
@@ -661,9 +771,11 @@ export function TeamHome({
           subline={
             !spend.totals
               ? unreadLine
-              : delta === null
-                ? `${formatNumber(spend.totals.request_count)} requests`
-                : undefined
+              : spentFacts.length > 0
+                ? spentFacts.join(" · ")
+                : delta === null
+                  ? `${formatNumber(spend.totals.request_count)} requests`
+                  : undefined
           }
           graphic={
             spend.series.length > 1 ? (
@@ -729,10 +841,37 @@ export function TeamHome({
           <KpiCell
             label="Failures"
             value={spend.totals ? formatPct(errorRate) : "—"}
-            subline={
+            isLoading={isReading}
+            severity={
               spend.totals
-                ? `${formatNumber(spend.totals.error_count)} failed ${spend.totals.error_count === 1 ? "request" : "requests"}`
-                : unreadLine
+                ? failureSeverity(failed, spend.totals.request_count)
+                : undefined
+            }
+            subline={
+              spend.totals ? (
+                <FigureLinks
+                  links={[
+                    {
+                      text: `${formatNumber(failed)} failed`,
+                      search: { ...windowSearch, status: "error" },
+                      isShown: hasRequests,
+                    },
+                    {
+                      text: `${formatNumber(detail.unpriced ?? 0)} unpriced`,
+                      search: {
+                        ...windowSearch,
+                        status: "success",
+                        priced: "false",
+                      },
+                      isShown: hasRequests && (detail.unpriced ?? 0) > 0,
+                    },
+                  ]}
+                  fallback={`${formatNumber(failed)} failed`}
+                  onOpen={pointShell}
+                />
+              ) : (
+                unreadLine
+              )
             }
           />
         )}
@@ -743,6 +882,7 @@ export function TeamHome({
               ? formatTokens(billedTokenTotal(spend.totals) ?? 0)
               : "—"
           }
+          isLoading={isReading}
           subline={
             !spend.totals
               ? unreadLine
@@ -859,6 +999,15 @@ export function TeamHome({
           </p>
         )}
       </section>
+      {hasRequests ? (
+        <RecentFailures
+          window={window}
+          now={now}
+          workspaceId={workspaceId}
+          total={spend.totals?.error_count}
+          onOpen={pointShell}
+        />
+      ) : null}
       {editing ? (
         <SetLimitDialog
           key={`${editing.scope}:${editing.scopeId}`}

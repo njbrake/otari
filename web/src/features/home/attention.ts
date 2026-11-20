@@ -21,7 +21,13 @@
  * | 5 Pace       | organization or workspace limit, period of 7 days or more, | warning         |
  * |               | 10% gone, projected past the maximum, under 80% used      |                 |
  * | 6 Near limit  | 80% or more of a limit used, under 100%, period not ended | warning         |
+ * | 7 Unreachable | a provider's credentials cannot reach it (operator only)  | urgent          |
+ * | 8 Key expiry  | a key in use expires within 7 days; four or more fold     | warning         |
+ * |               | into one row                                              |                 |
  *
+ * Refusals and failures are counted per workspace, because Requests lists one
+ * workspace at a time: a row says which workspace it counted when the
+ * organization has more than one, and its link opens that workspace.
  * Failures count the error classes a person at the keyboard did not cause:
  * missing pricing (402), rate limits (429), provider errors (any 5xx) and the
  * unknown (no status code). The caller's own 4xx are not counted.
@@ -50,10 +56,14 @@ const NEAR_LIMIT = 0.8
 /** Near-limit rows shown before the rest fold. */
 const NEAR_ROWS_SHOWN = 3
 
-const MIN_FAILURES = 5
-const MIN_FAILURE_RATE = 0.02
-const URGENT_FAILURE_RATE = 0.1
+export const MIN_FAILURES = 5
+export const MIN_FAILURE_RATE = 0.02
+export const URGENT_FAILURE_RATE = 0.1
 const URGENT_FAILURE_REQUESTS = 20
+/** A key this close to its expiry gets a row. */
+const KEY_EXPIRY_DAYS = 7
+/** Expiring keys shown one by one; more fold into one row. */
+const KEY_ROWS_SHOWN = 3
 
 /** The error classes a failure count includes; see the table above. */
 const COUNTED_ERROR_CLASSES: readonly string[] = [
@@ -63,7 +73,13 @@ const COUNTED_ERROR_CLASSES: readonly string[] = [
   "unknown",
 ]
 
-export type AttentionSource = "limits" | "refusals" | "failures" | "account"
+export type AttentionSource =
+  | "limits"
+  | "refusals"
+  | "failures"
+  | "keys"
+  | "providers"
+  | "account"
 export type AttentionState = ReadState
 
 /** Whether a source is still being read, and a sentence for each that failed. */
@@ -87,14 +103,21 @@ const SOURCE_NAMES: Record<Exclude<AttentionSource, "account">, string> = {
   limits: "Limits",
   refusals: "Refusals",
   failures: "Failures",
+  keys: "API keys",
+  providers: "Provider health",
 }
 
 interface AttentionAction {
   label: string
   /** A limit to change in place. */
   limit?: LimitTarget
-  to?: "/rules" | "/requests"
+  to?: "/rules" | "/requests" | "/keys" | "/admin/hosted-providers"
   search?: Record<string, string>
+  /**
+   * The workspace the destination has to be looking at to show what the row
+   * counted: Requests and API keys list the shell's selected workspace.
+   */
+  workspaceId?: string
   /** A control an edition renders itself (`overlayHomeAccount.tsx`). */
   node?: ReactNode
 }
@@ -119,12 +142,38 @@ export interface AttentionInput {
   peopleOf: ReadonlyMap<string, readonly string[]>
   /** What the edition holding the organization's money adds, if any. */
   account: Pick<HomeAccount, "sourceName" | "attention" | "quietClause">
-  day: {
+  /** The last 24 hours of each workspace, by error class. */
+  days: readonly (AttentionDay & { workspaceId: string })[]
+  /**
+   * The 403s of the last 24 hours, by workspace and user; a null user id is
+   * nobody in particular.
+   */
+  refusals: readonly {
+    workspaceId: string
+    userId: string | null
+    name: string
     requests: number
-    errors: readonly { errorClass: string; requests: number }[]
-  }
-  /** The 403s of the last 24 hours, by user; a null id is nobody in particular. */
-  refusals: readonly { userId: string | null; name: string; requests: number }[]
+  }[]
+  /** The organization's keys the caller can list. */
+  keys: readonly AttentionKey[]
+  /** Whether provider reachability was read: only a deployment operator's. */
+  checksProviders: boolean
+  /** Providers whose credentials could not reach them; empty when not checked. */
+  unreachable: readonly { name: string; error: string }[]
+}
+
+export interface AttentionDay {
+  requests: number
+  errors: readonly { errorClass: string; requests: number }[]
+}
+
+export interface AttentionKey {
+  id: string
+  name: string
+  workspaceId: string
+  expiresAt: string | null
+  lastUsedAt: string | null
+  isActive: boolean
 }
 
 export interface AttentionResult {
@@ -293,46 +342,62 @@ function accountRow(input: AttentionInput): Ranked | undefined {
   }
 }
 
-function refusedRow(
+/** " in the Platform workspace", where the organization has more than one. */
+function inWorkspace(input: AttentionInput, workspaceId: string): string {
+  if (input.workspaceNames.size <= 1) return ""
+  const name = input.workspaceNames.get(workspaceId)
+  return name ? ` in the ${name} workspace` : " in another workspace"
+}
+
+function refusedRows(
   input: AttentionInput,
   reached: ReadonlySet<string>,
-): Ranked | undefined {
-  const rows = input.refusals.filter(
-    (row) => row.requests > 0 && !(row.userId && reached.has(row.userId)),
-  )
-  const total = rows.reduce((sum, row) => sum + row.requests, 0)
-  if (total === 0) return undefined
-  const people = rows.filter((row) => row.userId)
-  const isOnePerson = people.length === 1 && people.length === rows.length
-  const text = isOnePerson
-    ? total === 1
-      ? `The gateway refused a request from ${people[0].name} in the last 24 hours.`
-      : `The gateway refused ${formatNumber(total)} requests from ${people[0].name} in the last 24 hours.`
-    : people.length > 1
-      ? `The gateway refused ${formatNumber(total)} requests from ${people.length} people in the last 24 hours.`
-      : total === 1
-        ? "The gateway refused a request in the last 24 hours."
-        : `The gateway refused ${formatNumber(total)} requests in the last 24 hours.`
-  const userId = isOnePerson ? people[0].userId : undefined
-  return {
-    type: 3,
-    scopeRank: 0,
-    used: 0,
-    item: {
-      id: "refused",
-      isUrgent: true,
-      text,
-      action: {
-        label: "See the refusals",
-        to: "/requests",
-        search: {
-          status_code: "403",
-          range: "24h",
-          ...(userId ? { user_id: userId } : {}),
+): Ranked[] {
+  const byWorkspace = new Map<string, AttentionInput["refusals"][number][]>()
+  for (const row of input.refusals) {
+    if (row.requests <= 0 || (row.userId && reached.has(row.userId))) continue
+    const list = byWorkspace.get(row.workspaceId) ?? []
+    list.push(row)
+    byWorkspace.set(row.workspaceId, list)
+  }
+  const ranked: Ranked[] = []
+  for (const [workspaceId, rows] of byWorkspace) {
+    const total = rows.reduce((sum, row) => sum + row.requests, 0)
+    const where = inWorkspace(input, workspaceId)
+    const people = rows.filter((row) => row.userId)
+    const isOnePerson = people.length === 1 && people.length === rows.length
+    const text = isOnePerson
+      ? total === 1
+        ? `The gateway refused a request from ${people[0].name}${where} in the last 24 hours.`
+        : `The gateway refused ${formatNumber(total)} requests from ${people[0].name}${where} in the last 24 hours.`
+      : people.length > 1
+        ? `The gateway refused ${formatNumber(total)} requests from ${people.length} people${where} in the last 24 hours.`
+        : total === 1
+          ? `The gateway refused a request${where} in the last 24 hours.`
+          : `The gateway refused ${formatNumber(total)} requests${where} in the last 24 hours.`
+    const userId = isOnePerson ? people[0].userId : undefined
+    ranked.push({
+      type: 3,
+      scopeRank: 0,
+      used: total,
+      item: {
+        id: `refused:${workspaceId}`,
+        isUrgent: true,
+        text,
+        action: {
+          label: "See the refusals",
+          to: "/requests",
+          search: {
+            status_code: "403",
+            range: "24h",
+            ...(userId ? { user_id: userId } : {}),
+          },
+          workspaceId,
         },
       },
-    },
+    })
   }
+  return ranked
 }
 
 /**
@@ -340,7 +405,7 @@ function refusedRow(
  * above; undefined below them. Also a member's Home, over their own requests.
  */
 export function countedFailures(
-  day: AttentionInput["day"],
+  day: AttentionDay,
 ): { failed: number; rate: number; isUrgent: boolean } | undefined {
   const { requests, errors } = day
   const failed = errors
@@ -357,33 +422,118 @@ export function countedFailures(
   }
 }
 
-function failuresRow(input: AttentionInput): Ranked | undefined {
-  const { requests } = input.day
-  const counted = countedFailures(input.day)
-  if (!counted) return undefined
-  const { failed, rate } = counted
-  return {
-    type: 4,
-    scopeRank: 0,
-    used: rate,
-    item: {
-      id: "failures",
-      isUrgent: counted.isUrgent,
-      text: `${formatNumber(failed)} of ${formatNumber(requests)} requests failed in the last 24 hours (${formatPct(rate)}).`,
-      action: {
-        label: "See the failures",
-        to: "/requests",
-        search: { status: "error", range: "24h" },
+function failureRows(input: AttentionInput): Ranked[] {
+  const ranked: Ranked[] = []
+  for (const day of input.days) {
+    const counted = countedFailures(day)
+    if (!counted) continue
+    const { failed, rate } = counted
+    ranked.push({
+      type: 4,
+      scopeRank: 0,
+      used: rate,
+      item: {
+        id: `failures:${day.workspaceId}`,
+        isUrgent: counted.isUrgent,
+        text: `${formatNumber(failed)} of ${formatNumber(day.requests)} requests${inWorkspace(input, day.workspaceId)} failed in the last 24 hours (${formatPct(rate)}).`,
+        action: {
+          label: "See the failures",
+          to: "/requests",
+          search: { status: "error", range: "24h" },
+          workspaceId: day.workspaceId,
+        },
       },
-    },
+    })
   }
+  return ranked
+}
+
+function unreachableRows(input: AttentionInput): Ranked[] {
+  return input.unreachable.map((provider) => ({
+    type: 7,
+    scopeRank: 0,
+    used: 1,
+    item: {
+      id: `unreachable:${provider.name}`,
+      isUrgent: true,
+      text: `${provider.name} is unreachable, so requests routed to it fail.${provider.error ? ` ${provider.error}` : ""}`,
+      action: { label: "Check the provider", to: "/admin/hosted-providers" },
+    },
+  }))
+}
+
+/** Whole local days from `now` to `at`: 0 today, 1 tomorrow. */
+function calendarDaysUntil(at: number, now: number): number {
+  const day = (time: number) => {
+    const date = new Date(time)
+    return new Date(
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate(),
+    ).getTime()
+  }
+  return Math.round((day(at) - day(now)) / DAY_MS)
+}
+
+/**
+ * Keys someone is using that stop working within the week. A key never used
+ * refuses nobody when it expires, so it is left to the Keys page.
+ */
+function keyRows(input: AttentionInput): Ranked[] {
+  const { now } = input
+  const expiring = input.keys
+    .filter((key) => {
+      if (!key.isActive || !key.lastUsedAt || !key.expiresAt) return false
+      const at = Date.parse(key.expiresAt)
+      return at > now && at - now <= KEY_EXPIRY_DAYS * DAY_MS
+    })
+    .sort(
+      (a, b) => Date.parse(a.expiresAt ?? "") - Date.parse(b.expiresAt ?? ""),
+    )
+  if (expiring.length > KEY_ROWS_SHOWN) {
+    return [
+      {
+        type: 8,
+        scopeRank: 0,
+        used: 0,
+        item: {
+          id: "keys-expiring",
+          isUrgent: false,
+          text: `${formatNumber(expiring.length)} API keys in use expire within ${KEY_EXPIRY_DAYS} days.`,
+          action: { label: "Open API keys", to: "/keys" },
+        },
+      },
+    ]
+  }
+  return expiring.map((key, index) => {
+    const days = calendarDaysUntil(Date.parse(key.expiresAt ?? ""), now)
+    const when =
+      days <= 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`
+    return {
+      type: 8,
+      scopeRank: 0,
+      used: -index,
+      item: {
+        id: `key-expiring:${key.id}`,
+        isUrgent: false,
+        text: `The key ${key.name}${inWorkspace(input, key.workspaceId)} expires ${when}. Requests made with it are refused after that.`,
+        action: {
+          label: "Open in API keys",
+          to: "/keys",
+          workspaceId: key.workspaceId,
+        },
+      },
+    }
+  })
 }
 
 function quietLine(input: AttentionInput): { lead: string; detail: string } {
   const clauses = [
     `No limit is past ${wholePct(NEAR_LIMIT)}`,
     "nothing was refused in the last 24 hours",
+    `no key in use expires within ${KEY_EXPIRY_DAYS} days`,
   ]
+  if (input.checksProviders) clauses.push("every provider is reachable")
   if (input.account.quietClause) clauses.push(input.account.quietClause)
   const last = clauses.pop()
   const detail =
@@ -413,8 +563,10 @@ export function attention(input: AttentionInput): AttentionResult {
   const ranked: Ranked[] = [
     ...(states.account === "ready" ? [accountRow(input)] : []),
     ...limits,
-    ...(states.refusals === "ready" ? [refusedRow(input, reached)] : []),
-    ...(states.failures === "ready" ? [failuresRow(input)] : []),
+    ...(states.refusals === "ready" ? refusedRows(input, reached) : []),
+    ...(states.failures === "ready" ? failureRows(input) : []),
+    ...(states.providers === "ready" ? unreachableRows(input) : []),
+    ...(states.keys === "ready" ? keyRows(input) : []),
   ].filter((row): row is Ranked => row !== undefined)
 
   ranked.sort(
