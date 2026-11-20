@@ -34770,7 +34770,7 @@ export interface operations {
                 channel?: ("api" | "imported" | "playground")[] | null;
                 /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
                 is_null?: ("api_key" | "user" | "session")[] | null;
-                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
             };
             header?: never;
@@ -34868,7 +34868,7 @@ export interface operations {
                 channel?: ("api" | "imported" | "playground")[] | null;
                 /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
                 is_null?: ("api_key" | "user" | "session")[] | null;
-                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
             };
             header?: never;
@@ -34968,7 +34968,7 @@ export interface operations {
                 channel?: ("api" | "imported" | "playground")[] | null;
                 /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
                 is_null?: ("api_key" | "user" | "session")[] | null;
-                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
             };
             header?: never;
@@ -35066,7 +35066,7 @@ export interface operations {
                 channel?: ("api" | "imported" | "playground")[] | null;
                 /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
                 is_null?: ("api_key" | "user" | "session")[] | null;
-                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
             };
             header?: never;
@@ -35168,7 +35168,7 @@ export interface operations {
                 channel?: ("api" | "imported" | "playground")[] | null;
                 /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
                 is_null?: ("api_key" | "user" | "session")[] | null;
-                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
             };
             header?: never;
@@ -38606,7 +38606,7 @@ export interface operations {
                 channel?: ("api" | "imported" | "playground")[] | null;
                 /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
                 is_null?: ("api_key" | "user" | "session")[] | null;
-                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
             };
             header?: never;
@@ -38737,7 +38737,7 @@ export interface operations {
                 channel?: ("api" | "imported" | "playground")[] | null;
                 /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
                 is_null?: ("api_key" | "user" | "session")[] | null;
-                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
             };
             header?: never;
@@ -38870,7 +38870,7 @@ export interface operations {
                 channel?: ("api" | "imported" | "playground")[] | null;
                 /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
                 is_null?: ("api_key" | "user" | "session")[] | null;
-                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
             };
             header?: never;
@@ -39019,7 +39019,7 @@ export interface operations {
                 channel?: ("api" | "imported" | "playground")[] | null;
                 /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
                 is_null?: ("api_key" | "user" | "session")[] | null;
-                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
             };
             header?: never;
@@ -39154,7 +39154,7 @@ export interface operations {
                 channel?: ("api" | "imported" | "playground")[] | null;
                 /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
                 is_null?: ("api_key" | "user" | "session")[] | null;
-                /** @description Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
                 q?: string | null;
             };
             header?: never;

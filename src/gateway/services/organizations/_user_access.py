@@ -1,6 +1,7 @@
 """Users' model and search tool access lists, which a key's own lists may only narrow, their names and budget use."""
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
+from typing import Any
 
 from gateway.repositories.organizations import OrganizationRepositories
 from gateway.repositories.users_repository import AccessLists, BudgetUse
@@ -36,13 +37,13 @@ class UserAccess:
         """Each of these users that has a row, deleted or not, to its alias."""
         return await self._users.aliases(user_ids)
 
-    def alias_of(self, user_id: object) -> object:
-        """The alias of the user ``user_id`` names, as an expression another domain's read can order by."""
-        return self._users.alias_of(user_id)
+    def aliases_relation(self) -> object:
+        """Every user as ``(id, name)``, for another domain's read to outer-join and order by."""
+        return self._users.aliases_relation()
 
-    async def ids_aliased_like(self, term: str, *, limit: int) -> list[str]:
-        """Up to ``limit`` ids of the users whose alias contains ``term``, case-insensitive."""
-        return await self._users.ids_aliased_like(term, limit=limit)
+    async def ids_aliased_like(self, term: str, *, limit: int, within: Callable[[Any], Any] | None = None) -> list[str]:
+        """Up to ``limit`` ids of the users whose alias contains ``term``, case-insensitive, that ``within`` accepts."""
+        return await self._users.ids_aliased_like(term, limit=limit, within=within)
 
     async def lock_with_end_users(self, user_id: str) -> list[str]:
         """Lock ``user_id`` and its end users against key issuance, and return the ids of those that exist."""

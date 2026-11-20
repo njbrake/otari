@@ -390,11 +390,11 @@ filters beside the entity filters:
 | `policy_name`, `exclude_policy_name` | Rows served, or not served, through these routing policies; repeatable. |
 | `routed` | `true`: requests a routing policy served. `false`: requests that named a model directly. |
 | `tokens_gt`, `cost_gt`, `latency_ms_gt` | Rows billed for more tokens (input plus output), costing more USD, or slower in milliseconds than the value. |
-| `statuses` | Rows with one of these statuses; repeatable. `status` narrows to one. |
+| `statuses` | Rows with one of these statuses; repeatable. `status` narrows to one. A subset that keeps `absorbed` counts attempts, so `request_count` matches the list's total. |
 | `include_absorbed` | `false`: each request once, without the attempts a routing policy recovered from. A status filter wins. |
 | `channel` | Rows that came in these ways; repeatable: `imported` (external usage), `playground` (the dashboard's Playground) or `api` (anything else this deployment served). |
 | `is_null` | Rows with nothing in these columns; repeatable: `api_key`, `user` or `session`. |
-| `q` | A search. A UUID matches a usage row id or an `Otari-Request-ID` exactly; anything else is a case-insensitive substring of the model, the name the caller sent, the source, the session label, the user id, the user's alias or the API key's name. At most 200 characters. |
+| `q` | A search. A UUID matches a usage row id, an `Otari-Request-ID` or a user id exactly; anything else is a case-insensitive substring of the model, the name the caller sent, the source, the session label, the user id, the user's alias or the API key's name. At most 200 characters. |
 
 `GET /api/v1/usage` takes `sort` and `order` (`asc` or `desc`, default `desc`).
 `sort` is `timestamp` (the default), `user`, `model`, `policy`, `source` (the

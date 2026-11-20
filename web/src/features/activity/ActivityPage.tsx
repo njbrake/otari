@@ -102,6 +102,7 @@ import {
   toolFilterFor,
 } from "./requestColumns"
 import {
+  boundsWindow,
   nextSort,
   readSort,
   SORTABLE_COLUMNS,
@@ -227,6 +228,10 @@ function ActivityPageContent({
   const search = url.get("q").trim()
   const sort = readSort(url.get("sort"), url.get("order"))
   const showRecovered = url.get("recovered") === "show"
+  // The server reads any order but time, and a substring search, over a bounded
+  // window, an omitted start as the last 30 days. Under "All" those reads take
+  // the year the timeline spans instead, so the rows match the bars above them.
+  const boundedRead = boundsWindow(sort, search)
   const page = Math.max(0, url.getNumber("page"))
   // The request open in the panel: a usage row's id, or the request id.
   const requestId = url.get("request")
@@ -365,7 +370,7 @@ function ActivityPageContent({
       // From the sidebar's switcher, not from a control on this page: it scopes
       // the whole shell, and the operator's own filters sit below it.
       workspace_id: workspace?.workspace_id,
-      start_date: win.start,
+      start_date: win.start ?? (boundedRead ? extentWin.start : undefined),
       end_date: win.end,
       status: statusFilter || undefined,
       model: modelFilters.length > 0 ? modelFilters : undefined,
@@ -386,6 +391,8 @@ function ActivityPageContent({
       search,
       workspace,
       win,
+      boundedRead,
+      extentWin.start,
       toolFilter,
       statusFilter,
       modelFilters,

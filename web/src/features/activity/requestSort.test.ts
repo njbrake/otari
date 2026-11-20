@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { NEWEST_FIRST } from "@/shared/api/usage"
 import {
+  boundsWindow,
   nextSort,
   readSort,
   readSortChoice,
@@ -104,5 +105,18 @@ describe("sortChoices", () => {
       sort: "latency",
       order: "asc",
     })
+  })
+})
+
+describe("boundsWindow", () => {
+  it("is false only for newest first with no search or an id search", () => {
+    expect(boundsWindow(NEWEST_FIRST, "")).toBe(false)
+    expect(boundsWindow(NEWEST_FIRST, "  ")).toBe(false)
+    expect(
+      boundsWindow(NEWEST_FIRST, "3F2504E0-4F89-11D3-9A0C-0305E82C3301"),
+    ).toBe(false)
+    expect(boundsWindow(NEWEST_FIRST, "sonnet")).toBe(true)
+    expect(boundsWindow({ sort: "cost", order: "desc" }, "")).toBe(true)
+    expect(boundsWindow({ sort: "timestamp", order: "asc" }, "")).toBe(false)
   })
 })

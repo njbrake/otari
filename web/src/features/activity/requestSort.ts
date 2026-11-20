@@ -33,6 +33,18 @@ const SORT_KEYS = new Set<string>(
   Object.values(SORTABLE_COLUMNS).map((column) => column.key),
 )
 
+// A term the server looks up as an id rather than searching by substring.
+const UUID_TERM =
+  /^(urn:uuid:)?\{?[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\}?$/i
+
+/** Whether the server bounds this read to a window: any order but time, and a search for anything but an id. */
+export function boundsWindow(sort: UsageSort, search: string): boolean {
+  const term = search.trim()
+  return (
+    sort.sort !== NEWEST_FIRST.sort || (term !== "" && !UUID_TERM.test(term))
+  )
+}
+
 const isDefault = (sort: UsageSort) =>
   sort.sort === NEWEST_FIRST.sort && sort.order === NEWEST_FIRST.order
 

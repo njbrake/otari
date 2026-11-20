@@ -39,6 +39,7 @@ from sqlmodel import col
 from gateway.core.config import API_ROOT
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.models.usage import UsageLog
+from gateway.models.users import User as GatewayUser
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
 # Every read this router serves. Parametrized rather than asserted once, because
@@ -503,6 +504,41 @@ def test_an_id_search_finds_no_row_outside_the_scope(client: TestClient, world: 
     assert beta_rows
     assert _models_listed(client, world, "alpha_owner", f"?q={beta_rows[0]['id']}") == set()
     assert _models_listed(client, world, "beta_owner", f"?q={beta_rows[0]['id']}") == {beta_rows[0]["model"]}
+
+
+def test_a_name_search_is_not_crowded_out_by_another_tenants_matches(
+    client: TestClient,
+    world: _World,
+    db_session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Users and keys found by name are those in the caller's scope, so a cap reached elsewhere cannot hide theirs."""
+    monkeypatch.setattr("gateway.services.usage_and_telemetry._service._MAX_NAMED_BY_SEARCH", 1)
+    session = db_session_factory()
+    try:
+        # Beta's user sorts first, so a global search capped at one would find only it.
+        for user_id, workspace in (("a-beta-person", "beta_one"), ("z-alpha-person", "alpha_one")):
+            session.add(GatewayUser(user_id=user_id, alias="Shared Name", spend=0.0, blocked=False))
+            session.flush()
+            session.add(
+                UsageLog(
+                    id=str(uuid.uuid4()),
+                    workspace_id=world.workspaces[workspace],
+                    user_id=user_id,
+                    model=f"named-{workspace}",
+                    provider="p",
+                    endpoint="/v1/chat/completions",
+                    source="gateway",
+                    status="success",
+                    total_tokens=10,
+                    timestamp=datetime.now(UTC),
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+    assert _models_listed(client, world, "alpha_owner", "?q=shared%20name") == {"named-alpha_one"}
+    assert _models_listed(client, world, "beta_owner", "?q=shared%20name") == {"named-beta_one"}
 
 
 def test_the_summary_p95_reads_only_the_callers_own_rows(client: TestClient, world: _World) -> None:

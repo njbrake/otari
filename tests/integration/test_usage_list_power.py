@@ -267,12 +267,17 @@ def test_a_search_matches_the_small_text_columns_and_the_names_behind_ids(
     assert _count(client, master_key_header, q=q) == len(expected)
 
 
-def test_a_uuid_search_matches_a_row_id_or_a_request_id_exactly(
-    client: TestClient, master_key_header: dict[str, str], seeded: dict[str, str]
+def test_a_uuid_search_matches_a_row_id_a_request_id_or_a_user_id_exactly(
+    client: TestClient, master_key_header: dict[str, str], seeded: dict[str, str], db_session: Session
 ) -> None:
     assert _ids(client, master_key_header, seeded, q=seeded["d"]) == "d"
     assert _ids(client, master_key_header, seeded, q=f"  {_GROUP.upper()} ") == "bc"
     assert _ids(client, master_key_header, seeded, q=str(uuid.uuid4())) == ""
+    # A dashboard member's billed user id is a UUID, which the substring arms never reach.
+    member = str(uuid.uuid4())
+    seeded["h"] = _log(db_session, minutes_ago=8, user_id=member)
+    db_session.commit()
+    assert _ids(client, master_key_header, seeded, q=member.upper()) == "h"
 
 
 def test_a_search_narrows_every_aggregate_alike(
@@ -332,6 +337,18 @@ def test_statuses_keep_a_subset_and_one_absorbed_status_counts_attempts(
     totals = _get(client, master_key_header, SUMMARY_PATH, statuses="absorbed", dimensions="none")["totals"]
     assert totals["request_count"] == 1
     assert client.get(COUNT_PATH, headers=master_key_header, params={"statuses": "lost"}).status_code == 422
+
+
+def test_a_status_subset_with_recovered_attempts_counts_rows_in_the_totals_as_the_list_does(
+    client: TestClient, master_key_header: dict[str, str], seeded: dict[str, str]
+) -> None:
+    listed = _ids(client, master_key_header, seeded, statuses=["absorbed", "success"])
+    assert sorted(listed) == sorted("abcfg")
+    assert _count(client, master_key_header, statuses=["absorbed", "success"]) == len(listed)
+    totals = _get(client, master_key_header, SUMMARY_PATH, statuses=["absorbed", "success"], dimensions="none")[
+        "totals"
+    ]
+    assert totals["request_count"] == len(listed)
 
 
 # =============================================================================

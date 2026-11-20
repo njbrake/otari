@@ -490,11 +490,35 @@ def _key_conditions(
 
 
 def single_status(filters: UsageFilters) -> str | None:
-    """The one status the rows are narrowed to, if they are, which decides what a request count counts."""
+    """The status that decides what a request count counts: ``absorbed`` counts every row.
+
+    A subset that keeps the recovered attempts asks about attempts, as filtering
+    to them alone does, so its counts are rows and agree with the list's total.
+    """
     statuses = filters.refine.statuses or []
     if filters.status is not None:
         return filters.status
+    if "absorbed" in statuses:
+        return "absorbed"
     return statuses[0] if len(statuses) == 1 else None
+
+
+def user_used_within(scope: UsageScope) -> Callable[[Any], Any] | None:
+    """A test that a user id has usage inside ``scope``, to confine a name search to it; None for every workspace.
+
+    Correlated on the user id, so it is answered from the (user_id, workspace_id) index.
+    """
+    if scope.workspaces is None:
+        return None
+
+    def used(user_id: Any) -> Any:
+        return (
+            select(literal(1))
+            .where(UsageLog.user_id == user_id, *_scope_conditions(scope, UsageLog.__table__.c))
+            .exists()
+        )
+
+    return used
 
 
 _NULLABLE_COLUMNS: dict[str, str] = {"api_key": "api_key_id", "user": "user_id", "session": "source_label"}
@@ -575,9 +599,9 @@ def _row_only_conditions(filters: UsageFilters) -> list[ColumnElement[bool]]:
 def _search_condition(refine: UsageRefinements) -> ColumnElement[bool] | None:
     """The rows a free-text search matches, or None when there is nothing to search for.
 
-    A UUID is a row id or an ``Otari-Request-ID`` pasted from a log line, matched
-    against those two indexed columns alone, since an OR with the substring arms
-    could use neither index. Anything else is a case-insensitive substring of the
+    A UUID is a row id, an ``Otari-Request-ID`` pasted from a log line or a user
+    id, matched against those three indexed columns alone, since an OR with the
+    substring arms could use none of the indexes. Anything else is a case-insensitive substring of the
     small text columns, or a user or key whose name the service found containing it.
     """
     term = search_term(refine.q)
@@ -585,7 +609,11 @@ def _search_condition(refine: UsageRefinements) -> ColumnElement[bool] | None:
         return None
     request_id = search_request_id(term)
     if request_id is not None:
-        return or_(UsageLog.id == request_id, UsageLog.request_group_id == request_id)
+        return or_(
+            UsageLog.id == request_id,
+            UsageLog.request_group_id == request_id,
+            UsageLog.user_id == request_id,
+        )
     arms: list[ColumnElement[bool]] = [
         column.icontains(term, autoescape=True)
         for column in (
@@ -860,15 +888,16 @@ def _summed(column: Any, zero: Any = 0) -> Any:
 class UsageSortLabels:
     """How the user and source orders name a row, from the domains that own the names.
 
-    Each takes ``usage_logs``' own id column and returns the name it points at as a
-    scalar subquery: a user's alias, an API key's name.
+    Each is a relation of ``(id, name)``: users by id with their alias, API keys by
+    id with their name. A page sorted by one is outer-joined to it once, rather
+    than looking the name up row by row.
     """
 
-    user: Callable[[Any], Any]
-    api_key: Callable[[Any], Any]
+    users: Any
+    api_keys: Any
 
 
-def _ordering(sort: UsageSort, order: SortOrder, labels: UsageSortLabels | None) -> tuple[Any, ...]:
+def _ordering(sort: UsageSort, order: SortOrder, names: tuple[Any, Any]) -> tuple[Any, ...]:
     """ORDER BY for a page: the chosen key with empty values last, then newest first, then the id.
 
     The id closes the ordering so rows tied on every other key keep one order
@@ -880,8 +909,7 @@ def _ordering(sort: UsageSort, order: SortOrder, labels: UsageSortLabels | None)
         if order == "asc":
             return UsageLog.timestamp.asc(), UsageLog.id.asc()
         return UsageLog.timestamp.desc(), UsageLog.id.desc()
-    user_name: Any = labels.user(UsageLog.user_id) if labels is not None else None
-    key_name: Any = labels.api_key(UsageLog.api_key_id) if labels is not None else None
+    user_name, key_name = names
     keys: dict[str, Any] = {
         "user": func.lower(func.coalesce(user_name, UsageLog.user_id)),
         "model": func.lower(UsageLog.model),
@@ -1145,13 +1173,18 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         labels: UsageSortLabels | None = None,
     ) -> list[UsageLog]:
         """The rows matching these filters inside this scope, in the order asked for, newest first by default."""
-        stmt = (
-            select(UsageLog)
-            .where(*usage_conditions(filters, scope))
-            .order_by(*_ordering(sort, order, labels))
-            .offset(skip)
-            .limit(limit)
-        )
+        stmt = select(UsageLog).where(*usage_conditions(filters, scope))
+        user_name: Any = null()
+        key_name: Any = null()
+        if labels is not None and sort == "user":
+            users = labels.users.subquery("user_names")
+            stmt = stmt.outerjoin(users, users.c.id == UsageLog.user_id)
+            user_name = users.c.name
+        if labels is not None and sort == "source":
+            keys = labels.api_keys.subquery("key_names")
+            stmt = stmt.outerjoin(keys, keys.c.id == UsageLog.api_key_id)
+            key_name = keys.c.name
+        stmt = stmt.order_by(*_ordering(sort, order, (user_name, key_name))).offset(skip).limit(limit)
         return list((await self.db.execute(stmt)).scalars().all())
 
     async def p95_latency_ms(self, filters: UsageFilters, scope: UsageScope) -> int | None:
