@@ -59,6 +59,7 @@ import {
   figureLabel,
   periodFromUrl,
   sessionsSearchFor,
+  windowOf,
   windowSpan,
   windowWords,
 } from "@/features/spend/period"
@@ -363,19 +364,17 @@ export function MemberHome({
     shown?.kind === "default" && shown.per === "a month" && shown.periodStart
       ? shown.amount
       : undefined
-  const noBudgetNote =
-    shown === undefined
-      ? ""
-      : shown.kind === "default"
-        ? `Your limit resets ${shown.per || "on its own schedule"}, not with the month, so the month is not measured against it.`
-        : shown.kind === "own"
-          ? "Your own limit's period is not shown to you, so the month is not measured against it."
-          : "No limit you can see applies to you here."
+  // Only a limit the member can read is named; an unseen one is not "none".
+  const noBudgetFact =
+    shown?.kind === "default"
+      ? `your limit is ${formatUsd(shown.amount)}${shown.per ? ` ${shown.per}` : ""}`
+      : ""
 
   const metric = metricFromUrl(get("chart"))
   const isIncludingNotCharged = get("charged") !== "only"
   const chartView = useBreakdownChart({
     window,
+    colorWindow: windowOf(period, now),
     now,
     workspaceId,
     userId: me,
@@ -776,9 +775,9 @@ export function MemberHome({
           workspaceId={workspaceId}
           userId={me}
           isEnabled={me !== undefined}
-          cap={monthCap}
+          budget={monthCap === undefined ? undefined : { cap: monthCap }}
           capLabel="Your limit"
-          noBudgetNote={noBudgetNote}
+          noBudgetFact={noBudgetFact}
         />
       )}
       <section aria-label="Where it went" className="flex flex-col gap-4">

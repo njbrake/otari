@@ -21,7 +21,7 @@ import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { Segmented } from "@/design-system/navigation/Segmented"
 import { MemberAvatar } from "@/features/account/avatar/MemberAvatar"
 import { breakdownCut } from "@/features/home/breakdownCut"
-import { monthlyCap } from "@/features/home/budgetMonth"
+import { ceilingCounter, monthlyCap } from "@/features/home/budgetMonth"
 import { busiestWorkspace } from "@/features/home/busiestWorkspace"
 import { FigureLinks } from "@/features/home/FigureLinks"
 import {
@@ -73,6 +73,7 @@ import {
   periodFromUrl,
   sessionsSearchFor,
   usageRange,
+  windowOf,
   windowWords,
 } from "@/features/spend/period"
 import { SetLimitDialog } from "@/features/spend/SetLimitDialog"
@@ -736,6 +737,7 @@ export function TeamHome({
   const isIncludingNotCharged = get("charged") !== "only"
   const chartView = useBreakdownChart({
     window,
+    colorWindow: windowOf(period, now),
     now,
     workspaceId,
     groupBy: shownCut === undefined ? undefined : GROUP_BY[cut.value],
@@ -750,13 +752,20 @@ export function TeamHome({
     ? limitsOn(spend.ceilings, "workspace", workspaceId).own
     : organization
   const monthCap = monthlyCap(scopeLimit)
+  const monthBudget =
+    monthCap !== undefined && scopeLimit
+      ? {
+          cap: monthCap,
+          ...ceilingCounter(scopeLimit.ceiling, now),
+        }
+      : undefined
   const budgetName = workspaceId ? "Workspace budget" : "Team budget"
-  const noBudgetNote =
+  const noBudgetFact =
     limitsRead !== "ready"
       ? ""
       : scopeLimit
-        ? `The ${budgetName.toLowerCase()} resets ${scopeLimit.per || "on its own schedule"}, not with the month, so the month is not measured against it.`
-        : `No monthly ${budgetName.toLowerCase()} is set${workspaceId ? " on this workspace" : ""}.`
+        ? `${budgetName.toLowerCase()} is ${formatUsd(scopeLimit.max)}${scopeLimit.per ? ` ${scopeLimit.per}` : ""}`
+        : `no monthly ${budgetName.toLowerCase()}`
 
   return (
     <div className="flex flex-col gap-6">
@@ -1029,9 +1038,9 @@ export function TeamHome({
         onMonth={(next) => patch({ month: next })}
         now={now}
         workspaceId={workspaceId}
-        cap={monthCap}
+        budget={monthBudget}
         capLabel={budgetName}
-        noBudgetNote={noBudgetNote}
+        noBudgetFact={noBudgetFact}
       />
       <section aria-label="Where it went" className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">

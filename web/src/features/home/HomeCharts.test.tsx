@@ -112,7 +112,10 @@ function mockApi({
       return Response.json(
         groupedSeries({
           group_by: "model",
-          groups: [row("gpt-5", 3), row("claude", 1)],
+          // A dragged span (one with an end) ranks the two the other way.
+          groups: url.searchParams.has("end_date")
+            ? [row("claude", 3), row("gpt-5", 1)]
+            : [row("gpt-5", 3), row("claude", 1)],
           points: days.flatMap((bucket_start) => [
             { ...row("gpt-5", 0.5), bucket_start },
             { ...row("claude", 0.25), bucket_start },
@@ -177,7 +180,7 @@ describe("Home, the month against the budget", () => {
     expect(read?.searchParams.get("bucket")).toBe("day")
   })
 
-  it("says why a budget on another cadence draws no line", async () => {
+  it("names a budget on another cadence rather than draw its line", async () => {
     mockApi({
       ceilings: [
         organizationSpendCeiling({
@@ -188,9 +191,7 @@ describe("Home, the month against the budget", () => {
     })
     await renderHome()
     expect(
-      await screen.findByText(
-        "The team budget resets a week, not with the month, so the month is not measured against it.",
-      ),
+      await screen.findByText("team budget is $50.00 a week"),
     ).toBeVisible()
   })
 
@@ -206,6 +207,43 @@ describe("Home, the month against the budget", () => {
     }).format(before.start)
     await pickOption(user, "Month", name)
     await waitFor(() => expect(search().get("month")).toBe(before.key))
+  })
+})
+
+describe("Home, a budget created mid-month", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it("measures the month from the day it began, and its counter, with no false verdict", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date"],
+      now: Date.parse("2026-11-20T12:00:00Z"),
+    })
+    // $4 spent this month, more than the $3 budget, but only $0.50 of it on
+    // the counter, which began on the 12th.
+    mockApi({
+      chargedCost: 4,
+      ceilings: [
+        organizationSpendCeiling({
+          max_budget: 3,
+          current_spend: 0.5,
+          period_start: "2026-11-01T00:00:00+00:00",
+          period_end: "2026-12-01T00:00:00+00:00",
+          created_at: "2026-11-12T08:00:00+00:00",
+        }),
+      ],
+    })
+    await renderHome()
+    const band = await screen.findByRole("region", { name: "Monthly budget" })
+    expect(
+      await within(band).findByText("Team budget $3.00 from Nov 12"),
+    ).toBeInTheDocument()
+    expect(
+      within(band).getByText("$0.50 of $3.00 team budget since Nov 12"),
+    ).toBeVisible()
+    expect(within(band).queryByText(/Over budget Nov/)).toBeNull()
   })
 })
 
@@ -379,5 +417,29 @@ describe("Home, sharing as an image", () => {
     expect(
       within(dialog).getByRole("button", { name: "Download PNG" }),
     ).toBeDisabled()
+  })
+})
+
+describe("Home, the usage chart's colors", () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  /** The fill of a legend marker beside `name`. */
+  const markerOf = (scope: HTMLElement, name: string) =>
+    within(scope)
+      .getAllByText(name)
+      .map((one) => one.querySelector("rect")?.getAttribute("fill"))
+      .find(Boolean)
+
+  it("keeps each group's color when a drag ranks them the other way", async () => {
+    mockApi()
+    const preset = lastDays(7)
+    const start = preset[2]
+    const end = new Date(Date.parse(preset[5]) + DAY_MS).toISOString()
+    await renderHome(`/?period=7d&by=models&start=${start}&end=${end}`)
+    const section = await screen.findByRole("region", { name: "Where it went" })
+    await waitFor(() =>
+      expect(markerOf(section, "gpt-5")).toBe("var(--color-chart-cat-1)"),
+    )
+    expect(markerOf(section, "claude")).toBe("var(--color-chart-cat-2)")
   })
 })

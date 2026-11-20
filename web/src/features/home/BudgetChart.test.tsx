@@ -17,7 +17,11 @@ function renderChart({
       month={month}
       now={now}
       totals={totals}
-      cap={cap ?? undefined}
+      line={
+        cap === null
+          ? undefined
+          : { cap, base: 0, fromDay: 0, from: month.start }
+      }
       capLabel="Team budget"
       spendLabel="Charged so far"
     />,
@@ -36,6 +40,13 @@ describe("BudgetChart", () => {
         name: /Charged spend in November 2026, running total, against the \$125\.00 team budget/,
       }),
     ).toBeVisible()
+  })
+
+  it("keeps the tilde on a crossing paced onto today that has not happened", () => {
+    // Day 4 at noon: $30 so far is a pace of ~$8.57 a day, which passes $33
+    // during today, while today's total is still under it.
+    renderChart({ now: at("2026-11-04T12:00:00Z"), cap: 33 })
+    expect(screen.getByText("Over budget ~Nov 4")).toBeInTheDocument()
   })
 
   it("says a crossing that has happened without a tilde", () => {
@@ -78,6 +89,8 @@ describe("BudgetChart", () => {
     expect(screen.queryByText("Today")).toBeNull()
     expect(screen.queryByText(/Over budget/)).toBeNull()
     expect(screen.queryByText("Projected at this month's pace")).toBeNull()
+    // Today's budget passes no verdict on a month it did not bound.
+    expect(document.querySelector(".bg-danger")).toBeNull()
     // Only the days there are to read.
     expect(screen.getByRole("slider")).toHaveAttribute("aria-valuemax", "31")
   })
@@ -96,6 +109,39 @@ describe("BudgetChart", () => {
       totals: Array.from({ length: 28 }, () => 1),
     })
     expect(screen.getByText("Today")).toHaveClass("right-1.5")
+  })
+})
+
+describe("BudgetChart, a budget that began mid-month", () => {
+  it("draws the line from that day and marks no crossing on the spend before it", () => {
+    const now = at("2026-11-20T00:00:00Z")
+    const month = monthAt(2026, 10, now)
+    const totals = Array.from({ length: 20 }, (_, index) => (index + 1) * 3)
+    const { container } = render(
+      <BudgetChart
+        month={month}
+        now={now}
+        totals={totals}
+        line={{
+          cap: 35,
+          base: 33,
+          fromDay: 11,
+          from: at("2026-11-12T00:00:00Z"),
+        }}
+        capLabel="Team budget"
+        spendLabel="Charged so far"
+      />,
+    )
+    expect(
+      screen.getByText("Team budget $35.00 from Nov 12"),
+    ).toBeInTheDocument()
+    expect(screen.getByText("Before the budget began")).toBeVisible()
+    // $60 is past $35, but $27 of the budget's own is not: nothing is over yet.
+    expect(container.querySelectorAll(".bg-danger")).toHaveLength(0)
+    expect(screen.queryByText(/Over budget Nov/)).toBeNull()
+    expect(container.querySelectorAll(".bg-chart-cat-other")).toHaveLength(
+      11 + 1,
+    )
   })
 })
 

@@ -4,8 +4,10 @@ import { InlineList } from "@/design-system/layout/InlineList"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { BudgetChart } from "@/features/home/BudgetChart"
 import {
+  budgetLine,
   canProject,
   dailyTotals,
+  dayLabel,
   monthFromUrl,
   monthName,
   monthRange,
@@ -30,10 +32,10 @@ export function MonthBudget({
   workspaceId,
   userId,
   isEnabled = true,
-  cap,
+  budget,
   capLabel,
   spendLabel = "Charged so far",
-  noBudgetNote,
+  noBudgetFact,
 }: {
   /** The URL's `month`, "" for this one. */
   monthKey: string
@@ -43,13 +45,17 @@ export function MonthBudget({
   /** Narrows the month to one person's spend. */
   userId?: string
   isEnabled?: boolean
-  /** The monthly budget the total is measured against, if one applies. */
-  cap: number | undefined
+  /**
+   * The monthly budget the total is measured against, if one applies: its
+   * amount, when its counter began, and what it has counted this period,
+   * where the caller may read them.
+   */
+  budget: { cap: number; startedAt?: number; counter?: number } | undefined
   /** What the budget line is called: "Team budget", "Your limit". */
   capLabel: string
   spendLabel?: string
-  /** Said where no monthly budget applies, in place of the budget figures. */
-  noBudgetNote: string
+  /** Said beside the month's spend where no monthly budget applies: "no monthly team budget". */
+  noBudgetFact: string
 }) {
   const months = offeredMonths(now)
   const month = monthFromUrl(monthKey, now)
@@ -70,19 +76,42 @@ export function MonthBudget({
   const data = summary.isPlaceholderData ? undefined : summary.data
   const totals = data ? runningTotal(dailyTotals(data.series, month)) : []
   const spent = totals.at(-1) ?? 0
+  const line = budget
+    ? budgetLine({
+        cap: budget.cap,
+        totals,
+        month,
+        startedAt: budget.startedAt,
+        counter: budget.counter,
+      })
+    : undefined
   const projection = projectMonth(
     totals,
     month,
-    month.isCurrent ? cap : undefined,
+    month.isCurrent ? line : undefined,
     now,
   )
+  const capName = (
+    month.isCurrent ? (budget ? capLabel : "") : `${capLabel} today`
+  ).toLowerCase()
   const facts: string[] = []
   if (data) {
-    facts.push(
-      cap === undefined
-        ? `${formatUsd(spent)} charged`
-        : `${formatUsd(spent)} charged of ${formatUsd(cap)} ${(month.isCurrent ? capLabel : `${capLabel} today`).toLowerCase()}`,
-    )
+    if (!line) {
+      facts.push(`${formatUsd(spent)} charged`)
+      if (noBudgetFact) facts.push(noBudgetFact)
+    } else if (line.base > 0 || line.fromDay > 0) {
+      // Part of the month is not on the budget's counter: say both.
+      facts.push(`${formatUsd(spent)} charged`)
+      facts.push(
+        `${formatUsd(spent - line.base)} of ${formatUsd(line.cap)} ${capName}${
+          line.fromDay > 0 ? ` since ${dayLabel(month, line.fromDay + 1)}` : ""
+        }`,
+      )
+    } else {
+      facts.push(
+        `${formatUsd(spent)} charged of ${formatUsd(line.cap)} ${capName}`,
+      )
+    }
     if (canProject(month, now) && projection.projected.length > 0) {
       facts.push(`on pace for ${formatUsd(projection.end)}`)
     }
@@ -122,7 +151,7 @@ export function MonthBudget({
           month={month}
           now={now}
           totals={totals}
-          cap={cap}
+          line={line}
           capLabel={capLabel}
           spendLabel={spendLabel}
         />
@@ -131,9 +160,6 @@ export function MonthBudget({
       ) : (
         <Skeleton className="h-52 w-full" />
       )}
-      {cap === undefined ? (
-        <p className="text-caption">{noBudgetNote}</p>
-      ) : null}
     </section>
   )
 }

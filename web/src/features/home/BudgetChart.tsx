@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useRef, useState } from "react"
 import {
   axisTop,
+  type BudgetLine,
   dayLabel,
   type Month,
   monthTitle,
@@ -52,7 +53,7 @@ export function BudgetChart({
   month,
   now,
   totals,
-  cap,
+  line,
   capLabel,
   spendLabel,
 }: {
@@ -61,8 +62,8 @@ export function BudgetChart({
   now: number
   /** The running total for each day of the month that has begun. */
   totals: readonly number[]
-  /** The budget, drawn as a line; undefined where none applies. */
-  cap: number | undefined
+  /** The budget, drawn as a line from the day it counts; undefined where none applies. */
+  line: BudgetLine | undefined
   /** "Team budget", "Your limit". */
   capLabel: string
   /** What a day's figure is: "Charged so far". */
@@ -74,14 +75,18 @@ export function BudgetChart({
   const { projected, end, crossDay } = projectMonth(
     totals,
     month,
-    month.isCurrent ? cap : undefined,
+    month.isCurrent ? line : undefined,
     now,
   )
+  const cap = line?.cap
+  // Where the line sits: the budget over the spend it does not count.
+  const limit = line ? line.base + line.cap : undefined
+  const fromDay = line?.fromDay ?? 0
   const count = month.length
   const elapsed = totals.length
   const heightOf = (index: number) =>
     index < elapsed ? totals[index] : (projected[index - elapsed] ?? 0)
-  const top = axisTop(Math.max(end, cap ?? 0) * HEADROOM)
+  const top = axisTop(Math.max(end, limit ?? 0) * HEADROOM)
   const pct = (value: number) => `${Math.max(0, (value / top) * 100)}%`
   const readable = projected.length > 0 ? count : Math.max(1, elapsed)
   const resting = Math.max(0, elapsed - 1)
@@ -90,7 +95,9 @@ export function BudgetChart({
   const readOut = (index: number): [string, number][] =>
     index >= elapsed
       ? [["Projected", heightOf(index)]]
-      : [[spendLabel, totals[index] ?? 0]]
+      : line && index < fromDay
+        ? [["Before the budget", totals[index] ?? 0]]
+        : [[spendLabel, totals[index] ?? 0]]
   const readDay = (index: number) =>
     `${dayLabel(month, index + 1)}${index >= elapsed ? ", projected" : ""}: ${readOut(
       index,
@@ -110,6 +117,11 @@ export function BudgetChart({
   }
 
   const isLate = (day: number) => day > count * LATE
+  // Projected unless a day's actual total passed the budget: the pace can put
+  // the crossing on today before today's spend has reached it.
+  const isCrossProjected =
+    crossDay !== undefined &&
+    !((totals[crossDay - 1] ?? 0) > (limit ?? Number.POSITIVE_INFINITY))
 
   return (
     <div className="flex flex-col gap-3">
@@ -132,7 +144,9 @@ export function BudgetChart({
             tabIndex={0}
             aria-label={`Charged spend in ${monthTitle(month)}, running total${
               cap !== undefined
-                ? `, against the ${formatUsd(cap)} ${capName.toLowerCase()}`
+                ? `, against the ${formatUsd(cap)} ${capName.toLowerCase()}${
+                    fromDay > 0 ? ` from ${dayLabel(month, fromDay + 1)}` : ""
+                  }`
                 : ""
             }. Use the arrow keys to read a day.`}
             aria-valuemin={1}
@@ -160,7 +174,15 @@ export function BudgetChart({
               {Array.from({ length: count }, (_, index) => {
                 const value = heightOf(index)
                 const isActual = index < elapsed
-                const isOver = cap !== undefined && value > cap
+                // A past month is drawn against today's budget, not its own,
+                // so its bars pass no verdict on it.
+                const isOver =
+                  month.isCurrent &&
+                  limit !== undefined &&
+                  index >= fromDay &&
+                  value > limit
+                // Spend before the budget began is shown, not counted.
+                const isUncounted = line !== undefined && index < fromDay
                 return (
                   <div
                     key={index}
@@ -170,7 +192,13 @@ export function BudgetChart({
                   >
                     {isActual ? (
                       <span
-                        className={isOver ? "bg-danger" : "bg-chart-cat-1"}
+                        className={
+                          isOver
+                            ? "bg-danger"
+                            : isUncounted
+                              ? "bg-chart-cat-other"
+                              : "bg-chart-cat-1"
+                        }
                         style={{ height: pct(value) }}
                       />
                     ) : projected.length > 0 ? (
@@ -183,14 +211,22 @@ export function BudgetChart({
                 )
               })}
             </div>
-            {cap !== undefined ? (
+            {line && limit !== undefined ? (
               <div
                 aria-hidden
-                className="pointer-events-none absolute inset-x-0 border-t border-dashed border-foreground"
-                style={{ bottom: pct(cap) }}
+                className="pointer-events-none absolute right-0 border-t border-dashed border-foreground"
+                style={{
+                  bottom: pct(limit),
+                  left: `${(fromDay / count) * 100}%`,
+                }}
               >
-                <span className="absolute bottom-0.75 left-1 bg-background px-1 text-mono-micro text-foreground">
-                  {capName} {formatUsd(cap)}
+                <span
+                  className={`absolute bottom-0.75 bg-background px-1 text-mono-micro whitespace-nowrap text-foreground ${
+                    isLate(fromDay + 1) ? "right-1" : "left-1"
+                  }`}
+                >
+                  {capName} {formatUsd(line.cap)}
+                  {fromDay > 0 ? ` from ${dayLabel(month, fromDay + 1)}` : ""}
                 </span>
               </div>
             ) : null}
@@ -205,7 +241,7 @@ export function BudgetChart({
                     isLate(crossDay) ? "right-1.5" : "left-1.5"
                   }`}
                 >
-                  {crossDay > elapsed ? "Over budget ~" : "Over budget "}
+                  {isCrossProjected ? "Over budget ~" : "Over budget "}
                   {dayLabel(month, crossDay)}
                 </span>
               </div>
@@ -274,6 +310,7 @@ export function BudgetChart({
         </div>
       </div>
       <BudgetLegend
+        hasUncounted={line !== undefined && fromDay > 0}
         hasProjection={projected.length > 0}
         cap={cap}
         capName={capName}
@@ -284,11 +321,13 @@ export function BudgetChart({
 }
 
 function BudgetLegend({
+  hasUncounted,
   hasProjection,
   cap,
   capName,
   spendLabel,
 }: {
+  hasUncounted: boolean
   hasProjection: boolean
   cap: number | undefined
   capName: string
@@ -300,6 +339,12 @@ function BudgetLegend({
         <span aria-hidden className="size-2 shrink-0 bg-chart-cat-1" />
         {spendLabel}
       </span>
+      {hasUncounted ? (
+        <span className="flex items-center gap-1.5">
+          <span aria-hidden className="size-2 shrink-0 bg-chart-cat-other" />
+          Before the budget began
+        </span>
+      ) : null}
       {hasProjection ? (
         <span className="flex items-center gap-1.5">
           <span aria-hidden className="otari-hatch size-2.5 shrink-0" />

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { UsageGroupRow } from "@/client"
 import {
+  assignSlots,
   bucketStarts,
   draggedSpan,
   foldSeries,
@@ -203,5 +204,36 @@ describe("labels", () => {
   it("reads an unknown metric as cost", () => {
     expect(metricFromUrl("tokens")).toBe("tokens")
     expect(metricFromUrl("bogus")).toBe("cost")
+  })
+})
+
+describe("assignSlots", () => {
+  it("gives each group the slot of its rank on the page", () => {
+    expect(assignSlots(["c", "a", "b"], ["a", "b", "c"])).toEqual([2, 0, 1])
+  })
+  it("gives a group the page did not rank the first slot left free", () => {
+    expect(assignSlots(["x", "b", "y"], ["a", "b", "c", "d"])).toEqual([
+      0, 1, 2,
+    ])
+    expect(assignSlots(["d", "z"], ["a", "b", "c", "d"])).toEqual([3, 0])
+  })
+  it("keeps colors when a narrower window ranks the groups the other way", () => {
+    const data = {
+      groups: [group("b", 5), group("a", 1)],
+      points: [point(DAY1, "b", 5), point(DAY1, "a", 1)],
+    }
+    const folded = foldSeries({
+      data,
+      starts: STARTS,
+      metric: "cost",
+      labelOf: (row) => row.key ?? "",
+      order: ["a", "b"],
+    })
+    expect(
+      Object.fromEntries(folded.series.map((one) => [one.label, one.color])),
+    ).toEqual({
+      a: "var(--color-chart-cat-1)",
+      b: "var(--color-chart-cat-2)",
+    })
   })
 })

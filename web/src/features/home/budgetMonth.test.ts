@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest"
 import {
   axisTop,
+  budgetLine,
   canProject,
+  ceilingCounter,
   dailyTotals,
   dayLabel,
   monthAt,
@@ -192,5 +194,93 @@ describe("monthlyCap", () => {
       monthlyCap({ max: 50, ceiling: { reset_alignment: null } }),
     ).toBeUndefined()
     expect(monthlyCap(null)).toBeUndefined()
+  })
+})
+
+describe("a budget that began mid-month", () => {
+  const now = at("2026-11-20T00:00:00Z")
+  const month = monthAt(2026, 10, now)
+  // $3 a day from the 1st: $57 by the end of the 19th, $60 with today's.
+  const totals = runningTotal(Array.from({ length: 20 }, () => 3))
+
+  it("counts from the day its counter began, the spend before under its line", () => {
+    const line = budgetLine({
+      cap: 35,
+      totals,
+      month,
+      startedAt: at("2026-11-12T15:00:00Z"),
+    })
+    expect(line).toMatchObject({ cap: 35, fromDay: 11, base: 33 })
+  })
+
+  it("passes no verdict on spend before it began", () => {
+    // $60 spent this month is past $35, but only $27 of it since the 12th.
+    const line = budgetLine({
+      cap: 35,
+      totals,
+      month,
+      startedAt: at("2026-11-12T00:00:00Z"),
+    })
+    const projection = projectMonth(totals, month, line, now)
+    expect(totals.at(-1)).toBe(60)
+    expect(projection.crossDay).not.toBe(1)
+    // At $27 over 8 days it crosses $35 on about the 15th day of counting.
+    expect(projection.crossDay).toBeGreaterThan(20)
+  })
+
+  it("takes the spend it does not count from the counter, where there is one", () => {
+    const line = budgetLine({ cap: 35, totals, month, counter: 12 })
+    expect(line).toMatchObject({ fromDay: 0, base: 48 })
+    expect(projectMonth(totals, month, line, now).crossDay).toBeUndefined()
+  })
+
+  it("counts the whole month for a counter that began before it or after it", () => {
+    expect(
+      budgetLine({
+        cap: 1,
+        totals,
+        month,
+        startedAt: at("2026-10-05T00:00:00Z"),
+      }).fromDay,
+    ).toBe(0)
+    const october = monthAt(2026, 9, now)
+    expect(
+      budgetLine({
+        cap: 1,
+        totals: [1],
+        month: october,
+        startedAt: at("2026-11-12T00:00:00Z"),
+      }),
+    ).toMatchObject({ fromDay: 0, base: 0 })
+  })
+})
+
+describe("ceilingCounter", () => {
+  const now = at("2026-11-20T00:00:00Z")
+  it("starts at the later of the period's start and the ceiling's creation", () => {
+    expect(
+      ceilingCounter(
+        {
+          period_start: "2026-11-01T00:00:00+00:00",
+          period_end: "2026-12-01T00:00:00+00:00",
+          created_at: "2026-11-12T09:00:00+00:00",
+          current_spend: 4.5,
+        },
+        now,
+      ),
+    ).toEqual({ startedAt: at("2026-11-12T09:00:00Z"), counter: 4.5 })
+  })
+  it("reads no counter from a period that has ended", () => {
+    expect(
+      ceilingCounter(
+        {
+          period_start: "2026-10-01T00:00:00+00:00",
+          period_end: "2026-11-01T00:00:00+00:00",
+          created_at: "2026-01-01T00:00:00+00:00",
+          current_spend: 40,
+        },
+        now,
+      ).counter,
+    ).toBeUndefined()
   })
 })

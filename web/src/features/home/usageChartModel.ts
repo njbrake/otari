@@ -100,24 +100,35 @@ export function foldSeries({
   starts,
   metric,
   labelOf,
+  order,
 }: {
   data: Pick<UsageGroupedSeries, "groups" | "points">
   starts: readonly number[]
   metric: Metric
   /** A group's name in the legend, from its row. */
   labelOf: (group: UsageGroupRow) => string
+  /**
+   * The page's ranking of the groups, largest first, which the colors follow:
+   * a group keeps its slot when a drag narrows the window and the ranking in
+   * the narrower one changes. Defaults to this answer's own ranking.
+   */
+  order?: readonly (string | null)[]
 }): FoldedChart {
   const named = data.groups
     .filter((group) => !group.is_other)
     .slice(0, NAMED_GROUPS)
   const indexOf = new Map(named.map((group, index) => [group.key, index]))
+  const slotOf = assignSlots(
+    named.map((group) => group.key),
+    order ?? named.map((group) => group.key),
+  )
   const hasOther =
     data.groups.length > named.length ||
     data.points.some((point) => point.is_other)
   const series: SeriesDef[] = named.map((group, index) => ({
     key: seriesKey(index),
     label: labelOf(group),
-    color: SLOTS[index],
+    color: SLOTS[slotOf[index]],
   }))
   if (hasOther) {
     series.push({ key: OTHER_KEY, label: "Other", color: OTHER_COLOR })
@@ -143,6 +154,27 @@ export function foldSeries({
       ...(byStart.get(start) ?? empty()),
     })),
   }
+}
+
+/**
+ * Each named group's color slot: the slot of its rank in `order` where that is
+ * one of the first four, else the first slot no other group holds.
+ */
+export function assignSlots(
+  keys: readonly (string | null)[],
+  order: readonly (string | null)[],
+): number[] {
+  const slots = keys.map((key) => {
+    const rank = order.indexOf(key)
+    return rank >= 0 && rank < SLOTS.length ? rank : -1
+  })
+  const taken = new Set(slots.filter((slot) => slot >= 0))
+  return slots.map((slot) => {
+    if (slot >= 0) return slot
+    const free = SLOTS.findIndex((_, index) => !taken.has(index))
+    taken.add(free)
+    return free
+  })
 }
 
 /**

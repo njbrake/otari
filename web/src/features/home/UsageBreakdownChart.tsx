@@ -42,9 +42,16 @@ export function useBreakdownChart({
   metric,
   isIncludingNotCharged,
   totals,
+  colorWindow,
   isEnabled = true,
 }: {
   window: SpendWindow
+  /**
+   * The page's own window, before a drag narrowed it: the groups take their
+   * colors from their ranking there, over all spend, so neither a drag nor the
+   * not-charged toggle repaints them.
+   */
+  colorWindow: SpendWindow
   now: number
   workspaceId?: string
   userId?: string
@@ -69,6 +76,21 @@ export function useBreakdownChart({
     isEnabled,
     "organization",
   )
+  const isOwnRanking =
+    isIncludingNotCharged &&
+    colorWindow.start === window.start &&
+    colorWindow.end === window.end
+  const ranking = useUsageGroupedSeries(
+    {
+      workspace_id: workspaceId || undefined,
+      user_id: userId ? [userId] : undefined,
+      ...usageRange(colorWindow),
+    },
+    colorWindow.bucket,
+    groupBy ?? null,
+    isEnabled && !isOwnRanking,
+    "organization",
+  )
   const starts = bucketStarts(window, now)
   // Another window's or breakdown's answer stands in while this one loads, and
   // an answer without groups is no breakdown at all (a mock, or a proxy's
@@ -77,21 +99,33 @@ export function useBreakdownChart({
     grouped.isPlaceholderData || !Array.isArray(grouped.data?.groups)
       ? undefined
       : grouped.data
-  const chart = data
-    ? foldSeries({ data, starts, metric, labelOf })
-    : placeholderSeries({
-        // The totals include spend no budget counted, so they stand in only
-        // where the chart will show it too.
-        totals: isIncludingNotCharged ? totals : [],
-        starts,
-        metric,
-      })
+  const rankingGroups =
+    isOwnRanking || ranking.isPlaceholderData ? undefined : ranking.data?.groups
+  // Until the page's ranking has answered, the bars wait for it rather than
+  // draw in colors they would then trade; a ranking that failed leaves the
+  // window's own.
+  const isRankingPending =
+    !isOwnRanking && !Array.isArray(rankingGroups) && !ranking.isError
+  const order = Array.isArray(rankingGroups)
+    ? rankingGroups.filter((group) => !group.is_other).map((group) => group.key)
+    : undefined
+  const chart =
+    data && !isRankingPending
+      ? foldSeries({ data, starts, metric, labelOf, order })
+      : placeholderSeries({
+          // The totals include spend no budget counted, so they stand in only
+          // where the chart will show it too.
+          totals: isIncludingNotCharged ? totals : [],
+          starts,
+          metric,
+        })
   return {
     chart,
     starts,
-    isLoading: data === undefined,
+    isLoading: data === undefined || isRankingPending,
     isEmpty:
       data !== undefined &&
+      !isRankingPending &&
       chart.points.every((point) =>
         chart.series.every((one) => !(Number(point[one.key]) > 0)),
       ),
@@ -163,6 +197,8 @@ export function UsageBreakdownChart({
             formatValue={(value) => formatMetric(metric, value)}
             formatYTick={(value) => formatMetricAxis(metric, value)}
             formatXTick={(x) => formatBucket(window.bucket, x)}
+            formatTooltipLabel={(x) => `${formatBucket(window.bucket, x)} UTC`}
+            selectHint="Drag to narrow the window"
             ariaLabel={`${
               METRICS.find((one) => one.value === metric)?.label ?? "Cost"
             } per ${window.bucket} by ${cutLabel}${
@@ -177,18 +213,13 @@ export function UsageBreakdownChart({
               if (span) onSelectSpan(span)
             }}
           />
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-            {isLoading ? (
-              <span className="text-caption">Loading the breakdown</span>
-            ) : isEmpty ? (
-              <span className="text-caption">Nothing to chart here.</span>
-            ) : (
-              <ChartLegend series={chart.series} />
-            )}
-            <span className="text-caption max-sm:hidden">
-              Drag across the bars to narrow the window. Times are UTC.
-            </span>
-          </div>
+          {isLoading ? (
+            <span className="text-caption">Loading the breakdown</span>
+          ) : isEmpty ? (
+            <span className="text-caption">Nothing to chart here.</span>
+          ) : (
+            <ChartLegend series={chart.series} />
+          )}
         </div>
       )}
     </div>

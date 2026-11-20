@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   ChartLegend,
   ChartTooltip,
+  niceTicks,
   releasedSelection,
   type SeriesDef,
   Sparkline,
@@ -307,5 +308,30 @@ describe("ChartTooltip", () => {
     // The zero series row is hidden in a stack; the total still sums all rows.
     expect(screen.queryByText("Failed")).toBeNull()
     expect(screen.getByText("Total")).toBeInTheDocument()
+  })
+})
+
+describe("niceTicks", () => {
+  it("steps by 1, 2 or 5 of a power of ten past the peak", () => {
+    expect(niceTicks(2.6, 4, false)).toEqual([0, 1, 2, 3])
+    expect(niceTicks(0.65, 4, false)).toEqual([0, 0.2, 0.4, 0.6, 0.8])
+    expect(niceTicks(840.5, 4, false)).toEqual([0, 500, 1000])
+    expect(niceTicks(3, 4, true)).toEqual([0, 1, 2, 3])
+    expect(niceTicks(0, 4, false)).toBeUndefined()
+  })
+})
+
+describe("ChartTooltip hint", () => {
+  it("says what the pointer can do under the values", () => {
+    render(
+      <ChartTooltip
+        active
+        label="Nov 3"
+        payload={[{ value: 2, name: "Cost" }]}
+        formatValue={String}
+        hint="Drag to narrow the window"
+      />,
+    )
+    expect(screen.getByText("Drag to narrow the window")).toBeVisible()
   })
 })

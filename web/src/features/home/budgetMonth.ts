@@ -111,44 +111,121 @@ export function canProject(month: Month, now: number): boolean {
   )
 }
 
+/**
+ * The budget as the month is measured against it: the amount, from the day it
+ * began counting. Spend before that is under the line (`base`), shown but not
+ * counted, so a budget created on the 12th passes no verdict on the 1st to the
+ * 11th.
+ */
+export interface BudgetLine {
+  cap: number
+  /** The month's charged spend the budget does not count. */
+  base: number
+  /** The 0-based day of the month the budget counts from. */
+  fromDay: number
+  /** The instant it counts from. */
+  from: number
+}
+
+/**
+ * The line a budget draws on the month. `startedAt` is when its counter began
+ * (the later of its period's start and its creation); `counter` is what it has
+ * counted in its current period, which is the month under way: where it is
+ * known, the spend it does not count is whatever the running total holds
+ * beyond it, so the figure under the title and the gap to the line agree with
+ * the counter the gateway enforces.
+ */
+export function budgetLine({
+  cap,
+  totals,
+  month,
+  startedAt,
+  counter,
+}: {
+  cap: number
+  totals: readonly number[]
+  month: Month
+  startedAt?: number
+  counter?: number
+}): BudgetLine {
+  // A counter that began inside the month starts the line there; one that
+  // began after it (a past month read against today's budget) or before it
+  // counts the whole month.
+  const from =
+    startedAt !== undefined && startedAt > month.start && startedAt < month.end
+      ? startedAt
+      : month.start
+  const fromDay = Math.floor((from - month.start) / DAY_MS)
+  const soFar = totals.at(-1) ?? 0
+  const before = fromDay > 0 ? (totals[fromDay - 1] ?? soFar) : 0
+  const base =
+    month.isCurrent && counter !== undefined
+      ? Math.max(0, soFar - counter)
+      : before
+  return { cap, base, fromDay, from }
+}
+
 export interface Projection {
   /** The projected running total for each day after today; empty when none is drawn. */
   projected: number[]
   /** The month's end total: projected while it runs, actual otherwise. */
   end: number
-  /** The 1-based day the running total passes `cap`, actual or projected. */
+  /** The 1-based day the running total passes the line, actual or projected. */
   crossDay: number | undefined
 }
 
 /**
- * Where the month is heading: each later day at this month's pace so far,
- * measured over the time it has run, and the day the running total passes
- * `cap`. Nothing is projected for a month that is over, or one too young.
+ * Where the month is heading: each later day at the pace the budget has
+ * counted so far (the month's own pace where there is no budget), and the day
+ * the running total passes the budget's line. Nothing is projected for a
+ * month that is over, one too young to have a pace, or a budget that has
+ * counted for less than a day.
  */
 export function projectMonth(
   totals: readonly number[],
   month: Month,
-  cap: number | undefined,
+  budget: BudgetLine | number | undefined,
   now: number,
 ): Projection {
+  const line =
+    typeof budget === "number"
+      ? { cap: budget, base: 0, fromDay: 0, from: month.start }
+      : budget
   const soFar = totals.at(-1) ?? 0
-  const isProjected = canProject(month, now) && soFar > 0
-  const rate = isProjected ? (soFar * DAY_MS) / (now - month.start) : 0
+  const base = line?.base ?? 0
+  const counted = soFar - base
+  const since = line ? Math.max(line.from, month.start) : month.start
+  const isProjected =
+    canProject(month, now) && counted > 0 && now - since >= PACE_MIN_MS
+  // Spend per millisecond over the time the budget has counted.
+  const rate = isProjected ? counted / (now - since) : 0
   const projected = isProjected
     ? Array.from(
         { length: month.length - month.elapsed },
-        (_, index) => rate * (month.elapsed + index + 1),
+        (_, index) =>
+          soFar +
+          rate * (month.start + (month.elapsed + index + 1) * DAY_MS - now),
       )
     : []
-  const end = isProjected ? Math.max(soFar, rate * month.length) : soFar
+  const end = isProjected
+    ? Math.max(soFar, soFar + rate * (month.end - now))
+    : soFar
   let crossDay: number | undefined
-  if (cap !== undefined && end > cap) {
-    const actual = totals.findIndex((total) => total > cap)
+  if (line && end > base + line.cap) {
+    const limit = base + line.cap
+    const actual = totals.findIndex(
+      (total, index) => index >= line.fromDay && total > limit,
+    )
     crossDay =
       actual >= 0
         ? actual + 1
         : rate > 0
-          ? Math.min(month.length, Math.floor(cap / rate) + 1)
+          ? Math.min(
+              month.length,
+              Math.floor(
+                (now - month.start + (limit - soFar) / rate) / DAY_MS,
+              ) + 1,
+            )
           : undefined
   }
   return { projected, end, crossDay }
@@ -209,4 +286,33 @@ export function monthlyCap(
   return limit?.ceiling.reset_alignment === "calendar_month"
     ? limit.max
     : undefined
+}
+
+/**
+ * When a ceiling's counter began and what it has counted, as the month band
+ * reads them: the later of its period's start and its creation, since one
+ * created on the 12th counts nothing before it, and its spend only while its
+ * period is the one under way.
+ */
+export function ceilingCounter(
+  ceiling: {
+    period_start?: string | null
+    period_end?: string | null
+    created_at?: string | null
+    current_spend?: number | null
+  },
+  now: number,
+): { startedAt?: number; counter?: number } {
+  const starts = [ceiling.period_start, ceiling.created_at]
+    .map((one) => (one ? Date.parse(one) : Number.NaN))
+    .filter(Number.isFinite)
+  const end = ceiling.period_end ? Date.parse(ceiling.period_end) : Number.NaN
+  const isCurrent =
+    Number.isFinite(end) &&
+    end > now &&
+    typeof ceiling.current_spend === "number"
+  return {
+    startedAt: starts.length > 0 ? Math.max(...starts) : undefined,
+    counter: isCurrent ? (ceiling.current_spend ?? undefined) : undefined,
+  }
 }
