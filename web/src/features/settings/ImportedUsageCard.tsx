@@ -166,7 +166,7 @@ export function ImportedUsageCard() {
           <Dropdown>
             <Dropdown.Trigger
               isDisabled={count.isPending || matching === 0}
-              className={buttonVariants({ size: "sm", variant: "secondary" })}
+              className={buttonVariants({ size: "sm", variant: "ghost" })}
             >
               Manage imported usage
               <FiChevronDown aria-hidden className="size-3.5" />
