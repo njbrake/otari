@@ -25,6 +25,7 @@ from sqlalchemy import (
     null,
     or_,
     select,
+    true,
     union_all,
     update,
 )
@@ -161,6 +162,45 @@ class ServedTraffic:
     api_key_id: str | None
     requests: int
     fell_back: int
+    readable: bool = True
+    """Whether the reader may see whose requests these are, so which key sent them."""
+
+
+@dataclass(frozen=True)
+class TrafficReader:
+    """Whose requests a reader of routing traffic may see as someone's, and so which keys sent them.
+
+    Every row in ``everyone_in`` (``None``: every workspace read), and elsewhere
+    their own rows alone, by ``own_user_id``.
+    """
+
+    everyone_in: frozenset[uuid.UUID] | None
+    own_user_id: str | None
+
+
+@dataclass(frozen=True)
+class NameAttempts:
+    """The attempts made in one workspace for one routing name, by one key, on one target in one role, by outcome."""
+
+    workspace_id: uuid.UUID
+    name: str
+    api_key_id: str | None
+    provider: str | None
+    model: str
+    selection_reason: str | None
+    """Why the plan chose the target: ``default``, ``on_failure``, ``router:<name>``, ``condition:<keys>``."""
+    position: int
+    """The earliest place in a plan the target was tried; a row with none recorded is the first."""
+    status: str
+    attempts: int
+
+
+def _readable(reader: TrafficReader) -> ColumnElement[bool]:
+    """Rows ``reader`` may see as someone's."""
+    if reader.everyone_in is None:
+        return true()
+    mine = UsageLog.user_id == reader.own_user_id if reader.own_user_id is not None else false()
+    return or_(UsageLog.workspace_id.in_(sorted(reader.everyone_in)), mine) if reader.everyone_in else mine
 
 
 @dataclass(frozen=True)
@@ -773,13 +813,25 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         result = cast("CursorResult[Any]", await self.db.execute(delete(UsageLog).where(UsageLog.id.in_(expired))))
         return result.rowcount or 0
 
-    async def served_traffic(self, *, workspace_ids: Collection[uuid.UUID], since: datetime) -> list[ServedTraffic]:
+    async def served_traffic(
+        self,
+        *,
+        workspace_ids: Collection[uuid.UUID],
+        since: datetime,
+        reader: TrafficReader | None = None,
+        api_key_ids: Collection[str] | None = None,
+    ) -> list[ServedTraffic]:
         """The requests served here since ``since`` in these workspaces, by name sent, offering reached and key.
 
-        One grouped read. Imported usage is left out, because it was never served here.
+        One grouped read. Imported usage is left out, because it was never served
+        here. With a ``reader``, each group says whether that reader may see whose
+        requests they are, and ``api_key_ids`` narrows to those keys' rows among
+        the ones the reader may see so.
         """
         if not workspace_ids:
             return []
+        readable = _readable(reader) if reader is not None else true()
+        readable_flag = case((readable, True), else_=False)
         fell_back = func.sum(case((and_(UsageLog.status == "success", UsageLog.attempt_position > 1), 1), else_=0))
         stmt = (
             select(
@@ -787,6 +839,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 UsageLog.model,
                 UsageLog.policy_name,
                 UsageLog.api_key_id,
+                readable_flag.label("readable"),
                 func.count().label("requests"),
                 func.coalesce(fell_back, 0).label("fell_back"),
             )
@@ -796,8 +849,10 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 UsageLog.status.in_(_REQUEST_STATUSES),
                 UsageLog.timestamp >= since,
             )
-            .group_by(UsageLog.provider, UsageLog.model, UsageLog.policy_name, UsageLog.api_key_id)
+            .group_by(UsageLog.provider, UsageLog.model, UsageLog.policy_name, UsageLog.api_key_id, readable_flag)
         )
+        if api_key_ids is not None:
+            stmt = stmt.where(UsageLog.api_key_id.in_(sorted(api_key_ids)), readable)
         return [
             ServedTraffic(
                 provider=row.provider,
@@ -806,6 +861,72 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 api_key_id=row.api_key_id,
                 requests=int(row.requests),
                 fell_back=int(row.fell_back),
+                readable=bool(row.readable),
+            )
+            for row in (await self.db.execute(stmt)).all()
+        ]
+
+    async def name_attempts(
+        self,
+        *,
+        workspace_ids: Collection[uuid.UUID],
+        names: Collection[str],
+        since: datetime,
+        reader: TrafficReader,
+        api_key_ids: Collection[str] | None = None,
+    ) -> list[NameAttempts]:
+        """The attempts made since ``since`` under these routing names, by workspace, key, target, role and outcome.
+
+        Only rows ``reader`` may see as someone's, narrowed to ``api_key_ids`` when
+        given. A row with no step recorded is the first step. Imported usage is
+        left out.
+        """
+        if not workspace_ids or not names:
+            return []
+        position = func.min(func.coalesce(UsageLog.attempt_position, 1))
+        stmt = (
+            select(
+                UsageLog.workspace_id,
+                UsageLog.policy_name,
+                UsageLog.api_key_id,
+                UsageLog.provider,
+                UsageLog.model,
+                UsageLog.selection_reason,
+                position.label("position"),
+                UsageLog.status,
+                func.count().label("attempts"),
+            )
+            .where(
+                UsageLog.workspace_id.in_(sorted(workspace_ids)),
+                UsageLog.policy_name.in_(sorted(names)),
+                UsageLog.source == SERVED_HERE_SLUG,
+                UsageLog.status.in_((*_REQUEST_STATUSES, "absorbed")),
+                UsageLog.timestamp >= since,
+                _readable(reader),
+            )
+            .group_by(
+                UsageLog.workspace_id,
+                UsageLog.policy_name,
+                UsageLog.api_key_id,
+                UsageLog.provider,
+                UsageLog.model,
+                UsageLog.selection_reason,
+                UsageLog.status,
+            )
+        )
+        if api_key_ids is not None:
+            stmt = stmt.where(UsageLog.api_key_id.in_(sorted(api_key_ids)))
+        return [
+            NameAttempts(
+                workspace_id=row.workspace_id,
+                name=row.policy_name,
+                api_key_id=row.api_key_id,
+                provider=row.provider,
+                model=row.model,
+                selection_reason=row.selection_reason,
+                position=int(row.position),
+                status=row.status,
+                attempts=int(row.attempts),
             )
             for row in (await self.db.execute(stmt)).all()
         ]

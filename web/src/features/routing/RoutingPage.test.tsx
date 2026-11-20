@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useParams, useSearch } from "@tanstack/react-router"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -8,7 +8,7 @@ import type { OrganizationContext } from "@/client"
 import { RoutingPage } from "@/features/routing/RoutingPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
-import { bootstrap, organizationContext } from "@/tests/fixtures"
+import { apiKey, bootstrap, organizationContext } from "@/tests/fixtures"
 import { withRouter } from "@/tests/router"
 import {
   ADMIN_WORKSPACE,
@@ -59,7 +59,7 @@ function PolicyProbe() {
 const POLICY_PAGE = [{ path: "/routing/$name", element: <PolicyProbe /> }]
 
 describe("RoutingPage", () => {
-  it("lists each policy's main model, its backups and who it applies to", async () => {
+  it("lists what each policy tries in order and who it applies to", async () => {
     mockApi()
     renderPage(<RoutingPage />)
 
@@ -68,23 +68,23 @@ describe("RoutingPage", () => {
     // itself so the table makes no catalog read per row.
     expect(within(fastRow).getByText("gpt-5-mini")).toBeInTheDocument()
     expect(within(fastRow).getByText("OpenAI")).toBeInTheDocument()
-    // The backups are spelled out in order, so a fallback is visible without
-    // opening the policy.
-    const backups = within(fastRow).getByRole("list", { name: "Backups" })
-    expect(within(backups).getAllByRole("listitem")).toHaveLength(1)
-    expect(backups).toHaveTextContent("claude-haiku-4-5 · Anthropic")
+    // The main model, then each backup, in order.
+    const chain = within(fastRow).getByRole("list", { name: "Tried in order" })
+    expect(within(chain).getAllByRole("listitem")).toHaveLength(2)
+    expect(chain).toHaveTextContent("gpt-5-mini OpenAI")
+    expect(chain).toHaveTextContent("claude-haiku-4-5 Anthropic")
+    expect(within(fastRow).queryByText("No backup")).toBeNull()
     expect(within(fastRow).getByText("Every caller")).toBeInTheDocument()
   })
 
-  it("says a policy has no backups rather than leaving the cell empty", async () => {
+  it("warns that a policy with one target has no backup", async () => {
     mockApi([policy("solo", { select: [{ default: "openai:gpt-5" }] })])
     renderPage(<RoutingPage />)
 
     const row = (await screen.findByText("solo")).closest("tr")!
-    expect(within(row).getByText("None")).toBeInTheDocument()
-    expect(
-      within(row).queryByRole("list", { name: "Backups" }),
-    ).not.toBeInTheDocument()
+    const chain = within(row).getByRole("list", { name: "Tried in order" })
+    expect(within(chain).getAllByRole("listitem")).toHaveLength(1)
+    expect(within(row).getByText("No backup")).toBeInTheDocument()
   })
 
   it("marks a policy that decides per request, since it has no single target", async () => {
@@ -820,6 +820,7 @@ describe("RoutingPage for an organization admin", () => {
           pinned: 0,
           pinned_provider: null,
           pinned_keys: [],
+          sent_by: [],
         },
       ],
     })
@@ -841,5 +842,126 @@ describe("RoutingPage for an organization admin", () => {
         url.endsWith(`${API_ROOT}/organizations/me/automatic-fallbacks`),
       ),
     ).toBe(true)
+  })
+
+  it("says who sent each policy and how many requests, and narrows to one key", async () => {
+    const user = userEvent.setup()
+    const { calls } = mockApi(undefined, undefined, undefined, {
+      context: organizationContext({
+        workspace_memberships: [
+          { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "owner" },
+        ],
+      }),
+      keys: [
+        apiKey({ id: "key-ci", key_name: "ci-bot" }),
+        apiKey({ id: "key-agent", key_name: "agent" }),
+      ],
+      traffic: [
+        {
+          workspace_id: ADMIN_WORKSPACE,
+          name: "fast",
+          requests: 1200,
+          sent_by: [
+            { api_key_id: "key-ci", key_name: "ci-bot", requests: 900 },
+            { api_key_id: "key-agent", key_name: "agent", requests: 250 },
+            { api_key_id: "key-old", key_name: null, requests: 50 },
+          ],
+          steps: [
+            {
+              target: "openai:gpt-5-mini",
+              role: "default",
+              router: null,
+              position: 1,
+              served: 1200,
+              failed: 0,
+            },
+          ],
+        },
+      ],
+    })
+    renderInWorkspace(<RoutingPage />)
+
+    const fastRow = (await screen.findByText("fast")).closest("tr")!
+    expect(await within(fastRow).findByText("1,200")).toBeInTheDocument()
+    expect(within(fastRow).getByText(/ci-bot/)).toBeInTheDocument()
+    expect(within(fastRow).getByText("+1 more")).toBeInTheDocument()
+    const autoRow = screen.getByText("auto").closest("tr")!
+    expect(within(autoRow).getByText("None (30d)")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: /Sent by key/ }))
+    await user.click(await screen.findByRole("option", { name: "ci-bot" }))
+    await waitFor(() =>
+      expect(
+        calls.some(
+          ({ url }) =>
+            url.includes("/routing-policies/traffic") &&
+            url.includes("api_key_id=key-ci"),
+        ),
+      ).toBe(true),
+    )
+    expect(
+      calls.some(
+        ({ url }) =>
+          url.includes("/automatic-fallbacks") &&
+          url.includes("api_key_id=key-ci"),
+      ),
+    ).toBe(true)
+    // Only the policies the key's traffic was sent under stay listed.
+    await waitFor(() => expect(screen.queryByText("auto")).toBeNull())
+    expect(screen.getByText("fast")).toBeInTheDocument()
+  })
+
+  it("names the keys that sent each automatic fallback", async () => {
+    mockApi(undefined, undefined, undefined, {
+      fallbacks: [
+        {
+          id: "anthropic/claude-sonnet-5.5",
+          name: "Claude Sonnet 5.5",
+          offerings: [],
+          requests: 7,
+          fell_back: 0,
+          pinned: 0,
+          pinned_provider: null,
+          pinned_keys: [],
+          sent_by: [{ api_key_id: "key-ci", key_name: "ci-bot", requests: 7 }],
+        },
+      ],
+    })
+    renderPage(<RoutingPage />)
+
+    const row = (
+      await screen.findByText("anthropic/claude-sonnet-5.5")
+    ).closest("tr")!
+    expect(within(row).getByText("ci-bot")).toBeInTheDocument()
+  })
+
+  it("shows a key named in the link as a chip it can drop, when there are too few keys to filter by", async () => {
+    const user = userEvent.setup()
+    mockApi(undefined, undefined, undefined, {
+      context: organizationContext({
+        workspace_memberships: [
+          { workspace_id: ADMIN_WORKSPACE, name: "Alpha one", role: "owner" },
+        ],
+      }),
+      keys: [apiKey({ id: "key-ci", key_name: "ci-bot" })],
+      traffic: [
+        {
+          workspace_id: ADMIN_WORKSPACE,
+          name: "fast",
+          requests: 3,
+          sent_by: [{ api_key_id: "key-ci", key_name: "ci-bot", requests: 3 }],
+          steps: [],
+        },
+      ],
+    })
+    renderInWorkspace(<RoutingPage />, "/?key=key-ci")
+
+    expect(await screen.findByText("fast")).toBeInTheDocument()
+    expect(screen.queryByText("auto")).toBeNull()
+    expect(screen.queryByRole("button", { name: /Sent by key/ })).toBeNull()
+    await user.click(
+      await screen.findByRole("button", { name: "Show every key" }),
+    )
+    expect(await screen.findByText("auto")).toBeInTheDocument()
   })
 })

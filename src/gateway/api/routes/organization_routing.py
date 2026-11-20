@@ -56,6 +56,7 @@ traffic used, and the fallback a catalog ID gives each with no policy.
 """
 
 import uuid
+from collections import defaultdict
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -69,6 +70,7 @@ from gateway.api.deps import (
     PersonGrowthSignalPortDep,
     RequestSessionModelProviderPortDep,
     RoutingServiceDep,
+    VisibleWorkspaces,
     VisibleWorkspacesDep,
     get_config,
     get_db,
@@ -91,14 +93,20 @@ from gateway.api.routes.routing import (
     validated_spec,
 )
 from gateway.core.config import GatewayConfig
+from gateway.core.sql import MAX_FILTER_VALUES
 from gateway.log_config import logger
 from gateway.models.providers import ModelAlias
 from gateway.models.routing import PolicySpec, RoutingPolicy
+from gateway.models.tenancy import MANAGEMENT_ROLES, Workspace
 from gateway.models.tenancy import User as TenancyUser
-from gateway.models.tenancy import Workspace
 from gateway.ports.growth_signal_port import GrowthAction, GrowthActivationEvent
 from gateway.ports.model_provider_port import ModelProviderPort
-from gateway.schemas.routing import AutomaticFallbackPublic, AutomaticFallbacksResponse
+from gateway.schemas.routing import (
+    AutomaticFallbackPublic,
+    AutomaticFallbacksResponse,
+    NameTrafficPublic,
+    RoutingTrafficResponse,
+)
 from gateway.services.alias_service import all_alias_names
 from gateway.services.model_access import intersect_allowlists, is_model_allowed
 from gateway.services.policy_store import all_policy_names
@@ -112,6 +120,7 @@ from gateway.services.tenancy.authorization import (
     resolve_workspace_in_organization,
 )
 from gateway.services.tenancy.organization_model_access import resolve_session_model_allowlist
+from gateway.services.usage_and_telemetry import TrafficReader
 
 # Authentication only, like the rest of the ``/api/v1/organizations/me`` surface.
 # What the caller may read or write is decided per request below, which is the
@@ -281,6 +290,35 @@ def _visible_workspace_ids(scope: VisibleWorkspaceScope) -> Select[uuid.UUID]:
 
 _LIMIT = Query(ge=1, le=_MAX_ROWS, description="Maximum entries to return, stored and config-file together.")
 
+_KEY_FILTER = Query(
+    max_length=MAX_FILTER_VALUES,
+    description=(
+        f"Only traffic these API keys sent, by id; repeatable, at most {MAX_FILTER_VALUES}. A key whose requests "
+        "the caller may not see narrows to nothing rather than being refused."
+    ),
+)
+
+
+async def _traffic_reader(db: AsyncSession, identity: TenancyUser, visible: VisibleWorkspaces) -> TrafficReader:
+    """Whose requests this caller may see as someone's, and so which keys sent them.
+
+    An organization owner or admin sees everyone's; a workspace's own owners and
+    admins everyone's in it; anyone else their own requests alone. Stricter than
+    the organization's usage reads, which show a member every row in their
+    workspaces.
+    """
+    if visible.whole_organization:
+        return TrafficReader(everyone_in=None, own_user_id=str(identity.id))
+    # Not an owner or admin of the organization, so only a workspace role manages.
+    memberships = await OrganizationService(db, membership_listener=None).workspaces.get_by_workspaces_and_user(
+        visible.workspace_ids, identity.id
+    )
+    managed = frozenset(
+        member.workspace_id for member in memberships if member.status == "active" and member.role in MANAGEMENT_ROLES
+    )
+    return TrafficReader(everyone_in=managed, own_user_id=str(identity.id))
+
+
 _WORKSPACE_FILTER = Query(
     description=(
         "Only stored entries in this workspace. Config-file entries are always included, being "
@@ -345,6 +383,50 @@ async def list_visible_routing_policies(
             )
         )
     return sorted(policies, key=lambda policy: (policy.name, str(policy.workspace_id or ""), policy.user_id or ""))
+
+
+@policies_router.get("/traffic")
+async def read_routing_traffic(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    current_identity: CurrentIdentity,
+    visible: VisibleWorkspacesDep,
+    routing: RoutingServiceDep,
+    workspace_id: Annotated[uuid.UUID | None, _WORKSPACE_FILTER] = None,
+    api_key_id: Annotated[list[str] | None, _KEY_FILTER] = None,
+) -> RoutingTrafficResponse:
+    """The last 30 days of traffic sent under each routing policy the caller may see.
+
+    Per workspace and policy name: the requests, the keys that sent them, and what
+    each step of the plan did (served, or failed and handed on). Whose requests
+    count: everyone's to an organization owner or admin, a workspace's to its
+    own owners and admins, and otherwise the caller's own. A stored policy
+    counts in its own workspace, a config-file one in every workspace.
+    """
+    reader = await _traffic_reader(db, current_identity, visible)
+    workspaces = sorted(visible.workspace_ids if workspace_id is None else visible.workspace_ids & {workspace_id})
+    # By name, as the list is, so at the cap a row it shows is still a row counted here.
+    pairs = await db.execute(
+        select(RoutingPolicy.workspace_id, RoutingPolicy.name)
+        .where(col(RoutingPolicy.workspace_id).in_(workspaces), col(RoutingPolicy.user_id).is_(None))
+        .distinct()
+        .order_by(RoutingPolicy.name, RoutingPolicy.workspace_id)
+        .limit(_MAX_ROWS)
+    )
+    by_workspace: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
+    for stored_in, name in pairs.all():
+        by_workspace[stored_in].add(name)
+    traffic = await routing.name_traffic(
+        workspace_ids=workspaces,
+        everywhere=set(config.routing.policies),
+        by_workspace=by_workspace,
+        reader=reader,
+        api_key_ids=api_key_id,
+    )
+    return RoutingTrafficResponse(
+        window_days=FALLBACK_WINDOW.days,
+        names=[NameTrafficPublic.model_validate(item) for item in traffic],
+    )
 
 
 @policies_router.post("")
@@ -539,12 +621,15 @@ async def delete_organization_alias(
 
 @fallbacks_router.get("")
 async def list_automatic_fallbacks(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_identity: CurrentIdentity,
     visible: VisibleWorkspacesDep,
     routing: RoutingServiceDep,
     workspace_id: Annotated[
         uuid.UUID | None,
         Query(description="Only the offerings a request billed to this workspace may call."),
     ] = None,
+    api_key_id: Annotated[list[str] | None, _KEY_FILTER] = None,
 ) -> AutomaticFallbacksResponse:
     """The models the caller's organization sent requests to in the last 30 days, and the fallback each gets.
 
@@ -555,12 +640,17 @@ async def list_automatic_fallbacks(
     beside its traffic: how many requests a backup served, and how many named one
     offering or a policy instead, by API key and provider. The traffic is the
     workspaces the caller may see in their active organization, by the rule the
-    organization's usage reads use.
+    organization's usage reads use. ``sent_by`` names the keys, and
+    ``api_key_id`` narrows to them, only among the requests the caller may see
+    as someone's: everyone's to an owner or admin, a workspace's to its own
+    owners and admins, and otherwise the caller's own.
     """
     fallbacks = await routing.automatic_fallbacks(
         organization_id=visible.organization_id,
         workspace_ids=visible.workspace_ids,
         serving_workspace_id=workspace_id,
+        reader=await _traffic_reader(db, current_identity, visible),
+        api_key_ids=api_key_id,
     )
     return AutomaticFallbacksResponse(
         window_days=FALLBACK_WINDOW.days,

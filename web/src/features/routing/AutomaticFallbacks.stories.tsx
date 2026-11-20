@@ -38,6 +38,7 @@ const fallback = (
   pinned: 0,
   pinned_provider: null,
   pinned_keys: [],
+  sent_by: [],
   ...overrides,
 })
 

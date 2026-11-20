@@ -334,9 +334,14 @@ test.describe("dashboard core flows", () => {
       .getByRole("row")
       .filter({ has: page.getByRole("rowheader", { name: "chained" }) })
     await expect(chained).toBeVisible()
-    await expect(
-      chained.getByRole("list", { name: "Backups" }).getByRole("listitem"),
-    ).toHaveText(["claude-3-5-haiku-latest · Anthropic"])
+    // The chain lists the main model, then its backup, in the order tried.
+    const tried = chained
+      .getByRole("list", { name: "Tried in order" })
+      .getByRole("listitem")
+    await expect(tried).toHaveCount(2)
+    await expect(tried.nth(0)).toContainText("gpt-4o")
+    await expect(tried.nth(1)).toContainText("claude-3-5-haiku-latest")
+    await expect(chained.getByText("No backup")).toHaveCount(0)
   })
 
   test("renames a policy in place", async ({ page }) => {
@@ -372,9 +377,12 @@ test.describe("dashboard core flows", () => {
       .getByRole("row")
       .filter({ has: page.getByRole("rowheader", { name: "renamed" }) })
     await expect(renamed).toBeVisible()
+    // The main model and its one backup, in the order tried.
     await expect(
-      renamed.getByRole("list", { name: "Backups" }).getByRole("listitem"),
-    ).toHaveCount(1)
+      renamed
+        .getByRole("list", { name: "Tried in order" })
+        .getByRole("listitem"),
+    ).toHaveCount(2)
     await expect(page.getByRole("rowheader", { name: "chained" })).toBeHidden()
   })
 })

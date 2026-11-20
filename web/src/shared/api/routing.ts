@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useIsFetching,
   useIsMutating,
   useMutation,
@@ -12,6 +13,7 @@ import type {
   ExplainPolicyRequest,
   ExplainPolicyResponse,
   RoutingPolicyResponse,
+  RoutingTrafficResponse,
   SetRoutingPolicyRequest,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
@@ -23,6 +25,7 @@ import {
   MODELS,
   ROUTING_EXPLAIN,
   ROUTING_POLICIES,
+  ROUTING_TRAFFIC,
   workspaceMeta,
 } from "@/shared/api/queryKeys"
 
@@ -119,23 +122,61 @@ export function useExplainPolicy(body: ExplainPolicyRequest, enabled: boolean) {
   })
 }
 
+/** The query string the routing traffic reads share: a workspace and the keys to narrow to. */
+function trafficParams(
+  workspaceId: string,
+  apiKeyIds: readonly string[],
+): string {
+  const params = new URLSearchParams()
+  if (workspaceId) params.set("workspace_id", workspaceId)
+  for (const id of apiKeyIds) params.append("api_key_id", id)
+  const query = params.toString()
+  return query ? `?${query}` : ""
+}
+
 // The models the caller's organization used in the last 30 days, each with the
 // offerings its catalog ID tries in order. One endpoint for every caller: the
 // server scopes the traffic to the workspaces the caller may see, and
 // `workspaceId` keeps only the offerings that workspace may call, and `null`
 // holds the read until the workspace is known (`useNarrowingWorkspace`).
-export function useAutomaticFallbacks(workspaceId: string | null = "") {
+//
+// `apiKeyIds` narrows the traffic to what those keys sent, among the requests
+// the caller may see as someone's; empty is every key.
+export function useAutomaticFallbacks(
+  workspaceId: string | null = "",
+  apiKeyIds: readonly string[] = [],
+) {
   return useQuery({
-    queryKey: [AUTOMATIC_FALLBACKS, workspaceId ?? ""],
+    queryKey: [AUTOMATIC_FALLBACKS, workspaceId ?? "", [...apiKeyIds]],
     meta: workspaceMeta(workspaceId),
     queryFn: () =>
       apiFetch<AutomaticFallbacksResponse>(
-        workspaceId
-          ? `/organizations/me/automatic-fallbacks?workspace_id=${encodeURIComponent(workspaceId)}`
-          : "/organizations/me/automatic-fallbacks",
+        `/organizations/me/automatic-fallbacks${trafficParams(workspaceId ?? "", apiKeyIds)}`,
       ),
     staleTime: 60_000,
     enabled: workspaceId !== null,
+    placeholderData: keepPreviousData,
+  })
+}
+
+/**
+ * The last 30 days sent under each routing policy name the caller may see, per
+ * workspace: the requests, the keys that sent them, and each step's outcome.
+ */
+export function useRoutingTraffic(
+  workspaceId: string | null = "",
+  apiKeyIds: readonly string[] = [],
+) {
+  return useQuery({
+    queryKey: [ROUTING_TRAFFIC, workspaceId ?? "", [...apiKeyIds]],
+    meta: workspaceMeta(workspaceId),
+    queryFn: () =>
+      apiFetch<RoutingTrafficResponse>(
+        `/organizations/me/routing-policies/traffic${trafficParams(workspaceId ?? "", apiKeyIds)}`,
+      ),
+    staleTime: 60_000,
+    enabled: workspaceId !== null,
+    placeholderData: keepPreviousData,
   })
 }
 

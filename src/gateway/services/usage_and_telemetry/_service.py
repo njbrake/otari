@@ -11,8 +11,10 @@ from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.usage_and_telemetry_exceptions import UsageSeriesTooLongError
 from gateway.repositories.usage_and_telemetry import (
     KeyNameTraffic,
+    NameAttempts,
     OfferingTraffic,
     ServedTraffic,
+    TrafficReader,
     UsageFilters,
     UsageLogRepository,
     UsageScope,
@@ -117,10 +119,37 @@ class UsageService:
         async with self._uow:
             await self._usage_logs.reassign_owner(user_ids, to_user_id)
 
-    async def served_traffic(self, *, workspace_ids: Collection[uuid.UUID], since: datetime) -> list[ServedTraffic]:
-        """The requests served here since ``since`` in these workspaces, by name sent, offering reached and key."""
+    async def served_traffic(
+        self,
+        *,
+        workspace_ids: Collection[uuid.UUID],
+        since: datetime,
+        reader: TrafficReader | None = None,
+        api_key_ids: Collection[str] | None = None,
+    ) -> list[ServedTraffic]:
+        """The requests served here since ``since`` in these workspaces, by name sent, offering reached and key.
+
+        ``reader`` marks the rows whose key it may see, and ``api_key_ids`` narrows to those keys among them.
+        """
         async with self._uow:
-            return await self._usage_logs.served_traffic(workspace_ids=workspace_ids, since=since)
+            return await self._usage_logs.served_traffic(
+                workspace_ids=workspace_ids, since=since, reader=reader, api_key_ids=api_key_ids
+            )
+
+    async def name_attempts(
+        self,
+        *,
+        workspace_ids: Collection[uuid.UUID],
+        names: Collection[str],
+        since: datetime,
+        reader: TrafficReader,
+        api_key_ids: Collection[str] | None = None,
+    ) -> list[NameAttempts]:
+        """The attempts made since ``since`` under these routing names, among the rows ``reader`` may see."""
+        async with self._uow:
+            return await self._usage_logs.name_attempts(
+                workspace_ids=workspace_ids, names=names, since=since, reader=reader, api_key_ids=api_key_ids
+            )
 
     async def names_by_key(
         self, key_ids: Collection[str], *, workspace_ids: Collection[uuid.UUID], since: datetime
