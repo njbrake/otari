@@ -133,8 +133,9 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
   }
 
   // A refinement only the request log reads says so anywhere else.
+  const notApplied = ` (not applied to ${view})`
   const requestOnly = (value: string) =>
-    isRequests ? value : `${value} (not applied to ${view})`
+    isRequests ? value : `${value}${notApplied}`
   const valueChips = (
     label: string,
     param: ObserveUrlKey,
@@ -197,7 +198,7 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
             label: "Status",
             value: state.statusApplied
               ? statusName(status)
-              : `${status} (not applied to ${view})`,
+              : `${status}${notApplied}`,
             onClear: () => patch({ status: "" }),
           },
         ]
@@ -274,7 +275,10 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
     ...thresholdChip("tokens_gt"),
     ...thresholdChip("cost_gt"),
     ...thresholdChip("latency_ms_gt"),
-  ]
+  ] // The badge counts what the view applies; a chip marked not applied is left out.
+  const appliedCount = chips.filter(
+    (chip) => !chip.value.endsWith(notApplied),
+  ).length
 
   const clearAll = () => patch(CLEARED)
 
@@ -293,22 +297,24 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
             {offersSheet ? (
               <Button
                 size="sm"
+                // Level with the select's box rather than its box and label.
+                className="self-end"
                 aria-haspopup="dialog"
                 aria-label={
-                  chips.length > 0
-                    ? `Filters, ${chips.length} applied`
+                  appliedCount > 0
+                    ? `Filters, ${appliedCount} applied`
                     : "Filters"
                 }
                 onPress={() => setIsSheetOpen(true)}
               >
                 <FiSliders aria-hidden className="size-3.5" />
                 Filters
-                {chips.length > 0 ? (
+                {appliedCount > 0 ? (
                   <span
                     aria-hidden
                     className="rounded-full bg-primary-subtle px-1.5 text-mono-micro text-primary-subtle-foreground"
                   >
-                    {chips.length}
+                    {appliedCount}
                   </span>
                 ) : null}
               </Button>

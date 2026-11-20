@@ -270,4 +270,14 @@ describe("ObserveFilterSheet on Sessions", () => {
     ).toBeInTheDocument()
     expect(await filtersButton()).toHaveAccessibleName("Filters, 1 applied")
   })
+
+  it("leaves a filter Sessions does not apply out of the badge", async () => {
+    mockApi({ traces: [traceSummary()] })
+    await renderSessions("?cost_gt=0.1&model=gpt-4o")
+
+    expect(
+      await screen.findByText(/not applied to sessions/),
+    ).toBeInTheDocument()
+    expect(await filtersButton()).toHaveAccessibleName("Filters, 1 applied")
+  })
 })
