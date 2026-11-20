@@ -125,6 +125,11 @@ Open **Sessions** and pick **Requests** for the per-request log. The two views
 share one time range and the model, user, API key and status filters, which
 stay in place when you switch views and are kept in the URL.
 
+Both views open on one row of controls above the chart: the view's search box,
+the **Time range**, **Columns** (on a phone, **Filters**), and at the right
+edge the view's refresh and, on Requests, its live controls. The filters you
+apply show as chips in a row directly under it.
+
 Filter from a column's header: each filterable column has a funnel that opens
 its values with how many requests carry each, busiest first, with a search box
 when the list is long. Check a value to keep only its rows, or press the slash
@@ -135,10 +140,11 @@ request came in by (**API**, **Imported** or **Playground**) and **No API key**
 or **No session**; **User** offers **No user**; **Routing** lists routing
 policies and offers **Direct requests only**; the token, **Cost** and **Total
 time** columns show only the rows above a threshold; **Cost** offers **Priced
-only** or **Unpriced only**; and **Status** takes several statuses at once. The funnel takes the accent color
-while its column is filtered. Every filter, including one a link set (a
-session, a status code, an endpoint), is a chip in the one row above the table
-that removes it; **Clear all** removes them together.
+only** or **Unpriced only**; and **Status** takes several statuses at once. The
+funnel takes the accent color while its column is filtered. Every filter,
+including one a link set (a session, a status code, an endpoint), is a chip in
+the row under the controls that removes it; **Clear all** removes them
+together.
 
 You can also filter from a cell: point at a user, model, routing policy, API
 key or status (or move to it with the arrow keys) and press the funnel beside
@@ -158,14 +164,15 @@ go back to newest first. **API key** sorts by the key's name, or the source of
 a request no key made. The order is kept in the URL. A sort other than time
 reads the last 30 days when the range has no start.
 
-The search box in the filter row finds requests by request ID (pasted whole),
+The search box on Requests finds requests by request ID (pasted whole),
 or by part of a user's name or ID, a model (the one that served or the
 name the caller sent), an API key's name, a source or a session. It searches as
 you stop typing, and every view of the page (the chart, the count and the
 column filters' values) follows it.
 
-On a phone the table is a list of cards with no headers, so the row above it
-has a **Filters** button instead, with a count of the filters applied. It opens
+On a phone the search box takes the full width and the controls follow it, and
+since the table is a list of cards with no headers, the row has a **Filters**
+button instead, with a count of the filters applied. It opens
 a sheet with one section per filterable column, in the table's order, each
 holding what that column's funnel holds, under a **Sort** section that orders
 the cards. Expand a section to load its values; changes apply as you make them. **Done** closes the sheet and **Clear all**
@@ -187,7 +194,7 @@ it; while paused it says why, and pressing it goes back to the newest requests.
 While paused, a **new · load** button says how many requests have landed since.
 
 On a desktop, drag the edge of a column's header to resize it, and use
-**Columns** at the end of the filter row to hide or show columns; the column
+**Columns** in the row of controls to hide or show columns; the column
 that names each row (**Model** on Requests, **Name** on Sessions) is always
 shown. A filter on a hidden column stays in the chip row and still applies.
 **Reset columns** returns the widths and the columns to the defaults. The

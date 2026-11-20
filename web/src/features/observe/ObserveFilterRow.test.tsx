@@ -32,7 +32,7 @@ async function renderBar(view: ObserveView, search = "") {
     </>,
     `${PATHS[view]}${search}`,
   )
-  await screen.findByText("Time range")
+  await screen.findByRole("button", { name: /Time range$/ })
 }
 
 // By element rather than role: an open picker hides everything outside its

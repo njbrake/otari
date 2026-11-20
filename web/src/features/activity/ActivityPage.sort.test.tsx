@@ -4,7 +4,6 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ActivityPage } from "@/features/activity/ActivityPage"
-import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
 import {
   countCalls,
   entry,
@@ -31,7 +30,6 @@ const lastParams = (urls: string[]) =>
 async function renderRequests(search = "") {
   renderPage(
     <>
-      <ObserveFilterRow view="requests" />
       <ActivityPage embedded />
       <UrlProbe />
     </>,
@@ -152,7 +150,6 @@ describe("ActivityPage search", () => {
     mockApi({ rows: [] })
     renderPage(
       <>
-        <ObserveFilterRow view="requests" />
         <ActivityPage embedded />
       </>,
       "/requests?q=nothing-matches",

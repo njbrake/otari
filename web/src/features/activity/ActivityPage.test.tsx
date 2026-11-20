@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { InFlightRequest, InFlightResponse } from "@/client"
 import { ActivityPage } from "@/features/activity/ActivityPage"
-import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
 import { API_ROOT } from "@/shared/api/client"
 import {
   countCalls,
@@ -21,7 +20,6 @@ import { organizationMember } from "@/tests/fixtures"
 function renderRequests(search = "") {
   return renderPage(
     <>
-      <ObserveFilterRow view="requests" />
       <ActivityPage embedded />
     </>,
     `/requests${search}`,
@@ -877,17 +875,19 @@ describe("ActivityPage", () => {
     ).toHaveValue("vllm:mistral-small")
   })
 
-  it("draws no filter toggle and no chip row of its own", async () => {
+  it("draws one chip row and no filter toggle", async () => {
     mockApi({ rows: [entry()] })
     renderPage(<ActivityPage embedded />, "/requests?priced=false&tool=any")
     await screen.findByText("gpt-4o")
 
-    // Every filter is set from a column header and shown in the Overview's one
-    // chip row, so the page itself carries neither.
+    // Every filter is set from a column header and shown in the one chip row
+    // under the controls.
     expect(
       screen.queryByRole("button", { name: /More filters|Add filter/ }),
     ).toBeNull()
-    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull()
+    expect(
+      screen.getAllByRole("button", { name: "Remove Priced filter" }),
+    ).toHaveLength(1)
   })
 
   it("shows its own filters as removable chips and clears one on ✕", async () => {

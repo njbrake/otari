@@ -204,15 +204,12 @@ describe("the Sessions layout", () => {
     expect(sessions.searchParams.has("page")).toBe(false)
   })
 
-  it("puts the tabs ahead of the filters", async () => {
+  it("leaves the filter row to the view under the tabs, which carries its own search", async () => {
     mockApi()
     renderPage(<OverviewIndex />, "/sessions")
 
-    const views = await screen.findByRole("navigation", SESSIONS_VIEWS)
-    expect(
-      views.compareDocumentPosition(screen.getByText("Time range")) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
+    await screen.findByRole("navigation", SESSIONS_VIEWS)
+    expect(screen.queryByRole("button", { name: /Time range$/ })).toBeNull()
   })
 
   it("leaves the Sessions title and tabs off Home", async () => {

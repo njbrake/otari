@@ -6,7 +6,6 @@ import { ActivityPage } from "@/features/activity/ActivityPage"
 import { SessionsPage } from "@/features/traces/SessionsPage"
 import { entry, mockApi, renderPage } from "@/tests/activity"
 import { traceSummary } from "@/tests/traceFixtures"
-import { ObserveFilterRow } from "./ObserveFilterRow"
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -21,7 +20,6 @@ function renderRequests(
   const api = mockApi({ rows: [entry()], preferences })
   renderPage(
     <>
-      <ObserveFilterRow view="requests" />
       <ActivityPage embedded />
     </>,
     `/requests${search}`,
@@ -169,7 +167,6 @@ describe("the Sessions table's layout", () => {
     })
     renderPage(
       <>
-        <ObserveFilterRow view="sessions" />
         <SessionsPage embedded />
       </>,
       "/sessions",

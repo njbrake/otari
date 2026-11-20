@@ -30,6 +30,8 @@ import {
   SetPriceDialog,
 } from "@/features/models/SetPriceDialog"
 import { ObserveColumnFilter } from "@/features/observe/ObserveColumnFilter"
+import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
+import { ObserveSearchBox } from "@/features/observe/ObserveSearchBox"
 import { funnelFor } from "@/features/observe/observeColumnFilters"
 import { readThreshold } from "@/features/observe/observeFilters"
 import {
@@ -1008,6 +1010,56 @@ function ActivityPageContent({
     [isMobile, columns, layout.hidden],
   )
 
+  // What says the log is still moving: the in-flight count, Live, the badge
+  // while paused, and Refresh. Inside the Overview they sit at the end of the
+  // filter row; on its own the page puts them beside the chart.
+  const liveControls = (
+    <span className="inline-flex items-center gap-2">
+      {/* Both live signals sit here, beside the control that acts on them:
+        the table below never moves on its own, so this strip is the only
+        place the page says anything is still happening. */}
+      {/* Rendered whenever the poll is answering at all, not only when it
+        reports traffic: the control hides itself while idle, but has to
+        stay mounted to keep an open list open across the moment the last
+        request lands. It still goes on a failed poll, where `liveNow` is
+        undefined, since there is nothing trustworthy left to report. */}
+      {liveNow ? (
+        <InFlightControl data={liveNow} updatedAt={inFlight.dataUpdatedAt} />
+      ) : null}
+      <LiveControl
+        isWanted={liveWanted}
+        pause={livePause}
+        onChange={(wanted, resume) => {
+          setLiveWanted(wanted)
+          if (resume) url.patch({ page: 0, request: "" })
+        }}
+      />
+      {newRows > 0 ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          onPress={refresh}
+          isDisabled={usage.isFetching}
+        >
+          {formatNumber(newRows)} new · load
+        </Button>
+      ) : null}
+      {newRowsUnknown ? (
+        <span
+          className="text-caption"
+          title="The row count could not be read, so this page cannot tell whether newer requests have landed. Refresh to load whatever is there."
+        >
+          Newer rows unknown
+        </span>
+      ) : null}
+      <RefreshButton
+        onRefresh={refresh}
+        isFetching={usage.isFetching}
+        updatedAt={usage.dataUpdatedAt}
+      />
+    </span>
+  )
+
   return (
     <div className="flex flex-col">
       <div
@@ -1016,6 +1068,20 @@ function ActivityPageContent({
       >
         {/* Inside the Overview the layout owns the heading. */}
         {embedded ? null : <PageIntro title="Activity" />}
+        {embedded ? (
+          <ObserveFilterRow
+            view="requests"
+            search={
+              <ObserveSearchBox
+                value={url.get("q")}
+                onCommit={(term) =>
+                  url.patch({ q: term, page: 0, request: "" })
+                }
+              />
+            }
+            end={liveControls}
+          />
+        ) : null}
 
         {/* The timeline's summary error is included so a failed series request
           reads as a failure, not as an empty "No activity in this range" strip. */}
@@ -1050,55 +1116,7 @@ function ActivityPageContent({
             windowEnd={win.end}
             loading={contextSummary.isLoading}
             ariaLabel="Activity request volume over the selected window"
-            action={
-              <span className="inline-flex items-center gap-2">
-                {/* Both live signals sit here, beside the control that acts on them:
-                  the table below never moves on its own, so this strip is the only
-                  place the page says anything is still happening. */}
-                {/* Rendered whenever the poll is answering at all, not only when it
-                  reports traffic: the control hides itself while idle, but has to
-                  stay mounted to keep an open list open across the moment the last
-                  request lands. It still goes on a failed poll, where `liveNow` is
-                  undefined, since there is nothing trustworthy left to report. */}
-                {liveNow ? (
-                  <InFlightControl
-                    data={liveNow}
-                    updatedAt={inFlight.dataUpdatedAt}
-                  />
-                ) : null}
-                <LiveControl
-                  isWanted={liveWanted}
-                  pause={livePause}
-                  onChange={(wanted, resume) => {
-                    setLiveWanted(wanted)
-                    if (resume) url.patch({ page: 0, request: "" })
-                  }}
-                />
-                {newRows > 0 ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onPress={refresh}
-                    isDisabled={usage.isFetching}
-                  >
-                    {formatNumber(newRows)} new · load
-                  </Button>
-                ) : null}
-                {newRowsUnknown ? (
-                  <span
-                    className="text-caption"
-                    title="The row count could not be read, so this page cannot tell whether newer requests have landed. Refresh to load whatever is there."
-                  >
-                    Newer rows unknown
-                  </span>
-                ) : null}
-                <RefreshButton
-                  onRefresh={refresh}
-                  isFetching={usage.isFetching}
-                  updatedAt={usage.dataUpdatedAt}
-                />
-              </span>
-            }
+            action={embedded ? undefined : liveControls}
           />
         </div>
 

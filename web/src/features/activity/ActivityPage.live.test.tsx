@@ -4,7 +4,6 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ActivityPage } from "@/features/activity/ActivityPage"
-import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
 import {
   countCalls,
   entry,
@@ -34,7 +33,6 @@ const liveControl = () => screen.findByRole("button", { name: "Live updates" })
 async function renderRequests(search = "") {
   renderPage(
     <>
-      <ObserveFilterRow view="requests" />
       <ActivityPage embedded />
       <UrlProbe />
     </>,

@@ -17,6 +17,7 @@ import { PageIntro } from "@/design-system/layout/PageIntro"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { ActivityTimeline } from "@/features/activity/ActivityTimeline"
 import { ObserveColumnFilter } from "@/features/observe/ObserveColumnFilter"
+import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
 import { funnelFor } from "@/features/observe/observeColumnFilters"
 import {
   laidOutColumns,
@@ -428,12 +429,32 @@ function SessionsPageContent({ embedded }: { embedded: boolean }) {
     void seriesQuery.refetch()
   }
 
+  // The one search box, in the filter row inside the Overview and above the
+  // table on its own.
+  const searchField = (className: string) => (
+    <SearchField
+      label="Search sessions"
+      placeholder="Search ID, name, agent or user"
+      value={query}
+      onChange={(value) => url.patch({ q: value, page: 0 })}
+      maxLength={SEARCH_MAX_LENGTH}
+      className={className}
+    />
+  )
+
   return (
     <div className="flex flex-col">
       {/* Below md the panel covers the page, which then takes no focus or
           presses until it closes. */}
       <div className="flex flex-col" inert={open !== null && isMobile}>
         {embedded ? null : <PageIntro title="Sessions" />}
+        {embedded ? (
+          <ObserveFilterRow
+            view="sessions"
+            search={searchField("w-full")}
+            end={<RefreshButton onRefresh={refresh} />}
+          />
+        ) : null}
         {keepsContent ? (
           <InfoBanner>
             {workspace ? "This workspace keeps" : "Your workspaces keep"} what
@@ -490,21 +511,16 @@ function SessionsPageContent({ embedded }: { embedded: boolean }) {
             additive={false}
             totals={windowTotals(count)}
           />
-          <div className="otari-toolbar flex flex-wrap items-center gap-2">
-            <SearchField
-              label="Search sessions"
-              placeholder="Search ID, name, agent or user"
-              value={query}
-              onChange={(value) => url.patch({ q: value, page: 0 })}
-              maxLength={SEARCH_MAX_LENGTH}
-              // The row's width on a phone, short of Refresh, so the
-              // placeholder fits.
-              className="w-72 max-w-full max-sm:w-auto max-sm:min-w-0 max-sm:flex-1"
-            />
-            <div className="ml-auto flex items-center gap-3">
-              <RefreshButton onRefresh={refresh} />
+          {embedded ? null : (
+            <div className="otari-toolbar flex flex-wrap items-center gap-2">
+              {searchField(
+                "w-72 max-w-full max-sm:w-auto max-sm:min-w-0 max-sm:flex-1",
+              )}
+              <div className="ml-auto flex items-center gap-3">
+                <RefreshButton onRefresh={refresh} />
+              </div>
             </div>
-          </div>
+          )}
 
           <TableScrollFrame className="otari-sessions-table">
             <DataTable
