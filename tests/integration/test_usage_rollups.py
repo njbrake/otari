@@ -200,6 +200,11 @@ _FILTERS: list[dict[str, Any]] = [
     {"refine": UsageRefinements(routed=False)},
     {"refine": UsageRefinements(tokens_gt=3000)},
     {"refine": UsageRefinements(cost_gt=0.5, latency_ms_gt=1000)},
+]
+
+# Kept apart from ``_FILTERS`` so their parity runs in a test of its own, inside
+# the suite's per-test timeout.
+_REFINEMENT_FILTERS: list[dict[str, Any]] = [
     # A status subset, the recovered attempts left out, the ways in and the empty
     # columns are all read off keys the rollups keep.
     {"refine": UsageRefinements(statuses=["error", "incomplete"])},
@@ -289,11 +294,17 @@ async def _read_all(repo: UsageLogRepository, filters: UsageFilters, scope: Usag
 
 
 async def _assert_parity(
-    rollups: _Reader, rows: _Reader, rng: random.Random, workspace_id: uuid.UUID, *, stride: int
+    rollups: _Reader,
+    rows: _Reader,
+    rng: random.Random,
+    workspace_id: uuid.UUID,
+    *,
+    stride: int,
+    specs: list[dict[str, Any]] = _FILTERS,
 ) -> None:
     scopes = _scopes(workspace_id)
     for index, (start, end) in enumerate(_windows(rng)):
-        for offset, spec in enumerate(_FILTERS):
+        for offset, spec in enumerate(specs):
             # Each filter meets every ``stride``-th window, and the scopes take turns.
             if (index + offset) % stride:
                 continue
@@ -363,6 +374,26 @@ async def test_rollups_answer_as_the_rows_do(
     await async_db.commit()
     assert await _marked(async_db) == 0
     await _assert_parity(rollups, rows, rng, workspace_id, stride=6)
+
+
+@pytest.mark.asyncio
+async def test_rollups_answer_the_newer_refinements_as_the_rows_do(
+    test_db: Session, async_db: AsyncSession, sessions: tuple[_Reader, _Reader]
+) -> None:
+    """Status subsets, recovered attempts left out, ways in, empty columns and a search, built and then written to."""
+    rng = random.Random(2027)
+    workspace_id = seed_workspace_id(test_db)
+    _seed_identities(test_db, workspace_id)
+    test_db.add_all(_rows(rng, workspace_id, 600))
+    test_db.commit()
+    rollups, rows = sessions
+    await _refresh_all(async_db)
+    await async_db.commit()
+    await _assert_parity(rollups, rows, rng, workspace_id, stride=4, specs=_REFINEMENT_FILTERS)
+
+    test_db.add_all(_rows(rng, workspace_id, 40))
+    test_db.commit()
+    await _assert_parity(rollups, rows, rng, workspace_id, stride=6, specs=_REFINEMENT_FILTERS)
 
 
 @pytest.mark.asyncio
