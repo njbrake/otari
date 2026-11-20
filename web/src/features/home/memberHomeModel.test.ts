@@ -10,6 +10,7 @@ import {
   memberAttention,
   memberLimit,
   memberLimitLabel,
+  ownKeys,
   ownReadState,
   rosterRowOf,
   UNSEEN_LIMIT_NOTE,
@@ -606,5 +607,42 @@ describe("a limit a member cannot read", () => {
         workspace: "Platform",
       }),
     ).toBe(undefined)
+  })
+})
+
+describe("ownKeys", () => {
+  const key = (
+    id: string,
+    user_id: string | null,
+    flags: {
+      is_service_key?: boolean
+      is_organization_service_key?: boolean
+    } = {},
+  ) => ({
+    id,
+    user_id,
+    is_service_key: false,
+    is_organization_service_key: false,
+    ...flags,
+  })
+
+  it("keeps only the keys issued under the caller's own ids", () => {
+    // A member's keys list also carries the workspace's service keys, and a
+    // workspace admin's carries other people's: none is "your key".
+    const keys = [
+      key("mine", "user-wei"),
+      key("account", "acct-wei"),
+      key("teammate", "user-ana"),
+      key("service", null, { is_service_key: true }),
+      key("service-owned", "user-wei", { is_service_key: true }),
+      key("org-service", "user-wei", { is_organization_service_key: true }),
+    ]
+    expect(
+      ownKeys(keys, ["user-wei", "acct-wei", undefined]).map((one) => one.id),
+    ).toEqual(["mine", "account"])
+  })
+
+  it("keeps nothing for a caller with no id yet", () => {
+    expect(ownKeys([key("mine", "user-wei")], [undefined])).toEqual([])
   })
 })

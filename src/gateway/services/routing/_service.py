@@ -2,7 +2,7 @@
 
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -19,7 +19,10 @@ from gateway.services.policy_store import resolve_effective_policy
 from gateway.services.routing.compiler import compile_catalog_plan, reachable_candidates
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tools import provider_tools
-from gateway.services.usage_and_telemetry import KeyNameTraffic, ServedTraffic, UsageService
+from gateway.services.usage_and_telemetry import KeyNameTraffic, ServedTraffic, TrafficReader, UsageService
+
+_ANSWERED = frozenset({"success", "incomplete"})
+"""Final statuses whose step answered the request; ``error`` and ``absorbed`` are failures of it."""
 
 FALLBACK_WINDOW = timedelta(days=30)
 """How far back the automatic fallbacks look for traffic."""
@@ -53,6 +56,79 @@ class PinnedTraffic:
 
 
 @dataclass(frozen=True)
+class KeyRequests:
+    """How many requests one API key sent."""
+
+    api_key_id: str
+    key_name: str | None
+    requests: int
+
+
+TargetRole = Literal["default", "routed", "condition", "on_failure", "catalog", "other"]
+
+
+def _role_of(selection_reason: str | None) -> tuple[TargetRole, str | None]:
+    """A target's role, and its router's name, from the ``selection_reason`` routing recorded."""
+    reason = selection_reason or ""
+    if reason.startswith("router:"):
+        return "routed", reason.partition(":")[2] or None
+    if reason.startswith("condition:"):
+        return "condition", None
+    if reason == "default":
+        return "default", None
+    if reason == "on_failure":
+        return "on_failure", None
+    if reason == "catalog":
+        return "catalog", None
+    return "other", None
+
+
+_ROLE_ORDER: dict[str, int] = {"routed": 0, "condition": 1, "default": 2, "catalog": 3, "on_failure": 4, "other": 5}
+
+
+@dataclass(frozen=True)
+class StepOutcome:
+    """What one target of a plan did in one role: the requests it served, and the attempts on it that failed.
+
+    Grouped by what served rather than by place in the plan, because a place
+    names different targets from request to request: a router ranks its pool
+    per request, a tier-down swaps the head, and the compiler drops a candidate
+    a key may not reach, so position 2 is a backup on one request and the
+    router's second pick on another.
+    """
+
+    target: str
+    """The offering tried, ``provider:model``, or the whole selector an older row carries."""
+    role: TargetRole
+    router: str | None
+    """The router that picked it, when ``role`` is ``routed``."""
+    position: int
+    """The earliest place in a plan it was tried, 1 for the first."""
+    served: int
+    failed: int
+
+
+@dataclass(frozen=True)
+class NameTraffic:
+    """The traffic sent under one routing name in one workspace."""
+
+    workspace_id: uuid.UUID
+    name: str
+    requests: int
+    sent_by: tuple[KeyRequests, ...]
+    """The keys that sent them, most first."""
+    steps: tuple[StepOutcome, ...]
+    """By earliest place tried, then by role and target."""
+
+
+def _most_first(counts: Counter[str], names: Mapping[str, str | None]) -> tuple[KeyRequests, ...]:
+    return tuple(
+        KeyRequests(api_key_id=key, key_name=names.get(key), requests=n)
+        for key, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    )
+
+
+@dataclass(frozen=True)
 class AutomaticFallback:
     """One model callers used in the window, its offerings in baseline order, and its traffic."""
 
@@ -68,6 +144,8 @@ class AutomaticFallback:
     """The instance most of the pinned requests reached."""
     pinned_keys: tuple[PinnedTraffic, ...]
     """The pinned requests by key and provider, most first."""
+    sent_by: tuple[KeyRequests, ...] = ()
+    """The keys the reader may see that sent ``requests``, most first."""
 
 
 KEY_MODELS_SHOWN = 10
@@ -138,6 +216,7 @@ class _Tally:
     fell_back: int = 0
     pinned: Counter[str] = field(default_factory=Counter)
     pinned_keys: Counter[tuple[str | None, str]] = field(default_factory=Counter)
+    keys: Counter[str] = field(default_factory=Counter)
 
 
 def _served_selectors(row: ServedTraffic) -> tuple[str, ...]:
@@ -283,12 +362,94 @@ class RoutingService:
             return _Coverage("pinned", "no_backup", "pinned", _instance(selector))
         return _Coverage("unknown", "unknown")
 
+    async def name_traffic(
+        self,
+        *,
+        workspace_ids: Collection[uuid.UUID],
+        everywhere: Collection[str],
+        by_workspace: Mapping[uuid.UUID, Collection[str]],
+        reader: TrafficReader,
+        api_key_ids: Collection[str] | None = None,
+    ) -> list[NameTraffic]:
+        """The traffic sent under routing policy names in the window, per workspace, among the rows ``reader`` sees.
+
+        A name counts in a workspace where it routes: everywhere for one
+        ``everywhere`` holds (the configured policies), and in its own workspace
+        for one ``by_workspace`` lists there. The same name sent where nothing
+        claims it is a plain model name, not this traffic.
+
+        A request counts once, on the row that ended it; each attempt before it
+        that a later one recovered from counts as a failure of its step. A step
+        served the requests whose final attempt it made and answered: a success,
+        or a stream the client abandoned (``incomplete``).
+        """
+        candidates = set(everywhere).union(*by_workspace.values())
+        rows = [
+            row
+            for row in await self._usage.name_attempts(
+                workspace_ids=workspace_ids,
+                names=candidates,
+                since=datetime.now(UTC) - FALLBACK_WINDOW,
+                reader=reader,
+                api_key_ids=api_key_ids,
+            )
+            if row.name in everywhere or row.name in by_workspace.get(row.workspace_id, ())
+        ]
+        requests: Counter[tuple[uuid.UUID, str]] = Counter()
+        keys: defaultdict[tuple[uuid.UUID, str], Counter[str]] = defaultdict(Counter)
+        # Per (workspace, name), per (target, role, router): served, failed, earliest place tried.
+        steps: defaultdict[tuple[uuid.UUID, str], dict[tuple[str, TargetRole, str | None], list[int]]] = defaultdict(
+            dict
+        )
+        for row in rows:
+            group = (row.workspace_id, row.name)
+            role, router = _role_of(row.selection_reason)
+            target = f"{row.provider}:{row.model}" if row.provider else row.model
+            step = steps[group].setdefault((target, role, router), [0, 0, row.position])
+            step[2] = min(step[2], row.position)
+            if row.status in _ANSWERED:
+                step[0] += row.attempts
+            else:
+                step[1] += row.attempts
+            if row.status != "absorbed":
+                requests[group] += row.attempts
+                if row.api_key_id is not None:
+                    keys[group][row.api_key_id] += row.attempts
+        key_names = await self._keys.key_names(
+            {key for counts in keys.values() for key in counts}, workspace_ids=workspace_ids
+        )
+        traffic = [
+            NameTraffic(
+                workspace_id=workspace_id,
+                name=name,
+                requests=requests[(workspace_id, name)],
+                sent_by=_most_first(keys[(workspace_id, name)], key_names),
+                steps=tuple(
+                    sorted(
+                        (
+                            StepOutcome(
+                                target=target, role=role, router=router, position=position, served=served, failed=failed
+                            )
+                            for (target, role, router), (served, failed, position) in steps[
+                                (workspace_id, name)
+                            ].items()
+                        ),
+                        key=lambda step: (step.position, _ROLE_ORDER[step.role], step.target),
+                    )
+                ),
+            )
+            for workspace_id, name in steps
+        ]
+        return sorted(traffic, key=lambda item: (item.name, str(item.workspace_id)))
+
     async def automatic_fallbacks(
         self,
         *,
         organization_id: uuid.UUID,
         workspace_ids: Collection[uuid.UUID],
         serving_workspace_id: uuid.UUID | None = None,
+        reader: TrafficReader | None = None,
+        api_key_ids: Collection[str] | None = None,
     ) -> list[AutomaticFallback]:
         """Every model these workspaces sent requests to in the window, most requested first.
 
@@ -304,6 +465,10 @@ class RoutingService:
         ``serving_workspace_id`` keeps only the offerings a request billed to
         that workspace may call, and the models left with one.
 
+        Each model names the keys that sent it where ``reader`` may see whose
+        requests they are, and ``api_key_ids`` narrows the traffic to those keys'
+        requests among the same.
+
         Raises:
             WorkspaceNotFoundError: ``serving_workspace_id`` is not one of
                 ``workspace_ids``, the workspaces the caller may see.
@@ -311,7 +476,10 @@ class RoutingService:
         if serving_workspace_id is not None and serving_workspace_id not in workspace_ids:
             raise WorkspaceNotFoundError(serving_workspace_id)
         traffic = await self._usage.served_traffic(
-            workspace_ids=workspace_ids, since=datetime.now(UTC) - FALLBACK_WINDOW
+            workspace_ids=workspace_ids,
+            since=datetime.now(UTC) - FALLBACK_WINDOW,
+            reader=reader,
+            api_key_ids=api_key_ids,
         )
         models = {model.id: model for model in catalog_models(organization_id=organization_id)}
         model_of = {selector: model.id for model in models.values() for selector in model.offerings}
@@ -325,12 +493,15 @@ class RoutingService:
             tally = tallies.setdefault(model_id, _Tally())
             tally.requests += row.requests
             tally.fell_back += row.fell_back
+            if reader is not None and row.readable and row.api_key_id is not None:
+                tally.keys[row.api_key_id] += row.requests
             if sent != model_id:
                 provider = row.provider or (reached or row.model).partition(":")[0]
                 tally.pinned[provider] += row.requests
                 tally.pinned_keys[(row.api_key_id, provider)] += row.requests
 
         key_ids = {key_id for tally in tallies.values() for key_id, _provider in tally.pinned_keys if key_id}
+        key_ids |= {key_id for tally in tallies.values() for key_id in tally.keys}
         key_names = await self._keys.key_names(key_ids, workspace_ids=workspace_ids)
 
         tools: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
@@ -376,6 +547,7 @@ class RoutingService:
                 pinned=sum(tally.pinned.values()),
                 pinned_provider=tally.pinned.most_common(1)[0][0] if tally.pinned else None,
                 pinned_keys=pinned_keys(tally),
+                sent_by=_most_first(tally.keys, key_names),
             )
             for model_id, tally in tallies.items()
             if tally.requests > 0 and served[model_id]

@@ -362,7 +362,7 @@ function ActivityPageContent({
     }
   }, [filtersKey, url])
 
-  const usage = useUsageLogs(filters, page, pageSize, true, { sort })
+  const usage = useUsageLogs(filters, page, pageSize, true, "caller", { sort })
   const count = useUsageCount(filters, { sort: sort.sort })
 
   // Which usage surface this caller reads, and with it the two things on this

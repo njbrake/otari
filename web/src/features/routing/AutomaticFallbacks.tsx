@@ -11,6 +11,7 @@ import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { docsSourceHref } from "@/shared/helpers/docs"
 import { formatNumber, formatRate } from "@/shared/helpers/format"
 import { providerDisplayName } from "@/shared/helpers/providers"
+import { SentByCell } from "./PolicyCells"
 
 /** Shorter than the shared display names, for a chain read across a row. */
 const SHORT_NAMES: Record<string, string> = { bedrock: "Bedrock" }
@@ -130,6 +131,12 @@ export function AutomaticFallbacks({
             {row.id}
           </CopyableValue>
         ),
+      },
+      {
+        id: "sentBy",
+        header: "Sent by",
+        // A gateway older than the dashboard sends no `sent_by`, which reads as none.
+        cell: (row) => <SentByCell sentBy={row.sent_by ?? []} />,
       },
       {
         id: "requests",

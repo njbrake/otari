@@ -2,9 +2,11 @@
 
 from gateway.repositories.usage_and_telemetry.usage_log_repository import (
     KeyNameTraffic,
+    NameAttempts,
     OfferingTraffic,
     RequestRows,
     ServedTraffic,
+    TrafficReader,
     UsageFilters,
     UsageLogRepository,
     UsageRefinements,
@@ -19,9 +21,11 @@ from gateway.repositories.usage_and_telemetry.usage_log_repository import (
 
 __all__ = [
     "KeyNameTraffic",
+    "NameAttempts",
     "OfferingTraffic",
     "RequestRows",
     "ServedTraffic",
+    "TrafficReader",
     "UsageFilters",
     "UsageLogRepository",
     "UsageRefinements",

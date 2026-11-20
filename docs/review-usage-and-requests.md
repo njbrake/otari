@@ -10,16 +10,44 @@ Pick the window at the top: **Today**, **Yesterday**, **7D**, **30D**, **3M** or
 **6M**; Home opens on **30D**. Days are your browser's calendar days. **Today**
 runs from midnight to now and **Yesterday** is the whole day before it, both
 read by the hour; the others are whole days ending with today. On a phone the
-same windows are in a select. What Home shows depends on your role.
+same windows are in a select. **Refresh**, beside the window, reads every
+figure again, and the time beside it says when they were last read. What Home
+shows depends on your role.
 
 An organization owner or admin sees the whole organization, or one workspace
-picked beside the window when there is more than one:
+picked beside the window when there is more than one.
+
+**Needs attention** comes first, over the last 24 hours whatever the window.
+Each line says what is wrong and ends with the link or dialog that fixes it:
+
+- a spend limit that is reached, at 80% or more, or on pace to run out before it
+  resets (**Raise the limit**);
+- requests the gateway refused, and failures of the gateway or a provider
+  (not the caller's own mistakes) at 2% or more of requests, five at least
+  (**See the refusals**, **See the failures**). Each is named by workspace,
+  and its link opens **Requests** on that workspace; failures spread across
+  workspaces with none past the threshold on its own are one row for the
+  organization, opening the workspace with the most;
+- an API key in use that expires within 7 days (**Open in API keys**);
+- for the deployment operator, a provider the gateway cannot reach
+  (**Check the provider**).
+
+With nothing to act on it says so in one line. The figures follow:
 
 - What the window cost, against the same span before it (**Today** against
-  yesterday up to the same time of day), with spend per hour or per day.
+  yesterday up to the same time of day), with spend per hour or per day. When
+  part of it never counted toward a budget (an API key marked exempt from
+  budget, or imported usage), the line under it splits it
+  (**$30.00 charged · +$20.00 not charged**); otherwise a window longer than
+  today says what was spent today.
 - How much of the organization's spend limit is used, and what the period is on
   pace to cost. With no limit set, **Set a team budget** sets one.
-- **Failures**: the share of requests that failed.
+- **Failures** over the window: the share of requests that failed, judged by
+  the thresholds **Needs attention** uses: **Healthy**, **Elevated** (2% or
+  more, and at least five failures) or **High** (10% or more, over at least
+  20 requests). It counts every failed request, the caller's own mistakes
+  included. **N failed** and **N unpriced** open those requests in **Requests**
+  when Home shows one workspace, since **Requests** lists one at a time.
 - Billed tokens, and how much of the input was read from cache.
 - **People active**: how many members spent anything in the window, and how
   many sessions ran. **See the sessions** opens them.
@@ -28,13 +56,20 @@ picked beside the window when there is more than one:
 **API keys**, **Models**, **Providers** or **Workspaces** (offered when there is
 more than one workspace). Each row shows what it spent, its tokens and its share
 of the total; outside **Models**, it also shows its top model, and outside
-**Models** and **Providers** the spend limit it works under. The five largest
+**Models** and **Providers** the spend limit it works under, with a meter and
+when the limit resets. A key's row also says when it was last used, and warns
+when it expires within 7 days. The five largest
 rows show first, and **Show all** lists the rest. A person's name opens their
 page (see [One person's spend](#one-persons-spend)). At the end of each row,
 **Sessions** opens its sessions over the same window, **Requests** a provider's
 requests, and **People** narrows the table to that workspace's people. A row's
 menu sets or changes its spend limit, and a key's row can be opened in
 **API keys**.
+
+**Recent failures** lists the window's latest failed requests: when, the
+model, the key and the error. Each one opens that request in **Requests**, and
+**See all** opens every failure of the window, again when Home shows one
+workspace.
 
 **Providers** names the provider each request went to, or the instance an
 operator named, which is the figure to match against each provider's own bill
@@ -44,7 +79,11 @@ before a provider was picked, share one **Unknown provider** row, so the rows
 still add up to the total.
 
 Anyone else sees only their own requests in the selected workspace: what they
-spent, the spend limit on them there, their tokens and their sessions.
+spent (split into charged and not charged as above), the spend limit on them
+there, their tokens and their sessions. Their **Needs attention** lists their
+own refused and failed requests of the last 24 hours and their own keys that
+expire within the week, and **Recent failures** lists their own failed
+requests.
 **Where it went** breaks their spend down by **API keys**, **Models** or
 **Providers**, and each row ends with **Sessions**, or **Requests** for a
 provider, which opens what it ran.

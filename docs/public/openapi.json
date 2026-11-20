@@ -2544,6 +2544,14 @@
             "description": "Requests served in the window, each counted once however many attempts.",
             "title": "Requests",
             "type": "integer"
+          },
+          "sent_by": {
+            "description": "The keys that sent `requests`, most first: everyone's to an organization owner or admin, a workspace's to its own owners and admins, and otherwise the caller's own keys alone.",
+            "items": {
+              "$ref": "#/components/schemas/KeyRequestsPublic"
+            },
+            "title": "Sent By",
+            "type": "array"
           }
         },
         "required": [
@@ -2554,7 +2562,8 @@
           "fell_back",
           "pinned",
           "pinned_provider",
-          "pinned_keys"
+          "pinned_keys",
+          "sent_by"
         ],
         "title": "AutomaticFallbackPublic",
         "type": "object"
@@ -14090,6 +14099,38 @@
         "title": "KeyPolicyPublic",
         "type": "object"
       },
+      "KeyRequestsPublic": {
+        "description": "How many requests one API key sent.",
+        "properties": {
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "key_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The key's name, or null where it has none or was deleted.",
+            "title": "Key Name"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "api_key_id",
+          "key_name",
+          "requests"
+        ],
+        "title": "KeyRequestsPublic",
+        "type": "object"
+      },
       "KeyRoutingPublic": {
         "description": "What one key sent in the window, and what a failure on each name does.",
         "properties": {
@@ -17324,6 +17365,51 @@
           "flagged"
         ],
         "title": "ModerationResult",
+        "type": "object"
+      },
+      "NameTrafficPublic": {
+        "description": "The traffic sent under one routing policy name in one workspace.",
+        "properties": {
+          "name": {
+            "description": "The policy name the requests sent as `model`.",
+            "title": "Name",
+            "type": "string"
+          },
+          "requests": {
+            "description": "Requests in the window, each counted once however many attempts.",
+            "title": "Requests",
+            "type": "integer"
+          },
+          "sent_by": {
+            "description": "The keys that sent them, most first.",
+            "items": {
+              "$ref": "#/components/schemas/KeyRequestsPublic"
+            },
+            "title": "Sent By",
+            "type": "array"
+          },
+          "steps": {
+            "description": "By earliest place tried, then by role and target.",
+            "items": {
+              "$ref": "#/components/schemas/StepOutcomePublic"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "name",
+          "requests",
+          "sent_by",
+          "steps"
+        ],
+        "title": "NameTrafficPublic",
         "type": "object"
       },
       "NoulCriteria": {
@@ -24815,6 +24901,30 @@
         "title": "RotateMasterKeyResponse",
         "type": "object"
       },
+      "RoutingTrafficResponse": {
+        "description": "The traffic sent under the routing policies the caller may see.",
+        "properties": {
+          "names": {
+            "description": "One entry per workspace and policy name, over the requests the caller may see as someone's: everyone's to an organization owner or admin, a workspace's to its own owners and admins, and otherwise the caller's own.",
+            "items": {
+              "$ref": "#/components/schemas/NameTrafficPublic"
+            },
+            "title": "Names",
+            "type": "array"
+          },
+          "window_days": {
+            "description": "How many days of traffic the counts cover.",
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days",
+          "names"
+        ],
+        "title": "RoutingTrafficResponse",
+        "type": "object"
+      },
       "SandboxCredentialPublic": {
         "description": "Where the key a hosted sandbox provider leases with comes from. Never the key itself.",
         "properties": {
@@ -26748,6 +26858,66 @@
           "active_organization_id"
         ],
         "title": "SsoSessionPublic",
+        "type": "object"
+      },
+      "StepOutcomePublic": {
+        "description": "What one target of a plan did in one role in the window.\n\nBy target and role rather than by place in the plan: a router ranks its pool\nper request and the compiler drops candidates a key may not reach, so one\nplace names different targets from request to request.",
+        "properties": {
+          "failed": {
+            "description": "Attempts on it that failed, whether a later target recovered or not.",
+            "title": "Failed",
+            "type": "integer"
+          },
+          "position": {
+            "description": "The earliest place in a plan it was tried, 1 for the first.",
+            "title": "Position",
+            "type": "integer"
+          },
+          "role": {
+            "description": "Why the plan tried it: the default target, a router's pick, a budget tier-down, a backup after a failure, a catalog offering, or a reason this build does not know.",
+            "enum": [
+              "default",
+              "routed",
+              "condition",
+              "on_failure",
+              "catalog",
+              "other"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "router": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The router that picked it, when `role` is `routed`.",
+            "title": "Router"
+          },
+          "served": {
+            "description": "Requests it answered: a success, or a stream the client abandoned.",
+            "title": "Served",
+            "type": "integer"
+          },
+          "target": {
+            "description": "The offering tried, as `provider:model`.",
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "role",
+          "router",
+          "position",
+          "served",
+          "failed"
+        ],
+        "title": "StepOutcomePublic",
         "type": "object"
       },
       "StoredCountryDatabasePublic": {
@@ -46359,7 +46529,7 @@
     },
     "/api/v1/organizations/me/automatic-fallbacks": {
       "get": {
-        "description": "The models the caller's organization sent requests to in the last 30 days, and the fallback each gets.\n\nA request that sends a model's catalog ID moves to the model's next offering\nwhen one fails, with no policy. Each model lists its offerings in the order\nsuch a request tries them before automatic selection reorders it, each with\nits input price for this organization and who runs the built-in tools on it,\nbeside its traffic: how many requests a backup served, and how many named one\noffering or a policy instead, by API key and provider. The traffic is the\nworkspaces the caller may see in their active organization, by the rule the\norganization's usage reads use.",
+        "description": "The models the caller's organization sent requests to in the last 30 days, and the fallback each gets.\n\nA request that sends a model's catalog ID moves to the model's next offering\nwhen one fails, with no policy. Each model lists its offerings in the order\nsuch a request tries them before automatic selection reorders it, each with\nits input price for this organization and who runs the built-in tools on it,\nbeside its traffic: how many requests a backup served, and how many named one\noffering or a policy instead, by API key and provider. The traffic is the\nworkspaces the caller may see in their active organization, by the rule the\norganization's usage reads use. ``sent_by`` names the keys, and\n``api_key_id`` narrows to them, only among the requests the caller may see\nas someone's: everyone's to an owner or admin, a workspace's to its own\nowners and admins, and otherwise the caller's own.",
         "operationId": "routing-list_automatic_fallbacks",
         "parameters": [
           {
@@ -46379,6 +46549,28 @@
               ],
               "description": "Only the offerings a request billed to this workspace may call.",
               "title": "Workspace Id"
+            }
+          },
+          {
+            "description": "Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused.",
+            "in": "query",
+            "name": "api_key_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused.",
+              "title": "Api Key Id"
             }
           }
         ],
@@ -50375,6 +50567,89 @@
           }
         ],
         "summary": "Explain Organization Routing Policy",
+        "tags": [
+          "routing"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/routing-policies/traffic": {
+      "get": {
+        "description": "The last 30 days of traffic sent under each routing policy the caller may see.\n\nPer workspace and policy name: the requests, the keys that sent them, and what\neach step of the plan did (served, or failed and handed on). Whose requests\ncount: everyone's to an organization owner or admin, a workspace's to its\nown owners and admins, and otherwise the caller's own. A stored policy\ncounts in its own workspace, a config-file one in every workspace.",
+        "operationId": "routing-read_routing_traffic",
+        "parameters": [
+          {
+            "description": "Only stored entries in this workspace. Config-file entries are always included, being deployment-wide. Omit for every workspace this caller may see.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only stored entries in this workspace. Config-file entries are always included, being deployment-wide. Omit for every workspace this caller may see.",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "description": "Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused.",
+            "in": "query",
+            "name": "api_key_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused.",
+              "title": "Api Key Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingTrafficResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Read Routing Traffic",
         "tags": [
           "routing"
         ]

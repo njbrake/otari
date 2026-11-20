@@ -652,6 +652,14 @@ describe("Home, the window", () => {
         return Response.json({ data: [ADA, WEI], count: 2 })
       }
       if (path === "/organizations/me/usage/summary") {
+        // Nothing was refused.
+        if (url.searchParams.get("status_code") === "403") {
+          return Response.json({
+            totals: usageTotals({ request_count: 0 }),
+            series: [],
+            by_user: [],
+          })
+        }
         return Response.json({
           totals: usageTotals({
             cost: 4,
@@ -701,17 +709,33 @@ describe("Home, the window", () => {
     })
   }
 
+  /**
+   * Needs attention's reads, which cover the last 24 hours whatever the window:
+   * failures by status code, and the refusals by person.
+   */
+  const isBandRead = (url: URL) =>
+    url.searchParams.getAll("dimensions").includes("status_code") ||
+    (url.searchParams.get("status_code") === "403" &&
+      url.searchParams.getAll("dimensions").includes("user"))
+
   /** The reads over a window: usage's `start_date`, sessions' `start`. */
   const windowed = (asked: URL[]) =>
     asked.filter(
       (url) =>
-        url.searchParams.has("start_date") || url.searchParams.has("start"),
+        (url.searchParams.has("start_date") || url.searchParams.has("start")) &&
+        !isBandRead(url),
     )
 
   it("counts one failed request in the singular", async () => {
     mockApi({ errors: 1 })
+    await renderHome("/?period=today&workspace=ws-a")
+    expect(await screen.findByRole("link", { name: "1 failed" })).toBeVisible()
+  })
+  it("links no count across every workspace, since Requests lists one", async () => {
+    mockApi({ errors: 1 })
     await renderHome("/?period=today")
-    expect(await screen.findByText("1 failed request")).toBeVisible()
+    expect(await screen.findByText("1 failed")).toBeVisible()
+    expect(screen.queryByRole("link", { name: "1 failed" })).toBeNull()
   })
   it("ends every read of yesterday at midnight, so none counts today", async () => {
     const asked = mockApi()
@@ -755,7 +779,9 @@ describe("Home, the window", () => {
     await screen.findByRole("grid", { name: "Spend by workspaces" })
     await waitFor(() =>
       expect(
-        asked.filter((url) => url.searchParams.get("workspace_id")),
+        asked.filter(
+          (url) => url.searchParams.get("workspace_id") && !isBandRead(url),
+        ),
       ).toHaveLength(2),
     )
     for (const url of windowed(asked)) {
@@ -764,6 +790,19 @@ describe("Home, the window", () => {
         String(url),
       ).toBeTruthy()
     }
+  })
+
+  it("reads the last day once for the organization while nothing failed", async () => {
+    // Two workspaces, no failures and no refusals: the band's two reads are
+    // the organization's, and none is repeated workspace by workspace.
+    const asked = mockApi()
+    await renderHome("/?period=7d")
+    await screen.findByText("Nothing needs you right now.")
+    const band = asked.filter(isBandRead)
+    expect(band.length).toBeGreaterThanOrEqual(2)
+    expect(band.filter((url) => url.searchParams.get("workspace_id"))).toEqual(
+      [],
+    )
   })
 
   it("opens on 30 days, and moves to today by the hour in the URL", async () => {
@@ -787,8 +826,15 @@ describe("Home, the window", () => {
       ).toBe(true),
     )
     for (const url of windowed(asked)) {
-      const isPrevious = url.searchParams.getAll("dimensions").includes("none")
-      expect(url.searchParams.has("end_date"), String(url)).toBe(isPrevious)
+      const isMain = url.searchParams.getAll("dimensions").includes("user")
+      if (isMain)
+        expect(url.searchParams.has("end_date"), String(url)).toBe(false)
+      // Only the window before it ends, which reads totals alone.
+      if (url.searchParams.has("end_date")) {
+        expect(url.searchParams.getAll("dimensions"), String(url)).toEqual([
+          "none",
+        ])
+      }
     }
 
     await user.click(within(picker).getByRole("radio", { name: "Today" }))
@@ -824,4 +870,130 @@ describe("Home, the window", () => {
       expect(within(picker).getByRole("radio", { name: "30D" })).toBeChecked()
     },
   )
+})
+
+describe("Home, the figures and what needs attention", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  })
+
+  /**
+   * One workspace whose last day failed often, with part of the window's
+   * spend on a budget-exempt key.
+   */
+  function mockApi() {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input), "http://test")
+      const path = url.pathname.replace(
+        new URL(API_ROOT, "http://test").pathname,
+        "",
+      )
+      if (path === "/organizations/me") {
+        return Response.json(
+          organizationContext({ role: "owner", deployment_operator: false }),
+        )
+      }
+      if (path === "/organizations/me/members") {
+        return Response.json({ data: [ADA, WEI], count: 2 })
+      }
+      if (path === "/organizations/me/usage/summary") {
+        const isCharged =
+          url.searchParams.get("counts_toward_budget") === "true"
+        const isUnpriced = url.searchParams.get("priced") === "false"
+        const isDay = url.searchParams
+          .getAll("dimensions")
+          .includes("status_code")
+        return Response.json({
+          totals: usageTotals({
+            cost: isCharged ? 30 : 50,
+            request_count: isUnpriced ? 4 : 100,
+            error_count: isUnpriced ? 0 : 12,
+          }),
+          series: [],
+          by_user: [],
+          by_api_key: [],
+          by_model: [],
+          errors_by_status_code: isDay
+            ? [
+                {
+                  status_code: 502,
+                  error_class: "provider_error",
+                  requests: 12,
+                },
+              ]
+            : [],
+        })
+      }
+      if (path === "/organizations/me/usage") return Response.json([])
+      if (path.endsWith("/traces/count")) return Response.json({ count: 3 })
+      if (path === "/organizations/me/spend-ceilings") {
+        return Response.json({ data: [], count: 0 })
+      }
+      if (path === "/workspaces") {
+        return Response.json({
+          data: [workspace({ id: "ws-a", name: "Platform" })],
+          count: 1,
+        })
+      }
+      return Response.json([])
+    })
+  }
+
+  async function renderHome() {
+    await renderWithRouter(<TeamHome />, {
+      url: "/?period=7d",
+      shell: (
+        <Provider>
+          <DeploymentProvider value={bootstrap({ surfaces: SURFACES })}>
+            <SelectedWorkspaceProvider>
+              <Outlet />
+            </SelectedWorkspaceProvider>
+          </DeploymentProvider>
+        </Provider>
+      ),
+    })
+  }
+
+  it("splits Spent into what was charged and what was not", async () => {
+    mockApi()
+    await renderHome()
+    expect(await screen.findByText("$30.00 charged")).toBeVisible()
+    expect(screen.getByText("+$20.00 not charged")).toBeVisible()
+  })
+
+  it("judges the failure rate and links the counts to Requests", async () => {
+    mockApi()
+    await renderHome()
+    const failed = await screen.findByRole("link", { name: "12 failed" })
+    const cell = failed.closest("[class*='row-span-4']") as HTMLElement
+    expect(within(cell).getByText("HIGH")).toBeVisible()
+    expect(failed.getAttribute("href")).toContain("status=error")
+    const unpriced = within(cell).getByRole("link", { name: "4 unpriced" })
+    expect(unpriced.getAttribute("href")).toContain("priced=false")
+  })
+
+  it("mounts Needs attention, with the last day's failures linked", async () => {
+    mockApi()
+    await renderHome()
+    const band = await screen.findByRole("region", { name: "Needs attention" })
+    expect(
+      await within(band).findByText(
+        "12 of 100 requests failed in the last 24 hours (12.0%).",
+      ),
+    ).toBeVisible()
+    expect(
+      within(band).getByRole("link", { name: "See the failures" }),
+    ).toHaveAttribute("href", expect.stringContaining("status=error"))
+  })
+
+  it("lists the window's recent failures and offers a refresh", async () => {
+    mockApi()
+    await renderHome()
+    expect(
+      await screen.findByText("No request failed in the last 7 days."),
+    ).toBeVisible()
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeVisible()
+    expect(screen.getByText(/^Updated /)).toBeVisible()
+  })
 })

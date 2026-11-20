@@ -3,6 +3,7 @@ import {
   type MemberAttention,
   memberAttention,
   type Owner,
+  ownKeys,
   ownReadState,
 } from "@/features/home/memberHomeModel"
 import { toMinute } from "@/features/spend/period"
@@ -22,11 +23,14 @@ export function useMemberAttention({
   owner,
   workspaceId,
   keys,
+  callerUserId,
 }: {
   now: number
   owner: Owner
   workspaceId: string
   keys: { data: readonly ApiKey[] | undefined; isError: boolean }
+  /** The signed-in account's own id, which a key may be issued under too. */
+  callerUserId: string | undefined
 }): MemberAttention {
   const { userId } = owner
   const since = new Date(toMinute(now) - DAY_MS).toISOString()
@@ -64,6 +68,6 @@ export function useMemberAttention({
         requests: row.requests,
       })),
     },
-    keys: keys.data ?? [],
+    keys: ownKeys(keys.data ?? [], [userId, callerUserId]),
   })
 }
