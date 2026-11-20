@@ -262,12 +262,18 @@ def test_each_name_a_key_sent_says_whether_a_failure_has_a_backup(routing_client
     assert coverage("paired") == (4, "policy", "has_backup", None, None)
     assert coverage("solo") == (3, "policy", "no_backup", "single_target_policy", "gemini")
     assert coverage(_BEDROCK) == (2, "pinned", "no_backup", "pinned", "bedrock")
-    assert coverage("retired-name") == (1, "unknown", "unknown", None, None)
+    # Routing recorded it and nothing resolves it now: a policy since deleted.
+    assert coverage("retired-name") == (1, "policy", "unknown", None, None)
     assert coverage("claude-opus-x") == (6, "unknown", "subscription", None, None)
 
     assert app["model_count"] == 6
     assert app["no_backup_count"] == 2
-    assert app["policies"] == [{"name": "paired", "requests": 4}, {"name": "solo", "requests": 3}]
+    assert [model["name"] for model in app["no_backup"]] == ["solo", _BEDROCK]
+    assert app["policies"] == [
+        {"name": "paired", "requests": 4, "deleted": False},
+        {"name": "solo", "requests": 3, "deleted": False},
+        {"name": "retired-name", "requests": 1, "deleted": True},
+    ]
 
 
 def test_an_alias_has_no_backup(routing_client: TestClient, world: _World) -> None:
@@ -308,10 +314,12 @@ def test_keys_answer_in_the_order_asked_and_an_idle_key_is_empty(routing_client:
     keys = _read_as(routing_client, world, "member", asked)
 
     assert [key["api_key_id"] for key in keys] == [world.keys["idle"], world.keys["narrow"], world.keys["app"]]
-    assert (keys[0]["models"], keys[0]["model_count"], keys[0]["no_backup_count"], keys[0]["policies"]) == (
+    idle = keys[0]
+    assert (idle["models"], idle["model_count"], idle["no_backup_count"], idle["no_backup"], idle["policies"]) == (
         [],
         0,
         0,
+        [],
         [],
     )
 
@@ -371,3 +379,27 @@ def test_the_read_takes_between_one_and_fifty_keys(routing_client: TestClient, w
 def test_the_read_needs_a_signed_in_caller(routing_client: TestClient, world: _World) -> None:
     response = routing_client.get(_MEMBER_PATH, params={"api_key_id": [world.keys["app"]]})
     assert response.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
+
+
+def test_the_no_backup_list_covers_names_past_the_top_ten(
+    routing_client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """``no_backup`` is drawn from every name, so a quiet name the top ten leaves out still says it has none."""
+    session = db_session_factory()
+    try:
+        key = session.get(APIKey, world.keys["idle"])
+        assert key is not None
+        rows: list[UsageLog] = []
+        for index in range(10):
+            rows += _rows(key.workspace_id, key.id, _CLAUDE if index == 0 else f"gone-{index}", _ANTHROPIC, count=10)
+        rows += _rows(key.workspace_id, key.id, None, _BEDROCK)
+        session.add_all(rows)
+        session.commit()
+    finally:
+        session.close()
+
+    [idle] = _read_as(routing_client, world, "member", [world.keys["idle"]])
+    assert len(idle["models"]) == 10
+    assert _BEDROCK not in [model["name"] for model in idle["models"]]
+    assert [model["name"] for model in idle["no_backup"]] == [_BEDROCK]
+    assert idle["no_backup_count"] == 1

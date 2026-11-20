@@ -3,7 +3,9 @@
 Alpha has two workspaces, an owner and an admin in neither, two members of the
 first and a newcomer in none. Beta is a second organization with a key of its
 own. Each widened action is checked three ways: an owner or admin may, a member
-of the same organization may not, and nobody reaches into Beta.
+of the same organization may not, and nobody reaches into Beta. What an owner or
+admin never gets is a colleague's secret: a key acts as its owner, so creating
+one for a member and regenerating a member's key are refused.
 """
 
 import uuid
@@ -209,7 +211,7 @@ def test_a_lowered_role_takes_the_organizations_keys_away_at_once(
 
 
 @pytest.mark.parametrize("owner", ["member", "owner"])
-def test_an_admin_updates_rotates_and_deletes_a_members_key(
+def test_an_admin_edits_disables_and_deletes_a_members_key(
     client: TestClient, world: _World, db_session_factory: Callable[[], Session], owner: str
 ) -> None:
     # The organization's owner is a member like any other here: an admin manages
@@ -223,13 +225,38 @@ def test_an_admin_updates_rotates_and_deletes_a_members_key(
     assert code == status.HTTP_200_OK, body
     assert (body["key_name"], body["user_id"]) == ("renamed", str(world.users[owner]))
 
-    code, body = _call(client, world, "admin", "POST", f"{_KEYS}/{key}/rotate")
+    code, body = _call(client, world, "admin", "PATCH", f"{_KEYS}/{key}", json={"is_active": False})
     assert code == status.HTTP_200_OK, body
-    assert body["key"]
+    assert body["is_active"] is False
 
     code, _ = _call(client, world, "admin", "DELETE", f"{_KEYS}/{key}")
     assert code == status.HTTP_204_NO_CONTENT
     assert key not in _listed(client, world, owner)
+
+
+@pytest.mark.parametrize("who", ["owner", "admin"])
+def test_an_owner_or_admin_cannot_regenerate_a_members_key(client: TestClient, world: _World, who: str) -> None:
+    """The new secret would act as the member, on their files, batches and MCP connections."""
+    code, body = _call(client, world, who, "POST", f"{_KEYS}/{world.keys['member']}/rotate")
+    assert code == status.HTTP_403_FORBIDDEN, body
+    assert body is None or "key" not in body
+    # The member still regenerates their own.
+    code, body = _call(client, world, "member", "POST", f"{_KEYS}/{world.keys['member']}/rotate")
+    assert code == status.HTTP_200_OK, body
+    assert body["key"]
+
+
+def test_an_admin_regenerates_their_own_key(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    session = db_session_factory()
+    try:
+        key = _key(session, world.workspaces["alpha_one"], world.users["admin"])
+    finally:
+        session.close()
+    code, body = _call(client, world, "admin", "POST", f"{_KEYS}/{key}/rotate")
+    assert code == status.HTTP_200_OK, body
+    assert body["key"]
 
 
 @pytest.mark.parametrize(("method", "suffix"), [("PATCH", ""), ("POST", "/rotate"), ("DELETE", "")])
@@ -402,96 +429,25 @@ def test_an_admin_still_cleans_up_after_a_member_who_left(
 # =============================================================================
 # Creating a key for a member
 # =============================================================================
+# Creating a key
+# =============================================================================
 
 
-@pytest.mark.parametrize("who", ["owner", "admin"])
-def test_an_owner_or_admin_creates_a_key_for_a_member(client: TestClient, world: _World, who: str) -> None:
+@pytest.mark.parametrize("who", ["owner", "admin", "member"])
+@pytest.mark.parametrize("target", ["colleague", "beta_owner", "unknown"])
+def test_nobody_creates_a_key_for_someone_else(client: TestClient, world: _World, who: str, target: str) -> None:
+    """A key acts as its owner, so a secret minted on this surface is only ever the caller's own."""
+    user_id = str(world.users[target]) if target in world.users else str(uuid.uuid4())
     code, body = _call(
         client,
         world,
         who,
         "POST",
         _KEYS,
-        json={
-            "key_name": "for-member",
-            "user_id": str(world.users["member"]),
-            "workspace_id": str(world.workspaces["alpha_one"]),
-        },
+        json={"user_id": user_id, "workspace_id": str(world.workspaces["alpha_one"])},
     )
-    assert code == status.HTTP_200_OK, body
-    assert body["user_id"] == str(world.users["member"])
-    assert body["id"] in _listed(client, world, who, "alpha_one")
-    assert body["exclude_from_budget"] is False
-    assert body["id"] in _listed(client, world, "member")
-    assert body["id"] not in _listed(client, world, "colleague")
-
-
-def test_an_omitted_workspace_resolves_against_the_member(client: TestClient, world: _World) -> None:
-    code, body = _call(client, world, "admin", "POST", _KEYS, json={"user_id": str(world.users["member"])})
-    assert code == status.HTTP_200_OK, body
-    assert body["id"] in _listed(client, world, "admin", "alpha_one")
-
-    # The newcomer is in no workspace, so the default one is not theirs either.
-    code, body = _call(client, world, "admin", "POST", _KEYS, json={"user_id": str(world.users["newcomer"])})
-    assert code == status.HTTP_409_CONFLICT, body
-    assert "That member" in body["detail"]
-
-
-def test_a_key_lands_only_in_a_workspace_its_owner_may_see(client: TestClient, world: _World) -> None:
-    code, _ = _call(
-        client,
-        world,
-        "admin",
-        "POST",
-        _KEYS,
-        json={"user_id": str(world.users["member"]), "workspace_id": str(world.workspaces["alpha_two"])},
-    )
-    assert code == status.HTTP_404_NOT_FOUND
-
-
-@pytest.mark.parametrize("target", ["beta_owner", "unknown"])
-def test_an_admin_cannot_create_a_key_for_someone_outside_the_organization(
-    client: TestClient, world: _World, target: str
-) -> None:
-    user_id = str(world.users[target]) if target in world.users else str(uuid.uuid4())
-    code, body = _call(client, world, "admin", "POST", _KEYS, json={"user_id": user_id})
-    assert code == status.HTTP_404_NOT_FOUND
-    assert body["detail"] == "No such member in this organization."
-
-
-def test_a_member_cannot_create_a_key_for_someone_else(client: TestClient, world: _World) -> None:
-    code, _ = _call(client, world, "member", "POST", _KEYS, json={"user_id": str(world.users["colleague"])})
-    assert code == status.HTTP_403_FORBIDDEN
+    assert code == status.HTTP_403_FORBIDDEN, body
     assert _listed(client, world, "colleague") == {world.keys["colleague"]}
-
-
-def test_a_revoked_member_gets_no_key_from_an_admin_either(
-    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
-) -> None:
-    session = db_session_factory()
-    try:
-        session.execute(
-            update(BillingUser)
-            .where(BillingUser.user_id == str(world.users["member"]))
-            .values(deleted_at=datetime.now(UTC))
-        )
-        session.commit()
-    finally:
-        session.close()
-    code, body = _call(client, world, "admin", "POST", _KEYS, json={"user_id": str(world.users["member"])})
-    assert code == status.HTTP_409_CONFLICT, body
-
-
-def test_a_service_key_takes_no_owner_from_the_caller(client: TestClient, world: _World) -> None:
-    code, body = _call(
-        client,
-        world,
-        "admin",
-        "POST",
-        _KEYS,
-        json={"user_id": str(world.users["member"]), "is_service_key": True},
-    )
-    assert code == status.HTTP_400_BAD_REQUEST, body
 
 
 def test_a_member_naming_themselves_is_creating_their_own_key(client: TestClient, world: _World) -> None:

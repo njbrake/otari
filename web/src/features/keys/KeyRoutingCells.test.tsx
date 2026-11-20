@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 import type { KeyRouting } from "@/client"
@@ -46,6 +46,7 @@ describe("KeyMostUsedCell", () => {
       api_key_id: "k",
       model_count: 3,
       no_backup_count: 0,
+      no_backup: [],
       policies: [],
       models: [
         {
@@ -72,11 +73,30 @@ describe("KeyMostUsedCell", () => {
 })
 
 describe("KeyRoutingSummary", () => {
-  const routing = {
+  const pinned = {
+    name: "openai:gpt-5",
+    requests: 40,
+    kind: "pinned",
+    backup: "no_backup",
+    reason: "pinned",
+    provider: "openai",
+  } as const
+  const single = {
+    name: "google/gemini-x",
+    requests: 3,
+    kind: "catalog",
+    backup: "no_backup",
+    reason: "single_offering",
+    provider: "gemini",
+  } as const
+  const routing: KeyRouting = {
     api_key_id: "k",
-    model_count: 3,
-    no_backup_count: 2,
-    policies: [{ name: "coding", requests: 1200 }],
+    model_count: 14,
+    no_backup_count: 5,
+    policies: [
+      { name: "coding", requests: 1200, deleted: false },
+      { name: "old-coding", requests: 9, deleted: true },
+    ],
     models: [
       {
         name: "coding",
@@ -86,36 +106,31 @@ describe("KeyRoutingSummary", () => {
         reason: null,
         provider: null,
       },
-      {
-        name: "openai:gpt-5",
-        requests: 40,
-        kind: "pinned",
-        backup: "no_backup",
-        reason: "pinned",
-        provider: "openai",
-      },
-      {
-        name: "google/gemini-x",
-        requests: 3,
-        kind: "catalog",
-        backup: "no_backup",
-        reason: "single_offering",
-        provider: "gemini",
-      },
     ],
-  } as KeyRouting
+    // Drawn from every name, the ones past the top ten included.
+    no_backup: [
+      pinned,
+      single,
+      { ...single, name: "a", requests: 2 },
+      { ...single, name: "b", requests: 1 },
+      { ...single, name: "c", requests: 1 },
+    ],
+  }
 
-  it("lists the names with no backup and why, and links to Routing", async () => {
+  it("lists the names with no backup and why, and says how many more", async () => {
     await renderWithRouter(
       <KeyRoutingSummary routing={routing} isPending={false} />,
     )
 
-    expect(screen.getByText("coding (1,200)")).toBeInTheDocument()
-    expect(screen.getByText("2 of 3 models have none")).toBeInTheDocument()
+    expect(
+      screen.getByText("coding (1,200), old-coding (9, since deleted)"),
+    ).toBeInTheDocument()
+    expect(screen.getByText("5 of 14 models have none")).toBeInTheDocument()
     const missing = screen.getByRole("list", { name: "Names with no backup" })
+    expect(within(missing).getAllByRole("listitem")).toHaveLength(3)
     expect(missing).toHaveTextContent("openai:gpt-5 · pinned to openai")
     expect(missing).toHaveTextContent("google/gemini-x · only gemini serves it")
-    expect(missing).not.toHaveTextContent("coding")
+    expect(screen.getByText("and 2 more without a backup")).toBeInTheDocument()
     // The most-used name is a policy, so the link opens Routing on no target.
     expect(
       screen.getByRole("link", { name: "Set up routing" }),

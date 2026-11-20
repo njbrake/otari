@@ -32,6 +32,7 @@ function TruncatingLink({
   tooltip: ReactNode
   /** Undefined where the caller may only read the key: the text then stays text. */
   onPress: (() => void) | undefined
+  /** A tone of its own, in place of the link color, which would otherwise win. */
   className?: string
   children: ReactNode
 }) {
@@ -52,7 +53,7 @@ function TruncatingLink({
           {...trigger}
           type="button"
           onClick={onPress}
-          className={`block max-w-full truncate text-left text-body ${LINK_CLASS} ${className}`}
+          className={`block max-w-full truncate text-left text-body ${className || LINK_CLASS}`}
         >
           {children}
         </button>
@@ -79,13 +80,13 @@ export function KeyModelsCell({
       <TruncatingLink
         tooltip={
           summary.kind === "all"
-            ? "Every model its owner may use"
+            ? "Every model its owner is allowed"
             : "Every request on this key is refused"
         }
         onPress={onOpen}
         className={summary.kind === "none" ? "text-danger" : ""}
       >
-        {summary.kind === "all" ? "All allowed models" : "No models"}
+        {summary.kind === "all" ? "All allowed" : "No models"}
       </TruncatingLink>
     )
   }
@@ -175,7 +176,7 @@ export function KeyMostUsedCell({
   }
   const others = routing.model_count - 1
   // The count of the others sits on the second line, so a long name's
-  // ellipsis never cuts it off.
+  // ellipsis never cuts it off; the name's title names them too.
   return (
     <span className="flex min-w-0 flex-col">
       <span
@@ -184,18 +185,21 @@ export function KeyMostUsedCell({
       >
         {top.name}
       </span>
-      <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+      {/* The backup state first, so a narrow lane cuts the count rather than it. */}
+      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+        <span className="shrink-0">
+          <KeyBackupLine model={top} />
+        </span>
         {others > 0 ? (
           <>
-            <span className="shrink-0 text-caption text-subtle">
-              +{others} {others === 1 ? "other" : "others"}
-            </span>
             <span aria-hidden="true" className="text-caption text-subtle">
               ·
             </span>
+            <span className="truncate text-caption text-subtle">
+              +{others} {others === 1 ? "other" : "others"}
+            </span>
           </>
         ) : null}
-        <KeyBackupLine model={top} />
       </span>
     </span>
   )
@@ -260,7 +264,11 @@ export function KeyRoutingSummary({
       </p>
     )
   }
-  const missing = routing.models.filter((model) => model.backup === "no_backup")
+  // From every name the key sent, not only the most used, so the list and the
+  // count above it agree. A gateway older than `no_backup` sends none.
+  const missing = routing.no_backup ?? []
+  const shown = missing.slice(0, 3)
+  const more = routing.no_backup_count - shown.length
   return (
     <div className="flex flex-col gap-3">
       <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-y-1 text-body">
@@ -270,7 +278,7 @@ export function KeyRoutingSummary({
             ? routing.policies
                 .map(
                   (policy) =>
-                    `${policy.name} (${policy.requests.toLocaleString("en-US")})`,
+                    `${policy.name} (${policy.requests.toLocaleString("en-US")}${policy.deleted ? ", since deleted" : ""})`,
                 )
                 .join(", ")
             : "None, requests name models directly"}
@@ -282,7 +290,7 @@ export function KeyRoutingSummary({
       </dl>
       {missing.length > 0 ? (
         <ul className="flex flex-col" aria-label="Names with no backup">
-          {missing.slice(0, 3).map((model) => (
+          {shown.map((model) => (
             <li
               key={model.name}
               className="grid grid-cols-[1rem_minmax(0,1fr)_auto] items-baseline gap-2 border-t border-border-subtle py-1.5"
@@ -300,6 +308,9 @@ export function KeyRoutingSummary({
             </li>
           ))}
         </ul>
+      ) : null}
+      {more > 0 ? (
+        <p className="text-caption">and {more} more without a backup</p>
       ) : null}
       <p className="text-body">
         <SetUpRoutingLink routing={routing}>Set up routing</SetUpRoutingLink>

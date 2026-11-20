@@ -108,10 +108,14 @@ Client filters may narrow the server-derived scope and never widen it. A tenant
 that needs a deployment-wide route gets a separately scoped endpoint, as
 organization usage does for reads and `/api/v1/organizations/me/keys`
 (`organization_keys.py`) does for writes; do not loosen the original route. A
-member's key surface derives its owner as well as its scope, takes a `user_id`
-only from an organization owner or admin naming an active member, never mints
-or hands a manager a budget-exempt key or an operator's service key, and
-refuses a viewer's key writes through the same contributor check.
+member's key surface derives its owner as well as its scope, so it mints a
+secret only for the caller and refuses a `user_id` naming anyone else, never
+mints or hands a manager a budget-exempt key or an operator's service key, and
+refuses a viewer's key writes through the same contributor check. An
+organization owner or admin manages members' keys there (edit, disable,
+delete) but is refused anything that yields a colleague's secret or acts as
+them, rotation and federation rules included: a key acts as its owner on the
+data plane (files, batches, MCP connections).
 
 The API key determines the billed workspace. Client `user`, workspace, or
 organization fields cannot move billing or credential resolution.

@@ -4081,12 +4081,13 @@ export interface paths {
         put?: never;
         /**
          * Create Own Key
-         * @description Create an API key, owned by the caller or, for an organization owner or admin, by a member they name.
+         * @description Create an API key owned by the caller, in a workspace they may see.
          *
-         *     The tenant counterpart of ``POST /api/v1/keys``: the key is always
-         *     budget-enforced, and the workspace must be visible to its owner (a member of
-         *     it, or an organization owner/admin, who see every workspace). A viewer of
-         *     the workspace is refused with 403. The secret is returned once.
+         *     The member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the
+         *     caller's own attribution user, the key is always budget-enforced, and the
+         *     workspace must be visible to the caller (a member of it, or an organization
+         *     owner/admin, who see every workspace). A ``user_id`` naming anyone else is
+         *     refused with 403, as is a viewer of the workspace. The secret is returned once.
          *
          *     A service key is the organization's rather than the caller's: only an
          *     organization owner or admin may create one, its end-user budgets must be
@@ -4259,11 +4260,12 @@ export interface paths {
         put?: never;
         /**
          * Rotate Own Key
-         * @description Rotate a key's secret in place: the caller's own, or for an owner or admin one of the organization's.
+         * @description Rotate a key's secret in place: the caller's own, or for an owner or admin an organization service key.
          *
          *     Same contract as the operator's rotate: the row keeps its identity, the new
          *     raw key is returned once, and the previous secret stops authenticating
-         *     immediately with no grace window.
+         *     immediately with no grace window. An owner or admin who manages a member's
+         *     key is refused with 403: the new secret would act as that member.
          */
         post: operations["organization-keys-rotate_own_key"];
         delete?: never;
@@ -12656,9 +12658,8 @@ export interface components {
          * CreateOwnKeyRequest
          * @description Create-key body for the member surface.
          *
-         *     Deliberately not ``CreateKeyRequest``: its ``user_id`` names an identity in
-         *     the organization rather than any billing id, and it has no
-         *     ``exclude_from_budget`` (see the module docstring). A field it does not take
+         *     Deliberately not ``CreateKeyRequest``: its ``user_id`` may only name the
+         *     caller, and it has no ``exclude_from_budget`` (see the module docstring). A field it does not take
          *     is refused rather than dropped.
          */
         CreateOwnKeyRequest: {
@@ -12727,7 +12728,7 @@ export interface components {
             scopes?: components["schemas"]["KeyScope"][];
             /**
              * User Id
-             * @description Organization owners and admins only: the member who owns the key and whose budget its spend counts toward, by identity id. Must be an active member of your active organization who may see the workspace. Omitted means you. Not taken with is_service_key, whose owner is the key's own.
+             * @description Your own identity id, or omitted. A key acts as its owner, so naming anyone else is refused with 403, an organization owner or admin included.
              */
             user_id?: string | null;
             /**
@@ -15978,7 +15979,7 @@ export interface components {
             backup: "has_backup" | "no_backup" | "subscription" | "unknown";
             /**
              * Kind
-             * @description What the name is to this key now: a routing policy, an alias, a catalog ID, a pinned `provider:model`, or none of them (a name nothing resolves any more).
+             * @description What the name is to this key now: a routing policy (with `backup` `unknown` when it has since been deleted), an alias, a catalog ID, a pinned `provider:model`, or none of them.
              * @enum {string}
              */
             kind: "policy" | "alias" | "catalog" | "pinned" | "unknown";
@@ -16008,6 +16009,11 @@ export interface components {
          * @description One routing policy a key sent in the window.
          */
         KeyPolicyPublic: {
+            /**
+             * Deleted
+             * @description No policy of this name is in force for the key now: it was deleted or renamed since.
+             */
+            deleted: boolean;
             /** Name */
             name: string;
             /** Requests */
@@ -16031,13 +16037,18 @@ export interface components {
              */
             models: components["schemas"]["KeyModelPublic"][];
             /**
+             * No Backup
+             * @description The names with no backup, most requested first, at most ten; `no_backup_count` counts them all.
+             */
+            no_backup: components["schemas"]["KeyModelPublic"][];
+            /**
              * No Backup Count
              * @description Of `model_count`, how many have no backup.
              */
             no_backup_count: number;
             /**
              * Policies
-             * @description Every routing policy the key sent, most requested first.
+             * @description Every routing policy the key sent, most requested first, including one since deleted.
              */
             policies: components["schemas"]["KeyPolicyPublic"][];
         };

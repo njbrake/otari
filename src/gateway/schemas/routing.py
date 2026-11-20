@@ -186,8 +186,8 @@ class KeyModelPublic(BaseModel):
     )
     requests: int = Field(description="Requests in the window, each counted once however many attempts.")
     kind: Literal["policy", "alias", "catalog", "pinned", "unknown"] = Field(
-        description="What the name is to this key now: a routing policy, an alias, a catalog ID, a pinned "
-        "`provider:model`, or none of them (a name nothing resolves any more)."
+        description="What the name is to this key now: a routing policy (with `backup` `unknown` when it has "
+        "since been deleted), an alias, a catalog ID, a pinned `provider:model`, or none of them."
     )
     backup: Literal["has_backup", "no_backup", "subscription", "unknown"] = Field(
         description="Whether a failure on this name has somewhere to go. `subscription`: every request was "
@@ -208,6 +208,9 @@ class KeyPolicyPublic(BaseModel):
 
     name: str
     requests: int
+    deleted: bool = Field(
+        description="No policy of this name is in force for the key now: it was deleted or renamed since."
+    )
 
 
 class KeyRoutingPublic(BaseModel):
@@ -219,7 +222,12 @@ class KeyRoutingPublic(BaseModel):
     models: list[KeyModelPublic] = Field(description="The most requested names first, at most ten.")
     model_count: int = Field(description="How many names the key sent, including any `models` leaves out.")
     no_backup_count: int = Field(description="Of `model_count`, how many have no backup.")
-    policies: list[KeyPolicyPublic] = Field(description="Every routing policy the key sent, most requested first.")
+    no_backup: list[KeyModelPublic] = Field(
+        description="The names with no backup, most requested first, at most ten; `no_backup_count` counts them all."
+    )
+    policies: list[KeyPolicyPublic] = Field(
+        description="Every routing policy the key sent, most requested first, including one since deleted."
+    )
 
 
 class KeyRoutingResponse(BaseModel):

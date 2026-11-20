@@ -6958,7 +6958,7 @@
       },
       "CreateOwnKeyRequest": {
         "additionalProperties": false,
-        "description": "Create-key body for the member surface.\n\nDeliberately not ``CreateKeyRequest``: its ``user_id`` names an identity in\nthe organization rather than any billing id, and it has no\n``exclude_from_budget`` (see the module docstring). A field it does not take\nis refused rather than dropped.",
+        "description": "Create-key body for the member surface.\n\nDeliberately not ``CreateKeyRequest``: its ``user_id`` may only name the\ncaller, and it has no ``exclude_from_budget`` (see the module docstring). A field it does not take\nis refused rather than dropped.",
         "properties": {
           "allowed_models": {
             "anyOf": [
@@ -7111,7 +7111,7 @@
                 "type": "null"
               }
             ],
-            "description": "Organization owners and admins only: the member who owns the key and whose budget its spend counts toward, by identity id. Must be an active member of your active organization who may see the workspace. Omitted means you. Not taken with is_service_key, whose owner is the key's own.",
+            "description": "Your own identity id, or omitted. A key acts as its owner, so naming anyone else is refused with 403, an organization owner or admin included.",
             "title": "User Id"
           },
           "workspace_id": {
@@ -14002,7 +14002,7 @@
             "type": "string"
           },
           "kind": {
-            "description": "What the name is to this key now: a routing policy, an alias, a catalog ID, a pinned `provider:model`, or none of them (a name nothing resolves any more).",
+            "description": "What the name is to this key now: a routing policy (with `backup` `unknown` when it has since been deleted), an alias, a catalog ID, a pinned `provider:model`, or none of them.",
             "enum": [
               "policy",
               "alias",
@@ -14068,6 +14068,11 @@
       "KeyPolicyPublic": {
         "description": "One routing policy a key sent in the window.",
         "properties": {
+          "deleted": {
+            "description": "No policy of this name is in force for the key now: it was deleted or renamed since.",
+            "title": "Deleted",
+            "type": "boolean"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -14079,7 +14084,8 @@
         },
         "required": [
           "name",
-          "requests"
+          "requests",
+          "deleted"
         ],
         "title": "KeyPolicyPublic",
         "type": "object"
@@ -14104,13 +14110,21 @@
             "title": "Models",
             "type": "array"
           },
+          "no_backup": {
+            "description": "The names with no backup, most requested first, at most ten; `no_backup_count` counts them all.",
+            "items": {
+              "$ref": "#/components/schemas/KeyModelPublic"
+            },
+            "title": "No Backup",
+            "type": "array"
+          },
           "no_backup_count": {
             "description": "Of `model_count`, how many have no backup.",
             "title": "No Backup Count",
             "type": "integer"
           },
           "policies": {
-            "description": "Every routing policy the key sent, most requested first.",
+            "description": "Every routing policy the key sent, most requested first, including one since deleted.",
             "items": {
               "$ref": "#/components/schemas/KeyPolicyPublic"
             },
@@ -14123,6 +14137,7 @@
           "models",
           "model_count",
           "no_backup_count",
+          "no_backup",
           "policies"
         ],
         "title": "KeyRoutingPublic",
@@ -47494,7 +47509,7 @@
         ]
       },
       "post": {
-        "description": "Create an API key, owned by the caller or, for an organization owner or admin, by a member they name.\n\nThe tenant counterpart of ``POST /api/v1/keys``: the key is always\nbudget-enforced, and the workspace must be visible to its owner (a member of\nit, or an organization owner/admin, who see every workspace). A viewer of\nthe workspace is refused with 403. The secret is returned once.\n\nA service key is the organization's rather than the caller's: only an\norganization owner or admin may create one, its end-user budgets must be\nthis organization's, and it is owned by a user minted for it alone.",
+        "description": "Create an API key owned by the caller, in a workspace they may see.\n\nThe member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the\ncaller's own attribution user, the key is always budget-enforced, and the\nworkspace must be visible to the caller (a member of it, or an organization\nowner/admin, who see every workspace). A ``user_id`` naming anyone else is\nrefused with 403, as is a viewer of the workspace. The secret is returned once.\n\nA service key is the organization's rather than the caller's: only an\norganization owner or admin may create one, its end-user budgets must be\nthis organization's, and it is owned by a user minted for it alone.",
         "operationId": "organization-keys-create_own_key",
         "requestBody": {
           "content": {
@@ -48067,7 +48082,7 @@
     },
     "/api/v1/organizations/me/keys/{key_id}/rotate": {
       "post": {
-        "description": "Rotate a key's secret in place: the caller's own, or for an owner or admin one of the organization's.\n\nSame contract as the operator's rotate: the row keeps its identity, the new\nraw key is returned once, and the previous secret stops authenticating\nimmediately with no grace window.",
+        "description": "Rotate a key's secret in place: the caller's own, or for an owner or admin an organization service key.\n\nSame contract as the operator's rotate: the row keeps its identity, the new\nraw key is returned once, and the previous secret stops authenticating\nimmediately with no grace window. An owner or admin who manages a member's\nkey is refused with 403: the new secret would act as that member.",
         "operationId": "organization-keys-rotate_own_key",
         "parameters": [
           {

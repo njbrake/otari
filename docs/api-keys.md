@@ -137,16 +137,17 @@ See [Workload identity](workload-identity.md).
 
 - **Owners, admins and members** create and manage their own keys on the
   **API keys** page. A key made there is always billed to whoever made it, and
-  is never budget-exempt.
+  no key made there is budget-exempt.
 - **Owners and admins** also manage every member's key in the organization:
-  they list, edit, regenerate and delete them, and create a key for a member
-  they pick as its **Owner**, who must be an active member able to see the
-  key's workspace. Their role is read on every request, so lowering it takes
-  those keys away at once. They cannot exempt a key from budget or give a
-  colleague's key a workload identity rule, and a
-  budget-exempt key, an operator's service key, or a key billed to someone
-  outside the organization stays out of their view unless it is their own.
-  They also create the organization's own
+  they list, edit (name, budget, models, tools, expiry), disable, enable and
+  delete them. They never hold a colleague's secret: a key acts as its owner,
+  reaching that person's files, batches and MCP connections, so creating a key
+  for someone else, regenerating a colleague's key and giving it a workload
+  identity rule are refused with `403`. Their role is read on every request, so
+  lowering it takes those keys away at once. They cannot exempt a key from
+  budget, and a budget-exempt key, an operator's service key, or a key billed
+  to someone outside the organization stays out of their view unless it is
+  their own. They also create the organization's own
   [service keys](end-users.md#2-create-the-service-key).
 - **Viewers** can list their keys but cannot create, edit, regenerate or delete
   one. An operator can issue a key to a viewer.

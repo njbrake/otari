@@ -154,6 +154,15 @@ export function keyFacts(
         "Requests on this key are logged with cost but never counted toward budget",
     })
   }
+  // Folded in here rather than given a lane: most keys never expire, and the
+  // table is wide enough with the routing lanes.
+  if (apiKey.expires_at) {
+    facts.push({
+      key: "expires",
+      text: `expires ${formatDate(apiKey.expires_at)}`,
+      title: new Date(apiKey.expires_at).toLocaleString(),
+    })
+  }
   if (apiKey.reject_user_mismatch !== null) {
     facts.push({
       key: "user",
@@ -317,21 +326,6 @@ function columnsFor({
         ) : row.key.last_used_at ? (
           <span className="text-mono-caption text-muted">
             {formatRelative(row.key.last_used_at)}
-          </span>
-        ) : (
-          NEVER
-        ),
-    },
-    {
-      id: "expires",
-      header: "Expires",
-      cell: ({ row }) =>
-        !row ? null : row.key.expires_at ? (
-          <span
-            className="text-mono-caption text-muted"
-            title={new Date(row.key.expires_at).toLocaleString()}
-          >
-            {formatDate(row.key.expires_at)}
           </span>
         ) : (
           NEVER
@@ -576,6 +570,13 @@ export function KeysPage() {
   }
   const renderMenu = (row: KeyRow) => {
     const access = keyAccess(row.key, caller)
+    // A key acts as its owner, so an owner or admin managing a colleague's key
+    // gets neither its secret nor a workload identity for it: those stay with
+    // the key's owner, the organization's service keys aside.
+    const actsAsCaller =
+      isOperator ||
+      row.key.user_id === me ||
+      row.key.is_organization_service_key
     return (
       // Focus anywhere in the menu, its portaled items included, marks this
       // row's trigger as the one a dialog opened from it gives focus back to.
@@ -592,16 +593,9 @@ export function KeysPage() {
             key: row.key,
             access,
             isOperator,
-            // A rule lets a workload act as the key, so an owner or admin
-            // gives one only to their own keys and the organization's
-            // service keys, never to a colleague's.
-            canFederate:
-              canFederate &&
-              (isOperator ||
-                row.key.user_id === me ||
-                row.key.is_organization_service_key),
+            canFederate: canFederate && actsAsCaller,
             isPending,
-          })}
+          }).filter((item) => item.id !== "regenerate" || actsAsCaller)}
           isReadOnly={access === "read"}
           teamName={teamNames.get(row.key.workspace_id)}
           organizationName={organizationName}

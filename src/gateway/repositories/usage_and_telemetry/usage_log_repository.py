@@ -263,6 +263,8 @@ class KeyNameTraffic:
     requests: int
     imported: int
     """Of ``requests``, those imported rather than served here."""
+    routed: bool = False
+    """Whether routing recorded the name, so it named a policy or a catalog ID when sent."""
 
 
 @dataclass(frozen=True)
@@ -828,6 +830,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 name.label("name"),
                 requests.label("requests"),
                 func.sum(case((imported, 1), else_=0)).label("imported"),
+                func.max(case((and_(~imported, UsageLog.policy_name.is_not(None)), 1), else_=0)).label("routed"),
             )
             .where(
                 UsageLog.api_key_id.in_(sorted(key_ids)),
@@ -840,7 +843,11 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         )
         return [
             KeyNameTraffic(
-                api_key_id=row.api_key_id, name=row.name, requests=int(row.requests), imported=int(row.imported)
+                api_key_id=row.api_key_id,
+                name=row.name,
+                requests=int(row.requests),
+                imported=int(row.imported),
+                routed=bool(row.routed),
             )
             for row in (await self.db.execute(stmt)).all()
         ]

@@ -99,6 +99,8 @@ class KeyPolicy:
 
     name: str
     requests: int
+    deleted: bool = False
+    """No policy of that name is in force for the key now: it was deleted or renamed since."""
 
 
 @dataclass(frozen=True)
@@ -110,8 +112,10 @@ class KeyRouting:
     """The most requested names first, at most ``KEY_MODELS_SHOWN``."""
     model_count: int
     no_backup_count: int
+    no_backup: tuple[KeyModel, ...]
+    """The names with no backup, most requested first, at most ``KEY_MODELS_SHOWN``; ``no_backup_count`` counts all."""
     policies: tuple[KeyPolicy, ...]
-    """Every policy the key sent, most requested first."""
+    """Every policy the key sent, most requested first, a deleted one included."""
 
 
 @dataclass(frozen=True)
@@ -198,7 +202,9 @@ class RoutingService:
         models: list[KeyModel] = []
         for row in names:
             coverage = (
-                _Coverage("unknown", "subscription") if row.imported == row.requests else self._coverage(key, row.name)
+                _Coverage("unknown", "subscription")
+                if row.imported == row.requests
+                else self._coverage(key, row.name, routed=row.routed)
             )
             models.append(
                 KeyModel(
@@ -211,17 +217,21 @@ class RoutingService:
                 )
             )
         models.sort(key=lambda model: (-model.requests, model.name))
+        no_backup = [model for model in models if model.backup == "no_backup"]
         return KeyRouting(
             api_key_id=key.id,
             models=tuple(models[:KEY_MODELS_SHOWN]),
             model_count=len(models),
-            no_backup_count=sum(1 for model in models if model.backup == "no_backup"),
+            no_backup_count=len(no_backup),
+            no_backup=tuple(no_backup[:KEY_MODELS_SHOWN]),
             policies=tuple(
-                KeyPolicy(name=model.name, requests=model.requests) for model in models if model.kind == "policy"
+                KeyPolicy(name=model.name, requests=model.requests, deleted=model.backup == "unknown")
+                for model in models
+                if model.kind == "policy"
             ),
         )
 
-    def _coverage(self, key: KeyReach, name: str) -> _Coverage:
+    def _coverage(self, key: KeyReach, name: str, *, routed: bool) -> _Coverage:
         policy = resolve_effective_policy(self._config, name, key.user_id, workspace_id=key.workspace_id)
         if policy is not None:
             # The candidates a request from this key could try, after the same
@@ -242,7 +252,11 @@ class RoutingService:
         if target is not None:
             # A one-target policy: the request path never fails an alias over to a catalog ID's other offerings.
             return _Coverage("alias", "no_backup", "single_target_policy", _instance(target))
-        return self._model_coverage(key, name)
+        coverage = self._model_coverage(key, name)
+        if routed and coverage.kind == "unknown":
+            # Routing recorded it, and it is no catalog ID: a policy since deleted or renamed.
+            return _Coverage("policy", "unknown")
+        return coverage
 
     def _model_coverage(self, key: KeyReach, selector: str) -> _Coverage:
         offerings = resolve_catalog_offerings(

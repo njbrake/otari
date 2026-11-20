@@ -3259,7 +3259,8 @@ body {
   height: 3.5rem;
   padding-block: 0.375rem;
 }
-.otari-keys-table .table__column,
+/* A header may wrap to a second line, so a lane is as wide as its content
+   rather than its label ("Spent this month"); a cell keeps to one. */
 .otari-keys-table .table__cell[data-column] {
   white-space: nowrap;
 }
@@ -3268,7 +3269,7 @@ body {
    zero max-width below gives it next to none. */
 .otari-keys-table .table__column[data-key="name"] {
   width: 100%;
-  min-width: 12rem;
+  min-width: 13rem;
 }
 /* A zero max-width stops the auto-layout table sizing Key to its longest name,
    so the name's own ellipsis has an edge to cut at. */
@@ -3276,43 +3277,47 @@ body {
   max-width: 0;
 }
 .otari-keys-table .table__column[data-key="state"] {
+  width: 5.5rem;
+  min-width: 5.5rem;
+}
+.otari-keys-table .table__column[data-key="owner"] {
   width: 7rem;
   min-width: 7rem;
 }
-.otari-keys-table .table__column[data-key="owner"] {
-  width: 10.5rem;
-  min-width: 10.5rem;
-}
 .otari-keys-table .table__cell[data-column="owner"] {
-  max-width: 10.5rem;
+  max-width: 7rem;
 }
 /* Each caps its text so a long provider list or name ends in an ellipsis. */
-.otari-keys-table .table__column[data-key="models"],
+.otari-keys-table .table__column[data-key="models"] {
+  width: 8rem;
+  min-width: 8rem;
+}
+.otari-keys-table .table__cell[data-column="models"] {
+  max-width: 8rem;
+}
 .otari-keys-table .table__column[data-key="most_used"] {
-  width: 11rem;
-  min-width: 11rem;
+  width: 9rem;
+  min-width: 9rem;
 }
-.otari-keys-table .table__cell[data-column="models"],
 .otari-keys-table .table__cell[data-column="most_used"] {
-  max-width: 11rem;
+  max-width: 9rem;
 }
-.otari-keys-table .table__column[data-key="used"],
-.otari-keys-table .table__column[data-key="expires"] {
-  width: 6.5rem;
-  min-width: 6.5rem;
+.otari-keys-table .table__column[data-key="used"] {
+  width: 5.5rem;
+  min-width: 5.5rem;
 }
 /* A budget is "$15.00 a day" at most. */
 .otari-keys-table .table__column[data-key="budget"] {
-  width: 10rem;
-  min-width: 10rem;
+  width: 7.5rem;
+  min-width: 7.5rem;
 }
 .otari-keys-table .table__column[data-key="spend"] {
-  width: 10rem;
-  min-width: 10rem;
-}
-.otari-keys-table .table__column[data-key="tokens"] {
   width: 5.5rem;
   min-width: 5.5rem;
+}
+.otari-keys-table .table__column[data-key="tokens"] {
+  width: 4.5rem;
+  min-width: 4.5rem;
 }
 /* 56px: the 32px trigger, the row's 16px end padding, and 8px before it. */
 .otari-keys-table .table__column[data-key="actions"] {

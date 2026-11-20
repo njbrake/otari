@@ -121,6 +121,7 @@ function mockApi(opts: Api = {}) {
               models: [],
               model_count: 0,
               no_backup_count: 0,
+              no_backup: [],
               policies: [],
               ...opts.routing?.[id],
             })),
@@ -335,7 +336,47 @@ describe("KeysPage", () => {
 
       const row = await rowOf("idle")
       expect(await within(row).findByText("Not used (30d)")).toBeVisible()
-      expect(within(row).getByText("All allowed models")).toBeVisible()
+      expect(within(row).getByText("All allowed")).toBeVisible()
+    })
+
+    it("offers an owner no secret for a colleague's key", async () => {
+      mockApi({
+        deploymentOperator: false,
+        role: "owner",
+        keys: [
+          apiKey({ id: "k-mine", key_name: "mine", user_id: ME }),
+          apiKey({
+            id: "k-theirs",
+            key_name: "theirs",
+            user_id: "someone-else",
+          }),
+        ],
+      })
+      const user = userEvent.setup()
+      await renderPage()
+
+      await user.click(
+        within(await rowOf("theirs")).getByRole("button", {
+          name: /^Actions for theirs/,
+        }),
+      )
+      const menu = await screen.findByRole("menu")
+      expect(within(menu).getByRole("menuitem", { name: /Edit/ })).toBeVisible()
+      expect(
+        within(menu).queryByRole("menuitem", { name: /Regenerate/ }),
+      ).toBeNull()
+      await user.keyboard("{Escape}")
+
+      await user.click(
+        within(await rowOf("mine")).getByRole("button", {
+          name: /^Actions for mine/,
+        }),
+      )
+      expect(
+        within(await screen.findByRole("menu")).getByRole("menuitem", {
+          name: /Regenerate/,
+        }),
+      ).toBeVisible()
     })
 
     it("tells a member the keys are theirs", async () => {
@@ -361,8 +402,25 @@ describe("KeysPage", () => {
       const row = await rowOf("ci-bot")
       expect(within(row).getByText("…7xKp")).toBeInTheDocument()
       expect(within(row).getByText("Active")).toBeInTheDocument()
-      // Never used, and never expires.
-      expect(within(row).getAllByText("Never")).toHaveLength(2)
+      // Never used; a key that never expires says nothing about it.
+      expect(within(row).getAllByText("Never")).toHaveLength(1)
+      expect(within(row).queryByText(/^expires/)).toBeNull()
+    })
+
+    it("says when a key expires under its name", async () => {
+      mockApi({
+        keys: [
+          apiKey({
+            id: "key-1",
+            key_name: "ci-bot",
+            expires_at: "2099-03-04T12:00:00Z",
+          }),
+        ],
+      })
+      await renderPage()
+
+      const row = await rowOf("ci-bot")
+      expect(within(row).getByText(/^expires /)).toBeVisible()
     })
 
     describe("on a phone", () => {
