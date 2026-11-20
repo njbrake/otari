@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest"
 import type { OrganizationSpendCeiling } from "@/client"
 import {
   type AttentionInput,
+  type AttentionKey,
   type AttentionSource,
   attention,
+  theWorkspace,
 } from "@/features/home/attention"
 import type { LimitTarget } from "@/features/spend/limits"
 
@@ -46,6 +48,8 @@ function input(overrides: Partial<AttentionInput> = {}): AttentionInput {
       limits: "ready",
       refusals: "ready",
       failures: "ready",
+      keys: "ready",
+      providers: "ready",
       account: "ready",
     },
     ceilings: [],
@@ -59,8 +63,12 @@ function input(overrides: Partial<AttentionInput> = {}): AttentionInput {
     targets: new Map(),
     peopleOf: new Map(),
     account: { sourceName: "The balance" },
-    day: { requests: 100, errors: [] },
+    orgDay: { requests: 100, errors: [] },
+    days: [{ workspaceId: "w1", requests: 100, errors: [] }],
     refusals: [],
+    keys: [],
+    checksProviders: false,
+    unreachable: [],
     ...overrides,
   }
 }
@@ -177,7 +185,13 @@ describe("type 3, refused", () => {
   const refusals = (
     rows: { userId: string | null; name: string; requests: number }[],
     extra: Partial<AttentionInput> = {},
-  ) => attention(input({ refusals: rows, ...extra })).items[0]
+  ) =>
+    attention(
+      input({
+        refusals: rows.map((row) => ({ workspaceId: "w1", ...row })),
+        ...extra,
+      }),
+    ).items[0]
 
   it("names one person and links to their refusals", () => {
     const item = refusals([{ userId: "u1", name: "Ana Ruiz", requests: 4 }])
@@ -190,6 +204,7 @@ describe("type 3, refused", () => {
       to: "/requests",
       // The refused requests only, not every failure in the window.
       search: { status_code: "403", range: "24h", user_id: "u1" },
+      workspaceId: "w1",
     })
   })
 
@@ -221,10 +236,12 @@ describe("type 3, refused", () => {
       input({
         ceilings: [ceiling({ current_spend: 100 })],
         peopleOf: new Map([["m1", ["u1"]]]),
-        refusals: [{ userId: "u1", name: "Wei Zhang", requests: 6 }],
+        refusals: [
+          { workspaceId: "w1", userId: "u1", name: "Wei Zhang", requests: 6 },
+        ],
       }),
     ).items
-    expect(items.map((one) => one.id)).not.toContain("refused")
+    expect(items.map((one) => one.id)).not.toContain("refused:w1")
     expect(items).toHaveLength(1)
   })
 
@@ -234,8 +251,8 @@ describe("type 3, refused", () => {
         ceilings: [ceiling({ current_spend: 100 })],
         peopleOf: new Map([["m1", ["u1"]]]),
         refusals: [
-          { userId: "u1", name: "Wei Zhang", requests: 6 },
-          { userId: "u2", name: "Ana Ruiz", requests: 2 },
+          { workspaceId: "w1", userId: "u1", name: "Wei Zhang", requests: 6 },
+          { workspaceId: "w1", userId: "u2", name: "Ana Ruiz", requests: 2 },
         ],
       }),
     ).items
@@ -249,7 +266,13 @@ describe("type 4, failures", () => {
   const failing = (
     requests: number,
     errors: { errorClass: string; requests: number }[],
-  ) => attention(input({ day: { requests, errors } })).items[0]
+  ) =>
+    attention(
+      input({
+        orgDay: { requests, errors },
+        days: [{ workspaceId: "w1", requests, errors }],
+      }),
+    ).items[0]
 
   it("counts only server-side classes", () => {
     expect(
@@ -303,6 +326,7 @@ describe("type 4, failures", () => {
       label: "See the failures",
       to: "/requests",
       search: { status: "error", range: "24h" },
+      workspaceId: "w1",
     })
   })
 })
@@ -458,18 +482,27 @@ describe("order and fold", () => {
           ceiling({ id: "near", current_spend: 90 }),
           ceiling({ id: "full", scope_id: "m2", current_spend: 100 }),
         ],
-        refusals: [{ userId: "u9", name: "Eli", requests: 2 }],
-        day: {
+        refusals: [
+          { workspaceId: "w1", userId: "u9", name: "Eli", requests: 2 },
+        ],
+        orgDay: {
           requests: 100,
           errors: [{ errorClass: "unknown", requests: 6 }],
         },
+        days: [
+          {
+            workspaceId: "w1",
+            requests: 100,
+            errors: [{ errorClass: "unknown", requests: 6 }],
+          },
+        ],
       }),
     )
     expect(result.items.map((one) => one.id)).toEqual([
       "full",
-      "refused",
+      "refused:w1",
       "balance",
-      "failures",
+      "failures:w1",
       "near",
     ])
   })
@@ -589,6 +622,8 @@ describe("states", () => {
       "limits",
       "refusals",
       "failures",
+      "keys",
+      "providers",
       "account",
     ]
     for (const source of sources) {
@@ -596,6 +631,8 @@ describe("states", () => {
         limits: "ready",
         refusals: "ready",
         failures: "ready",
+        keys: "ready",
+        providers: "ready",
         account: "ready",
         [source]: "loading",
       } as AttentionInput["states"]
@@ -613,6 +650,8 @@ describe("states", () => {
           limits: "failed",
           refusals: "ready",
           failures: "ready",
+          keys: "ready",
+          providers: "ready",
           account: "ready",
         },
       }),
@@ -630,6 +669,8 @@ describe("states", () => {
           limits: "ready",
           refusals: "failed",
           failures: "ready",
+          keys: "ready",
+          providers: "ready",
           account: "failed",
         },
         ceilings: [ceiling({ current_spend: 100 })],
@@ -648,7 +689,7 @@ describe("nothing qualifies", () => {
     expect(attention(input()).quiet).toEqual({
       lead: "Nothing needs you right now.",
       detail:
-        "No limit is past 80% and nothing was refused in the last 24 hours.",
+        "No limit is past 80%, nothing was refused in the last 24 hours, and no key in use expires within 7 days.",
     })
   })
 
@@ -663,7 +704,208 @@ describe("nothing qualifies", () => {
         }),
       ).quiet?.detail,
     ).toBe(
-      "No limit is past 80%, nothing was refused in the last 24 hours, and the balance tops up on its own.",
+      "No limit is past 80%, nothing was refused in the last 24 hours, no key in use expires within 7 days, and the balance tops up on its own.",
     )
+  })
+})
+
+describe("each row's workspace", () => {
+  // Requests lists the shell's selected workspace, so a count over every
+  // workspace linked to a page showing one of them.
+  const twoWorkspaces = new Map([
+    ["w1", "Platform"],
+    ["w2", "Research"],
+  ])
+
+  it("counts failures per workspace, names it, and opens it", () => {
+    const items = attention(
+      input({
+        workspaceNames: twoWorkspaces,
+        orgDay: {
+          requests: 150,
+          errors: [{ errorClass: "provider_error", requests: 7 }],
+        },
+        days: [
+          {
+            workspaceId: "w1",
+            requests: 100,
+            errors: [{ errorClass: "provider_error", requests: 1 }],
+          },
+          {
+            workspaceId: "w2",
+            requests: 50,
+            errors: [{ errorClass: "provider_error", requests: 6 }],
+          },
+        ],
+      }),
+    ).items
+    expect(items).toHaveLength(1)
+    expect(items[0]?.text).toBe(
+      "6 of 50 requests in the Research workspace failed in the last 24 hours (12.0%).",
+    )
+    expect(items[0]?.action.workspaceId).toBe("w2")
+  })
+
+  it("names the organization when failures cross only across workspaces", () => {
+    // Three in each: no workspace reaches five, the organization has six.
+    const some = { errorClass: "provider_error", requests: 3 }
+    const [item] = attention(
+      input({
+        workspaceNames: twoWorkspaces,
+        orgDay: {
+          requests: 200,
+          errors: [{ errorClass: "provider_error", requests: 6 }],
+        },
+        days: [
+          { workspaceId: "w1", requests: 150, errors: [some] },
+          {
+            workspaceId: "w2",
+            requests: 50,
+            errors: [{ errorClass: "provider_error", requests: 4 }],
+          },
+        ],
+      }),
+    ).items
+    expect(item?.text).toBe(
+      "6 of 200 requests across all workspaces failed in the last 24 hours (3.0%). The most were in the Research workspace.",
+    )
+    expect(item?.action.workspaceId).toBe("w2")
+  })
+
+  it("raises nothing when the organization is under the threshold", () => {
+    // Its workspaces are only read again once it crosses.
+    expect(
+      texts({
+        workspaceNames: twoWorkspaces,
+        orgDay: {
+          requests: 1000,
+          errors: [{ errorClass: "provider_error", requests: 6 }],
+        },
+        days: [],
+      }),
+    ).toEqual([])
+  })
+
+  it("gives each workspace's refusals their own row and link", () => {
+    const items = attention(
+      input({
+        workspaceNames: twoWorkspaces,
+        refusals: [
+          { workspaceId: "w1", userId: "u1", name: "Ana Ruiz", requests: 2 },
+          { workspaceId: "w2", userId: "u1", name: "Ana Ruiz", requests: 1 },
+        ],
+      }),
+    ).items
+    expect(items.map((one) => [one.text, one.action.workspaceId])).toEqual([
+      [
+        "The gateway refused 2 requests from Ana Ruiz in the Platform workspace in the last 24 hours.",
+        "w1",
+      ],
+      [
+        "The gateway refused a request from Ana Ruiz in the Research workspace in the last 24 hours.",
+        "w2",
+      ],
+    ])
+  })
+
+  it("says nothing about the workspace when there is only one", () => {
+    expect(
+      texts({
+        refusals: [{ workspaceId: "w1", userId: null, name: "", requests: 3 }],
+      }),
+    ).toEqual(["The gateway refused 3 requests in the last 24 hours."])
+  })
+})
+
+describe("type 7, a provider unreachable", () => {
+  it("is urgent and opens the providers", () => {
+    const [item] = attention(
+      input({
+        checksProviders: true,
+        unreachable: [{ name: "openai", error: "Invalid API key." }],
+      }),
+    ).items
+    expect(item).toEqual({
+      id: "unreachable:openai",
+      isUrgent: true,
+      text: "openai is unreachable, so requests routed to it fail. Invalid API key.",
+      action: { label: "Check the provider", to: "/admin/hosted-providers" },
+    })
+  })
+
+  it("is not ranked when provider health is not read", () => {
+    expect(
+      texts({
+        states: { ...input().states, providers: "loading" },
+        unreachable: [{ name: "openai", error: "" }],
+      }),
+    ).toEqual([])
+  })
+
+  it("says every provider is reachable when it checked them", () => {
+    expect(attention(input({ checksProviders: true })).quiet?.detail).toBe(
+      "No limit is past 80%, nothing was refused in the last 24 hours, no key in use expires within 7 days, and every provider is reachable.",
+    )
+  })
+})
+
+describe("type 8, a key expiring", () => {
+  let next = 0
+  const key = (days: number, overrides: Partial<AttentionKey> = {}) => {
+    next += 1
+    return {
+      id: `k${next}`,
+      name: `key-${next}`,
+      workspaceId: "w1",
+      expiresAt: iso(NOW + days * DAY),
+      lastUsedAt: iso(NOW - DAY),
+      isActive: true,
+      ...overrides,
+    }
+  }
+
+  it("warns within seven days and opens the key's workspace in API keys", () => {
+    const [item] = attention(
+      input({ keys: [key(3, { id: "kx", name: "ci" })] }),
+    ).items
+    expect(item?.isUrgent).toBe(false)
+    expect(item?.text).toMatch(/^The key ci expires in \d days\./)
+    expect(item?.action).toEqual({
+      label: "Open in API keys",
+      to: "/keys",
+      workspaceId: "w1",
+    })
+  })
+
+  it("leaves out a key later than a week, expired, disabled or never used", () => {
+    expect(
+      texts({
+        keys: [
+          key(8),
+          key(-1),
+          key(2, { isActive: false }),
+          key(2, { lastUsedAt: null }),
+          key(2, { expiresAt: null }),
+        ],
+      }),
+    ).toEqual([])
+  })
+
+  it("folds four or more into one row", () => {
+    const result = attention(input({ keys: [key(1), key(2), key(3), key(4)] }))
+    expect(result.items.map((one) => one.text)).toEqual([
+      "4 API keys in use expire within 7 days.",
+    ])
+    expect(result.items[0]?.action).toEqual({
+      label: "Open API keys",
+      to: "/keys",
+    })
+  })
+})
+
+describe("theWorkspace", () => {
+  it("names a workspace without doubling the noun", () => {
+    expect(theWorkspace("Research")).toBe("the Research workspace")
+    expect(theWorkspace("Default workspace")).toBe("the Default workspace")
   })
 })

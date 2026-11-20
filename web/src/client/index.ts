@@ -504,6 +504,10 @@ export type FallbackOffering = Schemas["FallbackOfferingPublic"]
 export type KeyRoutingResponse = Schemas["KeyRoutingResponse"]
 export type KeyRouting = Schemas["KeyRoutingPublic"]
 export type KeyRoutingModel = Schemas["KeyModelPublic"]
+export type RoutingTrafficResponse = Schemas["RoutingTrafficResponse"]
+export type NameTraffic = Schemas["NameTrafficPublic"]
+export type StepOutcome = Schemas["StepOutcomePublic"]
+export type KeyRequests = Schemas["KeyRequestsPublic"]
 
 // `spec` is the one field taken from ./local rather than the generator: the wire
 // contract declares it a free-form object, so the generated type is

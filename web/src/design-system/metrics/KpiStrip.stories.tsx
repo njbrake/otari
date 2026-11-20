@@ -138,3 +138,28 @@ export const FiveColumns: Story = {
     </KpiStrip>
   ),
 }
+
+/**
+ * A figure still being read holds its place with a placeholder rather than a
+ * dash, and a long line wraps under its delta instead of being cut, taking its
+ * row of the strip with it so every cell's parts stay lined up.
+ */
+export const LoadingAndLongLines: Story = {
+  render: () => (
+    <KpiStrip isEmpty={false} columns={4}>
+      <KpiCell label="Tokens this month" value="—" isLoading />
+      <KpiCell
+        label="Active API keys that someone used this month"
+        value="3"
+        delta={<a href="/keys">See their API keys</a>}
+        subline="Used 2 hours ago"
+      />
+      <KpiCell
+        label="Spent this month"
+        value="$412.08"
+        subline="$300.00 charged · $112.08 not charged · $14.20 today"
+      />
+      <KpiCell label="Sessions" value="128" subline="This month" />
+    </KpiStrip>
+  ),
+}

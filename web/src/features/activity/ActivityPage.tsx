@@ -446,7 +446,7 @@ function ActivityPageContent({
     setExtentWin(resolveExtentWindow(range, liveClock))
   }, [liveClock, range, startParam, endParam])
 
-  const usage = useUsageLogs(filters, page, pageSize, true, {
+  const usage = useUsageLogs(filters, page, pageSize, true, "caller", {
     sort,
     refetchInterval: liveRefetch,
   })

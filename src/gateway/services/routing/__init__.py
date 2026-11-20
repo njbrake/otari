@@ -45,9 +45,12 @@ from gateway.services.routing._service import (
     FallbackOffering,
     KeyModel,
     KeyPolicy,
+    KeyRequests,
     KeyRouting,
+    NameTraffic,
     PinnedTraffic,
     RoutingService,
+    StepOutcome,
 )
 from gateway.services.routing.backends import (
     PRIORITY_BACKEND,
@@ -102,6 +105,9 @@ __all__ = [
     "FallbackOffering",
     "KeyModel",
     "KeyPolicy",
+    "KeyRequests",
+    "NameTraffic",
+    "StepOutcome",
     "KeyRouting",
     "NoEligibleCandidatesError",
     "PinnedTraffic",

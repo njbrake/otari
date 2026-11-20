@@ -58,7 +58,7 @@ for a component, not for those.
 | Module | Exports you will reach for |
 | --- | --- |
 | `@heroui/react` | `Button`, `Select`, `Tooltip`, `Spinner`, and the rest of HeroUI v3 |
-| `layout/Section` · `/PageIntro` · `/SettingsGroup` · `/SettingRow` · `/Toolbar` · `/TableScrollFrame` | one component each, named for its file |
+| `layout/Section` · `/PageIntro` · `/SettingsGroup` · `/SettingRow` · `/Toolbar` · `/TableScrollFrame` · `/InlineList` | one component each, named for its file |
 | `metrics/KpiStrip` · `/KpiCell` · `/Meter` · `/ProgressBar` | one each |
 | `metrics/SpendMeter` | `SpendMeter`, `spendState`, and the `SpendState` type |
 | `metrics/SeverityMark` | `SeverityMark`, and the `Severity` type |

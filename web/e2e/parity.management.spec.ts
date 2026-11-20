@@ -455,16 +455,15 @@ test.describe("fallback routing", () => {
     await fillModelBox(page, /^Backup 2/, "groq:llama-3.3-70b-versatile")
     await dialog.getByRole("button", { name: "Create policy" }).click()
 
-    // The table lists the backups in order, so both chips are the assertion
-    // that both were saved and not just the first.
+    // The table lists the chain in the order tried, main model first, so
+    // both backups are the assertion that both were saved and not just the first.
     const policy = row(page, "Routing policies", POLICY)
-    const backups = policy
-      .getByRole("list", { name: "Backups" })
+    const tried = policy
+      .getByRole("list", { name: "Tried in order" })
       .getByRole("listitem")
-    await expect(backups).toHaveText([
-      "claude-3-5-haiku-latest · Anthropic",
-      "llama-3.3-70b-versatile · Groq",
-    ])
+    await expect(tried).toHaveCount(3)
+    await expect(tried.nth(1)).toContainText("claude-3-5-haiku-latest")
+    await expect(tried.nth(2)).toContainText("llama-3.3-70b-versatile")
 
     // Shrinking has to be possible too: a chain that could only grow would strand
     // an operator who added a candidate by mistake. Edit opens the policy's own
@@ -481,11 +480,11 @@ test.describe("fallback routing", () => {
     await page.getByRole("button", { name: "Save fallback chain" }).click()
     await expect(page.getByText("Unsaved changes")).toHaveCount(0)
     await page.getByRole("link", { name: "← Routing" }).click()
-    await expect(
-      row(page, "Routing policies", POLICY)
-        .getByRole("list", { name: "Backups" })
-        .getByRole("listitem"),
-    ).toHaveText(["claude-3-5-haiku-latest · Anthropic"])
+    const triedAfter = row(page, "Routing policies", POLICY)
+      .getByRole("list", { name: "Tried in order" })
+      .getByRole("listitem")
+    await expect(triedAfter).toHaveCount(2)
+    await expect(triedAfter.nth(1)).toContainText("claude-3-5-haiku-latest")
 
     await pressRowAction(row(page, "Routing policies", POLICY), "Delete")
     const confirmPolicy = page.getByRole("alertdialog")

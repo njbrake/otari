@@ -50,6 +50,8 @@ export const BUILTIN_GUARDRAIL_CATALOG = "builtin-guardrail-catalog"
 export const ALIASES = "aliases"
 export const ROUTING_POLICIES = "routing-policies"
 export const AUTOMATIC_FALLBACKS = "automatic-fallbacks"
+// Who sent each routing policy name, and what each step of its plan did.
+export const ROUTING_TRAFFIC = "routing-traffic"
 // Not under ROUTING_POLICIES: `useRoutingSyncing` holds every Save while that
 // head is fetching, and a plan being compiled is no reason to.
 export const ROUTING_EXPLAIN = "routing-explain"

@@ -5,6 +5,7 @@ import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { PageIntro } from "@/design-system/layout/PageIntro"
+import { useRoutingTraffic } from "@/shared/api/routing"
 import { useUrlValue } from "@/shared/helpers/urlState"
 
 import { FallbackChainGroup } from "./FallbackChainGroup"
@@ -14,6 +15,7 @@ import { PolicyNameGroup } from "./PolicyNameGroup"
 import { PolicyPreview } from "./PolicyPreview"
 import { PolicyReadOnly } from "./PolicyReadOnly"
 import { PolicyTestGroup } from "./PolicyTestGroup"
+import { PolicyTraffic } from "./PolicyTraffic"
 import { draftFromSpec, fallthroughOf, isRouted } from "./policyDraft"
 import { isEditableInForm, rowKeyOf } from "./policyModel"
 import { TierDownGroup } from "./TierDownGroup"
@@ -42,6 +44,7 @@ export function PolicyDetailPage({ name }: { name: string }) {
   const row = rows.find(
     (entry) => entry.name === name && (entry.user_id ?? "") === userId,
   )
+  const traffic = useRoutingTraffic(writeWorkspaceId)
 
   const back = (
     <nav aria-label="Breadcrumb" className="text-caption">
@@ -118,6 +121,15 @@ export function PolicyDetailPage({ name }: { name: string }) {
               : undefined
           }
           tierDowns={stored.tierDowns}
+        />
+      ) : null}
+
+      {/* Aliases are not recorded on usage rows, so they have no traffic to show. */}
+      {row.kind === "policy" ? (
+        <PolicyTraffic
+          row={row}
+          traffic={traffic.data?.names ?? []}
+          isPending={traffic.isPending && writeWorkspaceId !== null}
         />
       ) : null}
 
