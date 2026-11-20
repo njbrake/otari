@@ -295,12 +295,13 @@ describe("Home, People active", () => {
 
   it("links each person's name to their page and their sessions beside it", async () => {
     mockApi()
-    await renderHome("/?workspace=ws-a&by=people")
+    await renderHome("/?period=7d&workspace=ws-a&by=people")
     const table = await screen.findByRole("grid", { name: "Spend by people" })
     const name = await within(table).findByRole("link", {
       name: "Ada Lovelace",
     })
-    expect(name).toHaveAttribute("href", "/people/m-ada")
+    // Their page opens on the window Home was reading.
+    expect(name).toHaveAttribute("href", "/people/m-ada?period=7d")
     const row = name.closest("tr") as HTMLElement
     const sessions = within(row).getByRole("link", {
       name: "Sessions for Ada Lovelace",

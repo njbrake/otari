@@ -25,6 +25,7 @@ import { useHomeAccount } from "@/features/home/overlayHomeAccount"
 import { hasProviderSlot, ProviderSlot } from "@/features/home/ProviderSlot"
 import { RowOpenLink } from "@/features/home/RowOpenLink"
 import { ShareCell } from "@/features/home/ShareCell"
+import { personPeriodFromUrl } from "@/features/people/personPeriod"
 import { limitDialogCopy } from "@/features/spend/limitCopy"
 import {
   type AppliedLimit,
@@ -473,6 +474,7 @@ export function TeamHome({
               <Link
                 to="/people/$personId"
                 params={{ personId: personIdOf(row) }}
+                search={{ period: personPeriodFromUrl(period) }}
                 className="truncate text-foreground underline underline-offset-4 hover:text-link max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
               >
                 {row.name}

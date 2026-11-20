@@ -224,9 +224,9 @@ describe("A person's page", () => {
     window.localStorage.clear()
   })
 
-  it("leads with budgeted spend and names the exempt spend as not charged", async () => {
+  it("leads with charged spend and names the exempt spend as not charged", async () => {
     await renderPerson()
-    const label = await screen.findByText("Spent this month")
+    const label = await screen.findByText("Charged this month")
     const cell = label.closest("div")?.parentElement as HTMLElement
     expect(await within(cell).findByText("$12.50")).toBeVisible()
     expect(within(cell).getByText("+$40.00 not charged")).toBeVisible()
@@ -274,7 +274,7 @@ describe("A person's page", () => {
     )
 
     await user.click(screen.getByRole("radio", { name: "7D" }))
-    expect(await screen.findByText("Spent, 7 days")).toBeVisible()
+    expect(await screen.findByText("Charged, 7 days")).toBeVisible()
     const weekStart = new Date(
       today.getFullYear(),
       today.getMonth(),

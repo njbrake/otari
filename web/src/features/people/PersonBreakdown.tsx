@@ -12,6 +12,7 @@ import { RowOpenLink } from "@/features/home/RowOpenLink"
 import type { PersonRow } from "@/features/people/people"
 import {
   type BreakdownRow,
+  formatSpend,
   PERSON_CUTS,
   type PersonCut,
   personCutOf,
@@ -25,17 +26,8 @@ import {
   windowWords,
 } from "@/features/spend/period"
 import { Band } from "@/shared/components/Band"
-import {
-  formatCost,
-  formatNumber,
-  formatTokens,
-  formatUsd,
-} from "@/shared/helpers/format"
+import { formatNumber, formatTokens } from "@/shared/helpers/format"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
-
-/** A cent and up as dollars and cents; a fraction of one to its digits. */
-const money = (value: number) =>
-  value === 0 || value >= 0.01 ? formatUsd(value) : formatCost(value)
 
 /**
  * Where a person's spend went over the window, by model, API key, provider or
@@ -136,7 +128,7 @@ export function PersonBreakdown({
       align: "end",
       cell: (row) => (
         <span className="text-mono-caption text-foreground">
-          {money(row.budgeted)}
+          {formatSpend(row.budgeted)}
         </span>
       ),
     },
@@ -150,7 +142,7 @@ export function PersonBreakdown({
               <span
                 className={`text-mono-caption ${row.exempt > 0 ? "text-foreground" : "text-muted"}`}
               >
-                {money(row.exempt)}
+                {formatSpend(row.exempt)}
               </span>
             ),
           },

@@ -18,6 +18,7 @@ import { activeKeysOf } from "@/features/people/people"
 import { personActions } from "@/features/people/personActions"
 import {
   DEFAULT_PERSON_CUT,
+  formatSpend,
   personCutOf,
   splitTotals,
 } from "@/features/people/personBreakdown"
@@ -163,7 +164,9 @@ export function PersonPage({ personId }: { personId: string }) {
 
       <KpiStrip isEmpty={false} columns={hasSessions ? 5 : 4}>
         <KpiCell
-          label={figureLabel("Spent", window)}
+          // "Charged" rather than Home's "Spent": Home counts exempt spend too, so
+          // the two figures differ by the line below, which reconciles them.
+          label={figureLabel("Charged", window)}
           value={hidden ?? (split ? formatUsd(split.budgeted) : "—")}
           subline={
             hiddenWhy ??
@@ -172,7 +175,7 @@ export function PersonPage({ personId }: { personId: string }) {
                 ? "Could not load"
                 : "Loading"
               : split.exemptRequests > 0
-                ? `+${formatUsd(split.exempt)} not charged`
+                ? `+${formatSpend(split.exempt)} not charged`
                 : window.label)
           }
         />

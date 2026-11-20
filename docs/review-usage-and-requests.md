@@ -66,10 +66,11 @@ window above the figures: **This month**, the page's default, or **Today**,
 **7D**, **30D**, **3M** or **6M**, as on Home. The figures, the breakdown and
 their sessions all follow it, and the window is kept in the URL.
 
-**Spent** is what counts toward their budgets. Spend through an API key marked
+**Charged** is what counts toward their budgets. Spend through an API key marked
 exempt from budget, such as a key that records a Claude Code subscription's
 usage, and imported usage are tracked but not charged; when there is any, the
-figure's line says how much (**+$40.00 not charged**).
+figure's line says how much (**+$40.00 not charged**). The two add up to the
+**Spent** figure Home shows for them, which counts both.
 
 **Where it went** breaks their spend down by **Models**, **API keys**,
 **Providers** or **Sources**, the costliest first. Each row shows its requests,

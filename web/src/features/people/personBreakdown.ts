@@ -8,7 +8,12 @@ import type {
 import { describeSource } from "@/features/activity/activityModel"
 import { keyName } from "@/features/spend/names"
 import { groupModels, OTHER } from "@/features/usage/modelGroups"
+import { formatCost, formatUsd } from "@/shared/helpers/format"
 import { providerDisplayName } from "@/shared/helpers/providers"
+
+/** A cent and up as dollars and cents; a fraction of one to its digits. */
+export const formatSpend = (value: number) =>
+  value === 0 || value >= 0.01 ? formatUsd(value) : formatCost(value)
 
 export type PersonCut = "models" | "keys" | "providers" | "sources"
 

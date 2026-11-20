@@ -300,7 +300,7 @@ describe("People, when one read fails", () => {
       [WEI],
       answers,
     )
-    const spent = (await screen.findByText("Spent this month")).closest("div")
+    const spent = (await screen.findByText("Charged this month")).closest("div")
     expect(spent).toHaveTextContent("—")
     const refused = screen.getByText("Refused requests").closest("div")
     expect(refused).toHaveTextContent("—")
