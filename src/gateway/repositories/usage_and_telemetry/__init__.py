@@ -1,6 +1,7 @@
 """Data access for usage rows."""
 
 from gateway.repositories.usage_and_telemetry.usage_log_repository import (
+    KeyNameTraffic,
     OfferingTraffic,
     RequestRows,
     ServedTraffic,
@@ -13,6 +14,7 @@ from gateway.repositories.usage_and_telemetry.usage_log_repository import (
 )
 
 __all__ = [
+    "KeyNameTraffic",
     "OfferingTraffic",
     "RequestRows",
     "ServedTraffic",

@@ -138,7 +138,15 @@ See [Workload identity](workload-identity.md).
 - **Owners, admins and members** create and manage their own keys on the
   **API keys** page. A key made there is always billed to whoever made it, and
   is never budget-exempt.
-- **Owners and admins** also create the organization's own
+- **Owners and admins** also manage every member's key in the organization:
+  they list, edit, regenerate and delete them, and create a key for a member
+  they pick as its **Owner**, who must be an active member able to see the
+  key's workspace. Their role is read on every request, so lowering it takes
+  those keys away at once. They cannot exempt a key from budget or give a
+  colleague's key a workload identity rule, and a
+  budget-exempt key, an operator's service key, or a key billed to someone
+  outside the organization stays out of their view unless it is their own.
+  They also create the organization's own
   [service keys](end-users.md#2-create-the-service-key).
 - **Viewers** can list their keys but cannot create, edit, regenerate or delete
   one. An operator can issue a key to a viewer.
@@ -156,6 +164,23 @@ Membership changes switch keys off:
   When you demote someone to viewer, check the keys billed to them.
 
 The key routes are in the [OpenAPI specification](public/openapi.json).
+
+### What a key sends
+
+The **API keys** page shows each key's **Models** (the providers its allow-list
+draws on, with the catalog models that reaches) and its **Most-used model**:
+the name it sent most in the last 30 days, how many others it sent, and whether
+a failure on that name has a backup. Hover **No backup** for why: one provider
+serves it, a policy or alias has one target, the request named a provider, or
+no provider the key may use serves it. A key's **Edit** form lists its routing
+policies and the names with no backup, with **Set up routing**.
+
+The same read is `GET /api/v1/keys/routing` for the operator and
+`GET /api/v1/organizations/me/keys/routing` for anyone else, over the keys their
+list shows them. A name is what routing recorded the request was sent as: the
+routing policy or catalog ID where routing compiled a plan for it, and
+otherwise the `provider:model` that served it, so a request that named an
+alias reads as the offering the alias pointed at.
 
 ### Model and search tool access
 

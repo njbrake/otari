@@ -44,8 +44,10 @@ deployment.
   organization's budgets and ceilings. A deployment operator also sees the
   deployment's own budgets and the gateway users assigned to them.
 - **API keys.** An operator manages every key in the organization and picks each
-  key's owner. A member sees only their own keys, always billed to themselves and
-  never budget-exempt. An operator, or an organization owner or admin, can cap a
+  key's owner. An organization owner or admin manages every member's key and
+  picks a member as a new key's owner, without exempting any key from budget. A
+  member sees only their own keys, always billed to themselves and never
+  budget-exempt. An operator, or an organization owner or admin, can cap a
   key's spend from its create and edit forms, and the Budget column shows each
   key's spend against its limit. Where the deployment enables it, a key's actions
   menu offers **Workload identity…**; see

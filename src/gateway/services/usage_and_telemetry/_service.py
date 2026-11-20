@@ -10,6 +10,7 @@ from gateway.core.metered_pricing import quantize_cost
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.usage_and_telemetry_exceptions import UsageSeriesTooLongError
 from gateway.repositories.usage_and_telemetry import (
+    KeyNameTraffic,
     OfferingTraffic,
     ServedTraffic,
     UsageFilters,
@@ -120,6 +121,13 @@ class UsageService:
         """The requests served here since ``since`` in these workspaces, by name sent, offering reached and key."""
         async with self._uow:
             return await self._usage_logs.served_traffic(workspace_ids=workspace_ids, since=since)
+
+    async def names_by_key(
+        self, key_ids: Collection[str], *, workspace_ids: Collection[uuid.UUID], since: datetime
+    ) -> list[KeyNameTraffic]:
+        """The requests these keys sent since ``since``, by key and name sent, most first, in a block of its own."""
+        async with self._uow:
+            return await self._usage_logs.names_by_key(key_ids, workspace_ids=workspace_ids, since=since)
 
     async def page(self, filters: UsageFilters, scope: UsageScope, *, skip: int, limit: int) -> list[UsageEntry]:
         """The rows matching these filters inside this scope, most recent first, each labeled with its user and key.

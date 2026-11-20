@@ -1,7 +1,7 @@
-import { useNavigate } from "@tanstack/react-router"
-import { type ReactNode, useEffect, useRef, useState } from "react"
+import { Link, useNavigate } from "@tanstack/react-router"
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react"
 import { FiPlus } from "react-icons/fi"
-import type { ApiKey, CreateKeyResponse } from "@/client"
+import type { ApiKey, CreateKeyResponse, KeyRouting } from "@/client"
 import { Button } from "@/design-system/actions/Button"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import {
@@ -26,6 +26,7 @@ import {
   useKeyBudgets,
 } from "@/features/keys/KeyBudgetField"
 import { KeyOwner } from "@/features/keys/KeyOwner"
+import { KeyModelsCell, KeyMostUsedCell } from "@/features/keys/KeyRoutingCells"
 import { KeyRowMenu } from "@/features/keys/KeyRowMenu"
 import { KeyStateMark } from "@/features/keys/KeyStateMark"
 import {
@@ -45,6 +46,7 @@ import {
   rowsInState,
   STATE_FILTERS,
 } from "@/features/keys/keyList"
+import { summarizeKeyModels } from "@/features/keys/keyModels"
 import { useOpenCreateKey } from "@/features/keys/openCreateKey"
 import { RegeneratedSecretDialog } from "@/features/keys/RegeneratedSecretDialog"
 import {
@@ -60,10 +62,12 @@ import { windowOf } from "@/features/spend/period"
 import {
   useDeleteKey,
   useKeys,
+  useKeysRouting,
   useRotateKey,
   useUpdateKey,
 } from "@/shared/api/apiKeys"
 import { useApiKeyCeilings } from "@/shared/api/budgets"
+import { useModels } from "@/shared/api/models"
 import {
   useDeploymentOperator,
   useOrganizationContext,
@@ -125,24 +129,99 @@ function unread(read: Read, width: string) {
   return read === "pending" ? placeholder(width) : UNKNOWN
 }
 
-function KeyName({ apiKey, isActive }: { apiKey: ApiKey; isActive: boolean }) {
+/**
+ * The facts under a key's name that depart from the deployment default and
+ * have no lane of their own, as caption text joined by a middle dot rather
+ * than chips: they are facts about the key, not states of it.
+ */
+export function keyFacts(
+  apiKey: ApiKey,
+): { key: string; text: string; title: string }[] {
+  const facts: { key: string; text: string; title: string }[] = []
+  if (apiKey.is_service_key) {
+    const count = apiKey.end_user_budget_ids.length
+    facts.push({
+      key: "service",
+      text: "Service key",
+      title: `Bills the end users its requests name, on ${count} end-user budget${count === 1 ? "" : "s"}`,
+    })
+  }
+  if (apiKey.exclude_from_budget) {
+    facts.push({
+      key: "budget",
+      text: "Budget-exempt",
+      title:
+        "Requests on this key are logged with cost but never counted toward budget",
+    })
+  }
+  if (apiKey.reject_user_mismatch !== null) {
+    facts.push({
+      key: "user",
+      text: apiKey.reject_user_mismatch ? "Strict user" : "Lenient user",
+      title: apiKey.reject_user_mismatch
+        ? "Always rejects a request naming a different user, whatever the deployment setting says"
+        : "Always accepts a request naming a different user; spend still binds to its owner",
+    })
+  }
+  return facts
+}
+
+function KeyName({
+  apiKey,
+  isActive,
+  routing,
+}: {
+  apiKey: ApiKey
+  isActive: boolean
+  routing: KeyRouting | undefined
+}) {
   const name = keyLabel(apiKey)
+  const facts = keyFacts(apiKey)
+  // A key whose names have no backup says so here too, where a phone's card
+  // puts it first.
+  if (routing && routing.no_backup_count > 0) {
+    const count = routing.no_backup_count
+    facts.push({
+      key: "backup",
+      text: `${count} without backup`,
+      title: "Open Edit for which, and why",
+    })
+  }
   return (
-    <span className="otari-key-cell flex min-w-0 items-baseline gap-2.5">
-      <span
-        className={`otari-key-name truncate text-body ${isActive ? "" : "text-muted"}`}
-        title={name}
-      >
-        {name}
-      </span>
-      {apiKey.key_suffix ? (
-        <span className="shrink-0 text-mono-caption text-subtle">
-          …{apiKey.key_suffix}
+    <span className="flex min-w-0 flex-col">
+      <span className="otari-key-cell flex min-w-0 items-baseline gap-2.5">
+        <span
+          className={`otari-key-name truncate text-body ${isActive ? "" : "text-muted"}`}
+          title={name}
+        >
+          {name}
         </span>
-      ) : null}
-      {apiKey.is_service_key ? (
-        <span className="shrink-0 text-mono-overline text-muted">
-          Service key
+        {apiKey.key_suffix ? (
+          <span className="shrink-0 text-mono-caption text-subtle">
+            …{apiKey.key_suffix}
+          </span>
+        ) : null}
+      </span>
+      {facts.length > 0 ? (
+        <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+          {facts.map((fact, index) => (
+            <Fragment key={fact.key}>
+              {index > 0 ? (
+                <span
+                  aria-hidden="true"
+                  className="shrink-0 text-caption text-subtle"
+                >
+                  ·
+                </span>
+              ) : null}
+              <span
+                className={`truncate text-caption ${fact.key === "backup" ? "text-warning" : "text-subtle"}`}
+                title={fact.title}
+              >
+                {fact.text}
+              </span>
+            </Fragment>
+          ))}
         </span>
       ) : null}
     </span>
@@ -153,12 +232,21 @@ const NEVER = <span className="text-mono-caption text-subtle">Never</span>
 
 function columnsFor({
   showOwner,
+  routingOf,
+  modelIds,
+  onOpenEdit,
   budgetOf,
   budgetRead,
   usageRead,
   renderMenu,
 }: {
   showOwner: boolean
+  /** What the key sent in the last 30 days; absent while the read is in flight. */
+  routingOf: (keyId: string) => KeyRouting | undefined
+  /** The catalog's model ids, or undefined while it loads. */
+  modelIds: readonly string[] | undefined
+  /** Opens the key's Edit, or undefined where the caller may only read it. */
+  onOpenEdit: (key: ApiKey) => (() => void) | undefined
   /** The key's own cap, "$50.00 a month"; absent for who cannot read caps. */
   budgetOf?: (keyId: string) => string | null
   budgetRead: Read
@@ -172,7 +260,11 @@ function columnsFor({
       isRowHeader: true,
       cell: ({ id, row }) =>
         row ? (
-          <KeyName apiKey={row.key} isActive={row.state === "active"} />
+          <KeyName
+            apiKey={row.key}
+            isActive={row.state === "active"}
+            routing={routingOf(row.key.id)}
+          />
         ) : (
           placeholder(LOADING_NAME_WIDTHS[Number(id.slice(-1))])
         ),
@@ -193,6 +285,26 @@ function columnsFor({
           } satisfies DataTableColumn<TableRow>,
         ]
       : []),
+    {
+      id: "models",
+      header: "Models",
+      cell: ({ row }) =>
+        row ? (
+          <KeyModelsCell
+            summary={summarizeKeyModels(
+              row.key.allowed_models ?? undefined,
+              modelIds,
+            )}
+            onOpen={onOpenEdit(row.key)}
+          />
+        ) : null,
+    },
+    {
+      id: "most_used",
+      header: "Most-used model",
+      cell: ({ row }) =>
+        row ? <KeyMostUsedCell routing={routingOf(row.key.id)} /> : null,
+    },
     {
       id: "used",
       header: "Last used",
@@ -289,9 +401,12 @@ function columnsFor({
  * filter opens on Active; keys that stopped working are a pick away. Each
  * row's menu holds exactly the changes the server accepts from the caller.
  *
+ * The Models lane says what each key may reach, and Most-used model what it
+ * sent most in the last 30 days and whether a failure there has a backup.
+ *
  * The deployment operator reads every key through `/keys`, with an Owner
- * column; anyone else reads their own, and an owner or admin the
- * organization's service keys too.
+ * column; an organization owner or admin reads every member's key in the
+ * organization, also with an Owner column; anyone else reads their own.
  */
 export function KeysPage() {
   const [now] = useState(() => Date.now())
@@ -395,10 +510,14 @@ export function KeysPage() {
   const isLoading = keys.isPending && !keys.data
   // Decided while loading too, so the lanes do not move when the rows land:
   // only the operator is listed other people's keys.
-  const showOwner = isLoading ? isOperator : listsOtherPeoplesKeys(allKeys, me)
-  // Anyone but the operator is listed their own keys alone, so another
-  // person's never come back however the URL asks.
-  const ownerHidden = !isOperator && owner !== "" && owner !== me
+  const manages = isOperator || isManager
+  const showOwner = isLoading ? manages : listsOtherPeoplesKeys(allKeys, me)
+  // A member is listed their own keys alone, so another person's never come
+  // back however the URL asks.
+  const ownerHidden = !manages && owner !== "" && owner !== me
+  const routing = useKeysRouting(allKeys.map((key) => key.id))
+  const catalog = useModels()
+  const modelIds = catalog.data?.data.map((model) => model.id)
   const usageByKey = usage.data
     ? new Map((usage.data.by_api_key ?? []).map((one) => [one.key, one]))
     : null
@@ -473,7 +592,14 @@ export function KeysPage() {
             key: row.key,
             access,
             isOperator,
-            canFederate,
+            // A rule lets a workload act as the key, so an owner or admin
+            // gives one only to their own keys and the organization's
+            // service keys, never to a colleague's.
+            canFederate:
+              canFederate &&
+              (isOperator ||
+                row.key.user_id === me ||
+                row.key.is_organization_service_key),
             isPending,
           })}
           isReadOnly={access === "read"}
@@ -501,6 +627,10 @@ export function KeysPage() {
   }
   const columns = columnsFor({
     showOwner,
+    routingOf: (keyId) => routing.data?.get(keyId),
+    modelIds,
+    onOpenEdit: (key) =>
+      keyAccess(key, caller) === "write" ? () => setEditing(key) : undefined,
     budgetOf: canCap ? budgetOf : undefined,
     budgetRead,
     usageRead: readOf(usage),
@@ -563,6 +693,11 @@ export function KeysPage() {
     <div className="flex flex-col">
       <PageIntro
         title="API keys"
+        detail={
+          manages
+            ? "Every key in this organization, one per app. Spend counts toward each key’s owner."
+            : "Your keys for calling this gateway, one per app. Spend counts toward your budget."
+        }
         action={
           canCreate ? (
             <Button
@@ -643,6 +778,14 @@ export function KeysPage() {
             pageSizeOptions={PAGE_SIZE_OPTIONS}
             label="API keys"
           />
+        ) : null}
+        {rows.length > 0 && !ownerHidden ? (
+          <p className="text-caption">
+            Most-used model is from the last 30 days.{" "}
+            <Link to="/routing" className="text-link hover:text-link-hover">
+              Open Routing
+            </Link>
+          </p>
         ) : null}
       </div>
 

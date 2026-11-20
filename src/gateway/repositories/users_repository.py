@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import NamedTuple, Never
 
-from sqlalchemy import String, and_, cast, delete, func, or_, select
+from sqlalchemy import Select, String, and_, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -258,6 +258,18 @@ def _on_roster_of(organization_id: uuid.UUID | None) -> ColumnElement[bool]:
     return condition.exists()
 
 
+def member_attribution_ids(organization_id: uuid.UUID) -> Select[str]:
+    """Everyone who has held a membership in the organization, whatever its status, by attribution id.
+
+    The identity's UUID as a string, which is what a key of theirs carries as
+    ``user_id`` (see :func:`get_or_create_attribution_user`). A query to embed
+    rather than a list, so it does not grow with the organization.
+    """
+    return select(cast(col(OrganizationMember.user_id), String)).where(
+        col(OrganizationMember.organization_id) == organization_id
+    )
+
+
 def in_organization(organization_id: uuid.UUID) -> ColumnElement[bool]:
     """Restrict a ``users`` query to the spend identities one organization can name.
 
@@ -410,6 +422,17 @@ class UserAccessRepository(BaseRepository[User, Never, Never]):
             await self.db.execute(select(User.allowed_models, User.allowed_tools).where(User.user_id == user_id))
         ).one_or_none()
         return None if row is None else AccessLists(*row)
+
+    async def access_lists_of(self, user_ids: Collection[str]) -> dict[str, AccessLists]:
+        """These users' access lists, by user id; an id with no user is absent."""
+        if not user_ids:
+            return {}
+        rows = (
+            await self.db.execute(
+                select(User.user_id, User.allowed_models, User.allowed_tools).where(User.user_id.in_(sorted(user_ids)))
+            )
+        ).all()
+        return {user_id: AccessLists(models, tools) for user_id, models, tools in rows}
 
     async def live_access_lists(self) -> dict[str, AccessLists]:
         """Every live user's access lists, by user id."""

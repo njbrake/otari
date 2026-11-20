@@ -7,6 +7,7 @@ import type {
   ApiKey,
   Budget,
   DeploymentBootstrap,
+  KeyRouting,
   MembershipRole,
   ScopedBudget,
 } from "@/client"
@@ -69,6 +70,10 @@ interface Api {
   refuseCeilings?: boolean
   /** Holds the deployment's ceiling list until it settles. */
   holdCeilings?: Promise<void>
+  /** What each key sent in the last 30 days, by key id; none sent anything by default. */
+  routing?: Record<string, Partial<KeyRouting>>
+  /** The catalog's model ids. */
+  catalog?: string[]
 }
 
 /** The gateway as a caller sees it, with keys a write changes. */
@@ -105,6 +110,28 @@ function mockApi(opts: Api = {}) {
       }
       if (/\/keys\/[^/]+\/end-users/.test(url)) return json([])
       if (/\/keys\/[^/]+\/federation-rules/.test(url)) return json([])
+      if (/\/keys\/routing\?/.test(url)) {
+        const asked = new URL(url, "http://x").searchParams.getAll("api_key_id")
+        return json({
+          window_days: 30,
+          keys: asked
+            .filter((id) => list.some((k) => k.id === id))
+            .map((id) => ({
+              api_key_id: id,
+              models: [],
+              model_count: 0,
+              no_backup_count: 0,
+              policies: [],
+              ...opts.routing?.[id],
+            })),
+        })
+      }
+      if (url.startsWith(`${API_ROOT}/models`)) {
+        return json({
+          object: "list",
+          data: (opts.catalog ?? []).map((id) => ({ id, object: "model" })),
+        })
+      }
       if (KEYS_URL.test(url)) {
         const id = decodeURIComponent(
           url.split("?")[0].split("/keys/")[1]?.split("/")[0] ?? "",
@@ -243,6 +270,87 @@ function bodyOf(call: unknown[] | undefined): Record<string, unknown> {
 describe("KeysPage", () => {
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  describe("the routing lanes", () => {
+    it("says which providers a key draws on and what it sent most", async () => {
+      mockApi({
+        keys: [
+          apiKey({
+            id: "k1",
+            key_name: "agent",
+            allowed_models: ["anthropic:*", "openai:gpt-5"],
+          }),
+        ],
+        catalog: [
+          "anthropic:claude-sonnet-5",
+          "anthropic:claude-haiku-5",
+          "openai:gpt-5",
+          "openai:gpt-5-mini",
+        ],
+        routing: {
+          k1: {
+            model_count: 3,
+            no_backup_count: 1,
+            models: [
+              {
+                name: "bedrock:claude-x",
+                requests: 9,
+                kind: "pinned",
+                backup: "no_backup",
+                reason: "pinned",
+                provider: "bedrock",
+              },
+            ],
+          },
+        },
+      })
+      await renderPage()
+
+      const row = await rowOf("agent")
+      expect(
+        within(row).getByRole("button", { name: "anthropic, openai" }),
+      ).toBeInTheDocument()
+      expect(await within(row).findByText("3 models")).toBeInTheDocument()
+      expect(await within(row).findByText("bedrock:claude-x")).toHaveAttribute(
+        "title",
+        "bedrock:claude-x and 2 more",
+      )
+      expect(within(row).getByText("+2 others")).toBeInTheDocument()
+      expect(within(row).getByText(": pinned to bedrock")).toHaveClass(
+        "sr-only",
+      )
+      expect(within(row).getByText("1 without backup")).toBeVisible()
+      expect(
+        screen.getByText(/Most-used model is from the last 30 days/),
+      ).toBeVisible()
+      expect(
+        screen.getByRole("link", { name: "Open Routing" }),
+      ).toHaveAttribute("href", "/routing")
+    })
+
+    it("says a key that sent nothing has not been used", async () => {
+      mockApi({ keys: [apiKey({ id: "k1", key_name: "idle" })] })
+      await renderPage()
+
+      const row = await rowOf("idle")
+      expect(await within(row).findByText("Not used (30d)")).toBeVisible()
+      expect(within(row).getByText("All allowed models")).toBeVisible()
+    })
+
+    it("tells a member the keys are theirs", async () => {
+      mockApi({
+        deploymentOperator: false,
+        role: "member",
+        keys: [apiKey({ id: "k1", key_name: "mine", user_id: ME })],
+      })
+      await renderPage()
+
+      await rowOf("mine")
+      expect(
+        screen.getByText(/Your keys for calling this gateway, one per app/),
+      ).toBeVisible()
+    })
   })
 
   describe("the list", () => {
@@ -404,7 +512,8 @@ describe("KeysPage", () => {
         }),
       )
       await screen.findByRole("menu")
-      expect(screen.getByText("No models")).toBeInTheDocument()
+      // The menu's head, and the row's own Models lane.
+      expect(screen.getAllByText("No models")).toHaveLength(2)
     })
 
     it("marks a service key in its row", async () => {
@@ -521,12 +630,26 @@ describe("KeysPage", () => {
       expect(screen.queryByText(/Their spend per key is on Home/)).toBeNull()
     })
 
-    it("still points an owner to Home, which lists every key's spend", async () => {
-      mockApi({ deploymentOperator: false, role: "owner" })
+    it("lists another member's keys to an owner, who manages them", async () => {
+      mockApi({
+        deploymentOperator: false,
+        role: "owner",
+        keys: [
+          apiKey({ id: "k-mine", key_name: "mine", user_id: ME }),
+          apiKey({
+            id: "k-theirs",
+            key_name: "theirs",
+            user_id: "someone-else",
+          }),
+        ],
+      })
       await renderPage({ url: "/?owner=someone-else" })
 
+      expect(await rowOf("theirs")).toBeInTheDocument()
+      expect(screen.queryByText("mine")).not.toBeInTheDocument()
+      expect(screen.queryByText(/keys are not listed to you/)).toBeNull()
       expect(
-        await screen.findByText(/Their spend per key is on Home/),
+        screen.getByText(/Every key in this organization, one per app/),
       ).toBeVisible()
     })
   })

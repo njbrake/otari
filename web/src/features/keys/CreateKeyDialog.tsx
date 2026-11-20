@@ -20,6 +20,7 @@ import {
   KeyScopeFields,
 } from "@/features/keys/KeyScopeFields"
 import { KeySecretStep } from "@/features/keys/KeySecretStep"
+import { MemberOwnerField } from "@/features/keys/MemberOwnerField"
 import { OwnerAccessNote } from "@/features/keys/OwnerAccessNote"
 import {
   NO_SERVICE_KEY,
@@ -48,7 +49,10 @@ import { ToolScopeControl } from "@/features/tools/ToolScopeControl"
 import { organizationUsers } from "@/features/users/organizationUsers"
 import { UserComboBox } from "@/features/users/UserComboBox"
 import { useCreateKey, useKeys } from "@/shared/api/apiKeys"
-import { useDeploymentOperator } from "@/shared/api/organizations"
+import {
+  useDeploymentOperator,
+  useOrganizationMembers,
+} from "@/shared/api/organizations"
 import { useUsers } from "@/shared/api/users"
 import {
   useNarrowingWorkspace,
@@ -173,6 +177,10 @@ export function CreateKeyDialog({
   const isManager = useIsOrganizationManager()
   const users = useUsers(isOperator && isOpen)
   const memberLabels = useMemberAttributionLabels()
+  // An owner or admin may make a key for any member; the operator picks from
+  // the deployment's users instead.
+  const picksMember = !isOperator && isManager
+  const members = useOrganizationMembers(picksMember && isOpen)
   // Every key in the organization, workspace unset: with the member labels it
   // is what says a user belongs here, so the owner picker never offers another
   // tenant's people.
@@ -284,6 +292,8 @@ export function CreateKeyDialog({
   // their own, as it is for everyone else.
   const keyOwner = owner.trim() || me || ""
   const isServiceKey = offersServiceKey && serviceKey.isServiceKey
+  // Whose access the key narrows: someone else's when an owner or admin picks a member.
+  const ownerVoice = isOperator || (picksMember && owner !== "" && owner !== me)
   const scopes = heldScopes(keyScopes, isServiceKey)
   const shared = {
     key_name: keyName,
@@ -319,6 +329,10 @@ export function CreateKeyDialog({
           }
         : {
             ...shared,
+            // A service key is the organization's and takes no owner.
+            ...(picksMember && !isServiceKey && owner && owner !== me
+              ? { user_id: owner }
+              : {}),
             ...serviceKeyBody(offersServiceKey ? serviceKey : NO_SERVICE_KEY),
           },
     )
@@ -474,16 +488,23 @@ export function CreateKeyDialog({
           {isOperator ? (
             <OwnerAccessNote userId={owner || me || ""} users={ownerOptions} />
           ) : null}
+          {picksMember && !isServiceKey ? (
+            <MemberOwnerField
+              value={owner || me || ""}
+              onChange={setOwner}
+              members={members.data ?? []}
+            />
+          ) : null}
           <ModelScopeControl
             workspaceId={narrowingWorkspace}
             title="Restrict this key’s models"
             description={
-              isOperator
+              ownerVoice
                 ? "By default this key inherits its owner’s access. Optionally narrow it to a subset; a key can never exceed its owner’s allowed models."
                 : "By default this key inherits your model access. Narrow it to a subset; a key can never exceed your models."
             }
             anyLabel={
-              isOperator ? "Inherit owner access" : "Inherit your access"
+              ownerVoice ? "Inherit owner access" : "Inherit your access"
             }
             initial={allowedModels}
             onChange={(value, valid) => {
@@ -494,12 +515,12 @@ export function CreateKeyDialog({
           <ToolScopeControl
             title="Restrict this key’s search and fetch tools"
             description={
-              isOperator
+              ownerVoice
                 ? "Which search and fetch tools this key may run on /v1/search and /v1/fetch. Left on Inherit, it takes its owner’s list. With no list on either, it follows its model access, or its owner’s when it has none: unrestricted runs every tool, restricted only a search tool named there as provider:tool (deprecated). A key can never exceed its owner’s."
                 : "Which search and fetch tools this key may run on /v1/search and /v1/fetch. Left on Inherit, it takes your list. With no list on either, it follows its model access, or yours when it has none: unrestricted runs every tool, restricted only a search tool named there as provider:tool (deprecated). A key can never exceed yours."
             }
             inheritLabel={
-              isOperator ? "Inherit owner’s tools" : "Inherit your tools"
+              ownerVoice ? "Inherit owner’s tools" : "Inherit your tools"
             }
             initial={allowedTools}
             onChange={(value, valid) => {

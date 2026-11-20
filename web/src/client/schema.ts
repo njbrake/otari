@@ -2748,6 +2748,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/keys/routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Keys Routing
+         * @description What each key sent in the last 30 days, and whether a failure on each name has a backup.
+         *
+         *     For each key in the caller's organization among those named, in the order
+         *     named: the names its requests were sent as, most requested first, each judged
+         *     as a request from the key would resolve it now (a routing policy, an alias, a
+         *     catalog ID narrowed to the offerings the key may reach, or a pinned
+         *     ``provider:model``), and the routing policies it sent.
+         */
+        get: operations["keys-get_keys_routing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/keys/{key_id}": {
         parameters: {
             query?: never;
@@ -4042,31 +4068,55 @@ export interface paths {
         };
         /**
          * List Own Keys
-         * @description List the caller's own API keys in their active organization, newest first.
+         * @description List the API keys in the caller's active organization the caller may touch, newest first.
          *
-         *     Only keys billed to the caller's own user: an operator-minted key assigned
-         *     to them is theirs to see here, and nobody else's key ever is. Naming a
-         *     workspace outside their organization lists nothing rather than refusing, so
-         *     the filter reports no more than the unfiltered read does. An owner or admin
-         *     also sees the organization's service keys, which they manage.
+         *     A member sees only keys billed to their own user: an operator-minted key
+         *     assigned to them is theirs to see here, and nobody else's key ever is. An
+         *     owner or admin also sees the organization's service keys and every member's
+         *     key, apart from budget-exempt keys and the operator's service keys. Naming a
+         *     workspace outside the organization lists nothing rather than refusing, so
+         *     the filter reports no more than the unfiltered read does.
          */
         get: operations["organization-keys-list_own_keys"];
         put?: never;
         /**
          * Create Own Key
-         * @description Create an API key owned by the caller, in a workspace they may see.
+         * @description Create an API key, owned by the caller or, for an organization owner or admin, by a member they name.
          *
-         *     The member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the
-         *     caller's own attribution user, the key is always budget-enforced, and the
-         *     workspace must be visible to the caller (a member of it, or an organization
-         *     owner/admin, who see every workspace). A viewer of the workspace is refused
-         *     with 403. The secret is returned once.
+         *     The tenant counterpart of ``POST /api/v1/keys``: the key is always
+         *     budget-enforced, and the workspace must be visible to its owner (a member of
+         *     it, or an organization owner/admin, who see every workspace). A viewer of
+         *     the workspace is refused with 403. The secret is returned once.
          *
          *     A service key is the organization's rather than the caller's: only an
          *     organization owner or admin may create one, its end-user budgets must be
          *     this organization's, and it is owned by a user minted for it alone.
          */
         post: operations["organization-keys-create_own_key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/keys/routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Own Keys Routing
+         * @description What each key named sent in the last 30 days, and whether a failure on each name has a backup.
+         *
+         *     The operator's read, over the keys the list shows the caller: a member's own,
+         *     or for an owner or admin the organization's. A key outside that, named or
+         *     not, is left out like one that does not exist.
+         */
+        get: operations["organization-keys-get_own_keys_routing"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4085,14 +4135,14 @@ export interface paths {
         post?: never;
         /**
          * Delete Own Key
-         * @description Delete (revoke) one of the caller's own API keys.
+         * @description Delete (revoke) a key the caller may touch: their own, or for an owner or admin one of the organization's.
          */
         delete: operations["organization-keys-delete_own_key"];
         options?: never;
         head?: never;
         /**
          * Update Own Key
-         * @description Update one of the caller's own API keys, or one of the organization's service keys for an owner or admin.
+         * @description Update a key the caller may touch: their own, or for an owner or admin one of the organization's.
          */
         patch: operations["organization-keys-update_own_key"];
         trace?: never;
@@ -4209,7 +4259,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate Own Key
-         * @description Rotate the secret of one of the caller's own API keys, in place.
+         * @description Rotate a key's secret in place: the caller's own, or for an owner or admin one of the organization's.
          *
          *     Same contract as the operator's rotate: the row keeps its identity, the new
          *     raw key is returned once, and the previous secret stops authenticating
@@ -12606,10 +12656,10 @@ export interface components {
          * CreateOwnKeyRequest
          * @description Create-key body for the member surface.
          *
-         *     Deliberately not ``CreateKeyRequest``: it carries no ``user_id`` (the owner
-         *     is the caller, or one of the key's own for a service key) and no
-         *     ``exclude_from_budget`` (a member must not exempt their own spend from
-         *     enforcement). A field it does not take is refused rather than dropped.
+         *     Deliberately not ``CreateKeyRequest``: its ``user_id`` names an identity in
+         *     the organization rather than any billing id, and it has no
+         *     ``exclude_from_budget`` (see the module docstring). A field it does not take
+         *     is refused rather than dropped.
          */
         CreateOwnKeyRequest: {
             /**
@@ -12675,6 +12725,11 @@ export interface components {
              * @description The endpoint groups the key may reach. Omitted, the key gets 'inference:run', 'web:search', 'web:fetch', 'code:execute', 'mcp:read' and 'mcp:execute': it calls models and tools and lists MCP servers, and nothing else. The end-users scopes are a service key's alone.
              */
             scopes?: components["schemas"]["KeyScope"][];
+            /**
+             * User Id
+             * @description Organization owners and admins only: the member who owns the key and whose budget its spend counts toward, by identity id. Must be an active member of your active organization who may see the workspace. Omitted means you. Not taken with is_service_key, whose owner is the key's own.
+             */
+            user_id?: string | null;
             /**
              * Workspace Id
              * @description Workspace this key belongs to, which must be one you may see in your active organization. Omitted means that organization's default workspace, refused when you are not a member of it.
@@ -15909,6 +15964,98 @@ export interface components {
              * @description Dollars spent and held this period; null when uncapped or shared
              */
             used_usd: number | null;
+        };
+        /**
+         * KeyModelPublic
+         * @description One name a key sent in the window, and whether a failure on it has a backup.
+         */
+        KeyModelPublic: {
+            /**
+             * Backup
+             * @description Whether a failure on this name has somewhere to go. `subscription`: every request was imported usage, which the gateway never routed. `unknown`: the name resolves to nothing now.
+             * @enum {string}
+             */
+            backup: "has_backup" | "no_backup" | "subscription" | "unknown";
+            /**
+             * Kind
+             * @description What the name is to this key now: a routing policy, an alias, a catalog ID, a pinned `provider:model`, or none of them (a name nothing resolves any more).
+             * @enum {string}
+             */
+            kind: "policy" | "alias" | "catalog" | "pinned" | "unknown";
+            /**
+             * Name
+             * @description What the key's requests were sent as: the routing policy or catalog ID routing recorded, and otherwise the `provider:model` that served them. A request naming an alias reads as the offering it pointed at. For imported usage, the model that ran.
+             */
+            name: string;
+            /**
+             * Provider
+             * @description The one instance that serves the name, when only one does.
+             */
+            provider: string | null;
+            /**
+             * Reason
+             * @description Why there is no backup, when `backup` is `no_backup`: one offering serves it among those the key may reach, a policy or alias with one candidate, a request that named the provider, or no offering the key may reach.
+             */
+            reason: ("single_offering" | "single_target_policy" | "pinned" | "no_allowed_offering") | null;
+            /**
+             * Requests
+             * @description Requests in the window, each counted once however many attempts.
+             */
+            requests: number;
+        };
+        /**
+         * KeyPolicyPublic
+         * @description One routing policy a key sent in the window.
+         */
+        KeyPolicyPublic: {
+            /** Name */
+            name: string;
+            /** Requests */
+            requests: number;
+        };
+        /**
+         * KeyRoutingPublic
+         * @description What one key sent in the window, and what a failure on each name does.
+         */
+        KeyRoutingPublic: {
+            /** Api Key Id */
+            api_key_id: string;
+            /**
+             * Model Count
+             * @description How many names the key sent, including any `models` leaves out.
+             */
+            model_count: number;
+            /**
+             * Models
+             * @description The most requested names first, at most ten.
+             */
+            models: components["schemas"]["KeyModelPublic"][];
+            /**
+             * No Backup Count
+             * @description Of `model_count`, how many have no backup.
+             */
+            no_backup_count: number;
+            /**
+             * Policies
+             * @description Every routing policy the key sent, most requested first.
+             */
+            policies: components["schemas"]["KeyPolicyPublic"][];
+        };
+        /**
+         * KeyRoutingResponse
+         * @description The routing each key's traffic got.
+         */
+        KeyRoutingResponse: {
+            /**
+             * Keys
+             * @description One entry per key asked for that the caller may see, in the order asked; a key the caller may not see is left out, like one that does not exist.
+             */
+            keys: components["schemas"]["KeyRoutingPublic"][];
+            /**
+             * Window Days
+             * @description How many days of traffic the counts cover.
+             */
+            window_days: number;
         };
         /**
          * KeyScope
@@ -29333,6 +29480,38 @@ export interface operations {
             };
         };
     };
+    "keys-get_keys_routing": {
+        parameters: {
+            query: {
+                /** @description The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused. */
+                api_key_id: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyRoutingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     "keys-get_key": {
         parameters: {
             query?: never;
@@ -31964,6 +32143,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateKeyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "organization-keys-get_own_keys_routing": {
+        parameters: {
+            query: {
+                /** @description The keys to read, by id; repeatable (api_key_id=a&api_key_id=b), at most 50. An id that names no key the caller may see is left out of the answer rather than refused. */
+                api_key_id: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyRoutingResponse"];
                 };
             };
             /** @description Validation Error */

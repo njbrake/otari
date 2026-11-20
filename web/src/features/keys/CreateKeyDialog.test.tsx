@@ -44,11 +44,13 @@ function mockApi({
   isOperator,
   budgets = [],
   defaults = [],
+  members = [organizationMember({ attribution_user_id: "owner-1" })],
 }: {
   role: Role
   isOperator: boolean
   budgets?: Budget[]
   defaults?: WorkspaceBudgetDefault[]
+  members?: ReturnType<typeof organizationMember>[]
 }) {
   const writes: { url: string; body: Record<string, unknown> }[] = []
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -94,10 +96,7 @@ function mockApi({
     }
     // The caller's own row, which is what gives them an owner id to bill through.
     if (url.includes("/members")) {
-      return json({
-        data: [organizationMember({ attribution_user_id: "owner-1" })],
-        count: 1,
-      })
+      return json({ data: members, count: members.length })
     }
     return json([])
   })
@@ -477,5 +476,40 @@ describe("what a new key carries", () => {
     expect(post.url).toBe(`${API_ROOT}/organizations/me/keys`)
     expect(post.body).not.toHaveProperty("user_id")
     expect(post.body).not.toHaveProperty("exclude_from_budget")
+  })
+
+  it("lets an organization owner make a key for a member they pick", async () => {
+    const writes = mockApi({
+      role: "owner",
+      isOperator: false,
+      members: [
+        organizationMember({ attribution_user_id: "owner-1" }),
+        organizationMember({
+          user_id: "bea-identity",
+          attribution_user_id: "bea-identity",
+          full_name: "Bea Member",
+          email: "bea@example.com",
+          status: "active",
+        }),
+      ],
+    })
+    const { user, dialog } = await openDialog()
+    await moreOptions(user, dialog)
+    await user.click(within(dialog).getByRole("combobox", { name: "Owner" }))
+    await user.click(await screen.findByRole("option", { name: /Bea Member/ }))
+    await createKey(user, dialog)
+
+    await screen.findByRole("dialog", { name: "API key created" })
+    const post = posted(writes)
+    expect(post.url).toBe(`${API_ROOT}/organizations/me/keys`)
+    expect(post.body).toMatchObject({ user_id: "bea-identity" })
+    expect(post.body).not.toHaveProperty("exclude_from_budget")
+  })
+
+  it("offers a member no owner to pick", async () => {
+    mockApi({ role: "member", isOperator: false })
+    const { user, dialog } = await openDialog()
+    await moreOptions(user, dialog)
+    expect(within(dialog).queryByRole("combobox", { name: "Owner" })).toBeNull()
   })
 })
