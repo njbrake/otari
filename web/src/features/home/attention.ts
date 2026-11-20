@@ -84,7 +84,6 @@ export type AttentionSource =
   | "account"
 export type AttentionState = ReadState
 
-/** Whether a source is still being read, and a sentence for each that failed. */
 /**
  * "the Research workspace", or "the Default workspace" for a workspace whose
  * name already says it is one, so the noun is not doubled.
@@ -95,6 +94,7 @@ export function theWorkspace(name: string): string {
     : `the ${name} workspace`
 }
 
+/** Whether a source is still being read, and a sentence for each that failed. */
 export function readsOf<Source extends string>(
   states: Record<Source, AttentionState>,
   names: Record<Source, string>,
