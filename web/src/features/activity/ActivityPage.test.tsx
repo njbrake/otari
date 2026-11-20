@@ -257,7 +257,7 @@ describe("ActivityPage", () => {
     renderPage(<ActivityPage />)
 
     await user.click((await screen.findByText("gpt-4o")).closest("tr")!)
-    await user.click(screen.getByRole("button", { name: "Copy request id" }))
+    await user.click(screen.getByRole("button", { name: "Copy request ID" }))
 
     expect(await navigator.clipboard.readText()).toBe(
       "3ba12b77-8841-42a5-b776-a0a1aacb347f",
@@ -1325,7 +1325,9 @@ describe("ActivityPage", () => {
 
     await userEvent.click(await screen.findByText("deepseek"))
     expect(
-      await screen.findByText("Served by attempt 2 of 2: openai:gpt-4o"),
+      await screen.findByText(
+        "Served by attempt 2 of 2: openai:gpt-4o, after 1 failed attempt",
+      ),
     ).toBeInTheDocument()
     const plan = screen.getByRole("table", { name: /routing plan/i })
     expect(within(plan).getByText("failed 404, fell back")).toBeInTheDocument()
@@ -1448,8 +1450,11 @@ describe("ActivityPage gateway-run tools", () => {
     renderPage(<ActivityPage />)
 
     await userEvent.click(await screen.findByText("gpt-4o"))
-    expect(await screen.findByText("Tools")).toBeInTheDocument()
-    expect(screen.getByText("web search ×3")).toBeInTheDocument()
+    expect(await screen.findByText("Gateway tools")).toBeInTheDocument()
+    const tools = screen.getByText("Gateway tools").closest("section")!
+    expect(
+      within(tools).getByText("Web search").closest("li"),
+    ).toHaveTextContent("×3")
     // Per-call charge lines read "N at $X each", not the token form "$X / 1M".
     expect(screen.getByText(/3 at \$0\.01 each, \$0\.03/)).toBeInTheDocument()
   })
@@ -1475,9 +1480,12 @@ describe("ActivityPage gateway-run tools", () => {
       renderPage(<ActivityPage />)
 
       await userEvent.click(await screen.findByText("gpt-4o"))
-      const costField = (await screen.findByText("Tool cost")).closest("div")!
-      expect(within(costField).getByText(expectedCost)).toBeInTheDocument()
-      expect(screen.getByText(/web fetch, 1 failed/)).toBeInTheDocument()
+      const costField = (await screen.findByText("Includes")).parentElement!
+      expect(costField).toHaveTextContent(`${expectedCost} tools`)
+      const toolCards = screen.getByText("Gateway tools").closest("section")!
+      expect(
+        within(toolCards).getByText("Web fetch").closest("li"),
+      ).toHaveTextContent("1 failed")
       expect(screen.queryByText("unpriced")).not.toBeInTheDocument()
     },
   )
@@ -1514,8 +1522,9 @@ describe("ActivityPage gateway-run tools", () => {
     renderPage(<ActivityPage />)
 
     await userEvent.click(await screen.findByText("gpt-4o"))
-    expect(await screen.findByText("Tool cost")).toBeInTheDocument()
+    expect(await screen.findByText("Gateway tools")).toBeInTheDocument()
     expect(screen.getByText("unpriced")).toBeInTheDocument()
+    expect(screen.getByText("tools unpriced")).toBeInTheDocument()
   })
 })
 

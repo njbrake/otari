@@ -235,6 +235,9 @@ class UsageEntry(BaseModel):
     status_code: int | None
     latency_ms: int | None
     provider_latency_ms: int | None
+    # Milliseconds from the request's start to its first streamed chunk; null for a
+    # request that did not stream, a stream that yielded nothing, and older rows.
+    ttft_ms: int | None = None
     source: str
     source_label: str | None
     # The request's tags (from its ``metadata``); null when it sent none.
@@ -252,6 +255,9 @@ class UsageEntry(BaseModel):
     # are excluded from `error_count` and from `request_count`, since the request
     # they belong to is counted once by the attempt that served it.
     policy_name: str | None = None
+    # The model name the caller sent, before an alias or a policy resolved it into
+    # `model`; null on rows written before it was recorded.
+    requested_model: str | None = None
     selection_reason: str | None = None
     attempt_position: int | None = None
     attempt_count: int | None = None
@@ -298,7 +304,9 @@ class UsageEntry(BaseModel):
             status_code=log.status_code,
             latency_ms=log.latency_ms,
             provider_latency_ms=log.provider_latency_ms,
+            ttft_ms=log.ttft_ms,
             policy_name=log.policy_name,
+            requested_model=log.requested_model,
             selection_reason=log.selection_reason,
             attempt_position=log.attempt_position,
             attempt_count=log.attempt_count,

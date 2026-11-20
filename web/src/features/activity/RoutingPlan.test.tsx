@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { entry, mockApi, renderPage } from "@/tests/activity"
 import { flushRouter } from "@/tests/router"
-import { RoutingPlan } from "./RoutingPlan"
+import { describeEarlierAttempts, RoutingPlan } from "./RoutingPlan"
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -48,7 +48,9 @@ describe("RoutingPlan", () => {
     await flushRouter()
 
     expect(
-      await screen.findByText("Served by attempt 2 of 2: openai:gpt-4o"),
+      await screen.findByText(
+        "Served by attempt 2 of 2: openai:gpt-4o, after 1 failed attempt",
+      ),
     ).toBeInTheDocument()
     const rows = within(planTable()).getAllByRole("row").slice(1)
     expect(
@@ -67,7 +69,9 @@ describe("RoutingPlan", () => {
 
     // Await the assembled plan, not the table: the fallback table renders the
     // single row it was handed while the group lookup is still in flight.
-    await screen.findByText("Served by attempt 2 of 2: openai:gpt-4o")
+    await screen.findByText(
+      "Served by attempt 2 of 2: openai:gpt-4o, after 1 failed attempt",
+    )
     const rows = within(planTable()).getAllByRole("row").slice(1)
     expect(within(rows[0]).getByText("this row")).toBeInTheDocument()
     expect(within(rows[1]).queryByText("this row")).not.toBeInTheDocument()
@@ -80,7 +84,9 @@ describe("RoutingPlan", () => {
     renderPage(<RoutingPlan entry={failed} />)
     await flushRouter()
 
-    await screen.findByText(`Served by attempt 2 of 2: openai:${target}`)
+    await screen.findByText(
+      `Served by attempt 2 of 2: openai:${target}, after 1 failed attempt`,
+    )
     const cell = within(planTable()).getByTitle(`openai:${target}`)
     expect(cell).toHaveClass("truncate")
   })
@@ -127,5 +133,46 @@ describe("RoutingPlan", () => {
         "This row carries no request group, so its other attempts cannot be found.",
       ),
     ).toBeInTheDocument()
+  })
+
+  it("lists each failed attempt's own error under the table", async () => {
+    mockApi({
+      groupRows: [served, { ...failed, error_message: "quota exhausted" }],
+    })
+    renderPage(<RoutingPlan entry={served} />)
+    await flushRouter()
+
+    expect(
+      await screen.findByText("quota exhausted", { exact: false }),
+    ).toHaveTextContent("Attempt 1 (429): quota exhausted")
+  })
+
+  it("counts the skipped candidates beside the failed ones", async () => {
+    const skipped = entry({
+      ...failed,
+      id: "s",
+      status_code: null,
+      error_message: "Skipped: Rate limit 'cap' exceeded",
+      attempt_position: 2,
+      attempt_count: 3,
+    })
+    const third = entry({ ...served, attempt_position: 3, attempt_count: 3 })
+    mockApi({ groupRows: [failed, skipped, third] })
+    renderPage(<RoutingPlan entry={third} />)
+    await flushRouter()
+
+    expect(
+      await screen.findByText(
+        "Served by attempt 3 of 3: openai:gpt-4o, after 1 failed attempt and 1 skipped candidate",
+      ),
+    ).toBeInTheDocument()
+  })
+})
+
+describe("describeEarlierAttempts", () => {
+  it("names what came before the served attempt, or nothing", () => {
+    expect(describeEarlierAttempts(0, 0)).toBe("")
+    expect(describeEarlierAttempts(2, 0)).toBe(", after 2 failed attempts")
+    expect(describeEarlierAttempts(0, 1)).toBe(", after 1 skipped candidate")
   })
 })

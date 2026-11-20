@@ -127,3 +127,29 @@ its response carried. Routed requests share a request group, so the log shows
 each model tried and the one that served the response. Imported usage is labeled
 by its source and does not use a budget (see
 [Import usage from outside Otari](external-usage.md)).
+
+Pressing a row opens it in a panel beside the log. Its header carries the
+request ID with a copy control and where the request sits in the page (`3 /
+25`); **K** and **J** step to the previous and next request. The panel shows:
+
+- for a failed request, a banner naming the status in words and the stored
+  error; a request the gateway refused under `require_pricing` says so, and an
+  operator can price the model from it;
+- for a routed request, every attempt in order, how many failed or were skipped
+  before the one that served, and each failed attempt's error;
+- **Requested as**, the name the caller sent and whether it was a model, an
+  alias (with its target) or a routing policy, beside **Served by**, the
+  `instance:model` that answered. Requests logged before Otari recorded the
+  name show only **Served by**;
+- **Channel**: an API key, no key (the Playground or the master key), or an
+  imported source's subscription, with a chip when the request does not count
+  toward budgets;
+- each gateway tool the request ran, with its calls, failures, rate and cost;
+- the token mix as a bar with its cache-hit share, the cost (billed, or the
+  equivalent cost of imported usage) split into model and tools, and whether it
+  counts toward budgets;
+- the time to the first streamed token, the total time and the provider's own
+  compute time where it reports one.
+
+The buttons along the bottom filter the log to the request's session, model or
+gateway tool, and **Open in Playground** opens the model that served it.

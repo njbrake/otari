@@ -5,6 +5,7 @@ import { catalogModelSummary, catalogResponse } from "@/tests/fixtures"
 
 import {
   buildPlaygroundModels,
+  findLinkedModel,
   groupPlaygroundModels,
   isChatModel,
   PINNED_GROUP_ID,
@@ -86,7 +87,14 @@ describe("buildPlaygroundModels", () => {
         }),
       ]),
     )
-    expect(models).toEqual([{ key: "z-ai/glm", vendor: "", label: "z-ai/glm" }])
+    expect(models).toEqual([
+      {
+        key: "z-ai/glm",
+        vendor: "",
+        label: "z-ai/glm",
+        selectors: ["fireworks:glm", "nebius:glm"],
+      },
+    ])
   })
 
   it("falls back to the first offering while the catalog is unindexed", () => {
@@ -244,5 +252,27 @@ describe("pickInitialModel", () => {
 
   it("is empty when there is nothing to pick", () => {
     expect(pickInitialModel(undefined, [])).toBe("")
+  })
+})
+
+describe("findLinkedModel", () => {
+  const models = [
+    {
+      key: "openai/gpt-4o",
+      vendor: "OpenAI",
+      label: "gpt-4o",
+      selectors: ["openai:gpt-4o"],
+    },
+    { key: "anthropic/claude", vendor: "Anthropic", label: "claude" },
+  ]
+
+  it("finds a model by its key or one of its offerings' selectors", () => {
+    expect(findLinkedModel("anthropic/claude", models)).toBe("anthropic/claude")
+    expect(findLinkedModel("openai:gpt-4o", models)).toBe("openai/gpt-4o")
+  })
+
+  it("finds nothing for a model the Playground does not offer, or no link", () => {
+    expect(findLinkedModel("myalias", models)).toBeUndefined()
+    expect(findLinkedModel(undefined, models)).toBeUndefined()
   })
 })

@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react"
+import { screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -132,8 +132,9 @@ describe("RequestDetail", () => {
     )
     await flushRouter()
 
-    expect(screen.getByText("Total tokens")).toBeInTheDocument()
-    expect(screen.getByText("600")).toBeInTheDocument()
+    expect(screen.getByText("Total tokens").parentElement).toHaveTextContent(
+      "600",
+    )
     expect(screen.getByText("Billed tokens")).toBeInTheDocument()
     expect(
       screen.getByTitle(/the tokens this request was priced on/),
@@ -222,8 +223,11 @@ describe("RequestDetail", () => {
     )
     await flushRouter()
 
-    expect(screen.getByText("web search ×3, 1 failed")).toBeInTheDocument()
-    expect(screen.getByText("$0.03")).toBeInTheDocument()
+    const card = screen.getByText("Web search").closest("li")!
+    expect(card).toHaveTextContent("×3")
+    expect(card).toHaveTextContent("1 failed")
+    expect(card).toHaveTextContent(/\$0\.01\d* per call/)
+    expect(card).toHaveTextContent("$0.03")
   })
 
   it("says a tool is unpriced rather than reporting it as free", async () => {
@@ -238,6 +242,7 @@ describe("RequestDetail", () => {
     await flushRouter()
 
     expect(screen.getByText("unpriced")).toBeInTheDocument()
+    expect(screen.getByText(/no per-call price is set/)).toBeInTheDocument()
   })
 
   it("offers to price the model behind an uncosted row, keyed on instance:model", async () => {
@@ -301,10 +306,6 @@ describe("RequestDetail", () => {
   it.each([
     [404, "The model `gpt-5-nonexistent` does not exist."],
     [402, "Your credit balance is too low to access the API."],
-    [
-      402,
-      "No pricing is configured for model 'openai:gpt-4o', and require_pricing is on, so it cannot be billed.",
-    ],
   ])(
     "does not offer a price for a failed attempt (%i), which billed nothing",
     async (statusCode, message) => {
@@ -444,5 +445,236 @@ describe("RequestDetail", () => {
       selector: "span.text-overline",
     })
     expect(label.parentElement?.textContent).toContain("156 ms")
+  })
+
+  it("names what the caller asked for beside what served it", async () => {
+    mockApi()
+    const { unmount } = renderPage(
+      <RequestDetail
+        entry={entry({
+          requested_model: "fast",
+          model: "claude-opus-4",
+          provider: "anthropic",
+        })}
+      />,
+    )
+    await flushRouter()
+    expect(screen.getByText("Requested as").parentElement).toHaveTextContent(
+      "fast · alias → anthropic:claude-opus-4",
+    )
+    expect(screen.getByText("Served by").parentElement).toHaveTextContent(
+      "anthropic:claude-opus-4",
+    )
+    unmount()
+
+    renderPage(
+      <RequestDetail
+        entry={entry({
+          requested_model: "cheap-first",
+          policy_name: "cheap-first",
+        })}
+      />,
+    )
+    await flushRouter()
+    expect(screen.getByText("Requested as").parentElement).toHaveTextContent(
+      "cheap-first · routing policy",
+    )
+  })
+
+  it("leaves out the requested name on a row that never recorded one", async () => {
+    mockApi()
+    renderPage(<RequestDetail entry={entry({ requested_model: null })} />)
+    await flushRouter()
+    expect(screen.queryByText("Requested as")).not.toBeInTheDocument()
+  })
+
+  it("names an imported row's channel, marks it a subscription and its cost an equivalent", async () => {
+    mockApi()
+    renderPage(
+      <RequestDetail
+        entry={entry({ source: "claude_code", counts_toward_budget: false })}
+      />,
+    )
+    await flushRouter()
+    const channel = screen.getByText("Channel").parentElement!
+    expect(channel).toHaveTextContent("Claude Code subscription")
+    expect(within(channel).getByText("Subscription")).toBeInTheDocument()
+    expect(screen.getByText("Equivalent cost")).toBeInTheDocument()
+    expect(screen.queryByText("Billed")).not.toBeInTheDocument()
+    expect(screen.getByText("Budget").parentElement).toHaveTextContent(
+      "Subscription usage does not count toward budgets",
+    )
+    expect(screen.getByText("First token").parentElement).toHaveTextContent(
+      "Not recorded for imported rows",
+    )
+  })
+
+  it("marks a gateway row on a budget-exempt key, and one that counts", async () => {
+    mockApi()
+    const { unmount } = renderPage(
+      <RequestDetail entry={entry({ counts_toward_budget: false })} />,
+    )
+    await flushRouter()
+    const channel = screen.getByText("Channel").parentElement!
+    expect(channel).toHaveTextContent("API")
+    expect(within(channel).getByText("Budget-exempt")).toBeInTheDocument()
+    expect(screen.getByText("Budget").parentElement).toHaveTextContent(
+      "This key is exempt from budgets",
+    )
+    unmount()
+
+    renderPage(<RequestDetail entry={entry({ api_key_id: null })} />)
+    await flushRouter()
+    expect(screen.getByText("Channel").parentElement).toHaveTextContent(
+      "Playground or master key",
+    )
+    expect(screen.getByText("Billed").parentElement).toHaveTextContent(
+      "$0.0123",
+    )
+    expect(screen.getByText("Budget").parentElement).toHaveTextContent(
+      "Counts toward budgets",
+    )
+  })
+
+  it("explains the gateway's require_pricing refusal and offers the price that fixes it", async () => {
+    const user = userEvent.setup()
+    const onPriceModel = vi.fn()
+    mockApi()
+    renderPage(
+      <RequestDetail
+        entry={entry({
+          cost: null,
+          status: "error",
+          status_code: 402,
+          error_message:
+            "No pricing is configured for model 'openai:gpt-4o', and require_pricing is on, so it cannot be billed.",
+        })}
+        onPriceModel={onPriceModel}
+      />,
+    )
+    await flushRouter()
+
+    expect(
+      screen.getByText("402 Refused: this model has no price"),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/the gateway refused openai:gpt-4o before calling/),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Price this model" }))
+    expect(onPriceModel).toHaveBeenCalledWith(
+      "openai:gpt-4o",
+      "/v1/chat/completions",
+    )
+  })
+
+  it("does not offer a model price for a refused unpriced tool", async () => {
+    mockApi()
+    renderPage(
+      <RequestDetail
+        entry={entry({
+          cost: null,
+          status: "error",
+          status_code: 402,
+          error_message:
+            "Gateway tool 'web_search' has no pricing, and require_pricing is on.",
+        })}
+        onPriceModel={vi.fn()}
+      />,
+    )
+    await flushRouter()
+
+    expect(
+      screen.getByText("402 Refused: a gateway tool has no price"),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Price this model" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("heads a provider failure with its status in words", async () => {
+    mockApi()
+    renderPage(
+      <RequestDetail
+        entry={entry({
+          status: "absorbed",
+          status_code: 429,
+          error_message: "slow down",
+          counts_toward_budget: false,
+        })}
+      />,
+    )
+    await flushRouter()
+
+    expect(screen.getByText("429 Rate limited")).toBeInTheDocument()
+    expect(
+      screen.getByText(/routing moved on to the next candidate/),
+    ).toBeInTheDocument()
+    // A recovered attempt is outside budgets for a reason of its own.
+    expect(screen.queryByText("Budget-exempt")).not.toBeInTheDocument()
+  })
+
+  it("draws the token composition and its cache-hit share", async () => {
+    mockApi()
+    renderPage(
+      <RequestDetail
+        entry={entry({
+          billing_meters: {
+            total_input_tokens: 1000,
+            cache_read_tokens: 750,
+            completion_tokens: 200,
+          },
+        })}
+      />,
+    )
+    await flushRouter()
+
+    const bar = screen.getByTestId("token-composition-bar")
+    expect(bar.children).toHaveLength(3)
+    expect(screen.getByText("75% cache hit")).toBeInTheDocument()
+    expect(screen.getByText("Fresh input").parentElement).toHaveTextContent(
+      "250",
+    )
+  })
+
+  it("splits a priced row's cost into model and tools", async () => {
+    mockApi()
+    renderPage(
+      <RequestDetail
+        entry={entry({
+          cost: 0.05,
+          billing_meters: {
+            tools: { web_search: { billed: 2, unit_rate: 0.01 } },
+          },
+        })}
+      />,
+    )
+    await flushRouter()
+
+    expect(screen.getByText("Includes").parentElement).toHaveTextContent(
+      "$0.03 model · $0.02 tools",
+    )
+  })
+
+  it("shows the first-token time a streamed row recorded", async () => {
+    mockApi()
+    renderPage(<RequestDetail entry={entry({ ttft_ms: 320 })} />)
+    await flushRouter()
+
+    expect(screen.getByText("First token").parentElement).toHaveTextContent(
+      "320 ms",
+    )
+  })
+
+  it("leaves the request id to a frame that already shows it", async () => {
+    mockApi()
+    renderPage(
+      <RequestDetail
+        entry={entry({ request_group_id: "req-9" })}
+        showsRequestId={false}
+      />,
+    )
+    await flushRouter()
+
+    expect(screen.queryByText("Request ID")).not.toBeInTheDocument()
   })
 })

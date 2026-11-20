@@ -476,6 +476,7 @@ async def run_passthrough(
             and not await throttle_early_rejection(raw_request, str(api_key.user_id))
         ):
             await log_gateway_rejection(
+                requested_model=model,
                 db=db,
                 log_writer=log_writer,
                 api_key_id=api_key_id,
@@ -501,6 +502,7 @@ async def run_passthrough(
         row keeps so the failure taxonomy can tell a refusal from a provider fault.
         """
         await log_gateway_rejection(
+            requested_model=model,
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
@@ -956,6 +958,7 @@ async def run_passthrough(
         each of the call sites below.
         """
         return UsageLog(
+            requested_model=model,
             id=str(uuid.uuid4()),
             workspace_id=usage_workspace_id,
             api_key_id=api_key_id,
@@ -1385,6 +1388,7 @@ async def run_decision(
             and not await throttle_early_rejection(raw_request, str(api_key.user_id))
         ):
             await log_gateway_rejection(
+                requested_model=selector,
                 db=db,
                 log_writer=log_writer,
                 api_key_id=api_key_id,
@@ -1403,6 +1407,7 @@ async def run_decision(
 
     async def log_rejection(detail: str, *, row_model: str, row_provider: str | None, status_code: int) -> None:
         await log_gateway_rejection(
+            requested_model=selector,
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
@@ -1538,6 +1543,7 @@ async def run_decision(
 
     def usage_row(**outcome: Any) -> UsageLog:
         return UsageLog(
+            requested_model=selector,
             id=str(uuid.uuid4()),
             workspace_id=workspace_id,
             api_key_id=api_key_id,
