@@ -20,6 +20,7 @@ from gateway.repositories.usage_and_telemetry import (
     UsageScope,
     UsageSortLabels,
     is_substring_search,
+    user_used_within,
 )
 from gateway.schemas.usage_and_telemetry import (
     Bucket,
@@ -112,7 +113,15 @@ class UsageService:
         # Shared by every request this worker serves.
         self._heavy_reads = heavy_reads
 
-    async def _searched(self, filters: UsageFilters) -> UsageFilters:
+    async def _users_named(self, term: str, scope: UsageScope) -> list[str]:
+        """The users whose alias contains ``term`` with usage in ``scope``, so no other tenant crowds them out."""
+        return await self._users.ids_aliased_like(term, limit=_MAX_NAMED_BY_SEARCH, within=user_used_within(scope))
+
+    async def _keys_named(self, term: str, scope: UsageScope) -> list[str]:
+        """The keys whose name contains ``term``, among the workspaces ``scope`` covers."""
+        return await self._keys.ids_named_like(term, limit=_MAX_NAMED_BY_SEARCH, workspaces=scope.workspaces)
+
+    async def _searched(self, filters: UsageFilters, scope: UsageScope) -> UsageFilters:
         """``filters`` with the users and keys whose names contain a substring search, read from their domains.
 
         Called inside an open block. An id search, or none, needs no names.
@@ -121,8 +130,8 @@ class UsageService:
         if not is_substring_search(refine.q):
             return filters
         term = (refine.q or "").strip()
-        users = await self._users.ids_aliased_like(term, limit=_MAX_NAMED_BY_SEARCH)
-        keys = await self._keys.ids_named_like(term, limit=_MAX_NAMED_BY_SEARCH)
+        users = await self._users_named(term, scope)
+        keys = await self._keys_named(term, scope)
         return replace(filters, refine=replace(refine, q_user_ids=tuple(users), q_api_key_ids=tuple(keys)))
 
     @asynccontextmanager
@@ -198,12 +207,16 @@ class UsageService:
         """
         filters = list_window(filters, sort=sort)
         labels = (
-            UsageSortLabels(user=self._users.alias_of, api_key=self._keys.name_of)
+            UsageSortLabels(users=self._users.aliases_relation(), api_keys=self._keys.names_relation())
             if sort in ("user", "source")
             else None
         )
-        async with self._uow:
-            filters = await self._searched(filters)
+        # A sort or a word search visits every row of the window, so it waits its
+        # turn at this worker's gate as the count beside it does; the newest page
+        # is an index scan and does not.
+        heavy = sort != "timestamp" or is_substring_search(filters.refine.q)
+        async with self._heavy_read() if heavy else self._uow:
+            filters = await self._searched(filters, scope)
             rows = await self._usage_logs.page(
                 filters, scope, skip=skip, limit=limit, sort=sort, order=order, labels=labels
             )
@@ -235,7 +248,7 @@ class UsageService:
         """
         filters = list_window(filters, sort=sort)
         async with self._heavy_read():
-            filters = await self._searched(filters)
+            filters = await self._searched(filters, scope)
             return await self._usage_logs.count_matching(filters, scope, imported_only=imported_only)
 
     async def request_settlement(self, request_id: str, *, api_key_id: str | None) -> RequestSettlement | None:
@@ -303,7 +316,7 @@ class UsageService:
         # an empty selection, and it never contributes a dimension of its own.
         requested = _ALL_SUMMARY_DIMENSIONS if dimensions is None else {d for d in dimensions if d != "none"}
         async with self._heavy_read():
-            filters = await self._searched(filters)
+            filters = await self._searched(filters, scope)
             totals = await self._usage_logs.totals(filters, scope)
             if include_p95:
                 totals = totals.model_copy(
@@ -378,12 +391,12 @@ class UsageService:
         filters = replace(filters, start_date=start, end_date=end)
         term = (search or "").strip() or None
         async with self._heavy_read():
-            filters = await self._searched(filters)
+            filters = await self._searched(filters, scope)
             named: list[str] = []
             if term is not None and group_by == "user":
-                named = await self._users.ids_aliased_like(term, limit=_MAX_NAMED_BY_SEARCH)
+                named = await self._users_named(term, scope)
             elif term is not None and group_by == "api_key":
-                named = await self._keys.ids_named_like(term, limit=_MAX_NAMED_BY_SEARCH)
+                named = await self._keys_named(term, scope)
             groups, total = await self._usage_logs.value_groups(
                 filters, scope, group_by=group_by, search=term, named=named, skip=skip, limit=limit
             )
@@ -419,7 +432,7 @@ class UsageService:
             raise UsageSeriesTooLongError(MAX_SERIES_POINTS, bucket)
         dimension = _SERIES_DIMENSIONS[group_by]
         async with self._heavy_read():
-            filters = await self._searched(filters)
+            filters = await self._searched(filters, scope)
             totals = await self._usage_logs.totals(filters, scope)
             groups = await self._breakdown(filters, scope, totals, dimension=dimension, limit=SERIES_TOP_N)
             points = await self._usage_logs.grouped_series(

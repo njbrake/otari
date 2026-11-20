@@ -390,7 +390,7 @@ filters beside the entity filters:
 | `policy_name`, `exclude_policy_name` | Rows served, or not served, through these routing policies; repeatable. |
 | `routed` | `true`: requests a routing policy served. `false`: requests that named a model directly. |
 | `tokens_gt`, `cost_gt`, `latency_ms_gt` | Rows billed for more tokens (input plus output), costing more USD, or slower in milliseconds than the value. |
-| `statuses` | Rows with one of these statuses; repeatable. `status` narrows to one. |
+| `statuses` | Rows with one of these statuses; repeatable. `status` narrows to one. A subset that keeps `absorbed` counts attempts, so `request_count` matches the list's total. |
 | `include_absorbed` | `false`: each request once, without the attempts a routing policy recovered from. A status filter wins. |
 | `channel` | Rows that came in these ways; repeatable: `imported` (external usage), `playground` (the dashboard's Playground) or `api` (anything else this deployment served). |
 | `is_null` | Rows with nothing in these columns; repeatable: `api_key`, `user` or `session`. |
