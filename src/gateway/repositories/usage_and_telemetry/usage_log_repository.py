@@ -14,6 +14,7 @@ from sqlalchemy import (
     Float,
     Numeric,
     Select,
+    String,
     Subquery,
     and_,
     case,
@@ -379,7 +380,15 @@ _GROUP_COLUMNS: dict[str, str] = {
     "source_label": "source_label",
     "endpoint": "endpoint",
     "provider": "provider",
+    "workspace": "workspace_id",
 }
+
+
+def _group_column(rows: Subquery, dimension: str) -> ColumnElement[Any]:
+    """The column a breakdown groups on, as text: a workspace's id is a UUID, and a group's key is a string."""
+    column = rows.c[_GROUP_COLUMNS[dimension]]
+    return sql_cast(column, String) if dimension == "workspace" else column
+
 
 # The columns a filter menu lists the values of, among those the rollups keep.
 _VALUE_COLUMNS: dict[str, str] = {
@@ -1370,7 +1379,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         if tag_key is not None:
             return await self._tag_groups(filters, scope, tag_key=tag_key, limit=limit)
         rows = await self._usage_rows(filters, scope)
-        column = rows.c[_GROUP_COLUMNS[cast("str", dimension)]]
+        column = _group_column(rows, cast("str", dimension))
         cost_sum = _summed(rows.c.cost, 0.0)
         stmt = (
             select(
@@ -1601,7 +1610,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         deleted user) from the remainder.
         """
         rows = await self._usage_rows(filters, scope)
-        column = rows.c[_GROUP_COLUMNS[dimension]]
+        column = _group_column(rows, dimension)
         key_expr = case((column.in_(named), column), else_=null())
         if keeps_null:
             fold_expr = case((column.is_(None), 0), (column.in_(named), 0), else_=1)

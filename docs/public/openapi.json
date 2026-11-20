@@ -30322,7 +30322,9 @@
               "model",
               "user_id",
               "api_key_id",
-              "source"
+              "source",
+              "provider",
+              "workspace_id"
             ],
             "title": "Group By",
             "type": "string"
@@ -42384,7 +42386,9 @@
                 "model",
                 "user_id",
                 "api_key_id",
-                "source"
+                "source",
+                "provider",
+                "workspace_id"
               ],
               "title": "Group By",
               "type": "string"
@@ -55042,7 +55046,9 @@
                 "model",
                 "user_id",
                 "api_key_id",
-                "source"
+                "source",
+                "provider",
+                "workspace_id"
               ],
               "title": "Group By",
               "type": "string"
@@ -65419,7 +65425,9 @@
                 "model",
                 "user_id",
                 "api_key_id",
-                "source"
+                "source",
+                "provider",
+                "workspace_id"
               ],
               "title": "Group By",
               "type": "string"
