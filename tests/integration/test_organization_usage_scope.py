@@ -39,6 +39,7 @@ from sqlmodel import col
 from gateway.core.config import API_ROOT
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.models.usage import UsageLog
+from gateway.models.users import User as GatewayUser
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 
 # Every read this router serves. Parametrized rather than asserted once, because
@@ -468,6 +469,85 @@ def test_the_series_splits_only_the_callers_own_rows(client: TestClient, world: 
     assert isinstance(body, dict)
     keys = {group["key"] for group in body["groups"] if not group.get("is_other")}
     assert keys == set(_ALPHA_ONE_MODELS)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?q=one",
+        "?q=beta",
+        "?sort=model&order=asc",
+        "?sort=source",
+        "?channel=api",
+        "?is_null=user",
+        "?include_absorbed=false",
+        "?statuses=success",
+    ],
+)
+def test_a_search_sort_or_refinement_only_narrows_the_callers_own_rows(
+    client: TestClient, world: _World, query: str
+) -> None:
+    """None of them reaches past the scope: beta's rows match every one of these and still never appear."""
+    listed = _models_listed(client, world, "alpha_member", query)
+    assert listed <= set(_ALPHA_ONE_MODELS)
+    assert not listed & set(_BETA_MODELS)
+    code, body = _as(client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage/count{query}")
+    assert code == status.HTTP_200_OK, body
+    assert body == {"total": len(listed)}
+    assert _models_summarized(client, world, "alpha_member", query) == listed
+
+
+def test_an_id_search_finds_no_row_outside_the_scope(client: TestClient, world: _World) -> None:
+    code, beta_rows = _as(client, world, "beta_owner", f"{API_ROOT}/organizations/me/usage")
+    assert code == status.HTTP_200_OK
+    assert isinstance(beta_rows, list)
+    assert beta_rows
+    assert _models_listed(client, world, "alpha_owner", f"?q={beta_rows[0]['id']}") == set()
+    assert _models_listed(client, world, "beta_owner", f"?q={beta_rows[0]['id']}") == {beta_rows[0]["model"]}
+
+
+def test_a_name_search_is_not_crowded_out_by_another_tenants_matches(
+    client: TestClient,
+    world: _World,
+    db_session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Users and keys found by name are those in the caller's scope, so a cap reached elsewhere cannot hide theirs."""
+    monkeypatch.setattr("gateway.services.usage_and_telemetry._service._MAX_NAMED_BY_SEARCH", 1)
+    session = db_session_factory()
+    try:
+        # Beta's user sorts first, so a global search capped at one would find only it.
+        for user_id, workspace in (("a-beta-person", "beta_one"), ("z-alpha-person", "alpha_one")):
+            session.add(GatewayUser(user_id=user_id, alias="Shared Name", spend=0.0, blocked=False))
+            session.flush()
+            session.add(
+                UsageLog(
+                    id=str(uuid.uuid4()),
+                    workspace_id=world.workspaces[workspace],
+                    user_id=user_id,
+                    model=f"named-{workspace}",
+                    provider="p",
+                    endpoint="/v1/chat/completions",
+                    source="gateway",
+                    status="success",
+                    total_tokens=10,
+                    timestamp=datetime.now(UTC),
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+    assert _models_listed(client, world, "alpha_owner", "?q=shared%20name") == {"named-alpha_one"}
+    assert _models_listed(client, world, "beta_owner", "?q=shared%20name") == {"named-beta_one"}
+
+
+def test_the_summary_p95_reads_only_the_callers_own_rows(client: TestClient, world: _World) -> None:
+    code, body = _as(client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage/summary?include_p95=true")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    # The world's rows carry no latency, so there is nothing in scope to rank.
+    assert body["totals"]["p95_latency_ms"] is None
+    assert body["totals"]["request_count"] == len(_ALPHA_ONE_MODELS)
 
 
 def test_the_deployment_publishes_and_scopes_the_surface(client: TestClient, world: _World) -> None:

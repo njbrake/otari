@@ -14,6 +14,8 @@ import type {
   UsageFilters,
   UsageGroupBy,
   UsageGroupedSeries,
+  UsageSortKey,
+  UsageSortOrder,
   UsageSummary,
   UsageValueGroups,
   ValueGroupBy,
@@ -79,6 +81,30 @@ function usageParams(filters: UsageFilters): URLSearchParams {
   for (const key of ["tokens_gt", "cost_gt", "latency_ms_gt"] as const) {
     const value = filters[key]
     if (value !== undefined) params.set(key, String(value))
+  }
+  appendAll("statuses", filters.statuses)
+  if (filters.include_absorbed !== undefined) {
+    params.set("include_absorbed", String(filters.include_absorbed))
+  }
+  appendAll("channel", filters.channel)
+  appendAll("is_null", filters.is_null)
+  if (filters.q?.trim()) params.set("q", filters.q.trim())
+  return params
+}
+
+/** The order the request log is read in; newest first unless a column says otherwise. */
+export interface UsageSort {
+  sort: UsageSortKey
+  order: UsageSortOrder
+}
+
+export const NEWEST_FIRST: UsageSort = { sort: "timestamp", order: "desc" }
+
+const sortParams = (params: URLSearchParams, sort: UsageSort) => {
+  // The default is left off the wire, so the URL a default read sends is unchanged.
+  if (sort.sort !== NEWEST_FIRST.sort || sort.order !== NEWEST_FIRST.order) {
+    params.set("sort", sort.sort)
+    params.set("order", sort.order)
   }
   return params
 }
@@ -148,13 +174,17 @@ export function useUsageLogs(
   pageSize: number,
   enabled = true,
   usageScope: UsageScope = "caller",
+  {
+    sort = NEWEST_FIRST,
+    refetchInterval,
+  }: { sort?: UsageSort; refetchInterval?: number | false } = {},
 ) {
   const scope = useUsageScope(usageScope)
   return useQuery({
-    queryKey: [USAGE, "list", scope.base, filters, page, pageSize],
+    queryKey: [USAGE, "list", scope.base, filters, page, pageSize, sort],
     meta: workspaceMeta(filters.workspace_id),
     queryFn: () => {
-      const params = usageParams(filters)
+      const params = sortParams(usageParams(filters), sort)
       params.set("skip", String(page * pageSize))
       params.set("limit", String(pageSize))
       return apiFetch<UsageEntry[]>(`${scope.base}?${params.toString()}`)
@@ -168,7 +198,9 @@ export function useUsageLogs(
     // or page (all of which are in the key). Nothing here opts back into the
     // provider's refetch-on-focus default, which is already off (`provider.tsx`).
     // `useLiveUsageCount` is how the page still says that newer rows exist.
+    // Live mode is the one opt-in, passed by the page while it follows new rows.
     staleTime: 10_000,
+    refetchInterval,
   })
 }
 
@@ -178,19 +210,31 @@ export function useUsageLogs(
 // Deliberately as frozen as the log it counts (see `useUsageLogs`): the total
 // describes the page on screen, so a total that moved on its own would disagree
 // with the rows the operator can actually page through.
-export function useUsageCount(filters: UsageFilters) {
+//
+// `sort` is the list's order: any order but time bounds the window the way the
+// list's does, so it is the one part of the order the total depends on.
+export function useUsageCount(
+  filters: UsageFilters,
+  {
+    sort = NEWEST_FIRST.sort,
+    refetchInterval,
+  }: { sort?: UsageSortKey; refetchInterval?: number | false } = {},
+) {
   const scope = useUsageScope()
   return useQuery({
-    queryKey: [USAGE, "count", scope.base, filters],
+    queryKey: [USAGE, "count", scope.base, filters, sort],
     meta: workspaceMeta(filters.workspace_id),
-    queryFn: ({ signal }) =>
-      apiFetch<UsageCount>(
-        `${scope.base}/count?${usageParams(filters).toString()}`,
-        { signal: heavyReadSignal(signal) },
-      ),
+    queryFn: ({ signal }) => {
+      const params = usageParams(filters)
+      if (sort !== NEWEST_FIRST.sort) params.set("sort", sort)
+      return apiFetch<UsageCount>(`${scope.base}/count?${params.toString()}`, {
+        signal: heavyReadSignal(signal),
+      })
+    },
     enabled: scope.isReady,
     placeholderData: keepPreviousData,
     staleTime: 10_000,
+    refetchInterval,
     ...HEAVY_READ,
   })
 }

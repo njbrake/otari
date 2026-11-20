@@ -1,9 +1,9 @@
 import uuid
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import NamedTuple, Never
+from typing import Any, NamedTuple, Never
 
 from sqlalchemy import Select, String, and_, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -461,12 +461,20 @@ class UserAccessRepository(BaseRepository[User, Never, Never]):
         ).first()
         return None if row is None else BudgetUse(**row._asdict())
 
-    async def ids_aliased_like(self, term: str, *, limit: int) -> list[str]:
-        """Up to ``limit`` ids of the users whose alias contains ``term``, case-insensitive, deleted or not."""
-        stmt = (
-            select(User.user_id).where(User.alias.icontains(term, autoescape=True)).order_by(User.user_id).limit(limit)
-        )
-        return list((await self.db.execute(stmt)).scalars())
+    @staticmethod
+    def aliases_relation() -> Any:
+        """Every user as ``(id, name)``, its alias, for another domain's read to outer-join and order by."""
+        return select(User.user_id.label("id"), User.alias.label("name"))
+
+    async def ids_aliased_like(self, term: str, *, limit: int, within: Callable[[Any], Any] | None = None) -> list[str]:
+        """Up to ``limit`` ids of the users whose alias contains ``term``, case-insensitive, deleted or not.
+
+        ``within`` narrows them to the users it accepts, given the user id column.
+        """
+        stmt = select(User.user_id).where(User.alias.icontains(term, autoescape=True))
+        if within is not None:
+            stmt = stmt.where(within(User.user_id))
+        return list((await self.db.execute(stmt.order_by(User.user_id).limit(limit))).scalars())
 
     async def aliases(self, user_ids: Collection[str]) -> dict[str, str | None]:
         """Each of these users that has a row, deleted or not, to its alias."""

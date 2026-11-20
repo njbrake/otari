@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from conftest import seed_workspace_id
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.api_keys import APIKey
-from gateway.models.usage import UsageLog, UsageRollup, UsageRollupDirtyHour
+from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT, UsageLog, UsageRollup, UsageRollupDirtyHour
 from gateway.models.users import User
 from gateway.repositories.usage_and_telemetry import (
     UsageFilters,
@@ -46,7 +46,7 @@ _USERS = ("u1", "u2", None)
 _KEYS = ("k1", "k2", None)
 _MODELS = ("gpt-4o", "claude-sonnet", "openai/gpt-4o")
 _PROVIDERS = ("openai", "anthropic", None)
-_ENDPOINTS = ("/v1/chat/completions", "/v1/messages")
+_ENDPOINTS = ("/v1/chat/completions", PLAYGROUND_USAGE_ENDPOINT)
 _SOURCES = ("gateway", "claude-code")
 _LABELS = (None, "session-a", "session-b")
 _STATUSES = ("success", "success", "success", "error", "absorbed", "incomplete")
@@ -181,7 +181,7 @@ _FILTERS: list[dict[str, Any]] = [
     {"status": "error"},
     {"status": "absorbed"},
     {"status_code": 429},
-    {"provider": "openai", "endpoint": "/v1/messages"},
+    {"provider": "openai", "endpoint": PLAYGROUND_USAGE_ENDPOINT},
     {"source": "claude-code", "source_label": "session-a"},
     {"api_key_id": ["k2"]},
     {"priced": True},
@@ -200,6 +200,23 @@ _FILTERS: list[dict[str, Any]] = [
     {"refine": UsageRefinements(routed=False)},
     {"refine": UsageRefinements(tokens_gt=3000)},
     {"refine": UsageRefinements(cost_gt=0.5, latency_ms_gt=1000)},
+]
+
+# Kept apart from ``_FILTERS`` so their parity runs in a test of its own, inside
+# the suite's per-test timeout.
+_REFINEMENT_FILTERS: list[dict[str, Any]] = [
+    # A status subset, the recovered attempts left out, the ways in and the empty
+    # columns are all read off keys the rollups keep.
+    {"refine": UsageRefinements(statuses=["error", "incomplete"])},
+    {"refine": UsageRefinements(statuses=["absorbed"])},
+    {"refine": UsageRefinements(include_absorbed=False)},
+    {"status": "absorbed", "refine": UsageRefinements(include_absorbed=False)},
+    {"refine": UsageRefinements(channel=["imported"])},
+    {"refine": UsageRefinements(channel=["api", "playground"], is_null=["session"])},
+    {"refine": UsageRefinements(is_null=["user", "api_key"])},
+    # A search reads the rows.
+    {"refine": UsageRefinements(q="gpt")},
+    {"refine": UsageRefinements(q="SESSION-A", q_user_ids=("u2",))},
 ]
 
 _VALUE_GROUPS: tuple[ValueGroupBy, ...] = (
@@ -277,11 +294,17 @@ async def _read_all(repo: UsageLogRepository, filters: UsageFilters, scope: Usag
 
 
 async def _assert_parity(
-    rollups: _Reader, rows: _Reader, rng: random.Random, workspace_id: uuid.UUID, *, stride: int
+    rollups: _Reader,
+    rows: _Reader,
+    rng: random.Random,
+    workspace_id: uuid.UUID,
+    *,
+    stride: int,
+    specs: list[dict[str, Any]] = _FILTERS,
 ) -> None:
     scopes = _scopes(workspace_id)
     for index, (start, end) in enumerate(_windows(rng)):
-        for offset, spec in enumerate(_FILTERS):
+        for offset, spec in enumerate(specs):
             # Each filter meets every ``stride``-th window, and the scopes take turns.
             if (index + offset) % stride:
                 continue
@@ -351,6 +374,26 @@ async def test_rollups_answer_as_the_rows_do(
     await async_db.commit()
     assert await _marked(async_db) == 0
     await _assert_parity(rollups, rows, rng, workspace_id, stride=6)
+
+
+@pytest.mark.asyncio
+async def test_rollups_answer_the_newer_refinements_as_the_rows_do(
+    test_db: Session, async_db: AsyncSession, sessions: tuple[_Reader, _Reader]
+) -> None:
+    """Status subsets, recovered attempts left out, ways in, empty columns and a search, built and then written to."""
+    rng = random.Random(2027)
+    workspace_id = seed_workspace_id(test_db)
+    _seed_identities(test_db, workspace_id)
+    test_db.add_all(_rows(rng, workspace_id, 600))
+    test_db.commit()
+    rollups, rows = sessions
+    await _refresh_all(async_db)
+    await async_db.commit()
+    await _assert_parity(rollups, rows, rng, workspace_id, stride=4, specs=_REFINEMENT_FILTERS)
+
+    test_db.add_all(_rows(rng, workspace_id, 40))
+    test_db.commit()
+    await _assert_parity(rollups, rows, rng, workspace_id, stride=6, specs=_REFINEMENT_FILTERS)
 
 
 @pytest.mark.asyncio
@@ -539,6 +582,7 @@ async def test_a_refinement_the_rollups_do_not_key_reads_the_rows(
             UsageRefinements(cost_gt=0),
             UsageRefinements(latency_ms_gt=0),
             UsageRefinements(policy_name=["fast"]),
+            UsageRefinements(q="gpt"),
         ):
             assert (
                 await rollups.repo.count_matching(UsageFilters(start_date=start, end_date=end, refine=refine), scope)

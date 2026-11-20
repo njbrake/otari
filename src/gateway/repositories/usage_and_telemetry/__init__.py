@@ -11,8 +11,13 @@ from gateway.repositories.usage_and_telemetry.usage_log_repository import (
     UsageLogRepository,
     UsageRefinements,
     UsageScope,
+    UsageSortLabels,
+    is_substring_search,
     new_usage_row,
+    search_request_id,
+    search_term,
     settled_job_row,
+    user_used_within,
 )
 
 __all__ = [
@@ -26,6 +31,11 @@ __all__ = [
     "UsageLogRepository",
     "UsageRefinements",
     "UsageScope",
+    "UsageSortLabels",
+    "is_substring_search",
+    "user_used_within",
     "new_usage_row",
+    "search_request_id",
+    "search_term",
     "settled_job_row",
 ]

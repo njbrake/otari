@@ -77,6 +77,14 @@ import {
   STATUS_COLUMN,
   TIME_COLUMN,
 } from "./requestColumns"
+import {
+  boundsWindow,
+  nextSort,
+  readSort,
+  SORTABLE_COLUMNS,
+  sortDescriptorFor,
+  sortUrl,
+} from "./requestSort"
 
 // The timeline reads the summary's series and no breakdown.
 const NO_BREAKDOWNS: SummaryDimension[] = []
@@ -110,6 +118,11 @@ const URL_DEFAULTS = {
   tokens_gt: "",
   cost_gt: "",
   latency_ms_gt: "",
+  // Free-text search, typed in the filter row above the table.
+  q: "",
+  // The column the log is ordered by and which way; absent is newest first.
+  sort: "",
+  order: "",
   page: "0",
   size: String(DEFAULT_PAGE_SIZE),
   // The request open in the panel: a usage row's id, or the `Otari-Request-ID`
@@ -174,6 +187,12 @@ function ActivityPageContent({
   const endpointFilter = url.get("endpoint")
   const providerFilter = url.get("provider")
   const toolFilter = url.get("tool")
+  const search = url.get("q").trim()
+  const sort = readSort(url.get("sort"), url.get("order"))
+  // The server reads any order but time, and a substring search, over a bounded
+  // window, an omitted start as the last 30 days. Under "All" those reads take
+  // the year the timeline spans instead, so the rows match the bars above them.
+  const boundedRead = boundsWindow(sort, search)
   const page = Math.max(0, url.getNumber("page"))
   // Snap URL-supplied sizes to the nearest offered option: an old bookmark
   // with size=500 must not render a page of 500 rows, and a hand-edited size=0
@@ -302,7 +321,7 @@ function ActivityPageContent({
       // From the sidebar's switcher, not from a control on this page: it scopes
       // the whole shell, and the operator's own filters sit below it.
       workspace_id: workspace?.workspace_id,
-      start_date: win.start,
+      start_date: win.start ?? (boundedRead ? extentWin.start : undefined),
       end_date: win.end,
       status: statusFilter || undefined,
       model: modelFilters.length > 0 ? modelFilters : undefined,
@@ -315,12 +334,16 @@ function ActivityPageContent({
       provider: providerFilter || undefined,
       tool: (toolFilter || undefined) as UsageFilters["tool"],
       priced,
+      q: search || undefined,
       ...refinements,
     }),
     [
       refinements,
+      search,
       workspace,
       win,
+      boundedRead,
+      extentWin.start,
       toolFilter,
       statusFilter,
       modelFilters,
@@ -346,8 +369,8 @@ function ActivityPageContent({
     }
   }, [filtersKey, url])
 
-  const usage = useUsageLogs(filters, page, pageSize)
-  const count = useUsageCount(filters)
+  const usage = useUsageLogs(filters, page, pageSize, true, "caller", { sort })
+  const count = useUsageCount(filters, { sort: sort.sort })
 
   // Which usage surface this caller reads, and with it the two things on this
   // page that stay the deployment operator's: the in-flight strip and the
@@ -416,10 +439,12 @@ function ActivityPageContent({
       provider: providerFilter || undefined,
       tool: (toolFilter || undefined) as UsageFilters["tool"],
       priced,
+      q: search || undefined,
       ...refinements,
     }),
     [
       refinements,
+      search,
       workspace?.workspace_id,
       winOutsideExtent,
       toolFilter,
@@ -539,6 +564,7 @@ function ActivityPageContent({
       endpointFilter ||
       providerFilter ||
       toolFilter ||
+      search ||
       hasRefinements ||
       timeFiltered,
   )
@@ -718,7 +744,7 @@ function ActivityPageContent({
     }
   }, [embedded])
   const columns = useMemo<DataTableColumn<UsageEntry>[]>(() => {
-    return [
+    const built: DataTableColumn<UsageEntry>[] = [
       TIME_COLUMN,
       {
         id: "user",
@@ -776,6 +802,11 @@ function ActivityPageContent({
         headerAction: funnels.status,
       },
     ]
+    // The server orders the whole window, so every column it can sort by
+    // takes the press; the funnel and the resize handle keep their own.
+    return built.map((column) =>
+      SORTABLE_COLUMNS[column.id] ? { ...column, allowsSorting: true } : column,
+    )
   }, [groupOutcomes, memberLabels, funnels])
   // On a desk the person's own layout: their widths, without the columns they
   // hid. The phone's cards keep every field, since nothing there can bring a
@@ -893,6 +924,14 @@ function ActivityPageContent({
               ariaLabel="Activity log"
               columns={shownColumns}
               isResizable
+              sortDescriptor={sortDescriptorFor(sort)}
+              onSortChange={(descriptor) =>
+                url.patch({
+                  ...sortUrl(nextSort(sort, String(descriptor.column))),
+                  page: 0,
+                  request: "",
+                })
+              }
               columnWidths={layout.widths}
               onColumnResizeEnd={layout.resize}
               rows={rows}

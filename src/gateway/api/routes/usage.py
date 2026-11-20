@@ -38,11 +38,13 @@ from gateway.schemas.usage_and_telemetry import (
     Bucket,
     RequestSettlement,
     SeriesGroupBy,
+    SortOrder,
     SummaryDimension,
     ToolFilter,
     UsageCount,
     UsageEntry,
     UsageGroupedSeries,
+    UsageSort,
     UsageSummary,
     UsageValueGroups,
     ValueGroupBy,
@@ -206,6 +208,23 @@ _GROUP_BY_DESC = (
     "The column to list the values of: 'policy' is the routing policy a request was served through, "
     "under a null key for the requests that named a model directly."
 )
+_SORT_DESC = (
+    "Order rows by this column; ties fall back to newest first, then the row id. 'user' is the billed user's "
+    "alias (or id), 'source' the API key's name (or the provenance source where no key made the row), "
+    "'tokens' billed input plus output, and 'status' ranks failures, then incomplete requests, then "
+    "recovered attempts and the requests served after one, then successes. Rows with no value sort last in "
+    "either direction. Any order but 'timestamp' sorts every row in the window, so it reads the window "
+    "'/summary' does: the last 30 days when 'start_date' is omitted, and at most 366."
+)
+_ORDER_DESC = "Sort direction: 'desc' (the default) or 'asc'."
+_COUNT_SORT_DESC = (
+    "The order the list beside this count was read in. Any order but 'timestamp' bounds the window as the "
+    "list's does, so the total is the total of its pages."
+)
+_INCLUDE_P95_DESC = (
+    "Also compute 'totals.p95_latency_ms', the 95th-percentile total latency over the requests, which "
+    "sorts the window's latencies. Off by default, so a caller that does not show it does not pay for it."
+)
 _MAX_GROUP_SEARCH = 200
 _GROUP_SEARCH_DESC = (
     "Keep the values that contain this, case-insensitive, or whose name does: a user's alias, an API key's "
@@ -246,10 +265,12 @@ async def list_usage(
         list[str] | None, Query(max_length=_MAX_REQUEST_GROUPS, description=_REQUEST_GROUP_DESC)
     ] = None,
     workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    sort: Annotated[UsageSort, Query(description=_SORT_DESC)] = "timestamp",
+    order: Annotated[SortOrder, Query(description=_ORDER_DESC)] = "desc",
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
 ) -> list[UsageEntry]:
-    """List usage logs ordered by timestamp (most recent first).
+    """List usage logs, most recent first unless ``sort`` and ``order`` say otherwise.
 
     Supports optional filters for time range, user, status, failure status code,
     model, endpoint, provider, source, session (``source_label``), and request
@@ -280,7 +301,7 @@ async def list_usage(
         workspace_id=workspace_id,
         refine=refine,
     )
-    return await usage.page(filters, usage_scope, skip=skip, limit=limit)
+    return await usage.page(filters, usage_scope, skip=skip, limit=limit, sort=sort, order=order)
 
 
 @key_router.post("/external-events", openapi_extra=key_scope(KeyScope.USAGE_WRITE))
@@ -371,6 +392,7 @@ async def count_usage(
         list[str] | None, Query(max_length=_MAX_REQUEST_GROUPS, description=_REQUEST_GROUP_DESC)
     ] = None,
     workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    sort: Annotated[UsageSort, Query(description=_COUNT_SORT_DESC)] = "timestamp",
 ) -> UsageCount:
     """Total number of usage logs matching the given filters.
 
@@ -408,7 +430,9 @@ async def count_usage(
     # counts_toward_budget alone does not say "imported": gateway traffic on an
     # exclude_from_budget key is also False, so without this the count would
     # promise rows _selection_conditions then refuses to touch.
-    return UsageCount(total=await usage.count(filters, usage_scope, imported_only=counts_toward_budget is False))
+    return UsageCount(
+        total=await usage.count(filters, usage_scope, imported_only=counts_toward_budget is False, sort=sort)
+    )
 
 
 @operator_router.get("/in-flight")
@@ -519,6 +543,7 @@ async def usage_summary(
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
     dimensions: list[SummaryDimension] | None = Query(default=None, description=_DIMENSIONS_DESC),
     group_by_tag: GroupByTag = None,
+    include_p95: Annotated[bool, Query(description=_INCLUDE_P95_DESC)] = False,
 ) -> UsageSummary:
     """Aggregate spend, tokens, and request volume for the dashboard Usage page.
 
@@ -558,7 +583,9 @@ async def usage_summary(
         workspace_id=workspace_id,
         refine=refine,
     )
-    return await usage.summary(filters, usage_scope, bucket=bucket, dimensions=dimensions, group_by_tag=group_by_tag)
+    return await usage.summary(
+        filters, usage_scope, bucket=bucket, dimensions=dimensions, group_by_tag=group_by_tag, include_p95=include_p95
+    )
 
 
 @operator_router.get("/series")

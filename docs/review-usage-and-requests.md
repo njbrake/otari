@@ -138,11 +138,25 @@ while its column is filtered. Every filter, including one a link set (a
 session, a status code, an endpoint), is a chip in the one row above the table
 that removes it; **Clear all** removes them together.
 
+Press a column's header to sort the whole window by it. Names run A to Z
+first; tokens, **Cost** and **Total time** run largest first, and **Status**
+puts failures first. Press it again for the reverse order and a third time to
+go back to newest first. **API key** sorts by the key's name, or the source of
+a request no key made. The order is kept in the URL. Under **All**, a sort
+other than time, like a search for anything but an ID, reads the last year,
+the span the chart shows.
+
+The search box in the filter row finds requests by request ID (pasted whole),
+or by part of a user's name or ID, a model (the one that served or the
+name the caller sent), an API key's name, a source or a session. It searches as
+you stop typing, and every view of the page (the chart, the count and the
+column filters' values) follows it.
+
 On a phone the table is a list of cards with no headers, so the row above it
 has a **Filters** button instead, with a count of the filters applied. It opens
 a sheet with one section per filterable column, in the table's order, each
-holding what that column's funnel holds. Expand a section to load its values;
-changes apply as you make them. **Done** closes the sheet and **Clear all**
+holding what that column's funnel holds, under a **Sort** section that orders
+the cards. Expand a section to load its values; changes apply as you make them. **Done** closes the sheet and **Clear all**
 removes every filter.
 
 On a desktop, drag the edge of a column's header to resize it, and use

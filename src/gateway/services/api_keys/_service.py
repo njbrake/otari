@@ -171,10 +171,18 @@ class ApiKeyService:
         async with self._uow:
             return await self._keys.names_by_id(key_ids, workspace_ids=workspace_ids)
 
-    async def ids_named_like(self, term: str, *, limit: int) -> list[str]:
-        """Up to ``limit`` ids of the keys whose name contains ``term``, case-insensitive, in a block of its own."""
+    def names_relation(self) -> object:
+        """Every key as ``(id, name)``, for another domain's read to outer-join and order by."""
+        return self._keys.names_relation()
+
+    async def ids_named_like(self, term: str, *, limit: int, workspaces: object = None) -> list[str]:
+        """Up to ``limit`` ids of the keys whose name contains ``term``, case-insensitive, in a block of its own.
+
+        ``workspaces`` (a set of workspace ids or a select of them) keeps the keys in
+        those workspaces; None keeps every key.
+        """
         async with self._uow:
-            return await self._keys.ids_named_like(term, limit=limit)
+            return await self._keys.ids_named_like(term, limit=limit, workspaces=workspaces)
 
     async def summaries_in_workspace(
         self, workspace_id: uuid.UUID, key_ids: Collection[str] | None = None

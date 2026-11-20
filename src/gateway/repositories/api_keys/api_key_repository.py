@@ -2,9 +2,9 @@ import uuid
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Never
+from typing import Any, Never
 
-from sqlalchemy import Update, case, select, update
+from sqlalchemy import Select, Update, case, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -187,12 +187,23 @@ class ApiKeyRepository(BaseRepository[APIKey, Never, Never]):
             for key_id, workspace_id, user_id, allowed_models in (await self.db.execute(stmt)).all()
         ]
 
-    async def ids_named_like(self, term: str, *, limit: int) -> list[str]:
-        """Up to ``limit`` ids of the keys whose name contains ``term``, case-insensitive."""
-        stmt = (
-            select(APIKey.id).where(APIKey.key_name.icontains(term, autoescape=True)).order_by(APIKey.id).limit(limit)
-        )
-        return list((await self.db.execute(stmt)).scalars())
+    @staticmethod
+    def names_relation() -> Any:
+        """Every key as ``(id, name)``, for another domain's read to outer-join and order by."""
+        return select(APIKey.id.label("id"), APIKey.key_name.label("name"))
+
+    async def ids_named_like(self, term: str, *, limit: int, workspaces: Any = None) -> list[str]:
+        """Up to ``limit`` ids of the keys whose name contains ``term``, case-insensitive.
+
+        ``workspaces``, a set of workspace ids or a select of them, keeps the keys in
+        those workspaces; None keeps every key.
+        """
+        stmt = select(APIKey.id).where(APIKey.key_name.icontains(term, autoescape=True))
+        if workspaces is not None:
+            stmt = stmt.where(
+                APIKey.workspace_id.in_(workspaces if isinstance(workspaces, Select) else sorted(workspaces))
+            )
+        return list((await self.db.execute(stmt.order_by(APIKey.id).limit(limit))).scalars())
 
     async def names_defaulting_end_users_to(self, budget_id: str) -> list[str]:
         """Name each key that starts its end users on ``budget_id`` by default, by its name or else its id."""

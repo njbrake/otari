@@ -93,6 +93,7 @@ describe("ObserveFilterSheet on Requests", () => {
     const { sheet } = await openSheet()
 
     expect(sectionNames(sheet)).toEqual([
+      "SortNewest first",
       "User",
       "Model",
       "Routing",
@@ -108,6 +109,34 @@ describe("ObserveFilterSheet on Requests", () => {
     expect(
       within(sheet).getByRole("button", { name: "Clear all" }),
     ).toBeDisabled()
+  })
+
+  it("orders the cards from a Sort section, since a phone has no headers to press", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    await renderRequests("?page=2")
+    await screen.findAllByText("gpt-4o")
+    const { user, sheet } = await openSheet()
+    await user.click(within(sheet).getByRole("button", { name: /^Sort/ }))
+
+    await user.click(
+      within(sheet).getByRole("checkbox", { name: "Cost, highest first" }),
+    )
+
+    await waitFor(() => expect(urlParams().get("sort")).toBe("cost"))
+    expect(urlParams().get("order")).toBe("desc")
+    expect(urlParams().has("page")).toBe(false)
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            /\/usage\?/.test(call.url) && call.url.includes("sort=cost"),
+        ),
+      ).toBe(true),
+    )
+    await user.click(
+      within(sheet).getByRole("checkbox", { name: "Newest first" }),
+    )
+    await waitFor(() => expect(urlParams().has("sort")).toBe(false))
   })
 
   it("reads a section's values only once it is expanded", async () => {

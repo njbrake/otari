@@ -170,6 +170,29 @@ MeterMap = Annotated[BillingMeters | dict[str, Any], Field(union_mode="left_to_r
 
 
 Bucket = Literal["hour", "day"]
+
+# The columns the usage list can be ordered by. ``timestamp`` is the default and the
+# one the timestamp index serves; any other sorts every row of a bounded window.
+UsageSort = Literal[
+    "timestamp",
+    "user",
+    "model",
+    "policy",
+    "source",
+    "input_tokens",
+    "output_tokens",
+    "tokens",
+    "cost",
+    "latency",
+    "status",
+]
+SortOrder = Literal["asc", "desc"]
+# The way a request reached the log: imported through the external-events ingest,
+# typed in the dashboard's Playground, or sent to the API from somebody's own code.
+UsageChannel = Literal["api", "imported", "playground"]
+# The columns a filter can ask to be empty: no API key, no billed user, no session.
+NullableUsageField = Literal["api_key", "user", "session"]
+
 SeriesGroupBy = Literal["model", "user_id", "api_key_id", "source"]
 
 # Coarse display buckets for a failure's status code. A closed Literal rather than
@@ -377,6 +400,16 @@ class UsageTotals(BaseModel):
     # ``completion_tokens`` residual would drift, even negative, whenever a
     # row's meter and column disagree).
     billed_output_tokens: int = 0
+    # Attempts a routing policy recovered from (status ``absorbed``), which
+    # ``request_count`` leaves out, and requests that ended ``incomplete``.
+    absorbed_count: int = 0
+    incomplete_count: int = 0
+    # The cost of the rows this deployment did not serve (imported subscription
+    # usage), included in ``cost``: nothing was charged through the gateway for it.
+    imported_cost: float = 0.0
+    # The 95th-percentile total latency over the requests, absorbed attempts left
+    # out. Computed only when the summary is asked for it (``include_p95``).
+    p95_latency_ms: int | None = None
 
 
 class UsageGroupRow(BaseModel):

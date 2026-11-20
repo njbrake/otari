@@ -18,6 +18,7 @@ import {
 import { providerDisplayName } from "@/shared/helpers/providers"
 import { findPreset, localMidnightIso } from "@/shared/helpers/timeRange"
 import { ObserveFilterSheet } from "./ObserveFilterSheet"
+import { ObserveSearchBox } from "./ObserveSearchBox"
 import { OBSERVE_FILTER_COLUMNS } from "./observeColumnFilters"
 import {
   type ObserveUrlKey,
@@ -88,6 +89,7 @@ const CLEARED: Partial<Record<ObserveUrlKey, string | []>> = {
   source_label: "",
   status_code: "",
   endpoint: "",
+  q: "",
 }
 
 /**
@@ -319,6 +321,12 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
               onChange={pickRange}
               options={rangeOptions}
             />
+            {isRequests ? (
+              <ObserveSearchBox
+                value={url.get("q")}
+                onCommit={(term) => patch({ q: term })}
+              />
+            ) : null}
             {/* The phone's cards have no columns to size or hide. */}
             {!isMobile && isLayoutView(view) ? (
               <ObserveColumnsControl view={view} />
@@ -358,7 +366,7 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
           isOpen={isSheetOpen}
           onOpenChange={setIsSheetOpen}
           onClearAll={clearAll}
-          hasFilters={chips.length > 0}
+          hasFilters={chips.length > 0 || url.get("q") !== ""}
         />
       ) : null}
     </div>

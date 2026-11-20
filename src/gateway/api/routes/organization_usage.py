@@ -53,18 +53,22 @@ from gateway.api.routes._disconnect import CancelOnDisconnectRoute
 from gateway.api.routes._usage_refinements import UsageRefinementsQuery
 from gateway.api.routes.usage import (
     _API_KEY_MULTI_DESC,
+    _COUNT_SORT_DESC,
     _COUNTS_DESC,
     _DIMENSIONS_DESC,
     _END_DESC,
     _ENDPOINT_DESC,
     _GROUP_BY_DESC,
     _GROUP_SEARCH_DESC,
+    _INCLUDE_P95_DESC,
     _MAX_GROUP_SEARCH,
     _MAX_REQUEST_GROUPS,
     _MODEL_MULTI_DESC,
+    _ORDER_DESC,
     _PRICED_DESC,
     _PROVIDER_DESC,
     _REQUEST_GROUP_DESC,
+    _SORT_DESC,
     _SOURCE_DESC,
     _SOURCE_LABEL_DESC,
     _START_DESC,
@@ -83,11 +87,13 @@ from gateway.models.tenancy import Workspace
 from gateway.schemas.usage_and_telemetry import (
     Bucket,
     SeriesGroupBy,
+    SortOrder,
     SummaryDimension,
     ToolFilter,
     UsageCount,
     UsageEntry,
     UsageGroupedSeries,
+    UsageSort,
     UsageSummary,
     UsageValueGroups,
     ValueGroupBy,
@@ -193,10 +199,12 @@ async def list_organization_usage(
         list[str] | None, Query(max_length=_MAX_REQUEST_GROUPS, description=_REQUEST_GROUP_DESC)
     ] = None,
     workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    sort: Annotated[UsageSort, Query(description=_SORT_DESC)] = "timestamp",
+    order: Annotated[SortOrder, Query(description=_ORDER_DESC)] = "desc",
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
 ) -> list[UsageEntry]:
-    """List the caller's organization's usage logs, most recent first.
+    """List the caller's organization's usage logs, most recent first unless ``sort`` and ``order`` say otherwise.
 
     The tenant-scoped counterpart of ``GET /api/v1/usage``: same filters, same bare
     JSON array, same separate ``/count`` for a paginator's total, confined to
@@ -223,7 +231,7 @@ async def list_organization_usage(
         workspace_id=workspace_id,
         refine=refine,
     )
-    return await usage.page(filters, scope, skip=skip, limit=limit)
+    return await usage.page(filters, scope, skip=skip, limit=limit, sort=sort, order=order)
 
 
 @router.get("/count")
@@ -253,6 +261,7 @@ async def count_organization_usage(
         list[str] | None, Query(max_length=_MAX_REQUEST_GROUPS, description=_REQUEST_GROUP_DESC)
     ] = None,
     workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    sort: Annotated[UsageSort, Query(description=_COUNT_SORT_DESC)] = "timestamp",
 ) -> UsageCount:
     """Total rows matching these filters, within the caller's scope.
 
@@ -284,7 +293,7 @@ async def count_organization_usage(
         workspace_id=workspace_id,
         refine=refine,
     )
-    return UsageCount(total=await usage.count(filters, scope))
+    return UsageCount(total=await usage.count(filters, scope, sort=sort))
 
 
 @router.get("/summary")
@@ -314,6 +323,7 @@ async def organization_usage_summary(
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
     dimensions: list[SummaryDimension] | None = Query(default=None, description=_DIMENSIONS_DESC),
     group_by_tag: GroupByTag = None,
+    include_p95: Annotated[bool, Query(description=_INCLUDE_P95_DESC)] = False,
 ) -> UsageSummary:
     """Aggregate spend, tokens and request volume for the caller's organization.
 
@@ -343,7 +353,9 @@ async def organization_usage_summary(
         workspace_id=workspace_id,
         refine=refine,
     )
-    return await usage.summary(filters, scope, bucket=bucket, dimensions=dimensions, group_by_tag=group_by_tag)
+    return await usage.summary(
+        filters, scope, bucket=bucket, dimensions=dimensions, group_by_tag=group_by_tag, include_p95=include_p95
+    )
 
 
 @router.get("/series")

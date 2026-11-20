@@ -881,7 +881,7 @@ function DataTableGrid<Row extends object>({
                       // does what the header's would: the other direction on
                       // the sorted column, ascending on any other.
                       <AriaButton
-                        className="cursor-pointer text-inherit outline-none data-[focus-visible]:otari-focus-ring"
+                        className="cursor-pointer text-inherit [text-transform:inherit] outline-none data-[focus-visible]:otari-focus-ring"
                         onPress={() =>
                           onSortChange?.({
                             column: col.id,
