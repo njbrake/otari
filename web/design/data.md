@@ -56,6 +56,16 @@ pinned column takes the canvas color so a scrolled cell passes under it without 
 seam. The header is set in the `text-overline` role, so it never outweighs the
 rows it labels.
 
+A row that leads somewhere says where on the row, rather than in a caption under
+the table. The name links to the thing's own page where it has one (a person),
+and the trailing `actions` cell carries a named link to what the row ran
+(`RowOpenLink` in `features/home/`: **Sessions**, **Requests**) beside its
+`RowMenu`; on a table wide enough that the trailing lane scrolls out of view at
+1280px, as Home's is, the link goes under the name instead. Such a row passes no
+`onRowAction`: a pressable row with links in it
+is two targets nested in one, and the caption that explained it ("A row opens
+its sessions.") was the sign the affordance could not be seen.
+
 In the card layout an `align: "end"` cell is shrunk to its content, so its figure
 starts in the card's value lane with the others rather than at the screen's right
 edge.

@@ -268,7 +268,9 @@ describe("MemberHome, by model", () => {
     expect(rest).toHaveLength(0)
     expect(within(row).getByRole("rowheader")).toHaveTextContent("GLM 5.3")
 
-    await user.click(within(row).getByRole("rowheader"))
+    await user.click(
+      within(row).getByRole("link", { name: "Sessions for GLM 5.3" }),
+    )
     const landed = await screen.findByTestId("location")
     const [path, query] = (landed.textContent ?? "").split("?")
     expect(path).toBe("/sessions")
@@ -372,7 +374,9 @@ describe("MemberHome, sessions", () => {
     await renderMemberHome({ windowCost: 2, periodCost: 2 })
     const table = await spendTable()
     expect(screen.queryByText("Your sessions")).toBeNull()
-    expect(screen.queryByText(/A row opens its sessions/)).toBeNull()
+    expect(
+      within(table).queryByRole("link", { name: /^Sessions for / }),
+    ).toBeNull()
     expect(await findRowMenuItem(user, /See its sessions/, table)).toBeNull()
     // The strip keeps four figures: the owner's Failures takes the place.
     expect(screen.getByText("Failures")).toBeVisible()
@@ -386,7 +390,9 @@ describe("MemberHome, sessions", () => {
     expect(
       await screen.findByRole("link", { name: "See your sessions" }),
     ).toBeVisible()
-    expect(screen.getByText(/A row opens its sessions/)).toBeVisible()
+    expect(
+      within(table).getByRole("link", { name: "Sessions for laptop" }),
+    ).toBeVisible()
     expect(
       await findRowMenuItem(user, /See its sessions/, table),
     ).not.toBeNull()
@@ -436,7 +442,10 @@ describe("MemberHome, by provider", () => {
       name: /Unknown provider/,
     })
     expect(within(unknown).getByText("25%")).toBeVisible()
-    expect(screen.getByText(/A row opens its requests/)).toBeVisible()
+    expect(
+      within(anthropic).getByRole("link", { name: "Requests for Anthropic" }),
+    ).toBeVisible()
+    expect(within(unknown).queryByRole("link")).toBeNull()
   })
 
   it("opens their own requests to that provider", async () => {
@@ -447,7 +456,9 @@ describe("MemberHome, by provider", () => {
       url: "/?by=providers",
     })
     const table = await providerTable()
-    await user.click(within(table).getByText("Anthropic"))
+    await user.click(
+      within(table).getByRole("link", { name: "Requests for Anthropic" }),
+    )
     const landed = await screen.findByTestId("location")
     const [path, query] = (landed.textContent ?? "").split("?")
     expect(path).toBe("/requests")

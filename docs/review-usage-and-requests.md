@@ -29,10 +29,12 @@ picked beside the window when there is more than one:
 more than one workspace). Each row shows what it spent, its tokens and its share
 of the total; outside **Models**, it also shows its top model, and outside
 **Models** and **Providers** the spend limit it works under. The five largest
-rows show first, and **Show all** lists the rest. A row opens its sessions over
-the same window, a provider's row its requests, and a workspace's row narrows
-the table to that workspace's people. A row's menu sets or changes its spend
-limit, and a key's row can be opened in **API keys**.
+rows show first, and **Show all** lists the rest. A person's name opens their
+page (see [One person's spend](#one-persons-spend)). At the end of each row,
+**Sessions** opens its sessions over the same window, **Requests** a provider's
+requests, and **People** narrows the table to that workspace's people. A row's
+menu sets or changes its spend limit, and a key's row can be opened in
+**API keys**.
 
 **Providers** names the provider each request went to, or the instance an
 operator named, which is the figure to match against each provider's own bill
@@ -44,7 +46,8 @@ still add up to the total.
 Anyone else sees only their own requests in the selected workspace: what they
 spent, the spend limit on them there, their tokens and their sessions.
 **Where it went** breaks their spend down by **API keys**, **Models** or
-**Providers**, and a row opens its sessions, or a provider's row its requests.
+**Providers**, and each row ends with **Sessions**, or **Requests** for a
+provider, which opens what it ran.
 Someone with no active key and no session yet is offered
 **Create API key**; someone who may not create keys is told whom to ask.
 
@@ -54,6 +57,28 @@ On a gateway with nothing to route to and nothing served yet, Home opens with
 **Get started with Otari**. The operator is offered **Add your first provider**,
 an organization owner or admin **Add a provider key**, and anyone else is told
 to ask an owner or admin.
+
+## One person's spend
+
+Open **People** and pick a person, or press a person's name in Home's
+**Where it went**, to see where their spend went. Pick the
+window above the figures: **This month**, the page's default, or **Today**,
+**7D**, **30D**, **3M** or **6M**, as on Home. The figures, the breakdown and
+their sessions all follow it, and the window is kept in the URL.
+
+**Charged** is what counts toward their budgets. Spend through an API key marked
+exempt from budget, such as a key that records a Claude Code subscription's
+usage, and imported usage are tracked but not charged; when there is any, the
+figure's line says how much (**+$40.00 not charged**). The two add up to the
+**Spent** figure Home shows for them, which counts both.
+
+**Where it went** breaks their spend down by **Models**, **API keys**,
+**Providers** or **Sources**, the costliest first. Each row shows its requests,
+tokens and spend; once any of the window's spend is exempt, the spend is shown
+in two columns, **Budgeted** and **Exempt**. A key exempt from budget is marked
+**Exempt from budget**. Each row ends with **Sessions** (models and keys) or
+**Requests** (providers and sources), which opens what they ran on it over the
+same window.
 
 ## Requests
 

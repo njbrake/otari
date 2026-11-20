@@ -177,10 +177,15 @@ describe("Home, Where it went by model", () => {
     const rows = within(table).getAllByRole("row").slice(1)
     expect(
       rows.map((row) => within(row).getByRole("rowheader").textContent),
-    ).toEqual(["DeepSeek V4.1 Flash 1017", "Kimi K3.1 Pro"])
+      // Each name with the link to its sessions under it.
+    ).toEqual(["DeepSeek V4.1 Flash 1017Sessions", "Kimi K3.1 ProSessions"])
     expect(within(rows[0]).getByText("$199.80")).toBeVisible()
 
-    await userEvent.setup().click(within(rows[0]).getByRole("rowheader"))
+    await userEvent.setup().click(
+      within(rows[0]).getByRole("link", {
+        name: "Sessions for DeepSeek V4.1 Flash 1017",
+      }),
+    )
     const search = new URLSearchParams(
       (await screen.findByRole("status", { name: "Sessions search" }))
         .textContent ?? "",
@@ -288,6 +293,25 @@ describe("Home, People active", () => {
     })
   }
 
+  it("links each person's name to their page and their sessions beside it", async () => {
+    mockApi()
+    await renderHome("/?period=7d&workspace=ws-a&by=people")
+    const table = await screen.findByRole("grid", { name: "Spend by people" })
+    const name = await within(table).findByRole("link", {
+      name: "Ada Lovelace",
+    })
+    // Their page opens on the window Home was reading.
+    expect(name).toHaveAttribute("href", "/people/m-ada?period=7d")
+    const row = name.closest("tr") as HTMLElement
+    const sessions = within(row).getByRole("link", {
+      name: "Sessions for Ada Lovelace",
+    })
+    expect(sessions.getAttribute("href")).toMatch(/^\/sessions\?/)
+    expect(sessions.getAttribute("href")).toContain("user_id=u-ada")
+    // The row itself is not a press target: the two links are.
+    expect(screen.queryByText(/A row opens/)).toBeNull()
+  })
+
   it("points an empty window at a longer one, but not from the longest", async () => {
     mockApi()
     await renderHome("/?period=7d&by=models")
@@ -321,7 +345,6 @@ describe("Home, People active", () => {
     expect(
       await screen.findByRole("link", { name: "See the sessions" }),
     ).toBeVisible()
-    expect(screen.getByText("A row opens its sessions.")).toBeVisible()
   })
 
   it("offers no sessions where the deployment records none", async () => {
@@ -330,7 +353,7 @@ describe("Home, People active", () => {
     expect(await screen.findByText("0 of 2")).toBeVisible()
     expect(screen.getByText("in this workspace")).toBeVisible()
     expect(screen.queryByRole("link", { name: "See the sessions" })).toBeNull()
-    expect(screen.queryByText("A row opens its sessions.")).toBeNull()
+    expect(screen.queryByRole("link", { name: /^Sessions for / })).toBeNull()
     expect(counts).toHaveLength(0)
   })
 
@@ -468,9 +491,10 @@ describe("Home, by provider", () => {
     const names = within(table)
       .getAllByRole("rowheader")
       .map((cell) => cell.textContent)
+    // A provider's requests are linked under its name; the unrecorded row has none.
     expect(names).toEqual([
-      "OpenAI",
-      "Anthropic",
+      "OpenAIRequests",
+      "AnthropicRequests",
       "Unknown providerNot recorded",
     ])
     const openai = within(table).getByRole("row", { name: /OpenAI/ })
@@ -487,7 +511,12 @@ describe("Home, by provider", () => {
     expect(
       within(table).queryByRole("columnheader", { name: "Limit" }),
     ).toBeNull()
-    expect(screen.getByText("A row opens its requests.")).toBeVisible()
+    // Each provider that recorded one links to its requests, and the row that
+    // did not has nothing to open.
+    expect(
+      within(openai).getByRole("link", { name: "Requests for OpenAI" }),
+    ).toBeVisible()
+    expect(within(unknown).queryByRole("link")).toBeNull()
   })
 
   it("opens a provider's requests over the window", async () => {
@@ -495,7 +524,9 @@ describe("Home, by provider", () => {
     const user = userEvent.setup()
     await renderHome()
     const table = await providerTable()
-    await user.click(within(table).getByText("OpenAI"))
+    await user.click(
+      within(table).getByRole("link", { name: "Requests for OpenAI" }),
+    )
     const landed = await screen.findByTestId("location")
     const [path, query] = (landed.textContent ?? "").split("?")
     expect(path).toBe("/requests")
@@ -509,7 +540,9 @@ describe("Home, by provider", () => {
     const user = userEvent.setup()
     await renderHome("/?by=providers")
     const table = await providerTable()
-    await user.click(within(table).getByText("OpenAI"))
+    await user.click(
+      within(table).getByRole("link", { name: "Requests for OpenAI" }),
+    )
     const landed = await screen.findByTestId("location")
     expect(landed.textContent).toContain("provider=openai")
     // Each workspace's spend on the provider was weighed, not just the one

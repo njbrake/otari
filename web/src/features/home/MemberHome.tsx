@@ -25,6 +25,7 @@ import {
   unseenLimitLines,
 } from "@/features/home/memberHomeModel"
 import { hasProviderSlot, ProviderSlot } from "@/features/home/ProviderSlot"
+import { RowOpenLink } from "@/features/home/RowOpenLink"
 import { ShareCell } from "@/features/home/ShareCell"
 import { useCanCreateKey } from "@/features/organization/access"
 import { useCurrentOwner } from "@/features/organization/attribution"
@@ -301,19 +302,18 @@ export function MemberHome({
         })
       : undefined) ?? unseen?.note
 
+  const openTo = cut.value === "providers" ? "/requests" : "/sessions"
+  const searchFor = (row: SpendRow) => ({
+    ...mySessions,
+    [cut.value === "keys"
+      ? "api_key_id"
+      : cut.value === "providers"
+        ? "provider"
+        : "model"]: filterValues(row),
+  })
   const open = (row: SpendRow) => {
     if (!row.filterKey) return
-    void navigate({
-      to: cut.value === "providers" ? "/requests" : "/sessions",
-      search: {
-        ...mySessions,
-        [cut.value === "keys"
-          ? "api_key_id"
-          : cut.value === "providers"
-            ? "provider"
-            : "model"]: filterValues(row),
-      },
-    })
+    void navigate({ to: openTo, search: searchFor(row) })
   }
 
   const menuFor = (row: SpendRow): RowMenuAction[] => {
@@ -424,7 +424,17 @@ export function MemberHome({
       header: <span className="sr-only">Actions</span>,
       align: "end",
       cell: (row) => (
-        <RowMenu label={`Actions for ${row.name}`} actions={menuFor(row)} />
+        <span className="inline-flex items-center justify-end gap-3">
+          {canOpenRows && row.filterKey ? (
+            <RowOpenLink
+              to={openTo}
+              search={searchFor(row)}
+              label={cut.value === "providers" ? "Requests" : "Sessions"}
+              subject={row.name}
+            />
+          ) : null}
+          <RowMenu label={`Actions for ${row.name}`} actions={menuFor(row)} />
+        </span>
       ),
     },
   ]
@@ -624,38 +634,16 @@ export function MemberHome({
                     : nothingYet}
               </EmptyMessage>
             }
-            onRowAction={
-              canOpenRows
-                ? (key) => {
-                    const row = rows.find((one) => one.id === key)
-                    if (row) open(row)
-                  }
-                : undefined
-            }
-            rowClassName={(row) =>
-              row.filterKey ? undefined : "cursor-default!"
-            }
             mobileLayout="cards"
           />
         </TableScrollFrame>
-        {rows.length > 0 &&
-        (canOpenRows || (cut.value === "keys" && canCreateKey)) ? (
+        {rows.length > 0 && cut.value === "keys" && canCreateKey ? (
           <p className="text-sm text-muted">
-            {canOpenRows
-              ? cut.value === "providers"
-                ? "A row opens its requests."
-                : "A row opens its sessions."
-              : null}
-            {cut.value === "keys" && canCreateKey ? (
-              <>
-                {canOpenRows ? " " : null}
-                Keys that spent nothing {words} are on{" "}
-                <Link to="/keys" className="text-link underline">
-                  API keys
-                </Link>
-                .
-              </>
-            ) : null}
+            Keys that spent nothing {words} are on{" "}
+            <Link to="/keys" className="text-link underline">
+              API keys
+            </Link>
+            .
           </p>
         ) : null}
       </section>
