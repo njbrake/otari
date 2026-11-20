@@ -16,10 +16,8 @@ import { useIsMobile } from "@/design-system/hooks/useIsMobile"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { ActivityTimeline } from "@/features/activity/ActivityTimeline"
-import {
-  type FilterSection,
-  ObserveColumnFilter,
-} from "@/features/observe/ObserveColumnFilter"
+import { ObserveColumnFilter } from "@/features/observe/ObserveColumnFilter"
+import { funnelFor } from "@/features/observe/observeColumnFilters"
 import { useObserveScope } from "@/features/observe/useObserveScope"
 import { useOrganizationContext } from "@/shared/api/organizations"
 import {
@@ -123,17 +121,6 @@ export function windowTotals(count: {
 }): { count: number; failed: null } | null | undefined {
   if (count.data) return { count: count.data.count, failed: null }
   return count.isError ? undefined : null
-}
-
-const SESSION_FUNNELS: Record<
-  string,
-  { label: string; sections: FilterSection[] }
-> = {
-  user: { label: "User", sections: [{ kind: "values", dimension: "user" }] },
-  levels: {
-    label: "Levels",
-    sections: [{ kind: "values", dimension: "status" }],
-  },
 }
 
 /** Inside the Overview the page waits for its scope, so it never fetches the wrong one. */
@@ -337,24 +324,19 @@ function SessionsPageContent({ embedded }: { embedded: boolean }) {
 
   const rows = traces.data?.items ?? []
   const withMarks = anyHarnessMark(rows)
-  // Inside the Overview the shared filters are set from the headers: User,
-  // and Levels for the outcome. Model and API key have no column here, so
-  // they are set on Requests and carried across.
+  // Inside the Overview the shared filters are set from the headers
+  // (`OBSERVE_FILTER_COLUMNS`): User, and Levels for the outcome.
   const tableColumns = useMemo(
     () =>
-      columns(peekId, withMarks).map((column) =>
-        embedded && column.id in SESSION_FUNNELS
+      columns(peekId, withMarks).map((column) => {
+        const filter = embedded ? funnelFor("sessions", column.id) : undefined
+        return filter
           ? {
               ...column,
-              headerAction: (
-                <ObserveColumnFilter
-                  view="sessions"
-                  {...SESSION_FUNNELS[column.id]}
-                />
-              ),
+              headerAction: <ObserveColumnFilter view="sessions" {...filter} />,
             }
-          : column,
-      ),
+          : column
+      }),
     [peekId, withMarks, embedded],
   )
   const openIndex = rows.findIndex((session) => session.trace_id === peekId)

@@ -37,6 +37,13 @@ export type ThresholdKey = "tokens_gt" | "cost_gt" | "latency_ms_gt"
 /** A filter a column carries beside its values: priced or unpriced rows, direct requests. */
 export type ExtraKey = "priced" | "direct"
 
+/** One part of a column's filter panel. */
+export type FilterSection =
+  | { kind: "values"; dimension: ValueDimension }
+  | { kind: "threshold"; key: ThresholdKey }
+  | { kind: "extra"; key: ExtraKey }
+  | { kind: "tool" }
+
 const URL_DEFAULTS = {
   scope: "",
   range: "",

@@ -12,19 +12,31 @@ import type { ReactNode } from "react"
  * The chevron travels on the 150ms rung and is guarded, like the rail rows it
  * shares that duration with. HeroUI's own indicator carries the rotation, which
  * is why there is no transform spelled here.
+ *
+ * Uncontrolled unless given `isExpanded`. A caller that controls it can mount
+ * `children` only while it is open, for a panel whose content reads from the
+ * server.
  */
 export function Disclosure({
   heading,
   children,
   isDefaultExpanded = false,
+  isExpanded,
+  onExpandedChange,
 }: {
   /** The always-visible label. It is the button, so it says what opening reveals. */
   heading: ReactNode
   children: ReactNode
   isDefaultExpanded?: boolean
+  isExpanded?: boolean
+  onExpandedChange?: (isExpanded: boolean) => void
 }) {
   return (
-    <HeroDisclosure.Root defaultExpanded={isDefaultExpanded}>
+    <HeroDisclosure.Root
+      defaultExpanded={isDefaultExpanded}
+      isExpanded={isExpanded}
+      onExpandedChange={onExpandedChange}
+    >
       <HeroDisclosure.Heading>
         <HeroDisclosure.Trigger className="flex min-h-11 w-full items-center justify-between gap-2 text-body">
           {heading}

@@ -11,7 +11,8 @@ import {
   operatorContext,
   renderPage,
 } from "@/tests/activity"
-import { type FilterSection, ObserveColumnFilter } from "./ObserveColumnFilter"
+import { ObserveColumnFilter } from "./ObserveColumnFilter"
+import type { FilterSection } from "./observeFilters"
 import type { ObserveView } from "./observeSearch"
 
 afterEach(() => {

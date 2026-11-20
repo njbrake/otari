@@ -1,3 +1,8 @@
+import { useState } from "react"
+import { FiSliders } from "react-icons/fi"
+
+import { Button } from "@/design-system/actions/Button"
+import { useIsMobile } from "@/design-system/hooks/useIsMobile"
 import {
   type FilterChip,
   FilterChips,
@@ -11,6 +16,8 @@ import {
 } from "@/features/activity/activityModel"
 import { providerDisplayName } from "@/shared/helpers/providers"
 import { findPreset, localMidnightIso } from "@/shared/helpers/timeRange"
+import { ObserveFilterSheet } from "./ObserveFilterSheet"
+import { OBSERVE_FILTER_COLUMNS } from "./observeColumnFilters"
 import {
   type ObserveUrlKey,
   readThreshold,
@@ -65,6 +72,10 @@ const CLEARED: Partial<Record<ObserveUrlKey, string | []>> = {
  * chip row. A filter
  * the current view cannot apply stays visible and removable, marked as not
  * applied, rather than being dropped silently.
+ *
+ * On a phone the table is a list of cards with no headers, so the row carries
+ * a Filters button instead, counting the filters applied, which opens the same
+ * column filters as a sheet (`ObserveFilterSheet`).
  */
 export function ObserveFilterRow({ view }: { view: ObserveView }) {
   const state = useObserveFilterState(view)
@@ -81,6 +92,9 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
     "",
     (!isMine && users.length > 0) || excludedUsers.length > 0,
   )
+  const isMobile = useIsMobile()
+  const [isSheetOpen, setIsSheetOpen] = useState(false)
+  const offersSheet = isMobile && OBSERVE_FILTER_COLUMNS[view].length > 0
   const keyNames = useValueOptions(
     view,
     "api_key",
@@ -119,8 +133,9 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
   }
 
   // A refinement only the request log reads says so anywhere else.
+  const notApplied = ` (not applied to ${view})`
   const requestOnly = (value: string) =>
-    isRequests ? value : `${value} (not applied to ${view})`
+    isRequests ? value : `${value}${notApplied}`
   const valueChips = (
     label: string,
     param: ObserveUrlKey,
@@ -183,7 +198,7 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
             label: "Status",
             value: state.statusApplied
               ? statusName(status)
-              : `${status} (not applied to ${view})`,
+              : `${status}${notApplied}`,
             onClear: () => patch({ status: "" }),
           },
         ]
@@ -260,22 +275,63 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
     ...thresholdChip("tokens_gt"),
     ...thresholdChip("cost_gt"),
     ...thresholdChip("latency_ms_gt"),
-  ]
+  ] // The badge counts what the view applies; a chip marked not applied is left out.
+  const appliedCount = chips.filter(
+    (chip) => !chip.value.endsWith(notApplied),
+  ).length
+
+  const clearAll = () => patch(CLEARED)
 
   return (
     <div className="pb-3">
       <FilterChips
         chips={chips}
         start={
-          <FilterSelect
-            label="Time range"
-            value={rangeValue}
-            onChange={pickRange}
-            options={rangeOptions}
-          />
+          <>
+            <FilterSelect
+              label="Time range"
+              value={rangeValue}
+              onChange={pickRange}
+              options={rangeOptions}
+            />
+            {offersSheet ? (
+              <Button
+                size="sm"
+                // Level with the select's box rather than its box and label.
+                className="self-end"
+                aria-haspopup="dialog"
+                aria-label={
+                  appliedCount > 0
+                    ? `Filters, ${appliedCount} applied`
+                    : "Filters"
+                }
+                onPress={() => setIsSheetOpen(true)}
+              >
+                <FiSliders aria-hidden className="size-3.5" />
+                Filters
+                {appliedCount > 0 ? (
+                  <span
+                    aria-hidden
+                    className="rounded-full bg-primary-subtle px-1.5 text-mono-micro text-primary-subtle-foreground"
+                  >
+                    {appliedCount}
+                  </span>
+                ) : null}
+              </Button>
+            ) : null}
+          </>
         }
-        onClearAll={() => patch(CLEARED)}
+        onClearAll={clearAll}
       />
+      {offersSheet ? (
+        <ObserveFilterSheet
+          view={view}
+          isOpen={isSheetOpen}
+          onOpenChange={setIsSheetOpen}
+          onClearAll={clearAll}
+          hasFilters={chips.length > 0}
+        />
+      ) : null}
     </div>
   )
 }

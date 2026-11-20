@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test"
 
-import { gotoRoute, login, pageHeading, table } from "./helpers"
+import { filterChip, gotoRoute, login, pageHeading, table } from "./helpers"
+import { PARITY } from "./parity-data"
 
 // The screenshot suite's phone (see web/playwright.config.ts), so a coarse
 // pointer sizes the controls up the way it does on a device: the pager's 44px
@@ -147,4 +148,49 @@ test("a tap on a wrapped terms link opens it rather than ticking the box", async
     await tab.close()
   }
   await expect(box).not.toBeChecked()
+})
+
+test("a phone filters the request log from the Filters sheet", async ({
+  page,
+}) => {
+  // The cards have no column headers, so the funnels have nowhere to go; the
+  // chip row's Filters button opens the same filters as a sheet.
+  await login(page)
+  await gotoRoute(page, `/requests?source=${PARITY.source}`)
+  await expect(table(page, "Activity log")).toBeVisible()
+  await expect(
+    table(page, "Activity log").getByText(PARITY.models.unpriced.model).first(),
+  ).toBeVisible()
+  await expect(page.getByRole("button", { name: /^Filter / })).toHaveCount(0)
+
+  const open = page.getByRole("button", { name: "Filters, 1 applied" })
+  await open.click()
+  const sheet = page.getByRole("dialog", { name: "Filters" })
+  await expect(sheet).toBeVisible()
+  await sheet.getByRole("button", { name: "Model", exact: true }).click()
+  const search = sheet.getByRole("searchbox", { name: "Search Model values" })
+  if (await search.isVisible()) await search.fill(PARITY.models.unpriced.model)
+  // The input is visually hidden inside its label, so the label takes the tap.
+  await sheet
+    .getByRole("checkbox", { name: PARITY.models.unpriced.model, exact: true })
+    .locator("xpath=ancestor::label")
+    .click()
+  await expect(page).toHaveURL(
+    new RegExp(`[?&]model=${PARITY.models.unpriced.model}`),
+  )
+
+  // Fits the phone: no sideways pan inside the sheet either.
+  const overflow = await sheet.evaluate(
+    (element) => element.scrollWidth - element.clientWidth,
+  )
+  expect(overflow).toBeLessThanOrEqual(0)
+
+  await sheet.getByRole("button", { name: "Done" }).click()
+  await expect(sheet).toBeHidden()
+  await expect(
+    filterChip(page, "Model", PARITY.models.unpriced.model),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "Filters, 2 applied" }),
+  ).toBeFocused()
 })

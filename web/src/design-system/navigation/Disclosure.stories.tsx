@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
+import { useState } from "react"
 
 import { Disclosure } from "./Disclosure"
 
@@ -70,4 +71,29 @@ export const Stacked: Story = {
       ))}
     </div>
   ),
+}
+
+function ControlledDisclosure() {
+  const [isExpanded, setIsExpanded] = useState(false)
+  return (
+    <div className="w-96">
+      <Disclosure
+        heading="Model"
+        isExpanded={isExpanded}
+        onExpandedChange={setIsExpanded}
+      >
+        {isExpanded ? (
+          <p className="text-body">Read from the server when it opens.</p>
+        ) : null}
+      </Disclosure>
+    </div>
+  )
+}
+
+/**
+ * Controlled, with its body mounted only while open: how a panel whose content
+ * reads from the server keeps from reading until someone asks for it.
+ */
+export const Controlled: Story = {
+  render: () => <ControlledDisclosure />,
 }

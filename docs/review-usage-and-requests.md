@@ -74,6 +74,13 @@ while its column is filtered. Every filter, including one a link set (a
 session, a status code, an endpoint), is a chip in the one row above the table
 that removes it; **Clear all** removes them together.
 
+On a phone the table is a list of cards with no headers, so the row above it
+has a **Filters** button instead, with a count of the filters applied. It opens
+a sheet with one section per filterable column, in the table's order, each
+holding what that column's funnel holds. Expand a section to load its values;
+changes apply as you make them. **Done** closes the sheet and **Clear all**
+removes every filter.
+
 **Status** narrows Requests, and Sessions for errors and successes. Exclusions,
 **Provider**, tool, source, pricing, routing and thresholds narrow Requests only, so they stay behind
 when you switch to Sessions. On Requests, dragging across the chart narrows the
