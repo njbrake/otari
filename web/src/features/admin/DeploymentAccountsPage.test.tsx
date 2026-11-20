@@ -702,9 +702,9 @@ describe("Merge user record", () => {
     )
 
     const list = await within(dialog).findByRole("list", { name: "What moves" })
-    expect(list).toHaveTextContent("usage rows140")
+    expect(list).toHaveTextContent("Usage rows140")
     expect(list).toHaveTextContent("API keys2")
-    expect(list).not.toHaveTextContent("agent traces")
+    expect(list).not.toHaveTextContent("Agent traces")
     const merges = () => requests.filter((r) => r.url.endsWith("/merge"))
     expect(merges()).toHaveLength(1)
     expect(merges()[0].url).toContain(`${API_ROOT}/users/${ANALYST.id}/merge`)

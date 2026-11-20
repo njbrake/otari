@@ -99,9 +99,9 @@ describe("mergedRowLines", () => {
     expect(
       mergedRowLines({ api_keys: 2, usage_logs: 140, traces: 0, end_users: 1 }),
     ).toEqual([
-      { key: "usage_logs", count: 140, label: "usage rows" },
+      { key: "usage_logs", count: 140, label: "Usage rows" },
       { key: "api_keys", count: 2, label: "API keys" },
-      { key: "end_users", count: 1, label: "end user its service keys bill" },
+      { key: "end_users", count: 1, label: "End user its service keys bill" },
     ])
   })
 
