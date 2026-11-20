@@ -34,7 +34,10 @@ export const OBSERVE_FILTER_COLUMNS: Record<
     {
       label: "User",
       headers: [{ column: "user" }],
-      sections: [{ kind: "values", dimension: "user" }],
+      sections: [
+        { kind: "values", dimension: "user" },
+        { kind: "empty", field: "user" },
+      ],
     },
     // The provider has no column, and the Model cell carries the tool marker,
     // so both are filtered here.
@@ -61,6 +64,9 @@ export const OBSERVE_FILTER_COLUMNS: Record<
       sections: [
         { kind: "values", dimension: "api_key" },
         { kind: "values", dimension: "source" },
+        { kind: "channel" },
+        { kind: "empty", field: "api_key" },
+        { kind: "empty", field: "session" },
       ],
     },
     {
@@ -88,7 +94,10 @@ export const OBSERVE_FILTER_COLUMNS: Record<
     {
       label: "Status",
       headers: [{ column: "status" }],
-      sections: [{ kind: "values", dimension: "status" }],
+      sections: [
+        { kind: "values", dimension: "status" },
+        { kind: "extra", key: "recovered" },
+      ],
       placement: "bottom end",
     },
   ],

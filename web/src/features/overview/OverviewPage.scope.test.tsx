@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import type { ReactNode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { ActivityPage } from "@/features/activity/ActivityPage"
 import { OverviewIndex } from "@/features/overview/OverviewPage"
 import { SelectedWorkspaceProvider } from "@/shared/hooks/SelectedWorkspace"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
@@ -64,7 +66,7 @@ function mockGateway(context: Parameters<typeof organizationContext>[0]) {
   })
 }
 
-function renderSessions(url: string) {
+function renderSessions(url: string, page: ReactNode = <OverviewIndex />) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -73,9 +75,7 @@ function renderSessions(url: string) {
       <DeploymentProvider
         value={bootstrap({ surfaces: [...SURFACES, "traces"] })}
       >
-        <SelectedWorkspaceProvider>
-          <OverviewIndex />
-        </SelectedWorkspaceProvider>
+        <SelectedWorkspaceProvider>{page}</SelectedWorkspaceProvider>
       </DeploymentProvider>
     </QueryClientProvider>,
     { wrapper: withRouter({ url }) },
@@ -99,7 +99,8 @@ describe("Sessions scope", () => {
 
   it("reads a legacy Mine link as the caller, with a chip to drop it", async () => {
     mockGateway({ deployment_operator: false, role: "admin" })
-    renderSessions("/requests?scope=mine")
+    // The request log draws the filter row, under the Overview's tabs.
+    renderSessions("/requests?scope=mine", <ActivityPage embedded />)
 
     const remove = await screen.findByRole("button", REMOVE_USER_FILTER)
     const user = userEvent.setup()

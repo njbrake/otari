@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { type ReactNode, useState } from "react"
 import { FiSliders } from "react-icons/fi"
 
 import { Button } from "@/design-system/actions/Button"
@@ -18,9 +18,11 @@ import {
 import { providerDisplayName } from "@/shared/helpers/providers"
 import { findPreset, localMidnightIso } from "@/shared/helpers/timeRange"
 import { ObserveFilterSheet } from "./ObserveFilterSheet"
-import { ObserveSearchBox } from "./ObserveSearchBox"
 import { OBSERVE_FILTER_COLUMNS } from "./observeColumnFilters"
 import {
+  CHANNEL_OPTIONS,
+  EMPTY_LABELS,
+  type EmptyField,
   type ObserveUrlKey,
   readThreshold,
   THRESHOLDS,
@@ -90,6 +92,9 @@ const CLEARED: Partial<Record<ObserveUrlKey, string | []>> = {
   status_code: "",
   endpoint: "",
   q: "",
+  channel: [],
+  is_null: [],
+  recovered: "",
 }
 
 /**
@@ -104,9 +109,19 @@ const CLEARED: Partial<Record<ObserveUrlKey, string | []>> = {
  * a Filters button instead, counting the filters applied, which opens the same
  * column filters as a sheet (`ObserveFilterSheet`).
  */
-export function ObserveFilterRow({ view }: { view: ObserveView }) {
+export function ObserveFilterRow({
+  view,
+  search,
+  end,
+}: {
+  view: ObserveView
+  /** The view's own search box, first in the row. */
+  search?: ReactNode
+  /** The view's refresh and live controls, at the row's right edge. */
+  end?: ReactNode
+}) {
   const state = useObserveFilterState(view)
-  const { url, patch, status, users, isMine, clearMine, isRequests } = state
+  const { url, patch, users, isMine, clearMine, isRequests } = state
   const excludedUsers = url.getAll("exclude_user_id")
   const keys = url.getAll("api_key_id")
   const excludedKeys = url.getAll("exclude_api_key_id")
@@ -217,19 +232,22 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
         ]
       : []
   }
+  const statuses = url.getAll("status")
   const chips: FilterChip[] = [
-    ...(status
-      ? [
-          {
-            key: "status",
-            label: "Status",
-            value: state.statusApplied
-              ? statusName(status)
-              : `${status}${notApplied}`,
-            onClear: () => patch({ status: "" }),
-          },
-        ]
-      : []),
+    // Several on Requests; Sessions reads the first, so the rest say so there.
+    ...statuses.map((value, index) => {
+      const applied = isRequests ? true : index === 0 && state.statusApplied
+      const shown = applied ? statusName(value) : `${value}${notApplied}`
+      return {
+        key: `status:${value}`,
+        label: "Status",
+        value: shown,
+        clearLabel:
+          statuses.length > 1 ? `Remove Status filter ${shown}` : undefined,
+        onClear: () =>
+          patch({ status: statuses.filter((picked) => picked !== value) }),
+      }
+    }),
     ...valueChips("Status", "exclude_status", statusName, {
       negate: true,
       onlyRequests: true,
@@ -299,6 +317,34 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
     ...singleChip("source_label", "Session", (value) => value),
     ...singleChip("status_code", "Status code", (value) => value),
     ...singleChip("endpoint", "Endpoint", (value) => value),
+    ...valueChips(
+      "Channel",
+      "channel",
+      (value) => labelFrom(CHANNEL_OPTIONS, value),
+      {
+        onlyRequests: true,
+      },
+    ),
+    ...url.getAll("is_null").map((field) => ({
+      key: `is_null:${field}`,
+      label: "Empty",
+      value: requestOnly(EMPTY_LABELS[field as EmptyField] ?? field),
+      clearLabel: `Remove ${EMPTY_LABELS[field as EmptyField] ?? field} filter`,
+      onClear: () =>
+        patch({
+          is_null: url.getAll("is_null").filter((one) => one !== field),
+        }),
+    })),
+    ...(url.get("recovered") === "show"
+      ? [
+          {
+            key: "recovered",
+            label: "Recovered attempts",
+            value: requestOnly("Shown"),
+            onClear: () => patch({ recovered: "" }),
+          },
+        ]
+      : []),
     ...thresholdChip("tokens_gt"),
     ...thresholdChip("cost_gt"),
     ...thresholdChip("latency_ms_gt"),
@@ -310,56 +356,52 @@ export function ObserveFilterRow({ view }: { view: ObserveView }) {
   const clearAll = () => patch(CLEARED)
 
   return (
-    <div className="pb-3">
-      <FilterChips
-        chips={chips}
-        start={
-          <>
-            <FilterSelect
-              label="Time range"
-              value={rangeValue}
-              onChange={pickRange}
-              options={rangeOptions}
-            />
-            {isRequests ? (
-              <ObserveSearchBox
-                value={url.get("q")}
-                onCommit={(term) => patch({ q: term })}
-              />
-            ) : null}
-            {/* The phone's cards have no columns to size or hide. */}
-            {!isMobile && isLayoutView(view) ? (
-              <ObserveColumnsControl view={view} />
-            ) : null}
-            {offersSheet ? (
-              <Button
-                size="sm"
-                // Level with the select's box rather than its box and label.
-                className="self-end"
-                aria-haspopup="dialog"
-                aria-label={
-                  appliedCount > 0
-                    ? `Filters, ${appliedCount} applied`
-                    : "Filters"
-                }
-                onPress={() => setIsSheetOpen(true)}
+    <div className="flex flex-col gap-2 pb-3">
+      {/* One row of controls: the view's search, the window, the columns (or
+          the phone's Filters), and the view's own refresh at the right edge.
+          The applied filters sit under it, never across the chart from it. */}
+      <div className="otari-toolbar otari-observe-controls flex flex-wrap items-center gap-2">
+        {search ? (
+          <div className="min-w-0 max-md:basis-full md:w-72">{search}</div>
+        ) : null}
+        <FilterSelect
+          ariaLabel="Time range"
+          value={rangeValue}
+          onChange={pickRange}
+          options={rangeOptions}
+        />
+        {/* The phone's cards have no columns to size or hide. */}
+        {!isMobile && isLayoutView(view) ? (
+          <ObserveColumnsControl view={view} />
+        ) : null}
+        {offersSheet ? (
+          <Button
+            size="sm"
+            aria-haspopup="dialog"
+            aria-label={
+              appliedCount > 0 ? `Filters, ${appliedCount} applied` : "Filters"
+            }
+            onPress={() => setIsSheetOpen(true)}
+          >
+            <FiSliders aria-hidden className="size-3.5" />
+            Filters
+            {appliedCount > 0 ? (
+              <span
+                aria-hidden
+                className="rounded-full bg-primary-subtle px-1.5 text-mono-micro text-primary-subtle-foreground"
               >
-                <FiSliders aria-hidden className="size-3.5" />
-                Filters
-                {appliedCount > 0 ? (
-                  <span
-                    aria-hidden
-                    className="rounded-full bg-primary-subtle px-1.5 text-mono-micro text-primary-subtle-foreground"
-                  >
-                    {appliedCount}
-                  </span>
-                ) : null}
-              </Button>
+                {appliedCount}
+              </span>
             ) : null}
-          </>
-        }
-        onClearAll={clearAll}
-      />
+          </Button>
+        ) : null}
+        {end ? (
+          <div className="ml-auto flex items-center gap-3">{end}</div>
+        ) : null}
+      </div>
+      {chips.length > 0 ? (
+        <FilterChips chips={chips} onClearAll={clearAll} />
+      ) : null}
       {offersSheet ? (
         <ObserveFilterSheet
           view={view}

@@ -4,7 +4,6 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ActivityPage } from "@/features/activity/ActivityPage"
-import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
 import { API_ROOT } from "@/shared/api/client"
 import { entry, listCalls, mockApi, renderPage } from "@/tests/activity"
 
@@ -40,7 +39,6 @@ describe("ActivityPage filter serialization", () => {
     const { calls } = mockApi({ rows: [entry()] })
     renderPage(
       <>
-        <ObserveFilterRow view="requests" />
         <ActivityPage embedded />
       </>,
       "/requests?status_code=403&range=24h",
@@ -121,7 +119,6 @@ describe("ActivityPage column filters", () => {
   const renderRequests = (search = "") =>
     renderPage(
       <>
-        <ObserveFilterRow view="requests" />
         <ActivityPage embedded />
         <UrlProbe />
       </>,

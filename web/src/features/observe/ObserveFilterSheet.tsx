@@ -211,7 +211,7 @@ function SheetSection({
                 size="sm"
                 variant="ghost"
                 className="mx-1 mt-1 justify-start"
-                onPress={() => state.patch(clearedKeys(sections))}
+                onPress={() => state.patch(clearedKeys(sections, state))}
               >
                 <FiX aria-hidden className="size-3.5" />
                 Clear {inSentence(label)} filters

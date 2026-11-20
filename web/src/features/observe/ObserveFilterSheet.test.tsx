@@ -7,7 +7,6 @@ import { ActivityPage } from "@/features/activity/ActivityPage"
 import { SessionsPage } from "@/features/traces/SessionsPage"
 import { entry, listCalls, mockApi, renderPage } from "@/tests/activity"
 import { traceSummary } from "@/tests/traceFixtures"
-import { ObserveFilterRow } from "./ObserveFilterRow"
 
 const realMatchMedia = window.matchMedia
 
@@ -45,25 +44,23 @@ const groupReads = (calls: ReturnType<typeof mockApi>["calls"]) =>
 async function renderRequests(search = "") {
   renderPage(
     <>
-      <ObserveFilterRow view="requests" />
       <ActivityPage embedded />
       <UrlProbe />
     </>,
     `/requests${search}`,
   )
-  await screen.findByText("Time range")
+  await screen.findByRole("button", { name: /Time range$/ })
 }
 
 async function renderSessions(search = "") {
   renderPage(
     <>
-      <ObserveFilterRow view="sessions" />
       <SessionsPage embedded />
       <UrlProbe />
     </>,
     `/sessions${search}`,
   )
-  await screen.findByText("Time range")
+  await screen.findByRole("button", { name: /Time range$/ })
 }
 
 const filtersButton = () =>

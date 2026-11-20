@@ -211,7 +211,9 @@ function SessionsLayout() {
             />
           </div>
         ) : null}
-        <ObserveFilterRow view={current} />
+        {/* Requests and Sessions draw the row themselves, with their own
+            search and refresh in it. */}
+        {current === "usage" ? <ObserveFilterRow view={current} /> : null}
       </div>
       <Outlet />
     </div>

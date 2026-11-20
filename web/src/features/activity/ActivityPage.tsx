@@ -1,6 +1,13 @@
 import { Button } from "@heroui/react"
 import { useNavigate } from "@tanstack/react-router"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import type { SummaryDimension, UsageEntry, UsageFilters } from "@/client"
 import { RefreshButton } from "@/design-system/actions/RefreshButton"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
@@ -23,6 +30,8 @@ import {
   SetPriceDialog,
 } from "@/features/models/SetPriceDialog"
 import { ObserveColumnFilter } from "@/features/observe/ObserveColumnFilter"
+import { ObserveFilterRow } from "@/features/observe/ObserveFilterRow"
+import { ObserveSearchBox } from "@/features/observe/ObserveSearchBox"
 import { funnelFor } from "@/features/observe/observeColumnFilters"
 import { readThreshold } from "@/features/observe/observeFilters"
 import {
@@ -34,7 +43,9 @@ import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { userDisplay } from "@/features/users/userDisplay"
 import { useSetPricing } from "@/shared/api/pricing"
 import {
+  NEWEST_FIRST,
   useInFlightRequests,
+  useLiveClock,
   useLiveUsageCount,
   useRequestGroups,
   useUsageCount,
@@ -56,6 +67,7 @@ import { useUrlState } from "@/shared/helpers/urlState"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { ActivityTimeline } from "./ActivityTimeline"
 import {
+  describeStatus,
   findGroupsMissingEarlierAttempts,
   findRequestOutcome,
   formatLatencyCell,
@@ -65,17 +77,30 @@ import {
   resolveExtentWindow,
   resolveWindow,
 } from "./activityModel"
+import { CellFilter } from "./CellFilter"
+import {
+  applyCellFilter,
+  type CellDimension,
+  type CellFilterMode,
+  groupsWithEarlierAttempts,
+  nestRecoveredAttempts,
+} from "./cellFilters"
 import { InFlightControl } from "./InFlightControl"
+import { LiveControl, type LivePause } from "./LiveControl"
 import { RequestPeek } from "./RequestPeek"
+import { RequestTotals } from "./RequestTotals"
 import { RoutingCell } from "./RoutingCell"
 import {
   API_KEY_COLUMN,
+  apiKeyLabel,
   COST_COLUMN,
   INPUT_TOKENS_COLUMN,
   MODEL_COLUMN,
+  modelCell,
   OUTPUT_TOKENS_COLUMN,
   STATUS_COLUMN,
   TIME_COLUMN,
+  toolFilterFor,
 } from "./requestColumns"
 import {
   boundsWindow,
@@ -90,6 +115,13 @@ import {
 const NO_BREAKDOWNS: SummaryDimension[] = []
 
 const DEFAULT_PAGE_SIZE = 50
+
+// How often live mode re-reads the newest rows and the count, and how often it
+// brings the window, and with it the totals and the chart, up to now.
+const LIVE_ROWS_MS = 10_000
+const LIVE_AGGREGATES_MS = 60_000
+
+const NONE_NESTED: ReadonlySet<string> = new Set()
 
 // All filter + pagination state, with defaults, kept in the URL.
 const URL_DEFAULTS = {
@@ -120,6 +152,11 @@ const URL_DEFAULTS = {
   latency_ms_gt: "",
   // Free-text search, typed in the filter row above the table.
   q: "",
+  // How a request came in, columns that must be empty, and whether each
+  // request's recovered attempts are listed under it ("show").
+  channel: "",
+  is_null: "",
+  recovered: "",
   // The column the log is ordered by and which way; absent is newest first.
   sort: "",
   order: "",
@@ -167,7 +204,9 @@ function ActivityPageContent({
   const range = url.get("range")
   const startParam = url.get("start_date")
   const endParam = url.get("end_date")
-  const statusFilter = url.get("status")
+  // One status, or a subset of them on Requests.
+  const statusValues = url.getAll("status")
+  const statusFilter = statusValues.length === 1 ? statusValues[0] : ""
   // The three entity filters hold sets: each is repeatable in the URL and on the
   // wire, so a comparison ("these two models") is one view rather than several, and
   // a drill-down from the analytics page can carry its whole selection across.
@@ -189,11 +228,14 @@ function ActivityPageContent({
   const toolFilter = url.get("tool")
   const search = url.get("q").trim()
   const sort = readSort(url.get("sort"), url.get("order"))
+  const showRecovered = url.get("recovered") === "show"
   // The server reads any order but time, and a substring search, over a bounded
   // window, an omitted start as the last 30 days. Under "All" those reads take
   // the year the timeline spans instead, so the rows match the bars above them.
   const boundedRead = boundsWindow(sort, search)
   const page = Math.max(0, url.getNumber("page"))
+  // The request open in the panel: a usage row's id, or the request id.
+  const requestId = url.get("request")
   // Snap URL-supplied sizes to the nearest offered option: an old bookmark
   // with size=500 must not render a page of 500 rows, and a hand-edited size=0
   // or size=-5 must not reach the API as an invalid limit (or leave the
@@ -290,6 +332,9 @@ function ActivityPageContent({
     tokens_gt: readThreshold(url.get("tokens_gt")),
     cost_gt: readThreshold(url.get("cost_gt")),
     latency_ms_gt: readThreshold(url.get("latency_ms_gt")),
+    statuses: statusValues.length > 1 ? statusValues : [],
+    channel: url.getAll("channel"),
+    is_null: url.getAll("is_null"),
   })
   const refinements: Partial<UsageFilters> = useMemo(() => {
     const read = JSON.parse(refinementsKey) as Record<string, unknown>
@@ -309,6 +354,9 @@ function ActivityPageContent({
       tokens_gt: read.tokens_gt as number | undefined,
       cost_gt: read.cost_gt as number | undefined,
       latency_ms_gt: read.latency_ms_gt as number | undefined,
+      statuses: list("statuses") as UsageFilters["statuses"],
+      channel: list("channel") as UsageFilters["channel"],
+      is_null: list("is_null") as UsageFilters["is_null"],
     }
   }, [refinementsKey])
   const hasRefinements = Object.values(refinements).some(
@@ -316,7 +364,9 @@ function ActivityPageContent({
   )
 
   const { selected: workspace } = useSelectedWorkspace()
-  const filters: UsageFilters = useMemo(
+  // What every read of the window shares; the list and its count add one thing
+  // (`filters`, below), and the totals read this as it is.
+  const readFilters: UsageFilters = useMemo(
     () => ({
       // From the sidebar's switcher, not from a control on this page: it scopes
       // the whole shell, and the operator's own filters sit below it.
@@ -358,19 +408,66 @@ function ActivityPageContent({
     ],
   )
 
+  // The log lists each request once, as the row that settled it: the attempts a
+  // routing policy recovered from are counted in the totals and, with
+  // "recovered" shown, listed under their request (`nestRecoveredAttempts`).
+  const filters: UsageFilters = useMemo(
+    () => ({ ...readFilters, include_absorbed: false }),
+    [readFilters],
+  )
+
   // Any change to the filter set returns to the first page, but not on mount,
-  // so a shared URL keeps its page.
+  // so a shared URL keeps its page. A live re-anchor of the window changes the
+  // set too, on a first page with nothing open, so it navigates nowhere.
   const filtersKey = JSON.stringify(filters)
   const prevFiltersKey = useRef(filtersKey)
   useEffect(() => {
     if (prevFiltersKey.current !== filtersKey) {
       prevFiltersKey.current = filtersKey
-      url.patch({ page: 0, request: "" })
+      if (page !== 0 || requestId !== "") url.patch({ page: 0, request: "" })
     }
-  }, [filtersKey, url])
+  }, [filtersKey, url, page, requestId])
 
-  const usage = useUsageLogs(filters, page, pageSize, true, "caller", { sort })
-  const count = useUsageCount(filters, { sort: sort.sort })
+  // Live mode: on unless the reader paused it, and holding still on its own
+  // while they read a later page, have a request open, sort by a column, or look at a window
+  // that has ended, so no row moves under someone reading it.
+  const [liveWanted, setLiveWanted] = useState(true)
+  const sorted =
+    sort.sort !== NEWEST_FIRST.sort || sort.order !== NEWEST_FIRST.order
+  const livePause: LivePause = filters.end_date
+    ? "ended"
+    : requestId !== ""
+      ? "request"
+      : page > 0
+        ? "page"
+        : sorted
+          ? "sort"
+          : ""
+  const isLive = liveWanted && livePause === ""
+  const liveRefetch = isLive ? LIVE_ROWS_MS : false
+  // The rows and the count re-read every ten seconds over the window they have;
+  // once a minute the window itself is brought up to now, which re-reads the
+  // totals and the chart with it. The first reading is the page's own mount, so
+  // it re-anchors nothing.
+  const liveClock = useLiveClock(isLive, LIVE_AGGREGATES_MS)
+  const seenLiveClock = useRef(0)
+  useEffect(() => {
+    if (liveClock === 0) return
+    const first = seenLiveClock.current === 0
+    seenLiveClock.current = liveClock
+    if (first) return
+    setWin(resolveWindow(range, startParam, endParam, liveClock))
+    setExtentWin(resolveExtentWindow(range, liveClock))
+  }, [liveClock, range, startParam, endParam])
+
+  const usage = useUsageLogs(filters, page, pageSize, true, "caller", {
+    sort,
+    refetchInterval: liveRefetch,
+  })
+  const count = useUsageCount(filters, {
+    sort: sort.sort,
+    refetchInterval: liveRefetch,
+  })
 
   // Which usage surface this caller reads, and with it the two things on this
   // page that stay the deployment operator's: the in-flight strip and the
@@ -396,7 +493,9 @@ function ActivityPageContent({
   // bring newer rows into view (they land at the top of page 1), so a badge
   // offering to load them would be a promise the button does not keep; a window
   // that ends in the past can gain no rows at all, so the poll would be pure cost.
-  const newRowsRelevant = page === 0 && !filters.end_date
+  // While live the rows themselves catch up, so the badge has nothing to say,
+  // and under a column sort newer rows land anywhere but the top.
+  const newRowsRelevant = page === 0 && !filters.end_date && !isLive && !sorted
   const liveCount = useLiveUsageCount(filters, newRowsRelevant)
 
   // The timeline histogram spans the whole preset *extent* (the rolling preset
@@ -469,6 +568,24 @@ function ActivityPageContent({
     extentBucket,
     NO_BREAKDOWNS,
   )
+  // What the rows add up to over every page, for the strip above the table.
+  // The summary reads an omitted start as the last 30 days, so under "All" the
+  // totals take the year the chart spans, and the two agree.
+  const totalsFilters = useMemo(
+    () =>
+      readFilters.start_date
+        ? readFilters
+        : { ...readFilters, start_date: extentWin.start },
+    [readFilters, extentWin.start],
+  )
+  const totalsSummary = useUsageSummary(
+    totalsFilters,
+    "day",
+    NO_BREAKDOWNS,
+    true,
+    "caller",
+    { includeP95: true },
+  )
   const timelineSeries = (contextSummary.data?.series ?? []).map((point) => ({
     bucketStart: point.bucket_start,
     requests: point.requests,
@@ -477,7 +594,7 @@ function ActivityPageContent({
     errors: point.errors ?? 0,
   }))
 
-  const rows = usage.data ?? []
+  const pageRows = usage.data ?? []
 
   // What the live control may report. A failed poll leaves the list unknown, not
   // unchanged: TanStack keeps the last successful payload, so without the
@@ -497,9 +614,9 @@ function ActivityPageContent({
   // A served row is looked up as well when its earlier attempts are off the page,
   // so it can still say what it spilled over from.
   const { pageOutcomes, unresolvedGroupIds } = useMemo(() => {
-    const known = indexGroupOutcomes(rows)
+    const known = indexGroupOutcomes(pageRows)
     const missing = new Set([
-      ...rows.flatMap((row) =>
+      ...pageRows.flatMap((row) =>
         row.status === "absorbed" &&
         row.request_group_id &&
         !known.has(row.request_group_id)
@@ -507,10 +624,12 @@ function ActivityPageContent({
           : [],
       ),
       // A served row whose skipped or failed attempts fell on the next page.
-      ...findGroupsMissingEarlierAttempts(rows),
+      ...findGroupsMissingEarlierAttempts(pageRows),
+      // With recovered attempts shown, every request that had one, to list them.
+      ...(showRecovered ? groupsWithEarlierAttempts(pageRows) : []),
     ])
     return { pageOutcomes: known, unresolvedGroupIds: [...missing] }
-  }, [rows])
+  }, [pageRows, showRecovered])
   const unresolvedGroups = useRequestGroups(unresolvedGroupIds)
   const groupOutcomes = useMemo(() => {
     if (!unresolvedGroups.data?.length) return pageOutcomes
@@ -519,6 +638,13 @@ function ActivityPageContent({
       ...indexGroupOutcomes(unresolvedGroups.data),
     ])
   }, [pageOutcomes, unresolvedGroups.data])
+  const { rows, nested } = useMemo(
+    () =>
+      showRecovered
+        ? nestRecoveredAttempts(pageRows, unresolvedGroups.data ?? [])
+        : { rows: pageRows, nested: NONE_NESTED },
+    [showRecovered, pageRows, unresolvedGroups.data],
+  )
 
   const totalIsExact = count.isSuccess && !count.isPlaceholderData
   const total = totalIsExact ? (count.data?.total ?? 0) : null
@@ -553,7 +679,9 @@ function ActivityPageContent({
     Boolean(startParam || endParam) ||
     (range !== ACTIVITY_DEFAULT_KEY && rangePreset?.seconds != null)
   const anyFilter = Boolean(
-    statusFilter ||
+    statusValues.length ||
+      url.getAll("channel").length ||
+      url.getAll("is_null").length ||
       modelFilters.length ||
       (observeScope === "everyone" && userFilters.length) ||
       apiKeyFilters.length ||
@@ -590,7 +718,6 @@ function ActivityPageContent({
   // The open request lives in the URL, so it is linkable. Opening one from the
   // list is a history entry, so Back closes it; walking and closing replace it.
   const navigate = useNavigate()
-  const requestId = url.get("request")
   // Answered for this view: a query still disabled (its scope unresolved) is
   // neither loading nor fetching, and has answered nothing.
   const pageSettled = usage.isSuccess && !usage.isPlaceholderData
@@ -645,10 +772,11 @@ function ActivityPageContent({
       [
         getActivityRowClassName(entry),
         entry.id === openId ? "is-peeked" : undefined,
+        nested.has(entry.id) ? "is-nested" : undefined,
       ]
         .filter(Boolean)
         .join(" ") || undefined,
-    [openId],
+    [openId, nested],
   )
 
   // Sets the model's own price (a ModelPricing row), which is what future
@@ -694,6 +822,7 @@ function ActivityPageContent({
     }
     void inFlight.refetch()
     void contextSummary.refetch()
+    void totalsSummary.refetch()
   }
 
   // A rolling preset clears any explicit bounds; a timeline selection sets them
@@ -743,7 +872,50 @@ function ActivityPageContent({
       status: funnel("status"),
     }
   }, [embedded])
+  // A cell's own "only this" and "exclude" write the URL keys its column's
+  // funnel writes, read off the search as it stands when pressed.
+  const filterCell = useCallback(
+    (dimension: CellDimension, value: string | null, mode: CellFilterMode) =>
+      navigate({
+        to: ".",
+        search: (prev) =>
+          applyCellFilter(prev as DashboardSearch, dimension, value, mode),
+      }),
+    [navigate],
+  )
+  const filterTool = useCallback(
+    (entry: UsageEntry) =>
+      navigate({
+        to: ".",
+        search: (prev) => {
+          const {
+            page: _page,
+            request: _request,
+            ...rest
+          } = prev as DashboardSearch
+          return { ...rest, tool: toolFilterFor(entry) }
+        },
+      }),
+    [navigate],
+  )
+  // Under Mine the scope already decided whose rows these are.
+  const filtersUsers = observeScope !== "mine"
   const columns = useMemo<DataTableColumn<UsageEntry>[]>(() => {
+    const filterable = (
+      dimension: CellDimension,
+      value: string | null,
+      label: string,
+      shown: ReactNode,
+    ) => (
+      <CellFilter
+        value={value}
+        label={label}
+        canExclude={value !== null}
+        onFilter={(picked, mode) => filterCell(dimension, picked, mode)}
+      >
+        {shown}
+      </CellFilter>
+    )
     const built: DataTableColumn<UsageEntry>[] = [
       TIME_COLUMN,
       {
@@ -751,20 +923,34 @@ function ActivityPageContent({
         header: "User",
         headerAction: funnels.user,
         cell: (entry) => {
-          if (entry.user_id === null) return "—"
-          const { label } = userDisplay(
-            entry.user_id,
-            entry.user_alias,
-            memberLabels,
-          )
-          return (
-            <span className="block truncate" title={label}>
-              {label}
-            </span>
-          )
+          const label =
+            entry.user_id === null
+              ? "No user"
+              : userDisplay(entry.user_id, entry.user_alias, memberLabels).label
+          const shown =
+            entry.user_id === null ? (
+              "—"
+            ) : (
+              <span className="block truncate" title={label}>
+                {label}
+              </span>
+            )
+          return filtersUsers
+            ? filterable("user", entry.user_id, label, shown)
+            : shown
         },
       },
-      { ...MODEL_COLUMN, headerAction: funnels.model },
+      {
+        ...MODEL_COLUMN,
+        headerAction: funnels.model,
+        cell: (entry) =>
+          filterable(
+            "model",
+            entry.model,
+            entry.model,
+            modelCell(entry, filterTool),
+          ),
+      },
       {
         id: "routing",
         header: "Routing",
@@ -773,14 +959,28 @@ function ActivityPageContent({
         // that turned out. The Model column keeps meaning the model that actually
         // ran (it is the join key for filters and for spend-by-model), so this is
         // additive: together they answer "what did I ask for, and what served it".
-        cell: (entry) => (
-          <RoutingCell
-            entry={entry}
-            outcome={groupOutcomes.get(entry.request_group_id ?? "") ?? null}
-          />
-        ),
+        cell: (entry) =>
+          filterable(
+            "policy",
+            entry.policy_name ?? null,
+            entry.policy_name ?? "Direct requests",
+            <RoutingCell
+              entry={entry}
+              outcome={groupOutcomes.get(entry.request_group_id ?? "") ?? null}
+            />,
+          ),
       },
-      { ...API_KEY_COLUMN, headerAction: funnels.apiKey },
+      {
+        ...API_KEY_COLUMN,
+        headerAction: funnels.apiKey,
+        cell: (entry) =>
+          filterable(
+            "api_key",
+            entry.api_key_id,
+            entry.api_key_id === null ? "No API key" : apiKeyLabel(entry),
+            API_KEY_COLUMN.cell(entry),
+          ),
+      },
       {
         ...INPUT_TOKENS_COLUMN,
         headerAction: funnels.input,
@@ -800,6 +1000,13 @@ function ActivityPageContent({
       {
         ...STATUS_COLUMN,
         headerAction: funnels.status,
+        cell: (entry) =>
+          filterable(
+            "status",
+            entry.status,
+            describeStatus(entry.status),
+            STATUS_COLUMN.cell(entry),
+          ),
       },
     ]
     // The server orders the whole window, so every column it can sort by
@@ -807,7 +1014,14 @@ function ActivityPageContent({
     return built.map((column) =>
       SORTABLE_COLUMNS[column.id] ? { ...column, allowsSorting: true } : column,
     )
-  }, [groupOutcomes, memberLabels, funnels])
+  }, [
+    groupOutcomes,
+    memberLabels,
+    funnels,
+    filterCell,
+    filterTool,
+    filtersUsers,
+  ])
   // On a desk the person's own layout: their widths, without the columns they
   // hid. The phone's cards keep every field, since nothing there can bring a
   // hidden one back.
@@ -818,6 +1032,58 @@ function ActivityPageContent({
     [isMobile, columns, layout.hidden],
   )
 
+  // What says the log is still moving: the in-flight count, Live, the badge
+  // while paused, and Refresh. Inside the Overview they sit at the end of the
+  // filter row; on its own the page puts them beside the chart.
+  const liveControls = (
+    <span className="inline-flex items-center gap-2">
+      {/* Both live signals sit here, beside the control that acts on them:
+        the table below never moves on its own, so this strip is the only
+        place the page says anything is still happening. */}
+      {/* Rendered whenever the poll is answering at all, not only when it
+        reports traffic: the control hides itself while idle, but has to
+        stay mounted to keep an open list open across the moment the last
+        request lands. It still goes on a failed poll, where `liveNow` is
+        undefined, since there is nothing trustworthy left to report. */}
+      {liveNow ? (
+        <InFlightControl data={liveNow} updatedAt={inFlight.dataUpdatedAt} />
+      ) : null}
+      <LiveControl
+        isWanted={liveWanted}
+        pause={livePause}
+        onChange={(wanted, resume) => {
+          setLiveWanted(wanted)
+          // Resuming clears what held it: the first page of the newest
+          // requests, newest first, with nothing open.
+          if (resume) url.patch({ page: 0, request: "", sort: "", order: "" })
+        }}
+      />
+      {newRows > 0 ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          onPress={refresh}
+          isDisabled={usage.isFetching}
+        >
+          {formatNumber(newRows)} new · load
+        </Button>
+      ) : null}
+      {newRowsUnknown ? (
+        <span
+          className="text-caption"
+          title="The row count could not be read, so this page cannot tell whether newer requests have landed. Refresh to load whatever is there."
+        >
+          Newer rows unknown
+        </span>
+      ) : null}
+      <RefreshButton
+        onRefresh={refresh}
+        isFetching={usage.isFetching}
+        updatedAt={usage.dataUpdatedAt}
+      />
+    </span>
+  )
+
   return (
     <div className="flex flex-col">
       <div
@@ -826,6 +1092,20 @@ function ActivityPageContent({
       >
         {/* Inside the Overview the layout owns the heading. */}
         {embedded ? null : <PageIntro title="Activity" />}
+        {embedded ? (
+          <ObserveFilterRow
+            view="requests"
+            search={
+              <ObserveSearchBox
+                value={url.get("q")}
+                onCommit={(term) =>
+                  url.patch({ q: term, page: 0, request: "" })
+                }
+              />
+            }
+            end={liveControls}
+          />
+        ) : null}
 
         {/* The timeline's summary error is included so a failed series request
           reads as a failure, not as an empty "No activity in this range" strip. */}
@@ -839,6 +1119,7 @@ function ActivityPageContent({
             linkedRequest.error ??
             count.error ??
             contextSummary.error ??
+            totalsSummary.error ??
             inFlight.error
           }
         />
@@ -859,49 +1140,14 @@ function ActivityPageContent({
             windowEnd={win.end}
             loading={contextSummary.isLoading}
             ariaLabel="Activity request volume over the selected window"
-            action={
-              <span className="inline-flex items-center gap-2">
-                {/* Both live signals sit here, beside the control that acts on them:
-                  the table below never moves on its own, so this strip is the only
-                  place the page says anything is still happening. */}
-                {/* Rendered whenever the poll is answering at all, not only when it
-                  reports traffic: the control hides itself while idle, but has to
-                  stay mounted to keep an open list open across the moment the last
-                  request lands. It still goes on a failed poll, where `liveNow` is
-                  undefined, since there is nothing trustworthy left to report. */}
-                {liveNow ? (
-                  <InFlightControl
-                    data={liveNow}
-                    updatedAt={inFlight.dataUpdatedAt}
-                  />
-                ) : null}
-                {newRows > 0 ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onPress={refresh}
-                    isDisabled={usage.isFetching}
-                  >
-                    {formatNumber(newRows)} new · load
-                  </Button>
-                ) : null}
-                {newRowsUnknown ? (
-                  <span
-                    className="text-caption"
-                    title="The row count could not be read, so this page cannot tell whether newer requests have landed. Refresh to load whatever is there."
-                  >
-                    Newer rows unknown
-                  </span>
-                ) : null}
-                <RefreshButton
-                  onRefresh={refresh}
-                  isFetching={usage.isFetching}
-                  updatedAt={usage.dataUpdatedAt}
-                />
-              </span>
-            }
+            action={embedded ? undefined : liveControls}
           />
         </div>
+
+        <RequestTotals
+          totals={totalsSummary.data?.totals}
+          isLoading={totalsSummary.isPending && !totalsSummary.data}
+        />
 
         <div className="flex flex-col gap-3">
           {requestMissing ? (

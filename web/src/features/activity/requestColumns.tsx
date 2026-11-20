@@ -1,4 +1,5 @@
 import type { UsageEntry } from "@/client"
+import { Button } from "@/design-system/actions/Button"
 import type { DataTableColumn } from "@/design-system/data/DataTable"
 import { Dot } from "@/design-system/indicators/Dot"
 import { formatDateTime, formatRelative } from "@/shared/helpers/format"
@@ -41,38 +42,56 @@ export const TIME_COLUMN: RequestColumn = {
   ),
 }
 
-export const MODEL_COLUMN: RequestColumn = {
-  id: "model",
-  header: "Model",
-  isRowHeader: true,
-  // The tool marker lives here rather than in a column of its own, which would
-  // push the failure-forward Status pill off a narrow viewport.
-  cell: (entry) => {
-    const tools = listToolUsage(entry)
-    if (!tools.length) {
-      return (
-        <span className="block truncate" title={entry.model}>
-          {entry.model}
-        </span>
-      )
-    }
-    const calls = tools.reduce(
-      (sum, tool) => sum + tool.billed + tool.errors,
-      0,
-    )
-    const detail = tools.map(formatToolUsage).join(" · ")
+/** The gateway-tool filter a row's tool marker writes: the one tool it ran, or any tool. */
+export function toolFilterFor(entry: UsageEntry): string {
+  const tools = listToolUsage(entry)
+  const known = new Set(["web_search", "web_fetch", "code_execution"])
+  return tools.length === 1 && known.has(tools[0].tool) ? tools[0].tool : "any"
+}
+
+/**
+ * A row's model, with the marker for the gateway tools it ran. With `onTool`
+ * the marker is a button that filters the log to those tools.
+ */
+export function modelCell(
+  entry: UsageEntry,
+  onTool?: (entry: UsageEntry) => void,
+) {
+  const tools = listToolUsage(entry)
+  if (!tools.length) {
     return (
-      // The model keeps its width first; a narrow lane shortens the marker,
-      // whose label still says it all.
-      <span className="flex items-center gap-1.5">
-        <span className="max-w-full shrink-0 truncate" title={entry.model}>
-          {entry.model}
-        </span>
-        {/* A marker, not a badge: an accent dot and the count in mono
+      <span className="block truncate" title={entry.model}>
+        {entry.model}
+      </span>
+    )
+  }
+  const calls = tools.reduce((sum, tool) => sum + tool.billed + tool.errors, 0)
+  const detail = tools.map(formatToolUsage).join(" · ")
+  return (
+    // The model keeps its width first; a narrow lane shortens the marker,
+    // whose label still says it all.
+    <span className="flex items-center gap-1.5">
+      <span className="max-w-full shrink-0 truncate" title={entry.model}>
+        {entry.model}
+      </span>
+      {/* A marker, not a badge: an accent dot and the count in mono
             uppercase, on the same terms as every other marker in the product.
             A generic span does not reliably expose aria-label, so it takes the
             img role; the label is the whole meaning and the count inside is a
             summary of it. */}
+      {onTool ? (
+        <Button
+          size="sm"
+          className="otari-tool-marker"
+          aria-label={`Gateway tools: ${detail}`}
+          onPress={() => onTool(entry)}
+        >
+          <Dot className="bg-accent" />
+          <span className="truncate">
+            {calls} {calls === 1 ? "tool" : "tools"}
+          </span>
+        </Button>
+      ) : (
         <span
           role="img"
           className="inline-flex min-w-0 items-center gap-1.5 text-mono-overline text-muted"
@@ -84,9 +103,18 @@ export const MODEL_COLUMN: RequestColumn = {
             {calls} {calls === 1 ? "tool" : "tools"}
           </span>
         </span>
-      </span>
-    )
-  },
+      )}
+    </span>
+  )
+}
+
+export const MODEL_COLUMN: RequestColumn = {
+  id: "model",
+  header: "Model",
+  isRowHeader: true,
+  // The tool marker lives here rather than in a column of its own, which would
+  // push the failure-forward Status pill off a narrow viewport.
+  cell: (entry) => modelCell(entry),
 }
 
 export const API_KEY_COLUMN: RequestColumn = {

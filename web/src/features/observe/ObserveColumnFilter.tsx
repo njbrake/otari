@@ -6,8 +6,12 @@ import { TOOL_OPTIONS } from "@/features/activity/activityModel"
 import { useUsageSummary } from "@/shared/api/usage"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
 import {
+  CHANNEL_OPTIONS,
+  EMPTY_LABELS,
+  type EmptyField,
   type ExtraKey,
   type FilterSection,
+  isSingleFor,
   type ObserveFilterState,
   type ObserveUrlKey,
   readThreshold,
@@ -49,6 +53,12 @@ const EXTRAS: Record<
     key: "routed",
     choices: [{ on: "false", label: "Direct requests only" }],
   },
+  // Each request is listed once; this lists the attempts a routing policy
+  // recovered from under the request they belong to.
+  recovered: {
+    key: "recovered",
+    choices: [{ on: "show", label: "Show recovered attempts" }],
+  },
 }
 
 // The gateway tools a request can be filtered to; "All" is no filter.
@@ -76,20 +86,39 @@ export const offeredSections = (
   state: ObserveFilterState,
 ): FilterSection[] => sections.filter((section) => offered(section, state))
 
-/** The URL keys a column's sections write, each with its cleared value. */
+/**
+ * The URL keys a column's sections write, each with its cleared value. The
+ * empty-column filters share one key, so clearing a column takes only its own
+ * fields out of it.
+ */
 export function clearedKeys(
   sections: readonly FilterSection[],
-): Record<string, string | []> {
-  return Object.assign({}, ...sections.map(clearedKeysOf))
+  state: ObserveFilterState,
+): Record<string, string | string[]> {
+  const cleared: Record<string, string | string[]> = Object.assign(
+    {},
+    ...sections.map(clearedKeysOf),
+  )
+  const emptied = sections.flatMap((section) =>
+    section.kind === "empty" ? [section.field] : [],
+  )
+  if (emptied.length > 0) {
+    cleared.is_null = state.url
+      .getAll("is_null")
+      .filter((field) => !emptied.includes(field as EmptyField))
+  }
+  return cleared
 }
 
 function clearedKeysOf(section: FilterSection): Record<string, string | []> {
+  if (section.kind === "empty") return {}
+  if (section.kind === "channel") return { channel: [] }
   if (section.kind === "threshold") return { [section.key]: "" }
   if (section.kind === "extra") return { [EXTRAS[section.key].key]: "" }
   if (section.kind === "tool") return { tool: "" }
   const keys = VALUE_KEYS[section.dimension]
   return {
-    [keys.include]: keys.isSingle ? "" : [],
+    [keys.include]: [],
     ...(keys.exclude ? { [keys.exclude]: [] } : {}),
   }
 }
@@ -109,6 +138,9 @@ function isActive(section: FilterSection, state: ObserveFilterState): boolean {
     return extra.choices.some((choice) => choice.on === value)
   }
   if (section.kind === "tool") return state.url.get("tool") !== ""
+  if (section.kind === "channel") return state.url.getAll("channel").length > 0
+  if (section.kind === "empty")
+    return state.url.getAll("is_null").includes(section.field)
   const { selected, excluded } = valuesOf(state, section.dimension)
   return selected.length > 0 || (state.isRequests && excluded.length > 0)
 }
@@ -140,7 +172,7 @@ export function ObserveColumnFilter({
       label={label}
       placement={placement}
       isFiltered={isFiltered(shown, state)}
-      onClear={() => state.patch(clearedKeys(shown))}
+      onClear={() => state.patch(clearedKeys(shown, state))}
     >
       <ObserveFilterSections
         view={view}
@@ -209,6 +241,42 @@ export function ObserveFilterSections({
     if (section.kind === "tool") {
       return <ToolSection key="tool" view={view} state={state} />
     }
+    if (section.kind === "channel") {
+      return (
+        <ColumnFilterList
+          key="channel"
+          label="Channel"
+          title="Channel"
+          options={CHANNEL_OPTIONS}
+          selected={state.url.getAll("channel")}
+          onChange={(values) => state.patch({ channel: values })}
+        />
+      )
+    }
+    if (section.kind === "empty") {
+      const fields = state.url.getAll("is_null")
+      const isOn = fields.includes(section.field)
+      return (
+        <ColumnFilterList
+          key={`empty-${section.field}`}
+          label={EMPTY_LABELS[section.field]}
+          selectionMode="single"
+          options={[{ value: "on", label: EMPTY_LABELS[section.field] }]}
+          selected={isOn ? ["on"] : []}
+          onChange={(values) =>
+            state.patch({
+              is_null:
+                values.length > 0
+                  ? [
+                      ...fields.filter((one) => one !== section.field),
+                      section.field,
+                    ]
+                  : fields.filter((one) => one !== section.field),
+            })
+          }
+        />
+      )
+    }
     const extra = EXTRAS[section.key]
     const value = state.url.get(extra.key)
     return (
@@ -252,6 +320,7 @@ function ValuesSection({
   const keys = VALUE_KEYS[dimension]
   const { selected, excluded } = valuesOf(state, dimension)
   const canExclude = state.isRequests && keys.exclude !== undefined
+  const isSingle = isSingleFor(dimension, state.isRequests)
   // Provenance earns a list only once there is more than one source to choose
   // between: most gateways see only their own traffic. A source already
   // filtered on keeps it, so the filter stays clearable here.
@@ -265,15 +334,13 @@ function ValuesSection({
     <ColumnFilterList
       label={TITLES[dimension]}
       title={title}
-      selectionMode={keys.isSingle ? "single" : "multiple"}
+      selectionMode={isSingle ? "single" : "multiple"}
       options={isFixed ? statusOptions(view) : read.options}
       selected={selected}
       excluded={canExclude ? excluded : undefined}
       onChange={(nextSelected, nextExcluded) =>
         state.patch({
-          [keys.include]: keys.isSingle
-            ? (nextSelected.at(-1) ?? "")
-            : nextSelected,
+          [keys.include]: isSingle ? (nextSelected.at(-1) ?? "") : nextSelected,
           ...(canExclude && keys.exclude
             ? { [keys.exclude]: nextExcluded }
             : {}),
@@ -284,7 +351,9 @@ function ValuesSection({
       more={read.more}
       isLoading={!isFixed && read.isLoading}
       isError={!isFixed && read.isError}
-      allowsCustom={!keys.isSingle && dimension !== "policy"}
+      allowsCustom={
+        !isSingle && dimension !== "policy" && dimension !== "status"
+      }
       isMono={dimension === "model"}
       emptyLabel="Nothing in this window."
     />

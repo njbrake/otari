@@ -41,7 +41,7 @@ export function ObserveSearchBox({
       value={text}
       onChange={setText}
       maxLength={MAX_SEARCH_LENGTH}
-      className="otari-observe-search w-full self-end md:w-72"
+      className="w-full"
     />
   )
 }
