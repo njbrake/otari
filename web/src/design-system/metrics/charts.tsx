@@ -210,6 +210,7 @@ export function TrendChart({
   series,
   formatValue,
   formatXTick,
+  formatYTick,
   ariaLabel,
   height = 200,
   showYAxis = false,
@@ -229,6 +230,8 @@ export function TrendChart({
   series: SeriesDef[]
   formatValue: (value: number) => string
   formatXTick?: (x: string) => string
+  /** The y-axis ticks, where they want a shorter form than the tooltip's. */
+  formatYTick?: (value: number) => string
   ariaLabel: string
   height?: number
   showYAxis?: boolean
@@ -337,7 +340,9 @@ export function TrendChart({
               width={52}
               tickLine={false}
               axisLine={false}
-              tickFormatter={(value: number) => formatValue(value)}
+              tickFormatter={(value: number) =>
+                (formatYTick ?? formatValue)(value)
+              }
               tick={AXIS_TICK}
             />
           ) : null}

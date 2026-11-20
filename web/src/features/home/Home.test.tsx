@@ -5,7 +5,12 @@ import { Home } from "@/features/home/Home"
 import { API_ROOT } from "@/shared/api/client"
 import { SelectedWorkspaceProvider } from "@/shared/hooks/SelectedWorkspace"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
-import { bootstrap, organizationContext, usageTotals } from "@/tests/fixtures"
+import {
+  bootstrap,
+  groupedSeries,
+  organizationContext,
+  usageTotals,
+} from "@/tests/fixtures"
 import { renderWithRouter } from "@/tests/router"
 
 function json(body: unknown, status = 200): Response {
@@ -22,6 +27,7 @@ async function renderHome(status: number, detail: string) {
     .mockImplementation(async (input) => {
       const path = String(input).replace(API_ROOT, "").split("?")[0]
       if (path === "/organizations/me") return json({ detail }, status)
+      if (path.endsWith("/usage/series")) return json(groupedSeries())
       return json([])
     })
   const client = new QueryClient({
@@ -91,6 +97,7 @@ describe("Home", () => {
       ) {
         return json({ data: [], count: 0 })
       }
+      if (path.endsWith("/usage/series")) return json(groupedSeries())
       return json([])
     })
     const client = new QueryClient({

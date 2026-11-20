@@ -22,8 +22,11 @@ export function toMinute(now: number): number {
 
 export type PeriodKey = "today" | "yesterday" | "7d" | "30d" | "3m" | "6m"
 
-/** Every window there is: the picker's, and the calendar month so far. */
-export type WindowKind = PeriodKey | "month"
+/**
+ * Every window there is: the picker's, the calendar month so far, and a span
+ * dragged out on a chart.
+ */
+export type WindowKind = PeriodKey | "month" | "custom"
 
 export const PERIODS: { value: PeriodKey; label: string }[] = [
   { value: "today", label: "Today" },
@@ -108,6 +111,41 @@ export function windowOf(kind: WindowKind, now: number): SpendWindow {
   }
 }
 
+/** The longest span a dragged window keeps its hours for, as Today does. */
+const HOURLY_SPAN_MS = 2 * DAY_MS
+
+/**
+ * A window dragged out on a chart, from its two ISO bounds (the end
+ * exclusive), or undefined when they do not make one: unparsable, empty, or
+ * starting after `now`. The window before it is as long as it is.
+ */
+export function customWindow(
+  start: string,
+  end: string,
+  now: number,
+): SpendWindow | undefined {
+  const from = Date.parse(start)
+  const to = Date.parse(end)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return undefined
+  if (to <= from || from > now) return undefined
+  const lastDay = dayOf(to - 1)
+  const firstDay = dayOf(from)
+  const length = to - from
+  return {
+    kind: "custom",
+    start: iso(from),
+    end: iso(to),
+    previousStart: iso(from - length),
+    previousEnd: iso(from),
+    days: Math.max(1, Math.round((lastDay - firstDay) / DAY_MS) + 1),
+    label:
+      lastDay === firstDay
+        ? DAY_LABEL.format(from)
+        : `${DAY_LABEL.format(from)} to ${DAY_LABEL.format(to - 1)}`,
+    bucket: length <= HOURLY_SPAN_MS ? "hour" : "day",
+  }
+}
+
 /** Local midnight on the day `ms` falls on, `offset` days on. */
 function dayOf(ms: number, offset = 0): number {
   const at = new Date(ms)
@@ -185,6 +223,7 @@ export function windowSpan(window: SpendWindow): string {
   const { kind } = window
   if (kind === "today" || kind === "yesterday") return kind
   if (kind === "month") return "this month"
+  if (kind === "custom") return window.label
   const months = MONTHS_BACK[kind]
   return months ? plural(months, "month") : plural(window.days, "day")
 }
@@ -192,6 +231,7 @@ export function windowSpan(window: SpendWindow): string {
 /** "today", "in the last 7 days": the window inside a sentence. */
 export function windowWords(window: SpendWindow): string {
   const { kind } = window
+  if (kind === "custom") return `from ${window.label}`
   return kind === "today" || kind === "yesterday" || kind === "month"
     ? windowSpan(window)
     : `in the last ${windowSpan(window)}`
@@ -216,7 +256,9 @@ export function comparedWith(window: SpendWindow): string {
   if (window.kind === "yesterday") {
     return `vs ${WEEKDAY.format(new Date(window.previousStart))}`
   }
-  if (window.kind === "month") return `vs prior ${plural(window.days, "day")}`
+  if (window.kind === "month" || window.kind === "custom") {
+    return `vs prior ${plural(window.days, "day")}`
+  }
   // In the picker's own words, which keeps the change inside its figure at 1280px.
   const months = MONTHS_BACK[window.kind]
   return months ? `vs prior ${months}M` : `vs prior ${windowSpan(window)}`

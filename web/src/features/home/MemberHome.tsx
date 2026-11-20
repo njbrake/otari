@@ -16,9 +16,17 @@ import { TrendChip } from "@/design-system/metrics/TrendChip"
 import { Segmented } from "@/design-system/navigation/Segmented"
 import { FigureLinks } from "@/features/home/FigureLinks"
 import { failureSeverity, spendSplit } from "@/features/home/homeFigures"
+import {
+  GROUP_BY,
+  HOME_CHART_URL,
+  HomeWindowPicker,
+  homeWindow,
+  labelFromRows,
+} from "@/features/home/homeWindow"
 import { canOpenInKeys } from "@/features/home/keyAccess"
 import { MemberAttentionBand } from "@/features/home/MemberAttentionBand"
 import { MemberFirstRun } from "@/features/home/MemberFirstRun"
+import { MonthBudget } from "@/features/home/MonthBudget"
 import {
   hasActiveKey,
   isSpendRefusal,
@@ -32,6 +40,13 @@ import { hasProviderSlot, ProviderSlot } from "@/features/home/ProviderSlot"
 import { RecentFailures } from "@/features/home/RecentFailures"
 import { RowOpenLink } from "@/features/home/RowOpenLink"
 import { ShareCell } from "@/features/home/ShareCell"
+import { ShareDialog } from "@/features/home/ShareDialog"
+import { shareCardOf } from "@/features/home/shareCard"
+import {
+  UsageBreakdownChart,
+  useBreakdownChart,
+} from "@/features/home/UsageBreakdownChart"
+import { metricFromUrl } from "@/features/home/usageChartModel"
 import { useHomeRefresh } from "@/features/home/useHomeRefresh"
 import { useMemberAttention } from "@/features/home/useMemberAttention"
 import { useSpendDetail } from "@/features/home/useSpendDetail"
@@ -44,11 +59,9 @@ import {
   figureLabel,
   periodFromUrl,
   sessionsSearchFor,
-  windowOf,
   windowSpan,
   windowWords,
 } from "@/features/spend/period"
-import { SpendPeriodPicker } from "@/features/spend/SpendPeriodPicker"
 import { usePageClock } from "@/features/spend/usePageClock"
 import {
   filterValues,
@@ -98,7 +111,7 @@ const CUTS: {
   },
 ]
 
-const URL_DEFAULTS = { period: DEFAULT_PERIOD, by: "" }
+const URL_DEFAULTS = { period: DEFAULT_PERIOD, by: "", ...HOME_CHART_URL }
 
 /**
  * Home for someone who uses the team rather than runs it: the owner's Home,
@@ -130,7 +143,7 @@ export function MemberHome({
   const { refresh, isFetching } = useHomeRefresh(refreshClock)
 
   const period = periodFromUrl(get("period"))
-  const window = windowOf(period, now)
+  const window = homeWindow(period, get("start"), get("end"), now)
   const cut = CUTS.find((one) => one.value === get("by")) ?? CUTS[0]
 
   const spend = useSpend(window, {
@@ -344,6 +357,36 @@ export function MemberHome({
         })
       : undefined) ?? unseen?.note
 
+  // A limit for each person that resets with the calendar month is the one a
+  // month's running total can be read against.
+  const monthCap =
+    shown?.kind === "default" && shown.per === "a month" && shown.periodStart
+      ? shown.amount
+      : undefined
+  const noBudgetNote =
+    shown === undefined
+      ? ""
+      : shown.kind === "default"
+        ? `Your limit resets ${shown.per || "on its own schedule"}, not with the month, so the month is not measured against it.`
+        : shown.kind === "own"
+          ? "Your own limit's period is not shown to you, so the month is not measured against it."
+          : "No limit you can see applies to you here."
+
+  const metric = metricFromUrl(get("chart"))
+  const isIncludingNotCharged = get("charged") !== "only"
+  const chartView = useBreakdownChart({
+    window,
+    now,
+    workspaceId,
+    userId: me,
+    isEnabled: me !== undefined && !isFirstRun,
+    groupBy: GROUP_BY[cut.value],
+    labelOf: labelFromRows(rows),
+    metric,
+    isIncludingNotCharged,
+    totals: spend.series,
+  })
+
   const openTo = cut.value === "providers" ? "/requests" : "/sessions"
   const searchFor = (row: SpendRow) => ({
     ...mySessions,
@@ -497,12 +540,53 @@ export function MemberHome({
               isFetching={isFetching}
               updatedAt={now}
             />
-            <SpendPeriodPicker
-              value={period}
-              onChange={(next) => {
+            {isFirstRun ? null : (
+              <ShareDialog
+                isReady={spend.totals !== undefined && !chartView.isLoading}
+                startIso={window.start}
+                endIso={window.end || new Date(now).toISOString()}
+                card={shareCardOf({
+                  scope: `Your usage in ${workspace}`,
+                  window,
+                  chart: chartView.chart,
+                  metric,
+                  cutLabel: cut.label.toLowerCase(),
+                  figures: [
+                    {
+                      label: figureLabel("Spent", window),
+                      value: spend.totals ? formatUsd(total) : "—",
+                      subline: spentFacts.join(", ") || undefined,
+                    },
+                    {
+                      label: figureLabel("Tokens", window),
+                      value: spend.totals
+                        ? formatTokens(billedTokenTotal(spend.totals) ?? 0)
+                        : "—",
+                      subline: `${formatNumber(requestCount)} requests`,
+                    },
+                    {
+                      label: figureLabel("Failures", window),
+                      value: spend.totals
+                        ? formatPct(
+                            requestCount > 0
+                              ? spend.totals.error_count / requestCount
+                              : 0,
+                          )
+                        : "—",
+                      subline: `${formatNumber(failed)} failed`,
+                    },
+                  ],
+                })}
+              />
+            )}
+            <HomeWindowPicker
+              period={period}
+              window={window}
+              onPeriod={(next) => {
                 refreshClock()
-                patch({ period: next })
+                patch({ period: next, start: "", end: "" })
               }}
+              onClearSpan={() => patch({ start: "", end: "" })}
             />
           </div>
         }
@@ -684,6 +768,19 @@ export function MemberHome({
           />
         )}
       </KpiStrip>
+      {isFirstRun ? null : (
+        <MonthBudget
+          monthKey={get("month")}
+          onMonth={(next) => patch({ month: next })}
+          now={now}
+          workspaceId={workspaceId}
+          userId={me}
+          isEnabled={me !== undefined}
+          cap={monthCap}
+          capLabel="Your limit"
+          noBudgetNote={noBudgetNote}
+        />
+      )}
       <section aria-label="Where it went" className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
           <h2 className="text-title">Where it went</h2>
@@ -696,6 +793,21 @@ export function MemberHome({
             isFullWidth={isMobile}
           />
         </div>
+        {isFirstRun ? null : (
+          <UsageBreakdownChart
+            view={chartView}
+            window={window}
+            cutLabel={cut.label.toLowerCase()}
+            metric={metric}
+            onMetric={(next) => patch({ chart: next === "cost" ? "" : next })}
+            isIncludingNotCharged={isIncludingNotCharged}
+            onIncludeNotCharged={(next) =>
+              patch({ charged: next ? "" : "only" })
+            }
+            hasNotCharged={split !== undefined}
+            onSelectSpan={(span) => patch(span)}
+          />
+        )}
         <TableScrollFrame className="otari-breakdown otari-spend-table flex flex-col gap-2">
           <DataTable
             key={cut.value}

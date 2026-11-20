@@ -21,6 +21,7 @@ import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { Segmented } from "@/design-system/navigation/Segmented"
 import { MemberAvatar } from "@/features/account/avatar/MemberAvatar"
 import { breakdownCut } from "@/features/home/breakdownCut"
+import { monthlyCap } from "@/features/home/budgetMonth"
 import { busiestWorkspace } from "@/features/home/busiestWorkspace"
 import { FigureLinks } from "@/features/home/FigureLinks"
 import {
@@ -30,13 +31,28 @@ import {
   resetsLabel,
   spendSplit,
 } from "@/features/home/homeFigures"
+import {
+  GROUP_BY,
+  HOME_CHART_URL,
+  HomeWindowPicker,
+  homeWindow,
+  labelFromRows,
+} from "@/features/home/homeWindow"
 import { canOpenInKeys } from "@/features/home/keyAccess"
+import { MonthBudget } from "@/features/home/MonthBudget"
 import { useHomeAccount } from "@/features/home/overlayHomeAccount"
 import { hasProviderSlot, ProviderSlot } from "@/features/home/ProviderSlot"
 import { RecentFailures } from "@/features/home/RecentFailures"
 import { RowOpenLink } from "@/features/home/RowOpenLink"
 import { ShareCell } from "@/features/home/ShareCell"
+import { ShareDialog } from "@/features/home/ShareDialog"
+import { shareCardOf } from "@/features/home/shareCard"
 import { TeamAttentionBand } from "@/features/home/TeamAttentionBand"
+import {
+  UsageBreakdownChart,
+  useBreakdownChart,
+} from "@/features/home/UsageBreakdownChart"
+import { metricFromUrl } from "@/features/home/usageChartModel"
 import { useHomeRefresh } from "@/features/home/useHomeRefresh"
 import { useSpendDetail } from "@/features/home/useSpendDetail"
 import { personPeriodFromUrl } from "@/features/people/personPeriod"
@@ -45,6 +61,7 @@ import {
   type AppliedLimit,
   type LimitTarget,
   limitLine,
+  limitsOn,
   usedShare,
   wholePct,
 } from "@/features/spend/limits"
@@ -56,11 +73,9 @@ import {
   periodFromUrl,
   sessionsSearchFor,
   usageRange,
-  windowOf,
   windowWords,
 } from "@/features/spend/period"
 import { SetLimitDialog } from "@/features/spend/SetLimitDialog"
-import { SpendPeriodPicker } from "@/features/spend/SpendPeriodPicker"
 import { usePageClock } from "@/features/spend/usePageClock"
 import {
   filterValues,
@@ -144,7 +159,12 @@ const CUTS: {
   },
 ]
 
-const URL_DEFAULTS = { period: DEFAULT_PERIOD, by: "", workspace: "" }
+const URL_DEFAULTS = {
+  period: DEFAULT_PERIOD,
+  by: "",
+  workspace: "",
+  ...HOME_CHART_URL,
+}
 
 /** The limit figure's label, by how often the organization's limit resets. */
 const LIMIT_LABELS: Record<string, string | undefined> = {
@@ -309,7 +329,7 @@ export function TeamHome({
   const { refresh, isFetching } = useHomeRefresh(refreshClock)
 
   const period = periodFromUrl(get("period"))
-  const window = windowOf(period, now)
+  const window = homeWindow(period, get("start"), get("end"), now)
   const workspaceId = get("workspace")
   const hasWorkspaces = (workspaces.data?.length ?? 0) > 1
 
@@ -712,6 +732,31 @@ export function TeamHome({
       : []
   const failed = spend.totals?.error_count ?? 0
   const windowSearch: DashboardSearch = sessionsSearchFor(window)
+  const metric = metricFromUrl(get("chart"))
+  const isIncludingNotCharged = get("charged") !== "only"
+  const chartView = useBreakdownChart({
+    window,
+    now,
+    workspaceId,
+    groupBy: shownCut === undefined ? undefined : GROUP_BY[cut.value],
+    labelOf: labelFromRows(rows),
+    metric,
+    isIncludingNotCharged,
+    totals: spend.series,
+  })
+  // The budget the month is read against: the picked workspace's own, or the
+  // organization's, where it resets with the calendar month.
+  const scopeLimit = workspaceId
+    ? limitsOn(spend.ceilings, "workspace", workspaceId).own
+    : organization
+  const monthCap = monthlyCap(scopeLimit)
+  const budgetName = workspaceId ? "Workspace budget" : "Team budget"
+  const noBudgetNote =
+    limitsRead !== "ready"
+      ? ""
+      : scopeLimit
+        ? `The ${budgetName.toLowerCase()} resets ${scopeLimit.per || "on its own schedule"}, not with the month, so the month is not measured against it.`
+        : `No monthly ${budgetName.toLowerCase()} is set${workspaceId ? " on this workspace" : ""}.`
 
   return (
     <div className="flex flex-col gap-6">
@@ -724,12 +769,64 @@ export function TeamHome({
               isFetching={isFetching}
               updatedAt={now}
             />
-            <SpendPeriodPicker
-              value={period}
-              onChange={(next) => {
+            <ShareDialog
+              isReady={spend.totals !== undefined && !chartView.isLoading}
+              startIso={window.start}
+              endIso={window.end || new Date(now).toISOString()}
+              card={shareCardOf({
+                scope: workspaceId ? scopeName : "All workspaces",
+                window,
+                chart: chartView.chart,
+                metric,
+                cutLabel: cut.plural,
+                figures: [
+                  {
+                    label: figureLabel("Spent", window),
+                    value: spend.totals ? formatUsd(total) : "—",
+                    subline: spentFacts.join(", ") || undefined,
+                  },
+                  {
+                    label: organization
+                      ? (LIMIT_LABELS[organization.per] ?? "Of the team budget")
+                      : "Team budget",
+                    value: organization
+                      ? wholePct(usedShare(organization))
+                      : "None",
+                    subline: organization
+                      ? paceLine(organization, now)
+                      : undefined,
+                  },
+                  {
+                    label: figureLabel("Failures", window),
+                    value: spend.totals ? formatPct(errorRate) : "—",
+                    subline: `${formatNumber(failed)} failed`,
+                  },
+                  {
+                    label: figureLabel("Tokens", window),
+                    value: spend.totals
+                      ? formatTokens(billedTokenTotal(spend.totals) ?? 0)
+                      : "—",
+                    subline: spend.totals
+                      ? `${formatNumber(spend.totals.request_count)} requests`
+                      : undefined,
+                  },
+                  {
+                    label: "People active",
+                    value: isActiveKnown
+                      ? `${active} of ${Math.max(inScope.length, 1)}`
+                      : "—",
+                  },
+                ],
+              })}
+            />
+            <HomeWindowPicker
+              period={period}
+              window={window}
+              onPeriod={(next) => {
                 refreshClock()
-                patch({ period: next })
+                patch({ period: next, start: "", end: "" })
               }}
+              onClearSpan={() => patch({ start: "", end: "" })}
             />
             {hasWorkspaces ? (
               <FilterSelect
@@ -927,6 +1024,15 @@ export function TeamHome({
           }
         />
       </KpiStrip>
+      <MonthBudget
+        monthKey={get("month")}
+        onMonth={(next) => patch({ month: next })}
+        now={now}
+        workspaceId={workspaceId}
+        cap={monthCap}
+        capLabel={budgetName}
+        noBudgetNote={noBudgetNote}
+      />
       <section aria-label="Where it went" className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
@@ -951,6 +1057,21 @@ export function TeamHome({
             )}
           </div>
         </div>
+        {shownCut !== undefined ? (
+          <UsageBreakdownChart
+            view={chartView}
+            window={window}
+            cutLabel={cut.plural}
+            metric={metric}
+            onMetric={(next) => patch({ chart: next === "cost" ? "" : next })}
+            isIncludingNotCharged={isIncludingNotCharged}
+            onIncludeNotCharged={(next) =>
+              patch({ charged: next ? "" : "only" })
+            }
+            hasNotCharged={split !== undefined}
+            onSelectSpan={(span) => patch(span)}
+          />
+        ) : null}
         {isTeam && cut.value === "people" ? <WorkspaceDefaultLimit /> : null}
         <TableScrollFrame className="otari-breakdown otari-spend-table flex flex-col gap-2">
           {/* Which columns is the roster's answer, so none show before it. */}

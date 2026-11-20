@@ -119,6 +119,25 @@ export const TrendStacked: Story = {
   ),
 }
 
+/** A y-axis in a shorter form than the tooltip's: "1.2K" on the axis, "1,234" on hover. */
+export const TrendShortAxis: Story = {
+  render: () => (
+    <div className="w-[48rem]">
+      <TrendChart
+        data={SINGLE}
+        series={SINGLE_SERIES}
+        formatValue={count}
+        formatYTick={(value) =>
+          new Intl.NumberFormat("en-US", { notation: "compact" }).format(value)
+        }
+        formatXTick={day}
+        ariaLabel="Requests per day"
+        showYAxis
+      />
+    </div>
+  ),
+}
+
 /**
  * Drag across the plot to select a range. The chart reports bucket indices and
  * the caller decides what that means; here it just narrows `window`, which is how
