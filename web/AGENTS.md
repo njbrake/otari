@@ -109,8 +109,9 @@ shell.
 
 The workspace and organization rails have separate registries. A sidebar item
 points to a real page, never a redirect. A few destinations have no row of
-their own (`OFF_RAIL_ITEMS`) and select the row that stands for them: Routing
-and the workspace's guardrails select Rules, and the workspace roster People.
+their own (`OFF_RAIL_ITEMS`) and select the row that stands for them: the
+workspace's guardrails select Rules, and the workspace roster People. Routing
+has a row of its own and is also a tab of Rules.
 `/playground`, `/account`, and `/invitations` are chrome destinations and do
 not belong in a rail.
 

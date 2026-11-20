@@ -54,10 +54,18 @@ describe("Breadcrumbs", () => {
   })
 
   it("puts a page with no row under the row that stands for it", async () => {
+    renderTrail("/tools/guardrails", "")
+
+    const trail = await screen.findByRole("navigation", { name: "Breadcrumb" })
+    expect(trail).toHaveTextContent("Default workspace/Rules/Guardrails")
+  })
+
+  it("names Routing, which has a row of its own, without Rules", async () => {
     renderTrail("/routing", "")
 
     const trail = await screen.findByRole("navigation", { name: "Breadcrumb" })
-    expect(trail).toHaveTextContent("Default workspace/Rules/Routing")
+    expect(trail).toHaveTextContent("Default workspace/Routing")
+    expect(trail).not.toHaveTextContent("Rules")
     expect(screen.queryByRole("link")).not.toBeInTheDocument()
   })
 
@@ -68,11 +76,11 @@ describe("Breadcrumbs", () => {
     expect(trail).toHaveTextContent("Default workspace/People/Members")
   })
 
-  it("ends a policy's page on its name, after Rules and a link to Routing", async () => {
+  it("ends a policy's page on its name, after a link to Routing", async () => {
     renderTrail("/routing/coding", "coding")
 
     const trail = await screen.findByRole("navigation", { name: "Breadcrumb" })
-    expect(trail).toHaveTextContent("Default workspace/Rules/Routing/coding")
+    expect(trail).toHaveTextContent("Default workspace/Routing/coding")
     expect(screen.getByRole("link", { name: "Routing" })).toHaveAttribute(
       "href",
       "/routing",
