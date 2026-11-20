@@ -121,7 +121,8 @@ first of:
 
 An unpriced event is still stored, with no cost. `require_pricing` does not
 apply. Later price changes and replays do not change stored rows; reprice them
-with the usage repricing API.
+from **Settings** > **Imported usage**, or with the usage repricing API
+(`POST /api/v1/usage/set-price`).
 
 Imported cost is an estimate at API rates, not an invoice or a subscription
 charge, and cache pricing is only as accurate as the source's token counts.

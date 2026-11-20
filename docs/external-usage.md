@@ -106,6 +106,24 @@ Their cost is an estimate at API rates, not what a subscription charged, and an
 event with no price is kept without a cost. Budget gauges leave imported usage out. How each
 event is priced is in [Pricing](external-usage-reference.md#pricing).
 
+## Recost or delete imported usage
+
+An operator manages imported rows in bulk from **Settings**, under **Imported
+usage**:
+
+1. Pick the window (24 hours to all time), the import source, and whether to
+   take only rows with no cost. The card counts the imported rows that match.
+2. Open **Manage imported usage**:
+   - **Recost imported rows…** sets each matching row's cost from rates you
+     enter per million tokens and the row's own token counts.
+   - **Delete imported rows…** removes the matching rows once you type
+     `delete` to confirm. It cannot be undone.
+
+Both reach only imported rows, so a budget's spend never moves and a request
+the gateway served is never changed. The same operations are
+`POST /api/v1/usage/set-price` and `DELETE /api/v1/usage`, with `by_filter: true`
+and the filters, or with `ids`.
+
 ## Keep imported usage for a set time
 
 Imported rows and agent telemetry are kept indefinitely by default. Set
