@@ -78,6 +78,7 @@ import {
   TIME_COLUMN,
 } from "./requestColumns"
 import {
+  boundsWindow,
   nextSort,
   readSort,
   SORTABLE_COLUMNS,
@@ -188,6 +189,10 @@ function ActivityPageContent({
   const toolFilter = url.get("tool")
   const search = url.get("q").trim()
   const sort = readSort(url.get("sort"), url.get("order"))
+  // The server reads any order but time, and a substring search, over a bounded
+  // window, an omitted start as the last 30 days. Under "All" those reads take
+  // the year the timeline spans instead, so the rows match the bars above them.
+  const boundedRead = boundsWindow(sort, search)
   const page = Math.max(0, url.getNumber("page"))
   // Snap URL-supplied sizes to the nearest offered option: an old bookmark
   // with size=500 must not render a page of 500 rows, and a hand-edited size=0
@@ -316,7 +321,7 @@ function ActivityPageContent({
       // From the sidebar's switcher, not from a control on this page: it scopes
       // the whole shell, and the operator's own filters sit below it.
       workspace_id: workspace?.workspace_id,
-      start_date: win.start,
+      start_date: win.start ?? (boundedRead ? extentWin.start : undefined),
       end_date: win.end,
       status: statusFilter || undefined,
       model: modelFilters.length > 0 ? modelFilters : undefined,
@@ -337,6 +342,8 @@ function ActivityPageContent({
       search,
       workspace,
       win,
+      boundedRead,
+      extentWin.start,
       toolFilter,
       statusFilter,
       modelFilters,

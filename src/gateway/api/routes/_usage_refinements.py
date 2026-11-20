@@ -23,7 +23,7 @@ _VALUES_CAP = f"At most {MAX_FILTER_VALUES} per call."
 # enough that no caller posts a megabyte pattern into a LIKE over the window.
 MAX_SEARCH_LENGTH = 200
 SEARCH_DESC = (
-    "Free-text search. A UUID matches a usage row id or an Otari-Request-ID exactly; anything else is a "
+    "Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a "
     "case-insensitive substring of the model that served, the model name the caller sent, the provenance "
     "source, the session label, the user id, the billed user's alias or the API key's name. "
     f"At most {MAX_SEARCH_LENGTH} characters. On the list and its count a substring search reads the "

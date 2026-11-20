@@ -142,8 +142,9 @@ Press a column's header to sort the whole window by it. Names run A to Z
 first; tokens, **Cost** and **Total time** run largest first, and **Status**
 puts failures first. Press it again for the reverse order and a third time to
 go back to newest first. **API key** sorts by the key's name, or the source of
-a request no key made. The order is kept in the URL. A sort other than time
-reads the last 30 days when the range has no start.
+a request no key made. The order is kept in the URL. Under **All**, a sort
+other than time, like a search for anything but an ID, reads the last year,
+the span the chart shows.
 
 The search box in the filter row finds requests by request ID (pasted whole),
 or by part of a user's name or ID, a model (the one that served or the

@@ -575,9 +575,9 @@ def _row_only_conditions(filters: UsageFilters) -> list[ColumnElement[bool]]:
 def _search_condition(refine: UsageRefinements) -> ColumnElement[bool] | None:
     """The rows a free-text search matches, or None when there is nothing to search for.
 
-    A UUID is a row id or an ``Otari-Request-ID`` pasted from a log line, matched
-    against those two indexed columns alone, since an OR with the substring arms
-    could use neither index. Anything else is a case-insensitive substring of the
+    A UUID is a row id, an ``Otari-Request-ID`` pasted from a log line or a user
+    id, matched against those three indexed columns alone, since an OR with the
+    substring arms could use none of the indexes. Anything else is a case-insensitive substring of the
     small text columns, or a user or key whose name the service found containing it.
     """
     term = search_term(refine.q)
@@ -585,7 +585,11 @@ def _search_condition(refine: UsageRefinements) -> ColumnElement[bool] | None:
         return None
     request_id = search_request_id(term)
     if request_id is not None:
-        return or_(UsageLog.id == request_id, UsageLog.request_group_id == request_id)
+        return or_(
+            UsageLog.id == request_id,
+            UsageLog.request_group_id == request_id,
+            UsageLog.user_id == request_id,
+        )
     arms: list[ColumnElement[bool]] = [
         column.icontains(term, autoescape=True)
         for column in (

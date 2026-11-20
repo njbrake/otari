@@ -162,3 +162,22 @@ describe("ActivityPage search", () => {
     ).toBeInTheDocument()
   })
 })
+
+describe("ActivityPage bounded reads under All", () => {
+  it("reads the year the chart spans for a sort or a search, and all time otherwise", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    await renderRequests("?range=all&sort=cost&order=desc")
+    const daysBack = (urls: string[]) =>
+      (Date.now() - Date.parse(lastParams(urls).get("start_date") ?? "")) /
+      86_400_000
+    await waitFor(() => expect(daysBack(listCalls(calls))).toBeGreaterThan(360))
+    expect(daysBack(countCalls(calls))).toBeGreaterThan(360)
+  })
+
+  it("leaves newest first and an id search unbounded", async () => {
+    const { calls } = mockApi({ rows: [entry()] })
+    await renderRequests("?range=all&q=3f2504e0-4f89-11d3-9a0c-0305e82c3301")
+    await waitFor(() => expect(listCalls(calls).length).toBeGreaterThan(0))
+    expect(lastParams(listCalls(calls)).has("start_date")).toBe(false)
+  })
+})
