@@ -386,8 +386,10 @@ string, owned by one sign-in identity in one workspace, and offered to every
 member once a workspace manager shares it. The pages are a closed vocabulary in
 `models/saved_views.py`, with the query keys each one keeps in a view, and each
 page's built-in views are the service's own, never stored. A view goes with its
-owner, with its workspace, and with its owner's membership of that workspace
-(`SavedViewMembershipListener`), and follows a merged user (`SavedViewUserMergeListener`).
+workspace. A private one also goes with its owner's membership of that workspace
+(`SavedViewMembershipListener`) and with their account (`SavedViewAccountListener`),
+while a shared one stays, ownerless once the account is deleted, for the
+workspace's managers to keep. A view follows a merged user (`SavedViewUserMergeListener`).
 
 Built in the target shape from the start.
 

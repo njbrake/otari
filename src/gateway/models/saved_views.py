@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, Uuid, false, func, text
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, Uuid, false, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from gateway.models.base import Base, UtcDateTime
@@ -62,7 +62,9 @@ VIEW_QUERY_KEYS: dict[SavedViewPage, frozenset[str]] = {
 class SavedView(Base):
     """One saved view: a page's query string under a name, owned by the identity that saved it in one workspace.
 
-    It goes with its owner and with its workspace: it is the page's own memory, with no ledger to keep.
+    It goes with its workspace. A private one goes with its owner too, while a
+    shared one outlives them, ownerless once their account is deleted, and the
+    workspace's managers keep it from then on.
     """
 
     __tablename__ = "saved_views"
@@ -72,10 +74,16 @@ class SavedView(Base):
         # foreign key, so neither needs an index of its own.
         Index("uq_saved_views_owner_name", "workspace_id", "page", "user_id", text("lower(name)"), unique=True),
         Index("ix_saved_views_user_id", "user_id"),
+        # Only a shared view may outlive its owner: an ownerless private view is
+        # one nobody can see or delete.
+        CheckConstraint("user_id IS NOT NULL OR shared", name="ck_saved_views_owned_or_shared"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False)
+    # Null only on a shared view whose owner deleted their account.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL", name="fk_saved_views_user"), nullable=True
+    )
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False
     )

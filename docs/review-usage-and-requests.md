@@ -326,9 +326,14 @@ saves the current filters over it, shares or stops sharing it, and deletes it.
 **Copy link** copies the page's address, which opens on the same filters and
 names the same view in the workspace the reader has selected; a reload keeps
 the view's name too. You keep up to 50 views per page in a
-workspace. A dragged span on the chart is not part of a view, and your views
-in a workspace, shared ones included, are removed when you leave it or delete
-your account. On a
+workspace. A dragged span on the chart is not part of a view. Your private
+views in a workspace are removed when you leave it, lose access to it or delete
+your account; your shared ones stay shared. A shared view whose owner has left
+lists them by name, or as **Former member** once their account is deleted, and
+anyone who manages the workspace can rename it, save the current filters over it
+or delete it. It cannot be made private again, since nobody would be left to
+open it, so its menu offers **Delete** where an owner's offers **Stop sharing**.
+Should its owner return to the workspace, it is theirs again. On a
 phone, **Views** sits in the same row of controls as **Filters**.
 
 ## Find one request

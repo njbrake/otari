@@ -7,8 +7,10 @@ from typing import Protocol
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.saved_views_exceptions import (
     SavedViewLimitReachedError,
+    SavedViewNameTakenError,
     SavedViewNotFoundError,
     SavedViewNotYoursError,
+    SavedViewOwnerLeftError,
     SavedViewSharingForbiddenError,
 )
 from gateway.models.saved_views import MAX_VIEWS_PER_PAGE, SavedView, SavedViewPage
@@ -34,6 +36,10 @@ class WorkspaceChecks(Protocol):
         """The accounts these ids name."""
         ...
 
+    async def who_can_see(self, workspace: Workspace, user_ids: Collection[uuid.UUID]) -> set[uuid.UUID]:
+        """Those of these accounts that may see the workspace."""
+        ...
+
 
 def _built_in(page: SavedViewPage, view: BuiltInView) -> SavedViewPublic:
     return SavedViewPublic(
@@ -45,6 +51,7 @@ def _built_in(page: SavedViewPage, view: BuiltInView) -> SavedViewPublic:
         shared=False,
         is_mine=False,
         owner_name=None,
+        owner_left=False,
         can_edit=False,
         can_delete=False,
         updated_at=None,
@@ -64,6 +71,9 @@ class SavedViewService:
     workspace; a workspace the caller cannot see is not found. Only its owner
     changes a view, and a shared one only while they manage the workspace; its
     owner or a workspace manager deletes a shared one; only a manager shares.
+    A shared view whose owner left the workspace or deleted their account is
+    the managers' to rename, re-save or delete, and it cannot be made private,
+    since nobody would be left to open it.
     """
 
     def __init__(self, uow: UnitOfWork, views: SavedViewRepository, workspaces: WorkspaceChecks) -> None:
@@ -77,8 +87,19 @@ class SavedViewService:
             workspace = await self._workspaces.resolve_visible_workspace(user=user, workspace_id=workspace_id)
             manages = await self._workspaces.has_workspace_management_access(user=user, workspace=workspace)
             rows = await self._views.list_visible(workspace_id=workspace.id, page=page.value, user_id=user.id)
-            owners = {person.id: person for person in await self._workspaces.people({row.user_id for row in rows})}
-            saved = [self._public(row, caller=user, manages=manages, owner=owners.get(row.user_id)) for row in rows]
+            others = {row.user_id for row in rows if row.user_id is not None and row.user_id != user.id}
+            owners = {person.id: person for person in await self._workspaces.people(others)}
+            present = await self._workspaces.who_can_see(workspace, others) | {user.id}
+            saved = [
+                self._public(
+                    row,
+                    caller=user,
+                    manages=manages,
+                    owner=owners.get(row.user_id) if row.user_id else None,
+                    owner_present=row.user_id in present,
+                )
+                for row in rows
+            ]
         return SavedViewsPublic(
             data=[_built_in(page, view) for view in BUILT_IN_VIEWS[page]] + saved,
             can_share=manages,
@@ -104,27 +125,45 @@ class SavedViewService:
                 query=request.query,
                 shared=request.shared,
             )
-            return self._public(view, caller=user, manages=manages, owner=user)
+            return self._public(view, caller=user, manages=manages, owner=user, owner_present=True)
 
     async def update_view(
         self, *, user: User, workspace_id: uuid.UUID, view_id: uuid.UUID, request: SavedViewUpdate
     ) -> SavedViewPublic:
-        """Rename, re-save, share or stop sharing one of the caller's views."""
+        """Rename, re-save, share or stop sharing one of the caller's views.
+
+        A shared view whose owner is gone is renamed or re-saved by someone who manages the workspace.
+        """
         async with self._uow:
             workspace = await self._workspaces.resolve_visible_workspace(user=user, workspace_id=workspace_id)
             view = await self._visible_view(user, workspace, view_id)
-            if view.user_id != user.id:
-                raise SavedViewNotYoursError
             changes = request.model_dump(exclude_none=True)
             if "query" in changes:
                 require_page_keys(SavedViewPage(view.page), changes["query"])
             manages = await self._workspaces.has_workspace_management_access(user=user, workspace=workspace)
-            # Checked against the view as it will be: someone who no longer manages
-            # the workspace may stop sharing their view, not keep editing what everyone sees.
-            if changes.get("shared", view.shared) and not manages:
+            if view.user_id == user.id:
+                # Checked against the view as it will be: someone who no longer manages
+                # the workspace may stop sharing their view, not keep editing what everyone sees.
+                if changes.get("shared", view.shared) and not manages:
+                    raise SavedViewSharingForbiddenError
+                view = await self._views.update(view, changes)
+                return self._public(view, caller=user, manages=manages, owner=user, owner_present=True)
+            # Visible and not the caller's, so shared.
+            if not await self._owner_left(view, workspace):
+                raise SavedViewNotYoursError
+            if not manages:
                 raise SavedViewSharingForbiddenError
-            view = await self._views.update(view, changes)
-            return self._public(view, caller=user, manages=manages, owner=user)
+            if changes.get("shared") is False:
+                raise SavedViewOwnerLeftError
+            name = changes.get("name", view.name)
+            try:
+                view = await self._views.update(view, changes)
+            except SavedViewNameTakenError:
+                raise SavedViewNameTakenError(name, former_owner=True) from None
+            owner = await self._workspaces.people([view.user_id]) if view.user_id else []
+            return self._public(
+                view, caller=user, manages=manages, owner=owner[0] if owner else None, owner_present=False
+            )
 
     async def delete_view(self, *, user: User, workspace_id: uuid.UUID, view_id: uuid.UUID) -> None:
         """Delete one of the caller's views, or a shared one when they manage the workspace."""
@@ -137,6 +176,10 @@ class SavedViewService:
                 raise SavedViewNotYoursError
             await self._views.delete(view)
 
+    async def _owner_left(self, view: SavedView, workspace: Workspace) -> bool:
+        """Whether the view's owner deleted their account or can no longer see its workspace."""
+        return view.user_id is None or view.user_id not in await self._workspaces.who_can_see(workspace, [view.user_id])
+
     async def _visible_view(self, user: User, workspace: Workspace, view_id: uuid.UUID) -> SavedView:
         view = await self._views.get_visible(view_id=view_id, workspace_id=workspace.id, user_id=user.id)
         if view is None:
@@ -144,8 +187,12 @@ class SavedViewService:
         return view
 
     @staticmethod
-    def _public(view: SavedView, *, caller: User, manages: bool, owner: User | None) -> SavedViewPublic:
+    def _public(
+        view: SavedView, *, caller: User, manages: bool, owner: User | None, owner_present: bool
+    ) -> SavedViewPublic:
         is_mine = view.user_id == caller.id
+        # Only a shared view outlives its owner's access, and its managers keep it.
+        owner_left = view.shared and not owner_present
         return SavedViewPublic(
             id=str(view.id),
             page=SavedViewPage(view.page),
@@ -155,7 +202,8 @@ class SavedViewService:
             shared=view.shared,
             is_mine=is_mine,
             owner_name=_display_name(owner),
-            can_edit=is_mine and (manages or not view.shared),
+            owner_left=owner_left,
+            can_edit=(is_mine and (manages or not view.shared)) or (owner_left and manages),
             can_delete=is_mine or (view.shared and manages),
             updated_at=view.updated_at,
         )

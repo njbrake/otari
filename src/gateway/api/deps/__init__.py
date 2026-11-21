@@ -135,7 +135,11 @@ from gateway.api.deps.ports import (
     model_provider_port_on,
 )
 from gateway.api.deps.preferences import PreferenceServiceDep, get_preference_service
-from gateway.api.deps.saved_views import SavedViewServiceDep, get_saved_view_service
+from gateway.api.deps.saved_views import (
+    SavedViewServiceDep,
+    get_saved_view_account_listener,
+    get_saved_view_service,
+)
 from gateway.api.deps.tools import (
     CodeExecutionEnvironmentServiceDep,
     DirectToolAvailabilityDep,
@@ -1147,6 +1151,7 @@ async def get_account_deletion_service(
         trace_writer=getattr(request.app.state, "trace_writer", None),
         telemetry=telemetry,
         secrets=(provider_keys, endpoints, web_search_keys, mcp_servers, guardrails, identities.connections),
+        private_records=(get_saved_view_account_listener(uow),),
     )
 
 

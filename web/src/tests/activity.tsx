@@ -160,6 +160,7 @@ export function mockApi(
             shared: body.shared ?? false,
             is_mine: true,
             owner_name: "You",
+            owner_left: false,
             can_edit: true,
             can_delete: true,
             updated_at: new Date().toISOString(),

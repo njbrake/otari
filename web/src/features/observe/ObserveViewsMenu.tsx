@@ -91,6 +91,7 @@ function ViewsMenu({ views }: { views: ObserveViews }) {
       ? [{ id: "rename", label: `Rename ${current.name}…`, icon: FiEdit2 }]
       : []),
     // Someone who no longer manages the workspace may still stop sharing their view.
+    // A shared view whose owner is gone is only deleted, never made private.
     ...(current?.is_mine && (views.canShare || current.shared)
       ? [
           {
@@ -183,9 +184,20 @@ function ViewsMenu({ views }: { views: ObserveViews }) {
                         className="size-3.5 shrink-0 text-subtle"
                       />
                     ) : null}
-                    {!view.is_mine && view.owner_name ? (
-                      <span className="max-w-[8rem] shrink-0 truncate text-mono-micro text-subtle">
-                        {view.owner_name}
+                    {!view.is_mine && (view.owner_name || view.owner_left) ? (
+                      <span
+                        className="max-w-[8rem] shrink-0 truncate text-mono-micro text-subtle"
+                        title={
+                          view.owner_left
+                            ? "No longer in the workspace; its managers keep this view"
+                            : undefined
+                        }
+                      >
+                        {view.owner_name
+                          ? view.owner_left
+                            ? `${view.owner_name} (left)`
+                            : view.owner_name
+                          : "Former member"}
                       </span>
                     ) : null}
                     <ListBoxItem.Indicator />
@@ -265,9 +277,11 @@ function ViewsMenu({ views }: { views: ObserveViews }) {
         }}
         heading={`Delete ${deleting?.name ?? "view"}?`}
         body={
-          deleting?.shared
-            ? "It is removed for everyone in the workspace."
-            : "Only the view is removed; no requests or sessions change."
+          deleting?.owner_left
+            ? "Its owner is no longer in the workspace, so it is removed for everyone in it."
+            : deleting?.shared
+              ? "It is removed for everyone in the workspace."
+              : "Only the view is removed; no requests or sessions change."
         }
         confirmLabel="Delete view"
         isPending={views.isRemoving}

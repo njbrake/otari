@@ -47,7 +47,11 @@ async def update_saved_view(
     service: SavedViewServiceDep,
     identity: CurrentIdentity,
 ) -> SavedViewPublic:
-    """Rename, re-save or re-share one of the caller's own views."""
+    """Rename, re-save or re-share one of the caller's own views.
+
+    A shared view whose owner left the workspace or deleted their account is renamed or re-saved by someone
+    who manages the workspace; it cannot be made private, only deleted.
+    """
     return await service.update_view(user=identity, workspace_id=workspace_id, view_id=view_id, request=body)
 
 

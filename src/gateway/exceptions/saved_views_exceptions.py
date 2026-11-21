@@ -22,8 +22,14 @@ class SavedViewNotFoundError(TenancyNotFoundError):
 
 
 class SavedViewNameTakenError(TenancyConflictError):
-    def __init__(self, name: str):
-        super().__init__(f"You already have a view named '{name}' on this page")
+    """The view's owner already has a view of this name on this page, ignoring case.
+
+    ``former_owner`` says so of a manager renaming a view whose owner left, since the name is the owner's.
+    """
+
+    def __init__(self, name: str, *, former_owner: bool = False):
+        whose = "This view's former owner already has" if former_owner else "You already have"
+        super().__init__(f"{whose} a view named '{name}' on this page")
 
 
 class SavedViewNotYoursError(TenancyForbiddenError):
@@ -36,6 +42,13 @@ class SavedViewNotYoursError(TenancyForbiddenError):
 class SavedViewSharingForbiddenError(TenancyForbiddenError):
     def __init__(self) -> None:
         super().__init__("Only someone who manages this workspace may share a view with it, or change a shared one")
+
+
+class SavedViewOwnerLeftError(TenancyConflictError):
+    """A shared view whose owner is gone cannot be made private: nobody would be left to open it."""
+
+    def __init__(self) -> None:
+        super().__init__("This view's owner is no longer in the workspace, so delete it rather than stop sharing it")
 
 
 class SavedViewLimitReachedError(TenancyValidationError):
@@ -57,6 +70,7 @@ __all__ = [
     "SavedViewNameTakenError",
     "SavedViewNotFoundError",
     "SavedViewNotYoursError",
+    "SavedViewOwnerLeftError",
     "SavedViewQueryInvalidError",
     "SavedViewSharingForbiddenError",
 ]

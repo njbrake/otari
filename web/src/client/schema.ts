@@ -442,7 +442,8 @@ export interface paths {
          * @description Delete the caller's account and sign them out.
          *
          *     Erases the account's sign-in identity, sessions, passkeys, Playground
-         *     conversations, agent traces, telemetry, files and keys. Usage rows are
+         *     conversations, agent traces, telemetry, files, keys and private saved views; a shared saved view stays
+         *     with its workspace, ownerless. Usage rows are
          *     kept for the deployment's totals under a new id that does not identify
          *     the person, and an organization nobody else is active in is renamed, its
          *     keys revoked and its stored credentials cleared. Invitations to the
@@ -9442,6 +9443,9 @@ export interface paths {
         /**
          * Update Saved View
          * @description Rename, re-save or re-share one of the caller's own views.
+         *
+         *     A shared view whose owner left the workspace or deleted their account is renamed or re-saved by someone
+         *     who manages the workspace; it cannot be made private, only deleted.
          */
         patch: operations["saved-views-update_saved_view"];
         trace?: never;
@@ -21660,8 +21664,13 @@ export interface components {
             /** Name */
             name: string;
             /**
+             * Owner Left
+             * @description Shared, and its owner left the workspace or deleted their account, so the workspace's managers keep it.
+             */
+            owner_left: boolean;
+            /**
              * Owner Name
-             * @description Who saved it, for a shared view; null for a built-in one.
+             * @description Who saved it; null for a built-in one and for one whose owner deleted their account.
              */
             owner_name: string | null;
             page: components["schemas"]["SavedViewPage"];

@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Collection
 from typing import Any, Never
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -86,7 +86,7 @@ class SavedViewRepository(BaseRepository[SavedView, Never, Never]):
         result = await self.db.execute(
             select(SavedView)
             .where(SavedView.workspace_id == workspace_id, SavedView.page == page, _visible_to(user_id))
-            .order_by(SavedView.user_id != user_id, func.lower(SavedView.name), SavedView.id)
+            .order_by(case((SavedView.user_id == user_id, 0), else_=1), func.lower(SavedView.name), SavedView.id)
             .limit(_LIST_LIMIT)
         )
         return list(result.scalars().all())
@@ -100,13 +100,22 @@ class SavedViewRepository(BaseRepository[SavedView, Never, Never]):
         )
         return result.scalar_one_or_none()
 
-    async def remove_owned_in(self, user_id: uuid.UUID, workspace_ids: Collection[uuid.UUID]) -> None:
-        """Stage the removal of every view this person saved in these workspaces."""
+    async def remove_private_in(self, user_id: uuid.UUID, workspace_ids: Collection[uuid.UUID]) -> None:
+        """Stage the removal of the views this person saved in these workspaces and did not share."""
         if not workspace_ids:
             return
         await self.db.execute(
-            delete(SavedView).where(SavedView.user_id == user_id, SavedView.workspace_id.in_(list(workspace_ids)))
+            delete(SavedView).where(
+                SavedView.user_id == user_id,
+                SavedView.workspace_id.in_(list(workspace_ids)),
+                SavedView.shared.is_(False),
+            )
         )
+        await self.db.flush()
+
+    async def remove_private_owned_by(self, user_id: uuid.UUID) -> None:
+        """Stage the removal of every view this person saved and did not share, in any workspace."""
+        await self.db.execute(delete(SavedView).where(SavedView.user_id == user_id, SavedView.shared.is_(False)))
         await self.db.flush()
 
     async def count_owned_by(self, user_id: uuid.UUID) -> int:

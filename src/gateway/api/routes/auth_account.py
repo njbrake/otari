@@ -49,7 +49,8 @@ async def delete_own_account(
     """Delete the caller's account and sign them out.
 
     Erases the account's sign-in identity, sessions, passkeys, Playground
-    conversations, agent traces, telemetry, files and keys. Usage rows are
+    conversations, agent traces, telemetry, files, keys and private saved views; a shared saved view stays
+    with its workspace, ownerless. Usage rows are
     kept for the deployment's totals under a new id that does not identify
     the person, and an organization nobody else is active in is renamed, its
     keys revoked and its stored credentials cleared. Invitations to the

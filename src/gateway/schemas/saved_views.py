@@ -70,7 +70,14 @@ class SavedViewPublic(BaseModel):
     built_in: bool = Field(description="Offered by the page itself, not stored; it cannot be changed or deleted.")
     shared: bool
     is_mine: bool = Field(description="The caller saved it.")
-    owner_name: str | None = Field(description="Who saved it, for a shared view; null for a built-in one.")
+    owner_name: str | None = Field(
+        description="Who saved it; null for a built-in one and for one whose owner deleted their account."
+    )
+    owner_left: bool = Field(
+        description=(
+            "Shared, and its owner left the workspace or deleted their account, so the workspace's managers keep it."
+        )
+    )
     can_edit: bool = Field(description="The caller may rename it or save the page's current filters over it.")
     can_delete: bool
     updated_at: datetime | None = Field(description="When it was last saved; null for a built-in one.")

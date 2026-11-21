@@ -21,6 +21,7 @@ const view = (overrides: Partial<SavedView>): SavedView => ({
   shared: false,
   is_mine: false,
   owner_name: null,
+  owner_left: false,
   can_edit: false,
   can_delete: false,
   updated_at: null,
@@ -55,6 +56,19 @@ const THEIRS = view({
   built_in: false,
   shared: true,
   owner_name: "Mona Manager",
+  updated_at: "2026-11-20T00:00:00Z",
+})
+
+// Shared by someone who has since deleted their account, as a manager sees it.
+const ORPHANED = view({
+  id: "v-4",
+  name: "Old team view",
+  query: "status=success",
+  built_in: false,
+  shared: true,
+  owner_left: true,
+  can_edit: true,
+  can_delete: true,
   updated_at: "2026-11-20T00:00:00Z",
 })
 
@@ -308,6 +322,60 @@ describe("ObserveViewsMenu", () => {
     )
     await waitFor(() => expect(urlParams().has("view")).toBe(false))
     expect(urlParams().get("model")).toBe("gpt-4o")
+  })
+
+  it("names the owner of a shared view who left, and a deleted one as a former member", async () => {
+    const left = view({
+      ...ORPHANED,
+      id: "v-5",
+      name: "Left behind",
+      owner_name: "Lee Left",
+    })
+    await renderMenu("", { savedViews: [...BUILT_IN, ORPHANED, left] })
+    const menu = await openMenu(/^Views/)
+    const shared = within(menu).getByRole("group", { name: "Shared" })
+    expect(
+      within(shared).getByRole("option", { name: /^Old team view/ }),
+    ).toHaveTextContent("Former member")
+    expect(
+      within(shared).getByRole("option", { name: /^Left behind/ }),
+    ).toHaveTextContent("Lee Left (left)")
+  })
+
+  it("lets a manager rename or delete a shared view whose owner is gone, never make it private", async () => {
+    const { calls } = await renderMenu("?status=success", {
+      savedViews: [...BUILT_IN, ORPHANED],
+      canShareViews: true,
+    })
+    const menu = await openMenu(/^Views: Old team view$/)
+    expect(
+      within(menu).getByRole("option", { name: "Rename Old team view…" }),
+    ).toBeInTheDocument()
+    expect(within(menu).queryByRole("option", { name: /sharing/ })).toBeNull()
+    await userEvent.click(
+      within(menu).getByRole("option", { name: "Delete Old team view…" }),
+    )
+    expect(
+      await screen.findByText(/no longer in the workspace/),
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Delete view" }))
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "DELETE" && call.url.endsWith("/saved-views/v-4"),
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it("offers a plain member nothing to change on a shared view whose owner is gone", async () => {
+    const seen = view({ ...ORPHANED, can_edit: false, can_delete: false })
+    await renderMenu("?status=success", { savedViews: [...BUILT_IN, seen] })
+    const menu = await openMenu(/^Views: Old team view$/)
+    expect(within(menu).queryByRole("option", { name: /^Rename/ })).toBeNull()
+    expect(within(menu).queryByRole("option", { name: /^Delete/ })).toBeNull()
+    expect(within(menu).queryByRole("option", { name: /sharing/ })).toBeNull()
   })
 
   it("is not offered without a workspace to keep views in", async () => {
