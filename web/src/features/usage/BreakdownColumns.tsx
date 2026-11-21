@@ -149,7 +149,7 @@ export function NotChargedLine({
 }) {
   const notCharged = figures ? Math.max(0, figures.cost - figures.charged) : 0
   return notCharged > 0 ? (
-    <span className="whitespace-nowrap text-caption text-muted">
+    <span className="whitespace-nowrap text-caption">
       {money(notCharged)} not charged
     </span>
   ) : null
