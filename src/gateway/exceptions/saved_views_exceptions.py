@@ -22,8 +22,14 @@ class SavedViewNotFoundError(TenancyNotFoundError):
 
 
 class SavedViewNameTakenError(TenancyConflictError):
-    def __init__(self, name: str):
-        super().__init__(f"You already have a view named '{name}' on this page")
+    """The view's owner already has a view of this name on this page, ignoring case.
+
+    ``former_owner`` says so of a manager renaming a view whose owner left, since the name is the owner's.
+    """
+
+    def __init__(self, name: str, *, former_owner: bool = False):
+        whose = "This view's former owner already has" if former_owner else "You already have"
+        super().__init__(f"{whose} a view named '{name}' on this page")
 
 
 class SavedViewNotYoursError(TenancyForbiddenError):

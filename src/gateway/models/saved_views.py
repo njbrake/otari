@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, Uuid, false, func, text
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, Uuid, false, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from gateway.models.base import Base, UtcDateTime
@@ -74,6 +74,9 @@ class SavedView(Base):
         # foreign key, so neither needs an index of its own.
         Index("uq_saved_views_owner_name", "workspace_id", "page", "user_id", text("lower(name)"), unique=True),
         Index("ix_saved_views_user_id", "user_id"),
+        # Only a shared view may outlive its owner: an ownerless private view is
+        # one nobody can see or delete.
+        CheckConstraint("user_id IS NOT NULL OR shared", name="ck_saved_views_owned_or_shared"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

@@ -22,6 +22,7 @@ depends_on: str | Sequence[str] | None = None
 _TABLE = "saved_views"
 _COLUMN = "user_id"
 _FK = "fk_saved_views_user"
+_CHECK = "ck_saved_views_owned_or_shared"
 
 
 def _named(fallback: str) -> str:
@@ -69,9 +70,16 @@ def _repoint(*, nullable: bool, ondelete: str) -> None:
 
 def upgrade() -> None:
     _repoint(nullable=True, ondelete="SET NULL")
+    # Only a shared view may outlive its owner: an ownerless private view is one
+    # nobody can see or delete.
+    with op.batch_alter_table(_TABLE) as batch:
+        batch.create_check_constraint(_CHECK, sa.text(f"{_COLUMN} IS NOT NULL OR shared"))
 
 
 def downgrade() -> None:
     # A view whose owner is gone has nobody to point at, so it goes.
     op.execute(sa.text(f"DELETE FROM {_TABLE} WHERE {_COLUMN} IS NULL"))
+    if op.get_bind().dialect.name != "sqlite":
+        # SQLite's rebuild below copies the table without it.
+        op.drop_constraint(_CHECK, _TABLE, type_="check")
     _repoint(nullable=False, ondelete="CASCADE")

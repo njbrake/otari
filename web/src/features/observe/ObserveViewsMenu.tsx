@@ -193,7 +193,11 @@ function ViewsMenu({ views }: { views: ObserveViews }) {
                             : undefined
                         }
                       >
-                        {view.owner_name ?? "Former member"}
+                        {view.owner_name
+                          ? view.owner_left
+                            ? `${view.owner_name} (left)`
+                            : view.owner_name
+                          : "Former member"}
                       </span>
                     ) : null}
                     <ListBoxItem.Indicator />

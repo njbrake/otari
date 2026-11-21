@@ -7,6 +7,7 @@ from typing import Protocol
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.saved_views_exceptions import (
     SavedViewLimitReachedError,
+    SavedViewNameTakenError,
     SavedViewNotFoundError,
     SavedViewNotYoursError,
     SavedViewOwnerLeftError,
@@ -154,7 +155,11 @@ class SavedViewService:
                 raise SavedViewSharingForbiddenError
             if changes.get("shared") is False:
                 raise SavedViewOwnerLeftError
-            view = await self._views.update(view, changes)
+            name = changes.get("name", view.name)
+            try:
+                view = await self._views.update(view, changes)
+            except SavedViewNameTakenError:
+                raise SavedViewNameTakenError(name, former_owner=True) from None
             owner = await self._workspaces.people([view.user_id]) if view.user_id else []
             return self._public(
                 view, caller=user, manages=manages, owner=owner[0] if owner else None, owner_present=False

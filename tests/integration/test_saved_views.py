@@ -406,6 +406,25 @@ async def test_a_manager_keeps_a_shared_view_whose_owner_is_gone(async_db: Async
 
 
 @pytest.mark.asyncio
+async def test_renaming_a_departed_owners_view_onto_another_of_their_names_says_whose_it_is(
+    async_db: AsyncSession,
+) -> None:
+    organization, workspace, manager, _ = await _world(async_db, "views-left-name")
+    admin = await _workspace_admin(async_db, organization, workspace)
+    service = _service(async_db)
+    await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Team", shared=True))
+    ops = await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Ops", shared=True))
+    uow = UnitOfWork(async_db)
+    workspaces = WorkspaceService(async_db, uow=uow, membership_listener=get_membership_listener(uow))
+    await workspaces.remove_member(user=manager, workspace_id=workspace.id, user_id=admin.id)
+
+    with pytest.raises(SavedViewNameTakenError, match="former owner already has a view named 'team'"):
+        await service.update_view(
+            user=manager, workspace_id=workspace.id, view_id=uuid.UUID(ops.id), request=SavedViewUpdate(name="team")
+        )
+
+
+@pytest.mark.asyncio
 async def test_a_shared_view_is_its_owners_again_once_they_return(async_db: AsyncSession) -> None:
     organization, workspace, manager, _ = await _world(async_db, "views-return")
     admin = await _workspace_admin(async_db, organization, workspace)
@@ -521,3 +540,21 @@ async def test_a_user_merge_moves_views_onto_the_target_and_refuses_a_shared_nam
     assert await merged(str(member.id), str(other.id), preview=False) == {"saved_views": 2}
     owners = (await async_db.execute(select(SavedView.user_id).where(SavedView.user_id == other.id))).scalars().all()
     assert len(owners) == 2
+
+
+def test_a_private_view_cannot_lose_its_owner(db_session) -> None:
+    """The schema refuses an ownerless private view: nobody could see or delete it."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    workspace_id = db_session.execute(text("SELECT id FROM workspace LIMIT 1")).scalar_one()
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            text(
+                "INSERT INTO saved_views (id, user_id, workspace_id, page, name, query, shared) "
+                "VALUES (:id, NULL, :workspace, 'requests', 'stray', '', false)"
+            ),
+            {"id": uuid.uuid4(), "workspace": workspace_id},
+        )
+        db_session.flush()
+    db_session.rollback()

@@ -339,7 +339,7 @@ describe("ObserveViewsMenu", () => {
     ).toHaveTextContent("Former member")
     expect(
       within(shared).getByRole("option", { name: /^Left behind/ }),
-    ).toHaveTextContent("Lee Left")
+    ).toHaveTextContent("Lee Left (left)")
   })
 
   it("lets a manager rename or delete a shared view whose owner is gone, never make it private", async () => {
