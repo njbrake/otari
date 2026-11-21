@@ -10,10 +10,10 @@ import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { DismissChip } from "@/design-system/indicators/DismissChip"
+import { PageIntro } from "@/design-system/layout/PageIntro"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { DocsLink } from "@/design-system/navigation/DocsLink"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
-import { RulesFrame } from "@/features/rules/RulesFrame"
 import { useKeys } from "@/shared/api/apiKeys"
 import {
   useAutomaticFallbacks,
@@ -204,13 +204,12 @@ export function RoutingPage() {
     ? deleteMutationFor(pendingDelete)
     : undefined
 
-  // A tab of Rules: the frame carries the title and the tab row, so this view
-  // opens with its own action alone.
   return (
-    <RulesFrame current="routing">
-      <div className="flex flex-col gap-6">
-        {canEdit ? (
-          <div className="flex justify-end">
+    <div className="flex min-w-0 flex-col gap-6">
+      <PageIntro
+        title="Routing"
+        action={
+          canEdit ? (
             <Button
               ref={createButtonRef}
               // Visible while the dialog is open: the dialog is over the page,
@@ -220,9 +219,10 @@ export function RoutingPage() {
             >
               Create policy
             </Button>
-          </div>
-        ) : null}
-
+          ) : undefined
+        }
+      />
+      <div className="flex flex-col gap-6">
         {/* The reads only. Every delete on this page reports inside its own
           confirm dialog, which is where the operator is looking. */}
         <ErrorBanner error={error} />
@@ -376,7 +376,7 @@ export function RoutingPage() {
           }}
         />
       </div>
-    </RulesFrame>
+    </div>
   )
 }
 

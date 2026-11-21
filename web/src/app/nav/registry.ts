@@ -74,9 +74,8 @@ const BASE_NAV_SECTIONS = [
       },
       { to: "/people", label: "People", icon: FiUsers },
       { to: "/rules", label: "Rules", icon: FiShield },
-      // A row of its own as well as a tab of Rules (`features/rules/RulesFrame.tsx`),
-      // since a policy is what an operator edits most and two taps through
-      // Rules hid it. Not tagged `capability: "routing"`: ARCHITECTURE.md marks
+      // A row of its own, since a policy is what an operator edits most and
+      // two taps through Rules hid it. Not tagged `capability: "routing"`: ARCHITECTURE.md marks
       // the routing split provisional. `/aliases` redirects onto `/routing`.
       {
         to: "/routing",
