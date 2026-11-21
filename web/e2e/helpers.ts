@@ -140,6 +140,12 @@ export async function openTab(
   await expect(link).toHaveAttribute("aria-current", "page")
 }
 
+/** Routing, from its own rail row; its page is titled Routing. */
+export async function openRouting(page: Page): Promise<void> {
+  await nav(page).getByRole("link", { name: "Routing", exact: true }).click()
+  await expect(pageHeading(page, "Routing")).toBeVisible()
+}
+
 /**
  * A table row's actions are one three-dot menu (`RowActionRow` or `RowMenu`). Opens the
  * menu inside `scope` (a row, or anything holding several rows) that has an

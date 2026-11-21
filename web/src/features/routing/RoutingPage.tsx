@@ -204,8 +204,7 @@ export function RoutingPage() {
     ? deleteMutationFor(pendingDelete)
     : undefined
 
-  // A tab of Rules: the frame carries the title and the tab row, so this view
-  // opens with its own action alone.
+  // The frame carries the title, so this view opens with its own action alone.
   return (
     <RulesFrame current="routing">
       <div className="flex flex-col gap-6">

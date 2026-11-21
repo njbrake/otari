@@ -8,17 +8,15 @@ import { useIsOrganizationManager } from "@/features/organization/access"
 import { NewRuleDialog } from "@/features/rules/NewRuleDialog"
 import { RULE_TAB_LABEL, type RuleTab, ruleTabs } from "@/features/rules/rules"
 import { ViewTabs } from "@/shared/components/ViewTabs"
-import { useSurfaces } from "@/shared/hooks/useDeployment"
 
-/** What the tab row names the view by: a type of rule, or Routing. */
+/** The view a frame is over: a type of rule, or Routing. */
 export type RulesView = RuleTab | "routing"
 
 /**
- * Rules' title and tab row, over either view: the list of rules
- * (`RulesPage.tsx`, one tab per type) or the routing policies
- * (`features/routing/RoutingPage.tsx`, at `/routing`). Two routes under one
- * tab row, as Sessions and Requests are. Routing is offered to every role, on
- * a deployment that hosts the routing surface.
+ * The title over the list of rules (`RulesPage.tsx`, one tab per type) or the
+ * routing policies (`features/routing/RoutingPage.tsx`, at `/routing`).
+ * Routing has a rail row of its own, so it is titled Routing and carries no
+ * rule tabs, and the rule tabs do not lead to it.
  */
 export function RulesFrame({
   current,
@@ -30,7 +28,6 @@ export function RulesFrame({
   children: ReactNode
 }) {
   const isManager = useIsOrganizationManager()
-  const hostsSurface = useSurfaces()
   const [isNewOpen, setNewOpen] = useState(false)
   const isRouting = current === "routing"
 
@@ -38,7 +35,7 @@ export function RulesFrame({
     <div className="flex min-w-0 flex-col gap-6">
       <div className="otari-rules-intro flex flex-col">
         <PageIntro
-          title="Rules"
+          title={isRouting ? "Routing" : "Rules"}
           action={
             // Routing's own Create policy is the action on that view.
             isManager && !isRouting ? (
@@ -54,21 +51,18 @@ export function RulesFrame({
             <ErrorBanner error={error} />
           </div>
         ) : null}
-        <ViewTabs
-          label="Rule types"
-          current={current}
-          tabs={[
-            ...ruleTabs(isManager).map((one) => ({
+        {isRouting ? null : (
+          <ViewTabs
+            label="Rule types"
+            current={current}
+            tabs={ruleTabs(isManager).map((one) => ({
               id: one,
               to: "/rules",
               label: RULE_TAB_LABEL[one],
               search: one === "all" ? {} : { type: one },
-            })),
-            ...(hostsSurface("routing")
-              ? [{ id: "routing", to: "/routing", label: "Routing" }]
-              : []),
-          ]}
-        />
+            }))}
+          />
+        )}
       </div>
       {children}
       {isNewOpen ? <NewRuleDialog onClose={() => setNewOpen(false)} /> : null}

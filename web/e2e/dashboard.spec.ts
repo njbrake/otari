@@ -10,6 +10,7 @@ import {
   openAccountMenu,
   openNested,
   openOrganization,
+  openRouting,
   openTab,
   pageHeading,
   pressRowAction,
@@ -125,10 +126,9 @@ test.describe("dashboard core flows", () => {
     await nav(page).getByRole("link", { name: "Models", exact: true }).click()
     await expect(pageHeading(page, "Models")).toBeVisible()
 
-    // Routing is a tab of Rules, which titles the page, and each tool a view
+    // Routing has a rail row and a page of its own, and each tool is a view
     // of Tools.
-    await openTab(page, "Rules", "Routing")
-    await expect(pageHeading(page, "Rules")).toBeVisible()
+    await openRouting(page)
     await openTab(page, "Tools", "Web search")
     await expect(pageHeading(page, "Tools")).toBeVisible()
     // The one Tools view that is not a filtered view of the settings page, so
@@ -276,7 +276,7 @@ test.describe("dashboard core flows", () => {
 
   test("create a routing policy", async ({ page }) => {
     await login(page)
-    await openTab(page, "Rules", "Routing")
+    await openRouting(page)
     // `.first()` is the heading's action. An empty routing list also offers
     // the same words from its empty state, and a press has to name which.
     await page.getByRole("button", { name: "Create policy" }).first().click()
@@ -305,7 +305,7 @@ test.describe("dashboard core flows", () => {
 
   test("grows a policy a fallback chain", async ({ page }) => {
     await login(page)
-    await openTab(page, "Rules", "Routing")
+    await openRouting(page)
     // `.first()` is the heading's action. An empty routing list also offers
     // the same words from its empty state, and a press has to name which.
     await page.getByRole("button", { name: "Create policy" }).first().click()
@@ -357,7 +357,7 @@ test.describe("dashboard core flows", () => {
     expect([204, 404]).toContain(dropped.status())
 
     await login(page)
-    await openTab(page, "Rules", "Routing")
+    await openRouting(page)
 
     const chained = page
       .getByRole("row")
