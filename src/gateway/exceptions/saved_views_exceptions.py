@@ -38,6 +38,13 @@ class SavedViewSharingForbiddenError(TenancyForbiddenError):
         super().__init__("Only someone who manages this workspace may share a view with it, or change a shared one")
 
 
+class SavedViewOwnerLeftError(TenancyConflictError):
+    """A shared view whose owner is gone cannot be made private: nobody would be left to open it."""
+
+    def __init__(self) -> None:
+        super().__init__("This view's owner is no longer in the workspace, so delete it rather than stop sharing it")
+
+
 class SavedViewLimitReachedError(TenancyValidationError):
     def __init__(self, limit: int):
         super().__init__(f"You can keep up to {limit} saved views on a page; delete one to save another")
@@ -57,6 +64,7 @@ __all__ = [
     "SavedViewNameTakenError",
     "SavedViewNotFoundError",
     "SavedViewNotYoursError",
+    "SavedViewOwnerLeftError",
     "SavedViewQueryInvalidError",
     "SavedViewSharingForbiddenError",
 ]

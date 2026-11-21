@@ -62,7 +62,9 @@ VIEW_QUERY_KEYS: dict[SavedViewPage, frozenset[str]] = {
 class SavedView(Base):
     """One saved view: a page's query string under a name, owned by the identity that saved it in one workspace.
 
-    It goes with its owner and with its workspace: it is the page's own memory, with no ledger to keep.
+    It goes with its workspace. A private one goes with its owner too, while a
+    shared one outlives them, ownerless once their account is deleted, and the
+    workspace's managers keep it from then on.
     """
 
     __tablename__ = "saved_views"
@@ -75,7 +77,10 @@ class SavedView(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False)
+    # Null only on a shared view whose owner deleted their account.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL", name="fk_saved_views_user"), nullable=True
+    )
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False
     )

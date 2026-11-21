@@ -2,7 +2,8 @@
 
 What names the person goes: the sign-in identity with its passwords, passkeys,
 links and sessions, its Playground conversations, its agent traces and
-telemetry, its files and its keys. What the deployment still needs to count
+telemetry, its files, its keys and the saved views it kept to itself. Its shared
+saved views stay with their workspace, ownerless. What the deployment still needs to count
 stays, under a new id that nothing links back to them: usage rows move onto a
 nameless deleted user, so spend and token totals still add up and still count
 one person, and an organization nobody else is active in keeps its rows under a
@@ -56,6 +57,14 @@ class OrganizationSecrets(Protocol):
         ...
 
 
+class PrivateRecords(Protocol):
+    """A domain's records that only the account itself could open, which go with it."""
+
+    async def forget_account(self, identity_id: uuid.UUID) -> None:
+        """Stage removing the records only this account could open."""
+        ...
+
+
 @dataclass(frozen=True)
 class DeletedAccount:
     """The account that was deleted, as it was, for whoever must be told."""
@@ -82,10 +91,12 @@ class AccountDeletionService:
         trace_writer: TraceWriter | None,
         telemetry: TelemetryStoragePort,
         secrets: Sequence[OrganizationSecrets],
+        private_records: Sequence[PrivateRecords],
     ) -> None:
         """``files`` is ``None`` where the deployment stores no files, ``trace_writer`` where it writes no traces.
 
-        ``secrets`` are cleared in every organization the account leaves nobody active in.
+        ``secrets`` are cleared in every organization the account leaves nobody active in, and
+        ``private_records`` are removed before the account row goes.
         """
         self._uow = uow
         self._identities = repositories.users
@@ -100,6 +111,7 @@ class AccountDeletionService:
         self._trace_writer = trace_writer
         self._telemetry = telemetry
         self._secrets = secrets
+        self._private_records = private_records
 
     async def delete(self, account: User, *, confirm_email: str, current_password: str | None) -> DeletedAccount:
         """Delete ``account`` and everything that names its owner.
@@ -178,6 +190,8 @@ class AccountDeletionService:
             # on the account between the checks above and its deletion.
             await self._refuse_bootstrap_operator(identity_id)
             if identity is not None:
+                for records in self._private_records:
+                    await records.forget_account(identity_id)
                 await self._identities.delete(identity)
             await self._erased.add(identity_id)
         return released

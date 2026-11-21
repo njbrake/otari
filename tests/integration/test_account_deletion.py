@@ -24,6 +24,7 @@ from gateway.models.organizations import OrganizationInvitation
 from gateway.models.platform import RuntimeSetting
 from gateway.models.provider_keys import OrgProviderKey
 from gateway.models.providers import ProviderEndpoint
+from gateway.models.saved_views import SavedView
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace
 from gateway.models.tools import OrgWebSearchKey, WorkspaceMcpServer
 from gateway.models.usage import UsageLog
@@ -281,6 +282,40 @@ def test_a_member_leaves_an_organization_others_use_as_it_was(
         service_key = session.get(APIKey, account.service_key_id)
         assert service_key is not None
         assert service_key.is_active is True
+    finally:
+        session.close()
+
+
+def test_a_deleted_account_leaves_its_shared_views_ownerless_and_its_private_ones_gone(
+    client: TestClient, db_session_factory: Callable[[], Session]
+) -> None:
+    owner = _add_account(db_session_factory, email="grace@example.com")
+    account = _add_account(db_session_factory, organization_id=owner.organization_id, role="admin")
+    session = db_session_factory()
+    try:
+        session.add_all(
+            [
+                SavedView(
+                    user_id=account.identity_id,
+                    workspace_id=account.workspace_id,
+                    page="requests",
+                    name=name,
+                    query="status=error",
+                    shared=shared,
+                )
+                for name, shared in (("Private", False), ("Team", True))
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    assert _delete(client, account, current_password=PASSWORD).status_code == 204
+
+    session = db_session_factory()
+    try:
+        rows = session.query(SavedView.name, SavedView.user_id).all()
+        assert [tuple(row) for row in rows] == [("Team", None)]
     finally:
         session.close()
 

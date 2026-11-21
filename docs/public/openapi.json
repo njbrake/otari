@@ -25218,6 +25218,11 @@
             "title": "Name",
             "type": "string"
           },
+          "owner_left": {
+            "description": "Shared, and its owner left the workspace or deleted their account, so the workspace's managers keep it.",
+            "title": "Owner Left",
+            "type": "boolean"
+          },
           "owner_name": {
             "anyOf": [
               {
@@ -25227,7 +25232,7 @@
                 "type": "null"
               }
             ],
-            "description": "Who saved it, for a shared view; null for a built-in one.",
+            "description": "Who saved it; null for a built-in one and for one whose owner deleted their account.",
             "title": "Owner Name"
           },
           "page": {
@@ -25264,6 +25269,7 @@
           "shared",
           "is_mine",
           "owner_name",
+          "owner_left",
           "can_edit",
           "can_delete",
           "updated_at"
@@ -36767,7 +36773,7 @@
     },
     "/api/v1/auth/account": {
       "delete": {
-        "description": "Delete the caller's account and sign them out.\n\nErases the account's sign-in identity, sessions, passkeys, Playground\nconversations, agent traces, telemetry, files and keys. Usage rows are\nkept for the deployment's totals under a new id that does not identify\nthe person, and an organization nobody else is active in is renamed, its\nkeys revoked and its stored credentials cleared. Invitations to the\naccount's address are withdrawn everywhere. Refused while the account is the last active owner of\nan organization other people are active in.",
+        "description": "Delete the caller's account and sign them out.\n\nErases the account's sign-in identity, sessions, passkeys, Playground\nconversations, agent traces, telemetry, files, keys and private saved views; a shared saved view stays\nwith its workspace, ownerless. Usage rows are\nkept for the deployment's totals under a new id that does not identify\nthe person, and an organization nobody else is active in is renamed, its\nkeys revoked and its stored credentials cleared. Invitations to the\naccount's address are withdrawn everywhere. Refused while the account is the last active owner of\nan organization other people are active in.",
         "operationId": "auth-delete_own_account",
         "requestBody": {
           "content": {
@@ -74243,7 +74249,7 @@
         ]
       },
       "patch": {
-        "description": "Rename, re-save or re-share one of the caller's own views.",
+        "description": "Rename, re-save or re-share one of the caller's own views.\n\nA shared view whose owner left the workspace or deleted their account is renamed or re-saved by someone\nwho manages the workspace; it cannot be made private, only deleted.",
         "operationId": "saved-views-update_saved_view",
         "parameters": [
           {

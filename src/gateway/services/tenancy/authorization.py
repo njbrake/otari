@@ -154,6 +154,19 @@ class WorkspaceAccess:
         """The accounts these ids name."""
         return await UserRepository(self._db).get_by_ids(user_ids)
 
+    async def who_can_see(self, workspace: Workspace, user_ids: Collection[uuid.UUID]) -> set[uuid.UUID]:
+        """Those of these accounts that may see a workspace, by the rule :func:`resolve_visible_workspace` holds.
+
+        An active member of its organization who manages the organization, or who is an active member of the
+        workspace itself.
+        """
+        if not user_ids:
+            return set()
+        roles = await self._organizations.members.get_active_roles([workspace.organization_id], user_ids)
+        pairs = await WorkspaceMemberRepository(self._db).get_active_pairs([workspace.id], user_ids)
+        members = {user_id for _, user_id in pairs}
+        return {user_id for (_, user_id), role in roles.items() if role in MANAGEMENT_ROLES or user_id in members}
+
 
 @dataclass(frozen=True)
 class VisibleWorkspaceScope:

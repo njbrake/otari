@@ -22,20 +22,21 @@ from gateway.exceptions.saved_views_exceptions import (
     SavedViewNameTakenError,
     SavedViewNotFoundError,
     SavedViewNotYoursError,
+    SavedViewOwnerLeftError,
     SavedViewQueryInvalidError,
     SavedViewSharingForbiddenError,
 )
 from gateway.models.saved_views import MAX_VIEWS_PER_PAGE, SavedView, SavedViewPage
-from gateway.models.tenancy import Organization, User, Workspace
+from gateway.models.tenancy import ActiveOrganizationMemberUpdateRequest, Organization, User, Workspace
 from gateway.repositories.saved_views import SavedViewRepository
 from gateway.repositories.tenancy import WorkspaceMemberRepository
 from gateway.schemas.saved_views import SavedViewCreate, SavedViewUpdate
-from gateway.services.saved_views import SavedViewService, SavedViewUserMergeListener
+from gateway.services.saved_views import SavedViewAccountListener, SavedViewService, SavedViewUserMergeListener
 from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_service import WorkspaceService
 
-from .tenancy_helpers import create_member, create_organization, create_workspace
+from .tenancy_helpers import NO_SSO_ENFORCEMENT, create_member, create_organization, create_workspace
 
 REQUESTS = SavedViewPage.REQUESTS
 SESSIONS = SavedViewPage.SESSIONS
@@ -272,33 +273,156 @@ async def test_a_person_keeps_a_bounded_number_of_views_per_page(async_db: Async
     await _reload(async_db)
 
 
+async def _workspace_admin(db: AsyncSession, organization: Organization, workspace: Workspace) -> User:
+    """A plain member of the organization who manages ``workspace`` through its own membership."""
+    admin = await create_member(db, organization, role="member", full_name="Wes Admin")
+    await WorkspaceMemberRepository(db).create(workspace_id=workspace.id, user_id=admin.id, role="admin")
+    await db.commit()
+    return admin
+
+
+async def _remaining(db: AsyncSession) -> list[tuple[str, uuid.UUID | None]]:
+    rows = (await db.execute(select(SavedView.name, SavedView.user_id).order_by(SavedView.name))).all()
+    return [(name, user_id) for name, user_id in rows]
+
+
 @pytest.mark.asyncio
-async def test_leaving_a_workspace_removes_the_views_saved_in_it(async_db: AsyncSession) -> None:
-    _, workspace, manager, member = await _world(async_db, "views-leave")
+async def test_leaving_a_workspace_keeps_shared_views_and_removes_private_ones(async_db: AsyncSession) -> None:
+    organization, workspace, manager, member = await _world(async_db, "views-leave")
+    admin = await _workspace_admin(async_db, organization, workspace)
     service = _service(async_db)
-    await service.create_view(user=member, workspace_id=workspace.id, request=_create("Mine"))
-    await service.create_view(user=manager, workspace_id=workspace.id, request=_create("Team", shared=True))
+    await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Mine"))
+    await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Team", shared=True))
 
     uow = UnitOfWork(async_db)
     workspaces = WorkspaceService(async_db, uow=uow, membership_listener=get_membership_listener(uow))
-    await workspaces.remove_member(user=manager, workspace_id=workspace.id, user_id=member.id)
+    await workspaces.remove_member(user=manager, workspace_id=workspace.id, user_id=admin.id)
 
-    owners = (await async_db.execute(select(SavedView.user_id))).scalars().all()
-    assert owners == [manager.id]
+    assert await _remaining(async_db) == [("Team", admin.id)]
+    for caller, manages in ((manager, True), (member, False)):
+        listed = await service.list_views(user=caller, workspace_id=workspace.id, page=REQUESTS)
+        team = next(view for view in listed.data if view.name == "Team")
+        assert (team.owner_name, team.owner_left, team.can_edit, team.can_delete) == (
+            "Wes Admin",
+            True,
+            manages,
+            manages,
+        )
 
 
 @pytest.mark.asyncio
-async def test_deleting_an_identity_removes_its_views(async_db: AsyncSession) -> None:
-    _, workspace, manager, member = await _world(async_db, "views-delete")
+async def test_losing_an_organization_role_keeps_shared_views_and_removes_private_ones(
+    async_db: AsyncSession,
+) -> None:
+    organization, workspace, manager, _ = await _world(async_db, "views-org-demoted")
+    admin = await create_member(async_db, organization, role="admin", full_name="Ada Admin")
+    await async_db.commit()
     service = _service(async_db)
-    await service.create_view(user=member, workspace_id=workspace.id, request=_create("Mine"))
-    await service.create_view(user=manager, workspace_id=workspace.id, request=_create("Team", shared=True))
+    await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Mine"))
+    await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Team", shared=True))
 
-    await async_db.execute(delete(User).where(User.id == member.id))  # type: ignore[arg-type]
+    uow = UnitOfWork(async_db)
+    organizations = OrganizationService(async_db, uow=uow, membership_listener=get_membership_listener(uow))
+    membership = await organizations.members.get_active_by_organization_and_user(organization.id, admin.id)
+    assert membership is not None
+    await organizations.update_active_organization_member_for_user(
+        user=manager,
+        organization_member_id=membership.id,
+        request=ActiveOrganizationMemberUpdateRequest(role="member"),
+        sso_enforcement=NO_SSO_ENFORCEMENT,
+        open_signup=False,
+    )
+
+    assert await _remaining(async_db) == [("Team", admin.id)]
+    listed = await service.list_views(user=manager, workspace_id=workspace.id, page=REQUESTS)
+    team = next(view for view in listed.data if view.name == "Team")
+    assert (team.owner_left, team.can_edit, team.can_delete) == (True, True, True)
+
+
+async def _delete_account(db: AsyncSession, identity: User) -> None:
+    """What account deletion does to saved views: the private ones removed, then the identity row."""
+    uow = UnitOfWork(db)
+    async with uow:
+        await SavedViewAccountListener(SavedViewRepository(uow)).forget_account(identity.id)
+    await db.execute(delete(User).where(User.id == identity.id))  # type: ignore[arg-type]
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_account_keeps_its_shared_views_without_an_owner(async_db: AsyncSession) -> None:
+    organization, workspace, manager, _ = await _world(async_db, "views-delete")
+    admin = await _workspace_admin(async_db, organization, workspace)
+    service = _service(async_db)
+    await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Mine"))
+    await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Team", shared=True))
+    await service.create_view(user=manager, workspace_id=workspace.id, request=_create("Kept"))
+
+    await _delete_account(async_db, admin)
+
+    assert await _remaining(async_db) == [("Kept", manager.id), ("Team", None)]
+
+
+@pytest.mark.asyncio
+async def test_a_manager_keeps_a_shared_view_whose_owner_is_gone(async_db: AsyncSession) -> None:
+    organization, workspace, manager, member = await _world(async_db, "views-ownerless")
+    admin = await _workspace_admin(async_db, organization, workspace)
+    service = _service(async_db)
+    shared = await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Team", shared=True))
+    view_id = uuid.UUID(shared.id)
+    await _delete_account(async_db, admin)
+
+    listed = await service.list_views(user=member, workspace_id=workspace.id, page=REQUESTS)
+    team = next(view for view in listed.data if view.name == "Team")
+    assert (team.owner_name, team.owner_left, team.can_edit, team.can_delete) == (None, True, False, False)
+    with pytest.raises(SavedViewSharingForbiddenError):
+        await service.update_view(
+            user=member, workspace_id=workspace.id, view_id=view_id, request=SavedViewUpdate(name="Ours")
+        )
+    await _reload(async_db)
+    with pytest.raises(SavedViewNotYoursError):
+        await service.delete_view(user=member, workspace_id=workspace.id, view_id=view_id)
+    await _reload(async_db)
+
+    renamed = await service.update_view(
+        user=manager,
+        workspace_id=workspace.id,
+        view_id=view_id,
+        request=SavedViewUpdate(name="Team errors", query="status=success"),
+    )
+    assert (renamed.name, renamed.query, renamed.owner_left, renamed.can_edit) == (
+        "Team errors",
+        "status=success",
+        True,
+        True,
+    )
+    with pytest.raises(SavedViewOwnerLeftError):
+        await service.update_view(
+            user=manager, workspace_id=workspace.id, view_id=view_id, request=SavedViewUpdate(shared=False)
+        )
+    await _reload(async_db)
+    await service.delete_view(user=manager, workspace_id=workspace.id, view_id=view_id)
+
+    assert await _remaining(async_db) == []
+
+
+@pytest.mark.asyncio
+async def test_a_shared_view_is_its_owners_again_once_they_return(async_db: AsyncSession) -> None:
+    organization, workspace, manager, _ = await _world(async_db, "views-return")
+    admin = await _workspace_admin(async_db, organization, workspace)
+    service = _service(async_db)
+    shared = await service.create_view(user=admin, workspace_id=workspace.id, request=_create("Team", shared=True))
+    uow = UnitOfWork(async_db)
+    workspaces = WorkspaceService(async_db, uow=uow, membership_listener=get_membership_listener(uow))
+    await workspaces.remove_member(user=manager, workspace_id=workspace.id, user_id=admin.id)
+    await WorkspaceMemberRepository(async_db).create(workspace_id=workspace.id, user_id=admin.id, role="admin")
     await async_db.commit()
 
-    owners = (await async_db.execute(select(SavedView.user_id))).scalars().all()
-    assert owners == [manager.id]
+    listed = await service.list_views(user=manager, workspace_id=workspace.id, page=REQUESTS)
+    team = next(view for view in listed.data if view.id == shared.id)
+    assert (team.owner_left, team.can_edit) == (False, False)
+    listed = await service.list_views(user=admin, workspace_id=workspace.id, page=REQUESTS)
+    team = next(view for view in listed.data if view.id == shared.id)
+    assert (team.is_mine, team.owner_left, team.can_edit) == (True, False, True)
 
 
 def _default_workspace_id(client: TestClient, headers: dict[str, str]) -> str:
