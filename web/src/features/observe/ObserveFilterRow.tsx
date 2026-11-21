@@ -18,6 +18,7 @@ import {
 import { providerDisplayName } from "@/shared/helpers/providers"
 import { findPreset, localMidnightIso } from "@/shared/helpers/timeRange"
 import { ObserveFilterSheet } from "./ObserveFilterSheet"
+import { ObserveViewsMenu } from "./ObserveViewsMenu"
 import { OBSERVE_FILTER_COLUMNS } from "./observeColumnFilters"
 import {
   CHANNEL_OPTIONS,
@@ -357,8 +358,8 @@ export function ObserveFilterRow({
 
   return (
     <div className="flex flex-col gap-2 pb-3">
-      {/* One row of controls: the view's search, the window, the columns (or
-          the phone's Filters), and the view's own refresh at the right edge.
+      {/* One row of controls: the view's search, the window, its saved views,
+          the columns (or the phone's Filters), and the view's own refresh at the right edge.
           The applied filters sit under it, never across the chart from it. */}
       <div className="otari-toolbar otari-observe-controls flex flex-wrap items-center gap-2">
         {search ? (
@@ -370,6 +371,7 @@ export function ObserveFilterRow({
           onChange={pickRange}
           options={rangeOptions}
         />
+        {view === "usage" ? null : <ObserveViewsMenu page={view} />}
         {/* The phone's cards have no columns to size or hide. */}
         {!isMobile && isLayoutView(view) ? (
           <ObserveColumnsControl view={view} />

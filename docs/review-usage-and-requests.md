@@ -153,7 +153,7 @@ share one time range and the model, user, API key and status filters, which
 stay in place when you switch views and are kept in the URL.
 
 Both views open on one row of controls above the chart: the view's search box,
-the **Time range**, **Columns** (on a phone, **Filters**), and at the right
+the **Time range**, **Views**, **Columns** (on a phone, **Filters**), and at the right
 edge the view's refresh and, on Requests, its live controls. The filters you
 apply show as chips in a row directly under it.
 
@@ -240,6 +240,31 @@ or device. Phones show every field on the cards.
 when you switch to Sessions. On Requests, dragging across the chart narrows the
 range. Both views show everyone's requests in the workspace; pick yourself in
 the **User** column's filter to see only yours.
+
+### Saved views
+
+**Views** keeps a page's filters, search, time range and sort under a name, in
+the selected workspace. It lists the page's built-in views first (on Requests
+**All requests**, **My requests**, **Failures this week**, **Expensive calls**,
+**Subscription usage** for imported subscription traffic and **Billed API
+traffic**; on Sessions **All sessions**, **My sessions**, **Sessions with
+errors**, **Costliest this week** and **Longest running**), then yours, then
+those shared in the workspace with who shared them. Pick one to apply it: it
+replaces the filters rather than adding to them, and goes back to the first
+page. The button names the view the page shows, with a dot once you change a
+filter, and **Save changes to** puts the change on a view of your own.
+
+**Save current view** names the page as it stands. Someone who manages the
+workspace can also share it with the workspace, and only they can change a
+shared view or delete one somebody else shared. A view's menu renames it,
+saves the current filters over it, shares or stops sharing it, and deletes it.
+**Copy link** copies the page's address, which opens on the same filters and
+names the same view in the workspace the reader has selected; a reload keeps
+the view's name too. You keep up to 50 views per page in a
+workspace. A dragged span on the chart is not part of a view, and your views
+in a workspace, shared ones included, are removed when you leave it or delete
+your account. On a
+phone, **Views** sits in the same row of controls as **Filters**.
 
 ## Find one request
 

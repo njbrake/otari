@@ -23,6 +23,7 @@ from gateway.repositories.files import FileRepositories
 from gateway.repositories.identity import BlockedEmailRepository
 from gateway.repositories.inference import InferenceRepositories
 from gateway.repositories.organizations import OrganizationRepositories
+from gateway.repositories.saved_views import SavedViewRepository
 from gateway.repositories.tenancy import (
     OrganizationDomainRepository,
     OrganizationRepository,
@@ -53,6 +54,7 @@ from gateway.services.organizations import (
 from gateway.services.policy_store import refresh_policy_cache
 from gateway.services.providers import ProviderEndpointUserMergeListener, refresh_provider_endpoint_cache
 from gateway.services.routing import RoutingUserMergeListener
+from gateway.services.saved_views import SavedViewMembershipListener, SavedViewUserMergeListener
 from gateway.services.tenancy import (
     InvitationClaimSettings,
     MembershipListener,
@@ -74,7 +76,7 @@ def get_user_access(uow: UnitOfWorkDep) -> UserAccess:
 
 
 def get_membership_listener(uow: UnitOfWorkDep) -> MembershipListener:
-    """Return the listener that keeps members' budget ceilings, own keys, session shares and MCP access in step.
+    """Return the listener that keeps members' budget ceilings, own keys, session shares, MCP access and views in step.
 
     It writes through the request's Unit of Work, so a service that changes membership must be built on the same one.
     """
@@ -83,6 +85,7 @@ def get_membership_listener(uow: UnitOfWorkDep) -> MembershipListener:
         ApiKeyMembershipListener(ApiKeyRepositories.on(uow)),
         TraceMembershipListener(TracesRepositories.on(uow)),
         McpGrantMembershipListener(uow),
+        SavedViewMembershipListener(SavedViewRepository(uow)),
     )
 
 
@@ -237,6 +240,7 @@ def get_user_merge_service(
             SandboxContainerUserMergeListener(uow),
             AliasUserMergeListener(db),
             BatchUserMergeListener(db),
+            SavedViewUserMergeListener(SavedViewRepository(uow)),
         ),
     )
 

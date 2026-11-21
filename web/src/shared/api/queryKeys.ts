@@ -28,6 +28,9 @@ export const RATE_LIMIT_RULES = "rate-limit-rules"
 // The signed-in person's own dashboard preferences, one entry per key. Written
 // only by this tab's own layout changes, so nothing else invalidates it.
 export const PREFERENCES = "preferences"
+// A workspace's saved views of one page: written only through the views menu,
+// whose mutations invalidate it.
+export const SAVED_VIEWS = "saved-views"
 // One indexed single-row read, and only while the settings page is mounted.
 export const MAINTENANCE_MODE_POLL_MS = 30_000
 export const TOOL_SETTINGS = "tool-settings"

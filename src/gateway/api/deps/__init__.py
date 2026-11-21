@@ -133,6 +133,7 @@ from gateway.api.deps.ports import (
     model_provider_port_on,
 )
 from gateway.api.deps.preferences import PreferenceServiceDep, get_preference_service
+from gateway.api.deps.saved_views import SavedViewServiceDep, get_saved_view_service
 from gateway.api.deps.tools import (
     CodeExecutionEnvironmentServiceDep,
     DirectToolAvailabilityDep,
@@ -1241,6 +1242,7 @@ __all__ = [
     "PlaygroundToolOfferDep",
     "PortSessionDep",
     "PreferenceServiceDep",
+    "SavedViewServiceDep",
     "RateLimitServiceDep",
     "RequestSessionBillingPortDep",
     "RequestSessionModelProviderPortDep",
@@ -1333,6 +1335,7 @@ __all__ = [
     "get_platform_client",
     "get_playground_tool_offer",
     "get_preference_service",
+    "get_saved_view_service",
     "get_request_session_billing_port",
     "get_request_session_model_provider_port",
     "get_search_catalog_caller",
