@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from gateway.api.deps import get_membership_listener
 from gateway.core.config import API_ROOT
@@ -542,7 +543,7 @@ async def test_a_user_merge_moves_views_onto_the_target_and_refuses_a_shared_nam
     assert len(owners) == 2
 
 
-def test_a_private_view_cannot_lose_its_owner(db_session) -> None:
+def test_a_private_view_cannot_lose_its_owner(db_session: Session) -> None:
     """The schema refuses an ownerless private view: nobody could see or delete it."""
     from sqlalchemy import text
     from sqlalchemy.exc import IntegrityError
