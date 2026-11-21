@@ -83,7 +83,7 @@ export function operatorContext(): Response {
   })
 }
 
-interface FetchCall {
+export interface FetchCall {
   url: string
   method: string
   body: string | undefined
@@ -209,6 +209,58 @@ export function mockApi(
       }
       if (url.includes("/usage/in-flight")) {
         return jsonResponse(inFlight())
+      }
+      if (url.includes("/usage/grouped")) {
+        // The log grouped by a column, summed from the rows: most recent first.
+        const query = new URL(url, "http://localhost").searchParams
+        const groupBy = query.get("group_by") ?? "model"
+        const limit = Number(query.get("limit") ?? 50)
+        const field = {
+          api_key: "api_key_id",
+          source_label: "source_label",
+          model: "model",
+          user: "user_id",
+        }[groupBy] as keyof UsageEntry
+        const byKey = new Map<string | null, UsageEntry[]>()
+        for (const row of rows) {
+          const key = (row[field] as string | null | undefined) ?? null
+          byKey.set(key, [...(byKey.get(key) ?? []), row])
+        }
+        const groups = [...byKey.entries()].map(([key, members]) => {
+          const times = members.map((one) => one.timestamp).sort()
+          const models = new Map<string, number>()
+          for (const one of members) {
+            models.set(one.model, (models.get(one.model) ?? 0) + 1)
+          }
+          return {
+            key,
+            label:
+              groupBy === "api_key" ? (members[0].api_key_name ?? null) : null,
+            requests: members.length,
+            errors: members.filter((one) => one.status === "error").length,
+            cost: members.reduce((sum, one) => sum + (one.cost ?? 0), 0),
+            tokens: members.reduce(
+              (sum, one) => sum + (one.total_tokens ?? 0),
+              0,
+            ),
+            latency_ms: members[0].latency_ms,
+            first_at: times[0],
+            last_at: times.at(-1) ?? times[0],
+            top_models: [...models.entries()]
+              .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+              .slice(0, 3)
+              .map(([model, requests]) => ({ model, requests })),
+          }
+        })
+        groups.sort((a, b) => b.last_at.localeCompare(a.last_at))
+        return jsonResponse({
+          start_date: "",
+          end_date: "",
+          group_by: groupBy,
+          order: query.get("order") ?? "recent",
+          groups: groups.slice(0, limit),
+          total: groups.length,
+        })
       }
       if (url.includes("/usage/groups")) {
         // A column's values, as the server lists them: busiest first, searched

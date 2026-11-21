@@ -5545,6 +5545,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organizations/me/usage/grouped": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Organization Usage Log Groups
+         * @description The request log grouped by one column, for the caller's organization.
+         *
+         *     The tenant-scoped counterpart of ``GET /api/v1/usage/grouped``: the same
+         *     groups, over the rows this caller may read.
+         */
+        get: operations["organization-usage-organization_usage_log_groups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations/me/usage/groups": {
         parameters: {
             query?: never;
@@ -7817,6 +7840,31 @@ export interface paths {
          *     prompt/completion/tool field is rejected (422), not stored.
          */
         post: operations["usage-ingest_external_usage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/grouped": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Usage Log Groups
+         * @description The request log collapsed to one row per API key, session, model or user, with what each group adds up to.
+         *
+         *     Same filters and window bounds as ``/summary``. Each group carries its
+         *     requests, failures, cost, billed tokens, mean latency, first and last request,
+         *     and most-used models; ``total`` counts every group the filters leave, so a
+         *     client can page through them.
+         */
+        get: operations["usage-usage_log_groups"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -23858,6 +23906,73 @@ export interface components {
             tokens: number;
         };
         /**
+         * UsageLogGroup
+         * @description The request log's rows that share one value of a column, summed.
+         *
+         *     ``key`` is None for the rows with no value in the column, and ``label`` names
+         *     an opaque key (a user's alias, an API key's name). ``requests`` leaves out the
+         *     attempts a routing policy recovered from, as the log does; ``errors`` counts
+         *     failed rows. ``latency_ms`` is the mean over the rows that recorded one.
+         *     ``first_at`` and ``last_at`` are ISO 8601 instants, to the hour where older
+         *     traffic is read from the hourly rollups and exact otherwise.
+         */
+        UsageLogGroup: {
+            /** Cost */
+            cost: number;
+            /** Errors */
+            errors: number;
+            /** First At */
+            first_at: string;
+            /** Key */
+            key: string | null;
+            /** Label */
+            label?: string | null;
+            /** Last At */
+            last_at: string;
+            /** Latency Ms */
+            latency_ms: number | null;
+            /** Requests */
+            requests: number;
+            /** Tokens */
+            tokens: number;
+            /** Top Models */
+            top_models: components["schemas"]["UsageLogGroupModel"][];
+        };
+        /**
+         * UsageLogGroupModel
+         * @description One of a group's most-used models, and how many of its requests ran on it.
+         */
+        UsageLogGroupModel: {
+            /** Model */
+            model: string;
+            /** Requests */
+            requests: number;
+        };
+        /**
+         * UsageLogGroups
+         * @description A page of the request log's groups over the window, and how many groups the filters leave.
+         */
+        UsageLogGroups: {
+            /** End Date */
+            end_date: string;
+            /**
+             * Group By
+             * @enum {string}
+             */
+            group_by: "api_key" | "source_label" | "model" | "user";
+            /** Groups */
+            groups: components["schemas"]["UsageLogGroup"][];
+            /**
+             * Order
+             * @enum {string}
+             */
+            order: "recent" | "requests" | "cost";
+            /** Start Date */
+            start_date: string;
+            /** Total */
+            total: number;
+        };
+        /**
          * UsageLogResponse
          * @description Response model for usage log.
          */
@@ -35134,6 +35249,106 @@ export interface operations {
             };
         };
     };
+    "organization-usage-organization_usage_log_groups": {
+        parameters: {
+            query: {
+                /** @description The column to group the log by: 'api_key', 'source_label' (the session), 'model', or 'user' (the billed user). The rows with no value in it form one group under a null key. */
+                group_by: "api_key" | "source_label" | "model" | "user";
+                /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
+                start_date?: string | null;
+                /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
+                end_date?: string | null;
+                /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
+                user_id?: string[] | null;
+                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                status?: string | null;
+                /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
+                status_code?: number | null;
+                /** @description Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call. */
+                model?: string[] | null;
+                /** @description Filter to a single endpoint (e.g. '/v1/chat/completions') */
+                endpoint?: string | null;
+                /** @description Filter to a single provider (e.g. 'openai') */
+                provider?: string | null;
+                /** @description Filter to a single provenance source (e.g. 'gateway' or 'claude_code') */
+                source?: string | null;
+                /** @description Filter to a single session (source_label): the session's trace id on a gateway request that named one, or the session/project label imported usage carried */
+                source_label?: string | null;
+                /** @description Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call. */
+                tag?: string[] | null;
+                /** @description Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call. */
+                api_key_id?: string[] | null;
+                /** @description Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing. */
+                priced?: boolean | null;
+                /** @description Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically. */
+                tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
+                /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
+                counts_toward_budget?: boolean | null;
+                /** @description Only usage recorded in this workspace. */
+                workspace_id?: string | null;
+                /** @description How groups are ranked: 'recent' (the latest request first, the default), 'requests' (most first), or 'cost' (most spend first). Ties fall back to the key. */
+                order?: "recent" | "requests" | "cost";
+                skip?: number;
+                limit?: number;
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageLogGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     "organization-usage-organization_usage_value_groups": {
         parameters: {
             query: {
@@ -39023,6 +39238,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExternalIngestResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "usage-usage_log_groups": {
+        parameters: {
+            query: {
+                /** @description The column to group the log by: 'api_key', 'source_label' (the session), 'model', or 'user' (the billed user). The rows with no value in it form one group under a null key. */
+                group_by: "api_key" | "source_label" | "model" | "user";
+                /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
+                start_date?: string | null;
+                /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
+                end_date?: string | null;
+                /** @description Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call. */
+                user_id?: string[] | null;
+                /** @description Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count) */
+                status?: string | null;
+                /** @description Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly */
+                status_code?: number | null;
+                /** @description Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call. */
+                model?: string[] | null;
+                /** @description Filter to a single endpoint (e.g. '/v1/chat/completions') */
+                endpoint?: string | null;
+                /** @description Filter to a single provider (e.g. 'openai') */
+                provider?: string | null;
+                /** @description Filter to a single provenance source (e.g. 'gateway' or 'claude_code') */
+                source?: string | null;
+                /** @description Filter to a single session (source_label): the session's trace id on a gateway request that named one, or the session/project label imported usage carried */
+                source_label?: string | null;
+                /** @description Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call. */
+                tag?: string[] | null;
+                /** @description Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call. */
+                api_key_id?: string[] | null;
+                /** @description Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing. */
+                priced?: boolean | null;
+                /** @description Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically. */
+                tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
+                /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
+                counts_toward_budget?: boolean | null;
+                /** @description Only usage recorded in this workspace. */
+                workspace_id?: string | null;
+                /** @description How groups are ranked: 'recent' (the latest request first, the default), 'requests' (most first), or 'cost' (most spend first). Ties fall back to the key. */
+                order?: "recent" | "requests" | "cost";
+                skip?: number;
+                limit?: number;
+                /** @description Leave out rows served by these models. At most 50 per call. */
+                exclude_model?: string[] | null;
+                /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
+                exclude_user_id?: string[] | null;
+                /** @description Leave out rows made with these API keys; rows with no key stay. At most 50 per call. */
+                exclude_api_key_id?: string[] | null;
+                /** @description Leave out rows from these provenance sources. At most 50 per call. */
+                exclude_source?: string[] | null;
+                /** @description Leave out rows with these statuses. */
+                exclude_status?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description Only rows served through these routing policies. At most 50 per call. */
+                policy_name?: string[] | null;
+                /** @description Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call. */
+                exclude_policy_name?: string[] | null;
+                /** @description true: only requests a routing policy served; false: only requests that named a model. */
+                routed?: boolean | null;
+                /** @description Only rows billed for more than this many tokens (input plus output). */
+                tokens_gt?: number | null;
+                /** @description Only rows that cost more than this many USD. */
+                cost_gt?: number | null;
+                /** @description Only rows whose total latency exceeded this many milliseconds. */
+                latency_ms_gt?: number | null;
+                /** @description Only rows with one of these statuses; repeatable. 'status' narrows to one. */
+                statuses?: ("success" | "error" | "absorbed" | "incomplete")[] | null;
+                /** @description false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence. */
+                include_absorbed?: boolean | null;
+                /** @description Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served. */
+                channel?: ("api" | "imported" | "playground")[] | null;
+                /** @description Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'. */
+                is_null?: ("api_key" | "user" | "session")[] | null;
+                /** @description Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366. */
+                q?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageLogGroups"];
                 };
             };
             /** @description Validation Error */

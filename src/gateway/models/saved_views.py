@@ -53,6 +53,7 @@ VIEW_QUERY_KEYS: dict[SavedViewPage, frozenset[str]] = {
             "channel",
             "is_null",
             "recovered",
+            "group",
         )
     ),
 }

@@ -34,7 +34,7 @@ from gateway.repositories.usage_and_telemetry import (
     UsageScope,
 )
 from gateway.repositories.usage_and_telemetry.usage_log_repository import MAX_MARKED_HOURS
-from gateway.schemas.usage_and_telemetry import GATEWAY_TOOL_NAMES, Bucket, ValueGroupBy
+from gateway.schemas.usage_and_telemetry import GATEWAY_TOOL_NAMES, Bucket, LogGroupBy, LogGroupOrder, ValueGroupBy
 from gateway.services.usage_and_telemetry import UsageRollupService
 
 # Every hour the rows fall in is over by then, so a refresh builds them all.
@@ -242,6 +242,13 @@ def _scopes(workspace_id: uuid.UUID) -> list[UsageScope]:
     ]
 
 
+def _to_the_hour(group: dict[str, Any]) -> dict[str, Any]:
+    """A log group with its first and last request to the hour, which is as fine as the rollups keep them."""
+    for name in ("first_at", "last_at"):
+        group[name] = datetime.fromisoformat(group[name]).astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    return group
+
+
 async def _reads(reader: _Reader, filters: UsageFilters, scope: UsageScope) -> dict[str, Any]:
     """Every aggregate read the rollups serve, in a comparable shape."""
     async with reader.uow:
@@ -275,6 +282,18 @@ async def _read_all(repo: UsageLogRepository, filters: UsageFilters, scope: Usag
         filters, scope, group_by="user", search="U", named=("k-none",), skip=0, limit=1
     )
     out["values:searched"] = ([group.model_dump() for group in searched], total)
+    log_group_bys: tuple[LogGroupBy, ...] = ("api_key", "source_label", "model", "user")
+    log_orders: tuple[LogGroupOrder, ...] = ("recent", "requests", "cost")
+    for log_group_by in log_group_bys:
+        for order in log_orders:
+            log_groups, total = await repo.log_groups(
+                filters, scope, group_by=log_group_by, order=order, skip=0, limit=200
+            )
+            listed = [_to_the_hour(group.model_dump()) for group in log_groups]
+            if order == "recent":
+                # Groups last seen in one rolled-up hour tie there, so only the set is comparable.
+                listed.sort(key=lambda group: group["key"] or "")
+            out[f"log_groups:{log_group_by}:{order}"] = (listed, total)
     for bucket in ("hour", "day"):
         points = await repo.series(filters, scope, bucket=bucket)
         out[f"series:{bucket}"] = sorted((point.model_dump() for point in points), key=lambda p: p["bucket_start"])

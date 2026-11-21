@@ -153,8 +153,9 @@ share one time range and the model, user, API key and status filters, which
 stay in place when you switch views and are kept in the URL.
 
 Both views open on one row of controls above the chart: the view's search box,
-the **Time range**, **Views**, **Columns** (on a phone, **Filters**), and at the right
-edge the view's refresh and, on Requests, its live controls. The filters you
+the **Time range**, **Views**, on Requests **Group by**, **Columns** (on a phone,
+**Filters**), and at the right edge the view's refresh and, on Requests, its
+live controls. The filters you
 apply show as chips in a row directly under it.
 
 Filter from a column's header: each filterable column has a funnel that opens
@@ -194,19 +195,54 @@ a request no key made. The order is kept in the URL. Under **All**, a sort
 other than time, like a search for anything but an ID, reads the last year,
 the span the chart shows.
 
+### Group requests
+
+**Group by** on Requests collapses the log to one row per API key, session,
+model or person (**By person** is not offered under **My requests**). Each
+row names the group and its most-used models, and adds up its requests: how
+many, how many failed, the cost, the tokens, the average total time, and when
+the first and the last of them arrived. Groups are listed with the most
+recently active first, 50 at a time; **Show more groups** lists the next ones.
+The figures cover the window the totals line does, so under **All** they add up
+the last year.
+
+Press a group, or focus it and press Enter or Space, to open it to its eight
+newest requests, which open in the request panel as any row does. A group with
+more than eight offers **Show all**, which filters the log to that group's
+value (the same filter its column's funnel writes, or **No API key**, **No
+session** or **No user** for the group with none) and turns the grouping off.
+
+A group follows time, so it does not apply while the log is sorted by another
+column: **Group by** then reads, for example, **By model, paused by sort**, and
+the log is listed flat in that order. Picking a grouping returns the log to
+newest first and groups it. The grouping is kept in the URL and in a saved
+view. Phones list requests flat.
+
 The search box on Requests finds requests by request ID (pasted whole),
 or by part of a user's name or ID, a model (the one that served or the
 name the caller sent), an API key's name, a source or a session. It searches as
 you stop typing, and every view of the page (the chart, the count and the
 column filters' values) follows it.
 
-On a phone the search box takes the full width and the controls follow it, and
-since the table is a list of cards with no headers, the row has a **Filters**
-button instead, with a count of the filters applied. It opens
-a sheet with one section per filterable column, in the table's order, each
-holding what that column's funnel holds, under a **Sort** section that orders
-the cards. Expand a section to load its values; changes apply as you make them. **Done** closes the sheet and **Clear all**
-removes every filter.
+On a phone the search box takes the full width and the controls follow it.
+Requests are listed as rows of three lines: the model and its cost; who sent it,
+with its tokens and total time; and how long ago, with its outcome when it did
+not simply succeed. A colored square at the start of the row is the outcome.
+The list starts with the 20 newest and **Load 20 more** adds the next ones to
+the end, up to 1,000. The totals line stays pinned over the list as it scrolls.
+Pressing a row opens the request over the whole screen.
+
+The chart on a phone picks one bar rather than a range: press it and slide
+across the bars, and the line above the chart reads out the bar under your
+finger; lift to filter the log to that bar.
+
+Since the list has no headers, the row of controls has a **Filters** button
+instead, with a count of the filters applied. It opens a sheet with a **Sort**
+section that orders the list, a **Cost** row that keeps only the requests above
+$0.01, $0.10 or $0.40, and one section per filterable column, in the table's
+order, each holding what that column's funnel holds. Expand a section to load
+its values; changes apply as you make them. **Done** closes the sheet and
+**Clear all** removes every filter.
 
 Above the table, one line adds up the requests the filters leave, over every
 page: how many, how many failed and how many attempts a routing policy
@@ -233,7 +269,7 @@ that names each row (**Model** on Requests, **Name** on Sessions) is always
 shown. A filter on a hidden column stays in the chip row and still applies.
 **Reset columns** returns the widths and the columns to the defaults. The
 layout is saved to your account, per view, so it follows you to another browser
-or device. Phones show every field on the cards.
+or device.
 
 **Status** narrows Requests, and Sessions for errors and successes. Exclusions,
 **Provider**, tool, source, pricing, routing and thresholds narrow Requests only, so they stay behind
@@ -243,7 +279,8 @@ the **User** column's filter to see only yours.
 
 ### Saved views
 
-**Views** keeps a page's filters, search, time range and sort under a name, in
+**Views** keeps a page's filters, search, time range, sort and, on Requests,
+grouping under a name, in
 the selected workspace. It lists the page's built-in views first (on Requests
 **All requests**, **My requests**, **Failures this week**, **Expensive calls**,
 **Subscription usage** for imported subscription traffic and **Billed API
@@ -274,7 +311,8 @@ each model tried and the one that served the response. Imported usage is labeled
 by its source and does not use a budget (see
 [Import usage from outside Otari](external-usage.md)).
 
-Pressing a row opens it in a panel beside the log. Its header carries the
+Pressing a row opens it in a panel beside the log (on a phone, over the whole
+screen). Its header carries the
 request ID with a copy control and where the request sits in the page (`3 /
 25`); **K** and **J** step to the previous and next request. The panel shows:
 

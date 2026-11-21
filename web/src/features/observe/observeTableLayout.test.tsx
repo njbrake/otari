@@ -187,7 +187,7 @@ describe("on a phone", () => {
     window.matchMedia = realMatchMedia
   })
 
-  it("offers no Columns control and keeps every field on the cards", async () => {
+  it("offers no Columns control and lists the requests as rows", async () => {
     window.matchMedia = ((query: string) => ({
       matches: query === "(max-width: 767px)",
       media: query,
@@ -204,6 +204,7 @@ describe("on a phone", () => {
     await screen.findByText("gpt-4o")
     expect(screen.queryByRole("grid")).toBeNull()
     expect(screen.queryByRole("button", { name: /^Columns/ })).toBeNull()
-    expect(screen.getByText("API key")).toBeInTheDocument()
+    const list = screen.getByRole("list", { name: "Activity log" })
+    expect(within(list).getAllByRole("button").length).toBeGreaterThan(0)
   })
 })

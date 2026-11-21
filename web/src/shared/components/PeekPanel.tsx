@@ -121,8 +121,8 @@ export function ResizeHandle({
  * whose rows are read one after another.
  *
  * Beside the list rather than over it from `md` up, so another row can be
- * picked while one is open; below `md` it covers the page, and the caller makes
- * the page `inert` while it does. The bar walks the list (also J and K), widens
+ * picked while one is open; below `md` it covers the whole screen, shell
+ * included, and the caller makes the page `inert` while it does. The bar walks the list (also J and K), widens
  * the panel and closes it (also Escape). Focus moves into the panel as it opens
  * and back to whatever opened it as it closes.
  *
@@ -232,7 +232,7 @@ export function PeekPanel({
       data-owns-swipe
       style={{ "--peek-width": `${shownWidth}px` } as React.CSSProperties}
       // No left rule on a phone, where the panel is the screen's full width.
-      className={`fixed top-14 right-0 bottom-0 z-30 flex w-full flex-col border-border-strong bg-surface md:border-l outline-none transition-transform duration-250 ease-out-fluid motion-reduce:transition-none md:w-(--peek-width) ${
+      className={`fixed top-0 right-0 bottom-0 z-30 flex w-full max-md:z-50 max-md:pb-[env(safe-area-inset-bottom)] md:top-14 flex-col border-border-strong bg-surface md:border-l outline-none transition-transform duration-250 ease-out-fluid motion-reduce:transition-none md:w-(--peek-width) ${
         entered && !leaving ? "translate-x-0" : "translate-x-full"
       }`}
     >

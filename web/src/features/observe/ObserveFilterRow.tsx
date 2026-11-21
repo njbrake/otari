@@ -113,11 +113,14 @@ const CLEARED: Partial<Record<ObserveUrlKey, string | []>> = {
 export function ObserveFilterRow({
   view,
   search,
+  controls,
   end,
 }: {
   view: ObserveView
   /** The view's own search box, first in the row. */
   search?: ReactNode
+  /** The view's own arrangement of its rows, such as a grouping, after its saved views. */
+  controls?: ReactNode
   /** The view's refresh and live controls, at the row's right edge. */
   end?: ReactNode
 }) {
@@ -372,6 +375,7 @@ export function ObserveFilterRow({
           options={rangeOptions}
         />
         {view === "usage" ? null : <ObserveViewsMenu page={view} />}
+        {controls}
         {/* The phone's cards have no columns to size or hide. */}
         {!isMobile && isLayoutView(view) ? (
           <ObserveColumnsControl view={view} />

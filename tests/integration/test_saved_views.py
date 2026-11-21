@@ -229,8 +229,14 @@ async def test_a_query_names_only_the_keys_its_page_keeps(async_db: AsyncSession
             user=member, workspace_id=workspace.id, request=_create("Pricey", "cost_gt=0.4", page=SESSIONS)
         )
     await _reload(async_db)
+    # So is the grouping.
+    with pytest.raises(SavedViewQueryInvalidError):
+        await service.create_view(
+            user=member, workspace_id=workspace.id, request=_create("By key", "group=api_key", page=SESSIONS)
+        )
+    await _reload(async_db)
     view = await service.create_view(
-        user=member, workspace_id=workspace.id, request=_create("Pricey", "cost_gt=0.4&model=a&model=b")
+        user=member, workspace_id=workspace.id, request=_create("Pricey", "cost_gt=0.4&model=a&model=b&group=model")
     )
     with pytest.raises(SavedViewQueryInvalidError):
         await service.update_view(

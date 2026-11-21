@@ -30665,6 +30665,160 @@
         "title": "UsageGroupedSeriesPoint",
         "type": "object"
       },
+      "UsageLogGroup": {
+        "description": "The request log's rows that share one value of a column, summed.\n\n``key`` is None for the rows with no value in the column, and ``label`` names\nan opaque key (a user's alias, an API key's name). ``requests`` leaves out the\nattempts a routing policy recovered from, as the log does; ``errors`` counts\nfailed rows. ``latency_ms`` is the mean over the rows that recorded one.\n``first_at`` and ``last_at`` are ISO 8601 instants, to the hour where older\ntraffic is read from the hourly rollups and exact otherwise.",
+        "properties": {
+          "cost": {
+            "title": "Cost",
+            "type": "number"
+          },
+          "errors": {
+            "title": "Errors",
+            "type": "integer"
+          },
+          "first_at": {
+            "title": "First At",
+            "type": "string"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "last_at": {
+            "title": "Last At",
+            "type": "string"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "top_models": {
+            "items": {
+              "$ref": "#/components/schemas/UsageLogGroupModel"
+            },
+            "title": "Top Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "requests",
+          "errors",
+          "cost",
+          "tokens",
+          "latency_ms",
+          "first_at",
+          "last_at",
+          "top_models"
+        ],
+        "title": "UsageLogGroup",
+        "type": "object"
+      },
+      "UsageLogGroupModel": {
+        "description": "One of a group's most-used models, and how many of its requests ran on it.",
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "model",
+          "requests"
+        ],
+        "title": "UsageLogGroupModel",
+        "type": "object"
+      },
+      "UsageLogGroups": {
+        "description": "A page of the request log's groups over the window, and how many groups the filters leave.",
+        "properties": {
+          "end_date": {
+            "title": "End Date",
+            "type": "string"
+          },
+          "group_by": {
+            "enum": [
+              "api_key",
+              "source_label",
+              "model",
+              "user"
+            ],
+            "title": "Group By",
+            "type": "string"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/UsageLogGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "order": {
+            "enum": [
+              "recent",
+              "requests",
+              "cost"
+            ],
+            "title": "Order",
+            "type": "string"
+          },
+          "start_date": {
+            "title": "Start Date",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_date",
+          "end_date",
+          "group_by",
+          "order",
+          "groups",
+          "total"
+        ],
+        "title": "UsageLogGroups",
+        "type": "object"
+      },
       "UsageLogResponse": {
         "description": "Response model for usage log.",
         "properties": {
@@ -54515,6 +54669,775 @@
         ]
       }
     },
+    "/api/v1/organizations/me/usage/grouped": {
+      "get": {
+        "description": "The request log grouped by one column, for the caller's organization.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage/grouped``: the same\ngroups, over the rows this caller may read.",
+        "operationId": "organization-usage-organization_usage_log_groups",
+        "parameters": [
+          {
+            "description": "The column to group the log by: 'api_key', 'source_label' (the session), 'model', or 'user' (the billed user). The rows with no value in it form one group under a null key.",
+            "in": "query",
+            "name": "group_by",
+            "required": true,
+            "schema": {
+              "description": "The column to group the log by: 'api_key', 'source_label' (the session), 'model', or 'user' (the billed user). The rows with no value in it form one group under a null key.",
+              "enum": [
+                "api_key",
+                "source_label",
+                "model",
+                "user"
+              ],
+              "title": "Group By",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
+              "title": "Start Date"
+            }
+          },
+          {
+            "description": "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)",
+              "title": "End Date"
+            }
+          },
+          {
+            "description": "Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call.",
+            "in": "query",
+            "name": "user_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call.",
+              "title": "User Id"
+            }
+          },
+          {
+            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly",
+            "in": "query",
+            "name": "status_code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly",
+              "title": "Status Code"
+            }
+          },
+          {
+            "description": "Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call.",
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call.",
+              "title": "Model"
+            }
+          },
+          {
+            "description": "Filter to a single endpoint (e.g. '/v1/chat/completions')",
+            "in": "query",
+            "name": "endpoint",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single endpoint (e.g. '/v1/chat/completions')",
+              "title": "Endpoint"
+            }
+          },
+          {
+            "description": "Filter to a single provider (e.g. 'openai')",
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single provider (e.g. 'openai')",
+              "title": "Provider"
+            }
+          },
+          {
+            "description": "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')",
+              "title": "Source"
+            }
+          },
+          {
+            "description": "Filter to a single session (source_label): the session's trace id on a gateway request that named one, or the session/project label imported usage carried",
+            "in": "query",
+            "name": "source_label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single session (source_label): the session's trace id on a gateway request that named one, or the session/project label imported usage carried",
+              "title": "Source Label"
+            }
+          },
+          {
+            "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+              "title": "Tag"
+            }
+          },
+          {
+            "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
+            "in": "query",
+            "name": "api_key_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
+              "title": "Api Key Id"
+            }
+          },
+          {
+            "description": "Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing.",
+            "in": "query",
+            "name": "priced",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing.",
+              "title": "Priced"
+            }
+          },
+          {
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
+            "in": "query",
+            "name": "tool",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "any",
+                    "web_search",
+                    "web_fetch",
+                    "code_execution"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
+              "title": "Tool"
+            }
+          },
+          {
+            "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
+            "in": "query",
+            "name": "counts_toward_budget",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
+              "title": "Counts Toward Budget"
+            }
+          },
+          {
+            "description": "Only usage recorded in this workspace.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only usage recorded in this workspace.",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "description": "How groups are ranked: 'recent' (the latest request first, the default), 'requests' (most first), or 'cost' (most spend first). Ties fall back to the key.",
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "default": "recent",
+              "description": "How groups are ranked: 'recent' (the latest request first, the default), 'requests' (most first), or 'cost' (most spend first). Ties fall back to the key.",
+              "enum": [
+                "recent",
+                "requests",
+                "cost"
+              ],
+              "title": "Order",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Leave out rows served by these models. At most 50 per call.",
+            "in": "query",
+            "name": "exclude_model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows served by these models. At most 50 per call.",
+              "title": "Exclude Model"
+            }
+          },
+          {
+            "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+            "in": "query",
+            "name": "exclude_user_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+              "title": "Exclude User Id"
+            }
+          },
+          {
+            "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+            "in": "query",
+            "name": "exclude_api_key_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+              "title": "Exclude Api Key Id"
+            }
+          },
+          {
+            "description": "Leave out rows from these provenance sources. At most 50 per call.",
+            "in": "query",
+            "name": "exclude_source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows from these provenance sources. At most 50 per call.",
+              "title": "Exclude Source"
+            }
+          },
+          {
+            "description": "Leave out rows with these statuses.",
+            "in": "query",
+            "name": "exclude_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "success",
+                      "error",
+                      "absorbed",
+                      "incomplete"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 4,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows with these statuses.",
+              "title": "Exclude Status"
+            }
+          },
+          {
+            "description": "Only rows served through these routing policies. At most 50 per call.",
+            "in": "query",
+            "name": "policy_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows served through these routing policies. At most 50 per call.",
+              "title": "Policy Name"
+            }
+          },
+          {
+            "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+            "in": "query",
+            "name": "exclude_policy_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+              "title": "Exclude Policy Name"
+            }
+          },
+          {
+            "description": "true: only requests a routing policy served; false: only requests that named a model.",
+            "in": "query",
+            "name": "routed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true: only requests a routing policy served; false: only requests that named a model.",
+              "title": "Routed"
+            }
+          },
+          {
+            "description": "Only rows billed for more than this many tokens (input plus output).",
+            "in": "query",
+            "name": "tokens_gt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows billed for more than this many tokens (input plus output).",
+              "title": "Tokens Gt"
+            }
+          },
+          {
+            "description": "Only rows that cost more than this many USD.",
+            "in": "query",
+            "name": "cost_gt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 999999999999.0,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows that cost more than this many USD.",
+              "title": "Cost Gt"
+            }
+          },
+          {
+            "description": "Only rows whose total latency exceeded this many milliseconds.",
+            "in": "query",
+            "name": "latency_ms_gt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows whose total latency exceeded this many milliseconds.",
+              "title": "Latency Ms Gt"
+            }
+          },
+          {
+            "description": "Only rows with one of these statuses; repeatable. 'status' narrows to one.",
+            "in": "query",
+            "name": "statuses",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "success",
+                      "error",
+                      "absorbed",
+                      "incomplete"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 4,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows with one of these statuses; repeatable. 'status' narrows to one.",
+              "title": "Statuses"
+            }
+          },
+          {
+            "description": "false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence.",
+            "in": "query",
+            "name": "include_absorbed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence.",
+              "title": "Include Absorbed"
+            }
+          },
+          {
+            "description": "Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served.",
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "api",
+                      "imported",
+                      "playground"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 3,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served.",
+              "title": "Channel"
+            }
+          },
+          {
+            "description": "Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'.",
+            "in": "query",
+            "name": "is_null",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "api_key",
+                      "user",
+                      "session"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 3,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'.",
+              "title": "Is Null"
+            }
+          },
+          {
+            "description": "Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageLogGroups"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Organization Usage Log Groups",
+        "tags": [
+          "organization-usage"
+        ]
+      }
+    },
     "/api/v1/organizations/me/usage/groups": {
       "get": {
         "description": "One column's values over the window, for the caller's organization.\n\nThe tenant-scoped counterpart of ``GET /api/v1/usage/groups``: the same\nvalues, over the rows this caller may read.",
@@ -64806,6 +65729,775 @@
         ],
         "x-otari-key-scopes": [
           "usage:write"
+        ]
+      }
+    },
+    "/api/v1/usage/grouped": {
+      "get": {
+        "description": "The request log collapsed to one row per API key, session, model or user, with what each group adds up to.\n\nSame filters and window bounds as ``/summary``. Each group carries its\nrequests, failures, cost, billed tokens, mean latency, first and last request,\nand most-used models; ``total`` counts every group the filters leave, so a\nclient can page through them.",
+        "operationId": "usage-usage_log_groups",
+        "parameters": [
+          {
+            "description": "The column to group the log by: 'api_key', 'source_label' (the session), 'model', or 'user' (the billed user). The rows with no value in it form one group under a null key.",
+            "in": "query",
+            "name": "group_by",
+            "required": true,
+            "schema": {
+              "description": "The column to group the log by: 'api_key', 'source_label' (the session), 'model', or 'user' (the billed user). The rows with no value in it form one group under a null key.",
+              "enum": [
+                "api_key",
+                "source_label",
+                "model",
+                "user"
+              ],
+              "title": "Group By",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
+              "title": "Start Date"
+            }
+          },
+          {
+            "description": "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds)",
+              "title": "End Date"
+            }
+          },
+          {
+            "description": "Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call.",
+            "in": "query",
+            "name": "user_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to one or more users; repeatable (user_id=a&user_id=b). Several values match any of them. At most 50 per call.",
+              "title": "User Id"
+            }
+          },
+          {
+            "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single status: 'success', 'error', or 'absorbed' (an attempt a routing policy recovered from, excluded from error_count and request_count)",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly",
+            "in": "query",
+            "name": "status_code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single failure status code (e.g. 429 for provider rate limits, 402 for missing-pricing rejections). Only error rows carry one, so this filter also restricts to status='error' unless 'status' is given explicitly",
+              "title": "Status Code"
+            }
+          },
+          {
+            "description": "Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call.",
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to one or more models; repeatable (model=a&model=b). Several values match any of them. At most 50 per call.",
+              "title": "Model"
+            }
+          },
+          {
+            "description": "Filter to a single endpoint (e.g. '/v1/chat/completions')",
+            "in": "query",
+            "name": "endpoint",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single endpoint (e.g. '/v1/chat/completions')",
+              "title": "Endpoint"
+            }
+          },
+          {
+            "description": "Filter to a single provider (e.g. 'openai')",
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single provider (e.g. 'openai')",
+              "title": "Provider"
+            }
+          },
+          {
+            "description": "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single provenance source (e.g. 'gateway' or 'claude_code')",
+              "title": "Source"
+            }
+          },
+          {
+            "description": "Filter to a single session (source_label): the session's trace id on a gateway request that named one, or the session/project label imported usage carried",
+            "in": "query",
+            "name": "source_label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single session (source_label): the session's trace id on a gateway request that named one, or the session/project label imported usage carried",
+              "title": "Source Label"
+            }
+          },
+          {
+            "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by a request tag (what a request sent in its `metadata`), as `key:value`. Repeatable: values for the same key match any of them, and different keys must all match. At most 50 per call.",
+              "title": "Tag"
+            }
+          },
+          {
+            "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
+            "in": "query",
+            "name": "api_key_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to one or more API key ids; repeatable (api_key_id=a&api_key_id=b). Several values match any of them. At most 50 per call.",
+              "title": "Api Key Id"
+            }
+          },
+          {
+            "description": "Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing.",
+            "in": "query",
+            "name": "priced",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by token-pricing state: true = only rows whose model tokens were priced, false = only rows that still need pricing (no cost at all, or tokens that were never metered because the model had no rate). A row charged only for gateway-run tool calls still counts as needing pricing.",
+              "title": "Priced"
+            }
+          },
+          {
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
+            "in": "query",
+            "name": "tool",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "any",
+                    "web_search",
+                    "web_fetch",
+                    "code_execution"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
+              "title": "Tool"
+            }
+          },
+          {
+            "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
+            "in": "query",
+            "name": "counts_toward_budget",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
+              "title": "Counts Toward Budget"
+            }
+          },
+          {
+            "description": "Only usage recorded in this workspace.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only usage recorded in this workspace.",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "description": "How groups are ranked: 'recent' (the latest request first, the default), 'requests' (most first), or 'cost' (most spend first). Ties fall back to the key.",
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "default": "recent",
+              "description": "How groups are ranked: 'recent' (the latest request first, the default), 'requests' (most first), or 'cost' (most spend first). Ties fall back to the key.",
+              "enum": [
+                "recent",
+                "requests",
+                "cost"
+              ],
+              "title": "Order",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Leave out rows served by these models. At most 50 per call.",
+            "in": "query",
+            "name": "exclude_model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows served by these models. At most 50 per call.",
+              "title": "Exclude Model"
+            }
+          },
+          {
+            "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+            "in": "query",
+            "name": "exclude_user_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows billed to these users; rows with no user stay. At most 50 per call.",
+              "title": "Exclude User Id"
+            }
+          },
+          {
+            "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+            "in": "query",
+            "name": "exclude_api_key_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows made with these API keys; rows with no key stay. At most 50 per call.",
+              "title": "Exclude Api Key Id"
+            }
+          },
+          {
+            "description": "Leave out rows from these provenance sources. At most 50 per call.",
+            "in": "query",
+            "name": "exclude_source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows from these provenance sources. At most 50 per call.",
+              "title": "Exclude Source"
+            }
+          },
+          {
+            "description": "Leave out rows with these statuses.",
+            "in": "query",
+            "name": "exclude_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "success",
+                      "error",
+                      "absorbed",
+                      "incomplete"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 4,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows with these statuses.",
+              "title": "Exclude Status"
+            }
+          },
+          {
+            "description": "Only rows served through these routing policies. At most 50 per call.",
+            "in": "query",
+            "name": "policy_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows served through these routing policies. At most 50 per call.",
+              "title": "Policy Name"
+            }
+          },
+          {
+            "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+            "in": "query",
+            "name": "exclude_policy_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leave out rows served through these routing policies; unrouted rows stay. At most 50 per call.",
+              "title": "Exclude Policy Name"
+            }
+          },
+          {
+            "description": "true: only requests a routing policy served; false: only requests that named a model.",
+            "in": "query",
+            "name": "routed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true: only requests a routing policy served; false: only requests that named a model.",
+              "title": "Routed"
+            }
+          },
+          {
+            "description": "Only rows billed for more than this many tokens (input plus output).",
+            "in": "query",
+            "name": "tokens_gt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows billed for more than this many tokens (input plus output).",
+              "title": "Tokens Gt"
+            }
+          },
+          {
+            "description": "Only rows that cost more than this many USD.",
+            "in": "query",
+            "name": "cost_gt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 999999999999.0,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows that cost more than this many USD.",
+              "title": "Cost Gt"
+            }
+          },
+          {
+            "description": "Only rows whose total latency exceeded this many milliseconds.",
+            "in": "query",
+            "name": "latency_ms_gt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows whose total latency exceeded this many milliseconds.",
+              "title": "Latency Ms Gt"
+            }
+          },
+          {
+            "description": "Only rows with one of these statuses; repeatable. 'status' narrows to one.",
+            "in": "query",
+            "name": "statuses",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "success",
+                      "error",
+                      "absorbed",
+                      "incomplete"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 4,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows with one of these statuses; repeatable. 'status' narrows to one.",
+              "title": "Statuses"
+            }
+          },
+          {
+            "description": "false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence.",
+            "in": "query",
+            "name": "include_absorbed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "false leaves out the attempts a routing policy recovered from (status 'absorbed'), so each request is listed once, as the row that settled it. A status filter takes precedence.",
+              "title": "Include Absorbed"
+            }
+          },
+          {
+            "description": "Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served.",
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "api",
+                      "imported",
+                      "playground"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 3,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows that came in one of these ways: 'imported' through the external-events ingest, 'playground' from the dashboard's Playground, 'api' any other request this deployment served.",
+              "title": "Channel"
+            }
+          },
+          {
+            "description": "Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'.",
+            "in": "query",
+            "name": "is_null",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "api_key",
+                      "user",
+                      "session"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 3,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows where these are empty: 'api_key' (no key), 'user' (no billed user), 'session'.",
+              "title": "Is Null"
+            }
+          },
+          {
+            "description": "Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Free-text search. A UUID matches a usage row id, an Otari-Request-ID or a user id exactly; anything else is a case-insensitive substring of the model that served, the model name the caller sent, the provenance source, the session label, the user id, the billed user's alias or the API key's name. At most 200 characters. On the list and its count a substring search reads the window '/summary' does: the last 30 days when 'start_date' is omitted, and at most 366.",
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageLogGroups"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Usage Log Groups",
+        "tags": [
+          "usage"
         ]
       }
     },

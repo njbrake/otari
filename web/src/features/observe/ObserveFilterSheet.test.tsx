@@ -136,6 +136,22 @@ describe("ObserveFilterSheet on Requests", () => {
     await waitFor(() => expect(urlParams().has("sort")).toBe(false))
   })
 
+  it("sets a cost threshold from one row of choices", async () => {
+    mockApi({ rows: [entry()] })
+    await renderRequests()
+    await screen.findAllByText("gpt-4o")
+    const { user, sheet } = await openSheet()
+    const cost = within(sheet).getByRole("radiogroup", { name: "Cost above" })
+    expect(within(cost).getByRole("radio", { name: "Any cost" })).toBeChecked()
+
+    await user.click(within(cost).getByRole("radio", { name: "> $0.10" }))
+    await waitFor(() => expect(urlParams().get("cost_gt")).toBe("0.1"))
+    expect(within(cost).getByRole("radio", { name: "> $0.10" })).toBeChecked()
+
+    await user.click(within(cost).getByRole("radio", { name: "Any cost" }))
+    await waitFor(() => expect(urlParams().has("cost_gt")).toBe(false))
+  })
+
   it("reads a section's values only once it is expanded", async () => {
     const { calls } = mockApi({
       rows: [entry({ model: "gpt-4o" }), entry({ id: "b", model: "claude-x" })],

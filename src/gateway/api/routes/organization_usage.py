@@ -61,6 +61,8 @@ from gateway.api.routes.usage import (
     _GROUP_BY_DESC,
     _GROUP_SEARCH_DESC,
     _INCLUDE_P95_DESC,
+    _LOG_GROUP_BY_DESC,
+    _LOG_GROUP_ORDER_DESC,
     _MAX_GROUP_SEARCH,
     _MAX_REQUEST_GROUPS,
     _MODEL_MULTI_DESC,
@@ -86,6 +88,8 @@ from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
 from gateway.schemas.usage_and_telemetry import (
     Bucket,
+    LogGroupBy,
+    LogGroupOrder,
     SeriesGroupBy,
     SortOrder,
     SummaryDimension,
@@ -93,6 +97,7 @@ from gateway.schemas.usage_and_telemetry import (
     UsageCount,
     UsageEntry,
     UsageGroupedSeries,
+    UsageLogGroups,
     UsageSort,
     UsageSummary,
     UsageValueGroups,
@@ -470,3 +475,60 @@ async def organization_usage_value_groups(
         refine=refine,
     )
     return await usage.value_groups(filters, scope, group_by=group_by, search=search, skip=skip, limit=limit)
+
+
+@router.get("/grouped")
+async def organization_usage_log_groups(
+    identity: CurrentIdentity,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    usage: UsageServiceDep,
+    refine: UsageRefinementsQuery,
+    group_by: LogGroupBy = Query(description=_LOG_GROUP_BY_DESC),
+    start_date: datetime | None = Query(default=None, description=_START_DESC),
+    end_date: datetime | None = Query(default=None, description=_END_DESC),
+    user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
+    status: str | None = Query(default=None, description=_STATUS_DESC),
+    status_code: int | None = Query(default=None, description=_STATUS_CODE_DESC),
+    model: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_MODEL_MULTI_DESC)] = None,
+    endpoint: str | None = Query(default=None, description=_ENDPOINT_DESC),
+    provider: str | None = Query(default=None, description=_PROVIDER_DESC),
+    source: str | None = Query(default=None, description=_SOURCE_DESC),
+    source_label: str | None = Query(default=None, description=_SOURCE_LABEL_DESC),
+    tag: TagFilter = None,
+    api_key_id: Annotated[
+        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_API_KEY_MULTI_DESC)
+    ] = None,
+    priced: bool | None = Query(default=None, description=_PRICED_DESC),
+    tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
+    counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
+    workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    order: LogGroupOrder = Query(default="recent", description=_LOG_GROUP_ORDER_DESC),
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> UsageLogGroups:
+    """The request log grouped by one column, for the caller's organization.
+
+    The tenant-scoped counterpart of ``GET /api/v1/usage/grouped``: the same
+    groups, over the rows this caller may read.
+    """
+    scope = await _scope(db, user=identity, workspace_id=workspace_id)
+    filters = UsageFilters(
+        start_date=start_date,
+        end_date=end_date,
+        user_id=user_id,
+        status=status,
+        status_code=status_code,
+        model=model,
+        endpoint=endpoint,
+        provider=provider,
+        source=source,
+        source_label=source_label,
+        tags=parse_tag_filters(tag),
+        api_key_id=api_key_id,
+        priced=priced,
+        tool=tool,
+        counts_toward_budget=counts_toward_budget,
+        workspace_id=workspace_id,
+        refine=refine,
+    )
+    return await usage.log_groups(filters, scope, group_by=group_by, order=order, skip=skip, limit=limit)

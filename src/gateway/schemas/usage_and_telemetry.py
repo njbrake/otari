@@ -472,6 +472,54 @@ class UsageValueGroups(BaseModel):
     total: int
 
 
+# The columns the request log can be grouped by.
+LogGroupBy = Literal["api_key", "source_label", "model", "user"]
+# How the log's groups are ranked: latest request first, most requests first, or most spend first.
+LogGroupOrder = Literal["recent", "requests", "cost"]
+
+
+class UsageLogGroupModel(BaseModel):
+    """One of a group's most-used models, and how many of its requests ran on it."""
+
+    model: str
+    requests: int
+
+
+class UsageLogGroup(BaseModel):
+    """The request log's rows that share one value of a column, summed.
+
+    ``key`` is None for the rows with no value in the column, and ``label`` names
+    an opaque key (a user's alias, an API key's name). ``requests`` leaves out the
+    attempts a routing policy recovered from, as the log does; ``errors`` counts
+    failed rows. ``latency_ms`` is the mean over the rows that recorded one.
+    ``first_at`` and ``last_at`` are ISO 8601 instants, to the hour where older
+    traffic is read from the hourly rollups and exact otherwise.
+    """
+
+    key: str | None
+    label: str | None = None
+    requests: int
+    errors: int
+    cost: float
+    tokens: int
+    latency_ms: float | None
+    first_at: str
+    last_at: str
+    # Up to three, most requests first.
+    top_models: list[UsageLogGroupModel]
+
+
+class UsageLogGroups(BaseModel):
+    """A page of the request log's groups over the window, and how many groups the filters leave."""
+
+    start_date: str
+    end_date: str
+    group_by: LogGroupBy
+    order: LogGroupOrder
+    groups: list[UsageLogGroup]
+    total: int
+
+
 class UsageErrorCodeRow(BaseModel):
     """One error-taxonomy row: the failures in the window sharing a status code.
 

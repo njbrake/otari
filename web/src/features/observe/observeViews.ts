@@ -44,6 +44,7 @@ export const VIEW_KEYS: Record<SavedViewPage, readonly string[]> = {
     "channel",
     "is_null",
     "recovered",
+    "group",
   ],
 }
 

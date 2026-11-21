@@ -24,6 +24,8 @@ from gateway.repositories.usage_and_telemetry import (
 )
 from gateway.schemas.usage_and_telemetry import (
     Bucket,
+    LogGroupBy,
+    LogGroupOrder,
     RequestSettlement,
     SeriesGroupBy,
     SortOrder,
@@ -32,6 +34,7 @@ from gateway.schemas.usage_and_telemetry import (
     UsageErrorCodeRow,
     UsageGroupedSeries,
     UsageGroupRow,
+    UsageLogGroups,
     UsageSort,
     UsageSummary,
     UsageTotals,
@@ -417,6 +420,42 @@ class UsageService:
             start_date=start.isoformat(),
             end_date=end.isoformat(),
             group_by=group_by,
+            groups=[
+                group.model_copy(update={"label": labels.get(group.key)}) if group.key in labels else group
+                for group in groups
+            ],
+            total=total,
+        )
+
+    async def log_groups(
+        self,
+        filters: UsageFilters,
+        scope: UsageScope,
+        *,
+        group_by: LogGroupBy,
+        order: LogGroupOrder,
+        skip: int,
+        limit: int,
+    ) -> UsageLogGroups:
+        """A page of the request log grouped by one column over a bounded window, each user and key named."""
+        start, end = resolve_window(filters.start_date, filters.end_date)
+        filters = replace(filters, start_date=start, end_date=end)
+        async with self._heavy_read():
+            filters = await self._searched(filters, scope)
+            groups, total = await self._usage_logs.log_groups(
+                filters, scope, group_by=group_by, order=order, skip=skip, limit=limit
+            )
+            keys = {group.key for group in groups if group.key is not None}
+            labels: dict[str, str | None] = {}
+            if group_by == "user":
+                labels = await self._users.aliases(keys)
+            elif group_by == "api_key":
+                labels = await self._keys.key_names(keys, workspace_ids=None)
+        return UsageLogGroups(
+            start_date=start.isoformat(),
+            end_date=end.isoformat(),
+            group_by=group_by,
+            order=order,
             groups=[
                 group.model_copy(update={"label": labels.get(group.key)}) if group.key in labels else group
                 for group in groups
