@@ -37,7 +37,7 @@ from gateway.models.tools import (
     WorkspaceMcpServerGrant,
 )
 from gateway.models.traces import Trace
-from gateway.models.usage import AgentTelemetry, UsageLog
+from gateway.models.usage import AgentTelemetry, AgentTelemetryUserBarrier, UsageLog
 from gateway.models.users import User
 from gateway.services.tenancy.provisioning_service import DEFAULT_WORKSPACE_NAME
 from gateway.services.tools import _user_merge as user_merge_listeners
@@ -356,6 +356,7 @@ def _seed_every_reference(session: Session, workspace_id: uuid.UUID, user_id: st
                 hard_expires_at=now + timedelta(hours=1),
             ),
             AgentTelemetry(user_id=user_id, name="tool_call", source="claude_code", dedup_key="seed"),
+            AgentTelemetryUserBarrier(user_id=user_id),
             BatchRecord(id="batch_merge", provider="openai", user_id=user_id, model="gpt-4o"),
             VideoJobRecord(id="video_merge", provider="openai", model="sora", user_id=user_id),
             IdempotencyRecord(
@@ -431,7 +432,10 @@ def test_every_table_that_references_a_user_is_moved(
     before = naming(LEGACY)
     assert [ref for ref, count in before.items() if count == 0] == [], "seed a row for every reference"
     preview = _merge(client, master_key_header, target=world.account, source=LEGACY, preview=True).json()
-    assert set(preview["moved"]) >= {table for table, _ in columns} - {"users"} | {"end_users"}
+    # A barrier is dropped with the telemetry it guards rather than moved, so the merge reports no count for it.
+    assert set(preview["moved"]) >= {table for table, _ in columns} - {"users", "agent_telemetry_user_barriers"} | {
+        "end_users"
+    }
 
     response = _merge(client, master_key_header, target=world.account, source=LEGACY)
     assert response.status_code == status.HTTP_200_OK, response.text

@@ -108,6 +108,7 @@ from gateway.schemas.routing import (
     RoutingTrafficResponse,
 )
 from gateway.services.alias_service import all_alias_names
+from gateway.services.catalog import resolve_catalog_selector
 from gateway.services.model_access import intersect_allowlists, is_model_allowed
 from gateway.services.policy_store import all_policy_names
 from gateway.services.provider_kwargs import normalize_pricing_key, split_selector
@@ -158,6 +159,7 @@ async def _writable_workspace(
     workspace_id: uuid.UUID | None,
     targets: list[str],
     model_provider: ModelProviderPort | None,
+    catalog_spellings: bool = False,
 ) -> Workspace:
     """Resolve the workspace a tenant write lands in, refusing what it may not do.
 
@@ -165,7 +167,9 @@ async def _writable_workspace(
     would have told the caller. Management access first, so a member learns
     nothing about which workspaces exist. Then the workspace, resolved inside the
     caller's own organization, so another tenant's id is a 404 rather than a 403.
-    Then the targets, against the organization's own reach.
+    Then the targets, against the organization's own reach. ``catalog_spellings``
+    says a target may be a catalog spelling, which a policy's may and an alias's
+    may not.
     """
     organizations = OrganizationService(db, membership_listener=None)
     organization = await organizations.get_active_organization_for_user(user)
@@ -183,7 +187,13 @@ async def _writable_workspace(
         organizations=organizations,
     )
     await _require_reachable_targets(
-        db, config, user=user, workspace_id=workspace.id, targets=targets, model_provider=model_provider
+        db,
+        config,
+        user=user,
+        workspace_id=workspace.id,
+        targets=targets,
+        model_provider=model_provider,
+        catalog_spellings=catalog_spellings,
     )
     return workspace
 
@@ -212,6 +222,7 @@ async def _require_reachable_targets(
     workspace_id: uuid.UUID,
     targets: list[str],
     model_provider: ModelProviderPort | None,
+    catalog_spellings: bool,
 ) -> None:
     """Refuse a target the caller's organization cannot already reach.
 
@@ -224,6 +235,9 @@ async def _require_reachable_targets(
     helpers refuse chaining a step later and say so precisely. Checking it here
     first would answer "not available to this organization", which is true of an
     indirection name and useless for fixing it.
+
+    With ``catalog_spellings``, a catalog spelling is held to the offering it
+    resolves to in the workspace, which is the one a request for it dispatches to.
     """
     if not targets:
         return
@@ -232,6 +246,8 @@ async def _require_reachable_targets(
     own_prefixes = await OrgProviderKeyService(db, config).get_workspace_byo_providers(workspace_id=workspace_id)
 
     def canonical(target: str) -> str:
+        if catalog_spellings:
+            target = resolve_catalog_selector(target, workspace_id=workspace_id) or target
         # any-llm knows no key's request prefix, so `synth-a/model` is spelled `synth-a:model` here.
         split = split_selector(target)
         if split is not None and split[0] in own_prefixes:
@@ -464,6 +480,7 @@ async def set_organization_routing_policy(
         workspace_id=request.workspace_id,
         targets=validated_spec(request.name, request.spec).static_selectors(),
         model_provider=model_provider,
+        catalog_spellings=True,
     )
     policy, created = await upsert_policy_in_workspace(request, db, config, workspace_id=workspace.id)
     if created and growth is not None:

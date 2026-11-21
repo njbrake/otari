@@ -353,6 +353,9 @@ def test_list_usage_response_shape(
         "cache_write_1h_tokens": None,
         "reasoning_tokens": None,
         "provider_latency_ms": None,
+        # Null because the request did not stream.
+        "ttft_ms": None,
+        "output_tokens_per_second": None,
         "billing_meters": None,
         "pricing_breakdown": None,
         "cost": 1.23,
@@ -360,8 +363,6 @@ def test_list_usage_response_shape(
         "error_message": "capacity",
         "status_code": 503,
         "latency_ms": 842,
-        # Null because the request did not stream.
-        "ttft_ms": None,
         "source": "gateway",
         "source_label": None,
         "tags": None,
