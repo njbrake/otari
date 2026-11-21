@@ -47,6 +47,7 @@ from gateway.schemas.usage_and_telemetry import (
     ANY_TOOL,
     GATEWAY_TOOL_NAMES,
     TOOL_METER_NAMESPACE,
+    BreakdownRankBy,
     Bucket,
     LogGroupBy,
     LogGroupOrder,
@@ -385,13 +386,52 @@ _GROUP_COLUMNS: dict[str, str] = {
     "endpoint": "endpoint",
     "provider": "provider",
     "workspace": "workspace_id",
+    "policy": "policy_name",
 }
+
+# The dimensions only a usage row carries, so a breakdown by one reads the rows.
+_ROW_ONLY_DIMENSIONS = frozenset({"policy"})
+
+
+def _channel_expr(columns: Any) -> ColumnElement[Any]:
+    """The way a row came in, read as :func:`_channel_conditions` reads it: imported, the Playground, or the API.
+
+    Its values are rendered inline, so the expression a query selects and the one
+    it groups by are the same text to PostgreSQL rather than two sets of parameters.
+    """
+
+    def inline(value: str) -> Any:
+        return literal(value, literal_execute=True)
+
+    return case(
+        (columns.source != inline(SERVED_HERE_SLUG), inline("imported")),
+        (columns.endpoint == inline(PLAYGROUND_USAGE_ENDPOINT), inline("playground")),
+        else_=inline("api"),
+    )
+
+
+def _dimension_expr(columns: Any, dimension: str) -> ColumnElement[Any]:
+    """What a breakdown groups on over either relation's columns, as text: a group's key is a string."""
+    if dimension == "channel":
+        return _channel_expr(columns)
+    column = columns[_GROUP_COLUMNS[dimension]]
+    return sql_cast(column, String) if dimension == "workspace" else column
 
 
 def _group_column(rows: Subquery, dimension: str) -> ColumnElement[Any]:
     """The column a breakdown groups on, as text: a workspace's id is a UUID, and a group's key is a string."""
-    column = rows.c[_GROUP_COLUMNS[dimension]]
-    return sql_cast(column, String) if dimension == "workspace" else column
+    return _dimension_expr(rows.c, dimension)
+
+
+def _p95_of(values: Sequence[int]) -> int | None:
+    """The 95th percentile of sorted ``values``, interpolated between ranks as ``percentile_cont`` does."""
+    if not values:
+        return None
+    position = 0.95 * (len(values) - 1)
+    lower = int(position)
+    if lower + 1 >= len(values):
+        return values[lower]
+    return round(values[lower] + (values[lower + 1] - values[lower]) * (position - lower))
 
 
 # How many of a log group's most-used models it names.
@@ -836,8 +876,12 @@ def _row_measures() -> dict[str, Any]:
 _MEASURES: tuple[str, ...] = tuple(_row_measures())
 
 
-def _raw_rows(conditions: Sequence[ColumnElement[bool]]) -> Select[Any]:
-    """The usage rows the conditions leave, each standing for itself, in the usage relation's columns."""
+def _raw_rows(conditions: Sequence[ColumnElement[bool]], *, with_policy: bool = False) -> Select[Any]:
+    """The usage rows the conditions leave, each standing for itself, in the usage relation's columns.
+
+    ``with_policy`` adds the routing policy, which no rollup keeps, so such a
+    relation is never unioned with the rollups.
+    """
     measures = _row_measures()
     table = UsageLog.__table__.c
     return select(
@@ -846,6 +890,7 @@ def _raw_rows(conditions: Sequence[ColumnElement[bool]]) -> Select[Any]:
         UsageLog.timestamp.label("ts"),
         literal(1, BigInteger).label("rows"),
         *(measures[name].label(name) for name in _MEASURES),
+        *((UsageLog.policy_name.label("policy_name"),) if with_policy else ()),
     ).where(*conditions)
 
 
@@ -1351,6 +1396,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                     _summed(case((c.status == "absorbed", c.rows), else_=0)),
                     _summed(case((c.status == "incomplete", c.rows), else_=0)),
                     _summed(case((c.source != SERVED_HERE_SLUG, c.cost), else_=0), 0.0),
+                    _summed(case((c.counts_toward_budget, c.cost), else_=0), 0.0),
                 )
             )
         ).one()
@@ -1372,6 +1418,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             absorbed_count=int(row[14]),
             incomplete_count=int(row[15]),
             imported_cost=float(row[16]),
+            charged_cost=float(row[17]),
         )
 
     async def groups(
@@ -1382,35 +1429,110 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         dimension: str | None = None,
         tag_key: str | None = None,
         limit: int | None,
+        rank_by: BreakdownRankBy = "cost",
+        rank_order: SortOrder = "desc",
     ) -> list[UsageGroupRow]:
-        """Spend, billed tokens and requests grouped by a dimension or by one tag's values, biggest spend first.
+        """Spend, billed tokens, requests and failures grouped by a dimension or by one tag's values.
 
         ``tokens`` is the *billed* total (input including both cache buckets, plus
         output), the same quantity both series report, so every analytics surface
-        agrees on what a token count means. Equal spend ranks by key, so the cap
-        cuts the same groups wherever the sums came from.
+        agrees on what a token count means. The groups are ranked by ``rank_by``
+        (``p95`` is ranked by the caller, so it reads as ``cost`` here), biggest
+        first unless ``rank_order`` is ``asc``. Equal values rank by key, so the
+        cap cuts the same groups wherever the sums came from.
         """
         if tag_key is not None:
             return await self._tag_groups(filters, scope, tag_key=tag_key, limit=limit)
-        rows = await self._usage_rows(filters, scope)
-        column = _group_column(rows, cast("str", dimension))
+        name = cast("str", dimension)
+        rows = await self._usage_rows(filters, scope, rows_only=name in _ROW_ONLY_DIMENSIONS)
+        column = _group_column(rows, name)
         cost_sum = _summed(rows.c.cost, 0.0)
+        charged_sum = _summed(case((rows.c.counts_toward_budget, rows.c.cost), else_=0), 0.0)
+        tokens_sum = _summed(rows.c.billed_input_tokens) + _summed(rows.c.billed_output_tokens)
+        requests_sum = _requests(rows, single_status(filters))
+        failed_sum = _summed(case((rows.c.status == "error", rows.c.rows), else_=0))
+        ranks: dict[str, Any] = {
+            "cost": cost_sum,
+            "charged": charged_sum,
+            "not_charged": cost_sum - charged_sum,
+            "tokens": tokens_sum,
+            "requests": requests_sum,
+            "failed": failed_sum,
+        }
+        rank = ranks.get(rank_by, cost_sum)
         stmt = (
-            select(
-                column,
-                cost_sum,
-                _summed(rows.c.billed_input_tokens) + _summed(rows.c.billed_output_tokens),
-                _requests(rows, single_status(filters)),
-            )
+            select(column, cost_sum, tokens_sum, requests_sum, charged_sum, failed_sum)
             .group_by(column)
-            .order_by(cost_sum.desc(), column)
+            .order_by(rank.asc() if rank_order == "asc" else rank.desc(), column)
         )
         if limit is not None:
             stmt = stmt.limit(limit)
         return [
-            UsageGroupRow(key=row[0], cost=float(row[1]), tokens=int(row[2]), requests=int(row[3]))
+            UsageGroupRow(
+                key=row[0],
+                cost=float(row[1]),
+                tokens=int(row[2]),
+                requests=int(row[3]),
+                charged_cost=float(row[4]),
+                error_count=int(row[5]),
+            )
             for row in (await self.db.execute(stmt)).all()
         ]
+
+    async def p95_by_group(
+        self,
+        filters: UsageFilters,
+        scope: UsageScope,
+        *,
+        dimension: str,
+        keys: Collection[str | None] | None,
+    ) -> dict[str | None, int]:
+        """Each group's 95th-percentile total latency over its requests, absorbed attempts left out.
+
+        ``keys`` names the groups to read, a null key for the group with no value;
+        ``None`` reads every group. A group none of whose requests recorded a
+        latency is left out. Read from the rows, since an hour's rollups keep only
+        a latency sum, and interpolated as :meth:`p95_latency_ms` is on either engine.
+        """
+        if keys is not None and not keys:
+            return {}
+        column = _dimension_expr(UsageLog.__table__.c, dimension)
+        measured = [
+            *usage_conditions(filters, scope),
+            UsageLog.status != "absorbed",
+            UsageLog.latency_ms.is_not(None),
+        ]
+        if keys is not None:
+            named = sorted(key for key in keys if key is not None)
+            arms: list[ColumnElement[bool]] = [column.in_(named)] if named else []
+            if None in keys:
+                arms.append(column.is_(None))
+            measured.append(or_(*arms))
+        if dialect_name(self.db) == "postgresql":
+            # Materialized, so the window is read by its own best path and then sorted:
+            # grouped in place, PostgreSQL walks an index on the group column to get
+            # its rows presorted, which visits every row the column has ever held.
+            window = (
+                select(column.label("key"), UsageLog.latency_ms.label("latency_ms"))
+                .where(*measured)
+                .cte("measured")
+                .prefix_with("MATERIALIZED")
+            )
+            stmt = select(window.c.key, func.percentile_cont(0.95).within_group(window.c.latency_ms.asc())).group_by(
+                window.c.key
+            )
+            return {row[0]: round(float(row[1])) for row in (await self.db.execute(stmt)).all() if row[1] is not None}
+        # SQLite has no ordered-set aggregate: read each group's latencies in order.
+        ordered = select(column, UsageLog.latency_ms).where(*measured).order_by(column, UsageLog.latency_ms.asc())
+        latencies: dict[str | None, list[int]] = {}
+        for key, latency in (await self.db.execute(ordered)).all():
+            latencies.setdefault(key, []).append(int(latency))
+        out: dict[str | None, int] = {}
+        for key, values in latencies.items():
+            value = _p95_of(values)
+            if value is not None:
+                out[key] = value
+        return out
 
     async def value_groups(
         self,
@@ -1578,6 +1700,8 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 cost_sum,
                 _billed_input_sum() + _billed_output_sum(),
                 _request_count_expr(single_status(filters)),
+                func.coalesce(func.sum(case((UsageLog.counts_toward_budget, UsageLog.cost), else_=0)), 0.0),
+                func.coalesce(func.sum(case((UsageLog.status == "error", 1), else_=0)), 0),
             )
             .where(*usage_conditions(filters, scope))
             .group_by(column)
@@ -1586,7 +1710,14 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         if limit is not None:
             stmt = stmt.limit(limit)
         return [
-            UsageGroupRow(key=row[0], cost=float(row[1]), tokens=int(row[2]), requests=int(row[3]))
+            UsageGroupRow(
+                key=row[0],
+                cost=float(row[1]),
+                tokens=int(row[2]),
+                requests=int(row[3]),
+                charged_cost=float(row[4]),
+                error_count=int(row[5]),
+            )
             for row in (await self.db.execute(stmt)).all()
         ]
 
@@ -1717,7 +1848,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         that ranked among the named ones (a real ``key=None`` series, e.g. a
         deleted user) from the remainder.
         """
-        rows = await self._usage_rows(filters, scope)
+        rows = await self._usage_rows(filters, scope, rows_only=dimension in _ROW_ONLY_DIMENSIONS)
         column = _group_column(rows, dimension)
         key_expr = case((column.in_(named), column), else_=null())
         if keeps_null:
@@ -1801,13 +1932,18 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         filters: UsageFilters,
         scope: UsageScope,
         extra: Callable[[Any], list[ColumnElement[bool]]] = _no_extra,
+        *,
+        rows_only: bool = False,
     ) -> Subquery:
         """The rows these filters leave inside this scope, as the usage relation, rollups wherever they serve.
 
         ``extra`` adds conditions over the keys the rollups keep, given either
-        table's columns.
+        table's columns. ``rows_only`` reads the rows alone, with the routing
+        policy each one was served through, which the rollups do not keep.
         """
         conditions = [*usage_conditions(filters, scope), *extra(UsageLog.__table__.c)]
+        if rows_only:
+            return _raw_rows(conditions, with_policy=True).subquery("usage_rows")
         window = await self._rollup_window(filters)
         if window is None:
             return _raw_rows(conditions).subquery("usage_rows")

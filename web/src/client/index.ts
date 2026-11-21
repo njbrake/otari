@@ -136,6 +136,7 @@ export type UsageLogGroups = Schemas["UsageLogGroups"]
 export type LogGroupBy = Schemas["UsageLogGroups"]["group_by"]
 export type LogGroupOrder = Schemas["UsageLogGroups"]["order"]
 export type UsageGroupRow = Schemas["UsageGroupRow"]
+export type UsageToolRow = Schemas["UsageToolRow"]
 export type UsageSeriesPoint = Schemas["UsageSeriesPoint"]
 export type UsageGroupedSeries = Schemas["UsageGroupedSeries"]
 export type InFlightRequest = Schemas["InFlightEntry"]
@@ -201,6 +202,8 @@ type SummaryQuery = NonNullable<
 >
 export type UsageBucket = NonNullable<SummaryQuery["bucket"]>
 export type SummaryDimension = NonNullable<SummaryQuery["dimensions"]>[number]
+export type BreakdownDimension = NonNullable<SummaryQuery["p95_by"]>
+export type BreakdownRankBy = NonNullable<SummaryQuery["rank_by"]>
 type SeriesQuery = NonNullable<
   operations["usage-usage_series"]["parameters"]["query"]
 >

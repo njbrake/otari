@@ -6,6 +6,8 @@ import {
   useQueryClient,
 } from "@tanstack/react-query"
 import type {
+  BreakdownDimension,
+  BreakdownRankBy,
   InFlightResponse,
   LogGroupBy,
   LogGroupOrder,
@@ -456,9 +458,23 @@ export function useUsageSummary(
   dimensions?: SummaryDimension[],
   enabled = true,
   usageScope: UsageScope = "caller",
-  { includeP95 = false }: { includeP95?: boolean } = {},
+  {
+    includeP95 = false,
+    p95By,
+    rank,
+  }: {
+    includeP95?: boolean
+    /** Reads each group's p95 in this one breakdown, from the rows. */
+    p95By?: BreakdownDimension
+    /** What ranks each breakdown's groups, and so which make the top N. */
+    rank?: { by: BreakdownRankBy; order: "asc" | "desc" }
+  } = {},
 ) {
   const scope = useUsageScope(usageScope)
+  // The server's default ranking reads as no ranking, so a default sort shares
+  // its cache entry with every read that names none.
+  const ranked =
+    rank && (rank.by !== "cost" || rank.order !== "desc") ? rank : undefined
   return useQuery({
     queryKey: [
       USAGE,
@@ -468,12 +484,19 @@ export function useUsageSummary(
       bucket,
       dimensions ?? "all",
       ...(includeP95 ? ["p95"] : []),
+      ...(p95By ? [`p95:${p95By}`] : []),
+      ...(ranked ? [`rank:${ranked.by}:${ranked.order}`] : []),
     ],
     meta: workspaceMeta(filters.workspace_id),
     queryFn: ({ signal }) => {
       const params = usageParams(filters)
       params.set("bucket", bucket)
       if (includeP95) params.set("include_p95", "true")
+      if (p95By) params.set("p95_by", p95By)
+      if (ranked) {
+        params.set("rank_by", ranked.by)
+        params.set("rank_order", ranked.order)
+      }
       // A repeated query param has no empty-list form, so an empty selection goes
       // on the wire as the server's `none` sentinel.
       if (dimensions) {

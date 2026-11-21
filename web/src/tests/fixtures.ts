@@ -120,6 +120,7 @@ export function usageTotals(overrides: Partial<UsageTotals> = {}): UsageTotals {
     incomplete_count: 0,
     imported_cost: 0,
     p95_latency_ms: null,
+    charged_cost: 0,
     ...overrides,
   }
 }

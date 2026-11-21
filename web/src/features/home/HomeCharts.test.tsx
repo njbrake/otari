@@ -56,6 +56,8 @@ const row = (key: string, cost: number) => ({
   requests: 2,
   tokens: 400,
   is_other: false,
+  charged_cost: 0,
+  error_count: 0,
 })
 
 function mockApi({

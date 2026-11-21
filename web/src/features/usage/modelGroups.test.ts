@@ -10,6 +10,8 @@ const row = (overrides: Partial<UsageGroupRow>): UsageGroupRow => ({
   tokens: 10,
   requests: 1,
   is_other: false,
+  charged_cost: 0,
+  error_count: 0,
   ...overrides,
 })
 
@@ -20,6 +22,9 @@ const FIREWORKS = row({
   cost: 149.33,
   tokens: 8_590_300_000,
   requests: 900,
+  charged_cost: 100,
+  error_count: 2,
+  p95_latency_ms: 800,
 })
 const NEBIUS = row({
   key: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
@@ -28,6 +33,9 @@ const NEBIUS = row({
   cost: 50.47,
   tokens: 2_973_500_000,
   requests: 300,
+  charged_cost: 50,
+  error_count: 1,
+  p95_latency_ms: 1200,
 })
 const PRO = row({
   key: "deepseek-ai/DeepSeek-V4.1-Pro-1017",
@@ -46,6 +54,10 @@ describe("groupModels", () => {
       cost: FIREWORKS.cost + NEBIUS.cost,
       tokens: FIREWORKS.tokens + NEBIUS.tokens,
       requests: 1200,
+      charged: 150,
+      failed: 3,
+      // The slowest of its ids' p95s, which bounds the model's.
+      p95: 1200,
       isOther: false,
     })
     // Another build of the family is another model.

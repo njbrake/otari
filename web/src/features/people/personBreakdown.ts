@@ -1,5 +1,6 @@
 import type {
   ApiKey,
+  BreakdownDimension,
   SummaryDimension,
   UsageGroupRow,
   UsageSummary,
@@ -7,6 +8,7 @@ import type {
 } from "@/client"
 import { describeSource } from "@/features/activity/activityModel"
 import { keyName } from "@/features/spend/names"
+import type { BreakdownFigures } from "@/features/usage/breakdownSort"
 import { groupModels, OTHER } from "@/features/usage/modelGroups"
 import { formatCost, formatUsd } from "@/shared/helpers/format"
 import { providerDisplayName } from "@/shared/helpers/providers"
@@ -15,7 +17,14 @@ import { providerDisplayName } from "@/shared/helpers/providers"
 export const formatSpend = (value: number) =>
   value === 0 || value >= 0.01 ? formatUsd(value) : formatCost(value)
 
-export type PersonCut = "models" | "keys" | "providers" | "sources"
+export type PersonCut =
+  | "models"
+  | "keys"
+  | "providers"
+  | "sources"
+  | "sessions"
+  | "channels"
+  | "policies"
 
 /**
  * The cuts of a person's spend, each one summary dimension, and the page and
@@ -26,10 +35,26 @@ export const PERSON_CUTS: {
   label: string
   /** The first column's head. */
   noun: string
-  dimension: SummaryDimension
-  field: "by_model" | "by_api_key" | "by_provider" | "by_source"
+  dimension: SummaryDimension & BreakdownDimension
+  field:
+    | "by_model"
+    | "by_api_key"
+    | "by_provider"
+    | "by_source"
+    | "by_source_label"
+    | "by_channel"
+    | "by_policy"
   to: "/sessions" | "/requests"
-  filter: "model" | "api_key_id" | "provider" | "source"
+  filter:
+    | "model"
+    | "api_key_id"
+    | "provider"
+    | "source"
+    | "source_label"
+    | "channel"
+    | "policy_name"
+  /** What a row of the requests that recorded no value opens: those requests. */
+  none?: Record<string, string>
 }[] = [
   {
     value: "models",
@@ -66,6 +91,35 @@ export const PERSON_CUTS: {
     field: "by_source",
     to: "/requests",
     filter: "source",
+  },
+  {
+    value: "sessions",
+    label: "Sessions",
+    noun: "Session",
+    dimension: "source_label",
+    field: "by_source_label",
+    to: "/requests",
+    filter: "source_label",
+    none: { is_null: "session" },
+  },
+  {
+    value: "channels",
+    label: "Channels",
+    noun: "Channel",
+    dimension: "channel",
+    field: "by_channel",
+    to: "/requests",
+    filter: "channel",
+  },
+  {
+    value: "policies",
+    label: "Routing policies",
+    noun: "Routing policy",
+    dimension: "policy",
+    field: "by_policy",
+    to: "/requests",
+    filter: "policy_name",
+    none: { routed: "false" },
   },
 ]
 
@@ -114,12 +168,35 @@ export interface BreakdownRow {
   filterValues: string[]
   requests: number
   tokens: number
+  /** What counted toward their budgets: the spend that is charged. */
   budgeted: number
+  /** What is recorded and not charged: a budget-exempt key's, imported usage. */
   exempt: number
+  failed: number
+  /** The 95th-percentile latency, null where none was read or recorded. */
+  p95: number | null
   /** An API key flagged `exclude_from_budget`. */
   isExemptKey: boolean
   /** The server's fold of its smallest rows. */
   isOther: boolean
+  /** The requests that recorded no value for the cut: no session, no policy. */
+  isNone: boolean
+}
+
+/** The figures a table sorts a row by. */
+export const rowFigures = (row: BreakdownRow): BreakdownFigures => ({
+  cost: row.budgeted + row.exempt,
+  charged: row.budgeted,
+  tokens: row.tokens,
+  requests: row.requests,
+  failed: row.failed,
+  p95: row.p95,
+})
+
+const CHANNEL_NAMES: Record<string, string> = {
+  api: "API",
+  imported: "Imported",
+  playground: "Playground",
 }
 
 interface Part {
@@ -130,8 +207,27 @@ interface Part {
   isOther: boolean
   isExemptKey: boolean
   cost: number
+  charged: number
+  failed: number
+  p95: number | null
   tokens: number
   requests: number
+}
+
+/** How a value of a cut other than models and keys reads, or the requests that recorded none. */
+function valueName(cut: PersonCut, key: string | null): string {
+  switch (cut) {
+    case "providers":
+      return key === null ? "Unknown provider" : providerDisplayName(key)
+    case "sessions":
+      return key ?? "No session"
+    case "channels":
+      return key === null ? "Unknown" : (CHANNEL_NAMES[key] ?? key)
+    case "policies":
+      return key ?? "Direct"
+    default:
+      return key === null ? "Unknown source" : describeSource(key)
+  }
 }
 
 /** A value's id, name and filter, by cut; ids no value can take for the fold and for none. */
@@ -149,6 +245,9 @@ function partsOf(
       isOther: model.isOther,
       isExemptKey: false,
       cost: model.cost,
+      charged: model.charged,
+      failed: model.failed,
+      p95: model.p95,
       tokens: model.tokens,
       requests: model.requests,
     }))
@@ -156,6 +255,9 @@ function partsOf(
   return rows.map((row) => {
     const base = {
       cost: row.cost,
+      charged: row.charged_cost,
+      failed: row.error_count,
+      p95: row.p95_latency_ms ?? null,
       tokens: row.tokens,
       requests: row.requests,
       isOther: row.is_other ?? false,
@@ -187,57 +289,53 @@ function partsOf(
     return {
       ...base,
       id,
-      name:
-        row.key === null
-          ? cut === "providers"
-            ? "Unknown provider"
-            : "Unknown source"
-          : cut === "providers"
-            ? providerDisplayName(row.key)
-            : describeSource(row.key),
+      name: valueName(cut, row.key),
       isExemptKey: false,
     }
   })
 }
 
 /**
- * The cut's rows from the budgeted and the exempt summaries, one per value
- * with both figures, the costliest overall first, then the most tokens. A
- * value with neither spend nor requests is left out.
+ * The cut's rows from one summary of the person's spend, one per value with
+ * what of it was charged and what was not, the costliest first, then the most
+ * tokens. A value with neither spend nor requests is left out.
  */
 export function splitRows(
   cut: PersonCut,
-  budgeted: UsageSummary | undefined,
-  exempt: UsageSummary | undefined,
+  summary: UsageSummary | undefined,
   keys: readonly ApiKey[],
 ): BreakdownRow[] {
   const field = personCutOf(cut).field
   const merged = new Map<string, BreakdownRow>()
-  const add = (parts: Part[], side: "budgeted" | "exempt") => {
-    for (const part of parts) {
-      const row = merged.get(part.id) ?? {
-        id: part.id,
-        name: part.name,
-        detail: part.detail,
-        filterValues: [],
-        requests: 0,
-        tokens: 0,
-        budgeted: 0,
-        exempt: 0,
-        isExemptKey: part.isExemptKey,
-        isOther: part.isOther,
-      }
-      row.requests += part.requests
-      row.tokens += part.tokens
-      row[side] += part.cost
-      for (const value of part.filterValues) {
-        if (!row.filterValues.includes(value)) row.filterValues.push(value)
-      }
-      merged.set(part.id, row)
+  for (const part of partsOf(cut, summary?.[field] ?? [], keys)) {
+    const row = merged.get(part.id) ?? {
+      id: part.id,
+      name: part.name,
+      detail: part.detail,
+      filterValues: [],
+      requests: 0,
+      tokens: 0,
+      budgeted: 0,
+      exempt: 0,
+      failed: 0,
+      p95: null,
+      isExemptKey: part.isExemptKey,
+      isOther: part.isOther,
+      isNone: part.id.endsWith("::none"),
     }
+    row.requests += part.requests
+    row.tokens += part.tokens
+    row.budgeted += part.charged
+    row.exempt += Math.max(0, part.cost - part.charged)
+    row.failed += part.failed
+    if (part.p95 !== null && (row.p95 === null || part.p95 > row.p95)) {
+      row.p95 = part.p95
+    }
+    for (const value of part.filterValues) {
+      if (!row.filterValues.includes(value)) row.filterValues.push(value)
+    }
+    merged.set(part.id, row)
   }
-  add(partsOf(cut, budgeted?.[field] ?? [], keys), "budgeted")
-  add(partsOf(cut, exempt?.[field] ?? [], keys), "exempt")
   return [...merged.values()]
     .filter((row) => row.requests > 0 || row.budgeted + row.exempt > 0)
     .sort(

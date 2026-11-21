@@ -1,56 +1,70 @@
 import type { UsageSummary } from "@/client"
 import { type PersonCut, personCutOf } from "@/features/people/personBreakdown"
 import { type SpendWindow, usageRange } from "@/features/spend/period"
-import { useUsageSummary } from "@/shared/api/usage"
+import type { BreakdownSort } from "@/features/usage/breakdownSort"
+import { NO_BREAKDOWNS, useUsageSummary } from "@/shared/api/usage"
 
 export interface PersonSpend {
   budgeted: UsageSummary | undefined
   exempt: UsageSummary | undefined
-  /** Either read has no answer yet. */
+  /** The cut's breakdown over all their spend, ranked by the table's sort, with each value's p95. */
+  breakdown: UsageSummary | undefined
+  /** Either total has no answer yet, or the breakdown has none. */
   isLoading: boolean
   /**
-   * The answers on screen are a previous cut's or window's, kept while the
-   * new one loads: right for the totals, not for the cut's rows.
+   * The breakdown on screen is a previous cut's, window's or sort's, kept while
+   * the new one loads: right for nothing in the table.
    */
   isStale: boolean
   error: unknown
 }
 
 /**
- * One person's spend over a window, read twice: what counts toward a budget,
- * and what does not. Each read carries the cut's one breakdown, so a switch of
- * cut asks for that dimension alone. Over the caller's whole organization, as
- * the person's figures beside it are.
+ * One person's spend over a window: what counts toward a budget and what does
+ * not, as totals, and the cut's one breakdown over both, each row carrying
+ * what of it was charged. Over the caller's whole organization, as the
+ * person's figures beside it are.
  */
 export function usePersonSpend(
   userId: string,
   window: SpendWindow,
   cut: PersonCut,
+  sort: BreakdownSort,
   isEnabled = true,
 ): PersonSpend {
   const filters = { user_id: [userId], ...usageRange(window) }
-  const dimensions = [personCutOf(cut).dimension]
+  const { dimension } = personCutOf(cut)
   const budgeted = useUsageSummary(
     { ...filters, counts_toward_budget: true },
     "day",
-    dimensions,
+    NO_BREAKDOWNS,
     isEnabled,
     "organization",
   )
   const exempt = useUsageSummary(
     { ...filters, counts_toward_budget: false },
     "day",
-    dimensions,
+    NO_BREAKDOWNS,
     isEnabled,
     "organization",
+  )
+  const breakdown = useUsageSummary(
+    filters,
+    "day",
+    [dimension],
+    isEnabled,
+    "organization",
+    { p95By: dimension, rank: { by: sort.key, order: sort.order } },
   )
   return {
     budgeted: budgeted.data,
     exempt: exempt.data,
+    breakdown: breakdown.data,
     isLoading:
       (budgeted.isPending && !budgeted.data) ||
-      (exempt.isPending && !exempt.data),
-    isStale: budgeted.isPlaceholderData || exempt.isPlaceholderData,
-    error: budgeted.error ?? exempt.error,
+      (exempt.isPending && !exempt.data) ||
+      (breakdown.isPending && !breakdown.data),
+    isStale: breakdown.isPlaceholderData,
+    error: budgeted.error ?? exempt.error ?? breakdown.error,
   }
 }

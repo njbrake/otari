@@ -8,6 +8,8 @@ const row = (overrides: Partial<UsageGroupRow>): UsageGroupRow => ({
   tokens: 0,
   requests: 0,
   is_other: false,
+  charged_cost: 0,
+  error_count: 0,
   ...overrides,
 })
 
@@ -53,7 +55,13 @@ describe("pickTopModel", () => {
 
   it("never picks the fold of other models", () => {
     const top = pickTopModel([
-      row({ key: null, cost: 50, is_other: true }),
+      row({
+        key: null,
+        cost: 50,
+        is_other: true,
+        charged_cost: 0,
+        error_count: 0,
+      }),
       row({ key: "named", cost: 3 }),
     ])
     expect(top?.name).toBe("named")
@@ -68,7 +76,15 @@ describe("pickTopModel", () => {
   it("is undefined with nothing to pick from", () => {
     expect(pickTopModel([])).toBeUndefined()
     expect(
-      pickTopModel([row({ key: null, cost: 5, is_other: true })]),
+      pickTopModel([
+        row({
+          key: null,
+          cost: 5,
+          is_other: true,
+          charged_cost: 0,
+          error_count: 0,
+        }),
+      ]),
     ).toBeUndefined()
   })
 

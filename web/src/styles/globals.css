@@ -2534,6 +2534,7 @@ body {
   min-width: 6.875rem;
 }
 .otari-breakdown .table__column[data-key="spend"],
+.otari-breakdown .table__column[data-key="cost"],
 .otari-breakdown .table__column[data-key="calls"],
 .otari-breakdown .table__column[data-key="failed"] {
   min-width: 6.25rem;
@@ -3448,6 +3449,7 @@ body {
   width: 6.875rem;
 }
 .otari-breakdown .table__column[data-key="spend"],
+.otari-breakdown .table__column[data-key="cost"],
 .otari-breakdown .table__column[data-key="calls"],
 .otari-breakdown .table__column[data-key="failed"] {
   width: 6.25rem;

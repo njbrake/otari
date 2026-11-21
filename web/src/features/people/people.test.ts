@@ -53,13 +53,25 @@ function spendRow(id: string, cost: number, tokens = 0): SpendRow {
     cost,
     requests: 1,
     tokens,
+    charged: cost,
+    failed: 0,
+    p95: null,
     limits: NO_LIMITS,
     target: null,
   }
 }
 
 function usage(key: string, requests: number): UsageGroupRow {
-  return { key, label: key, cost: 0, requests, tokens: 0, is_other: false }
+  return {
+    key,
+    label: key,
+    cost: 0,
+    requests,
+    tokens: 0,
+    is_other: false,
+    charged_cost: 0,
+    error_count: 0,
+  }
 }
 
 function session(user: string, workspace = PLATFORM): TraceSummary {

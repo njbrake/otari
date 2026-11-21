@@ -33,6 +33,7 @@ import { usePersonSpend } from "@/features/people/usePersonSpend"
 import { figureLabel, windowOf, windowWords } from "@/features/spend/period"
 import { SpendPeriodPicker } from "@/features/spend/SpendPeriodPicker"
 import { usePageClock } from "@/features/spend/usePageClock"
+import { sortFromUrl, sortToUrl } from "@/features/usage/breakdownSort"
 import { useKeys } from "@/shared/api/apiKeys"
 import {
   useOrganizationContext,
@@ -55,6 +56,8 @@ const sentenceCase = (words: string) =>
 const URL_DEFAULTS = {
   period: DEFAULT_PERSON_PERIOD,
   by: DEFAULT_PERSON_CUT,
+  sort: "",
+  order: "",
 }
 
 /**
@@ -81,7 +84,8 @@ export function PersonPage({ personId }: { personId: string }) {
   const [isRoleOpen, setRoleOpen] = useState(false)
   const person = people.rows.find((row) => row.id === personId)
   const userId = person && !person.isOutsideView ? person.userId : undefined
-  const spend = usePersonSpend(userId ?? "", window, cut, Boolean(userId))
+  const sort = sortFromUrl(get("sort"), get("order"))
+  const spend = usePersonSpend(userId ?? "", window, cut, sort, Boolean(userId))
   const split = splitTotals(spend.budgeted?.totals, spend.exempt?.totals)
 
   if (people.isLoading) return <PageLoading />
@@ -263,6 +267,8 @@ export function PersonPage({ personId }: { personId: string }) {
             window={window}
             cut={cut}
             onCutChange={(next) => patch({ by: next })}
+            sort={sort}
+            onSort={(next) => patch(sortToUrl(next))}
             spend={spend}
             keys={keys.data ?? []}
           />

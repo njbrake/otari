@@ -30502,9 +30502,19 @@
       "UsageGroupRow": {
         "description": "One breakdown row (a model, a user, an API key, a session, ...).\n\n``key`` is None both for the synthesized fold row (``is_other=True``) and for a\nreal group whose column was NULL (e.g. usage from a since-deleted user, with\n``is_other=False``). ``is_other`` disambiguates the two so the UI does not\nmislabel deleted-user usage as the fold.",
         "properties": {
+          "charged_cost": {
+            "default": 0.0,
+            "title": "Charged Cost",
+            "type": "number"
+          },
           "cost": {
             "title": "Cost",
             "type": "number"
+          },
+          "error_count": {
+            "default": 0,
+            "title": "Error Count",
+            "type": "integer"
           },
           "is_other": {
             "default": false,
@@ -30543,6 +30553,17 @@
               }
             ],
             "title": "Model Group"
+          },
+          "p95_latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Latency Ms"
           },
           "requests": {
             "title": "Requests",
@@ -30584,7 +30605,10 @@
               "api_key_id",
               "source",
               "provider",
-              "workspace_id"
+              "workspace_id",
+              "source_label",
+              "channel",
+              "policy_name"
             ],
             "title": "Group By",
             "type": "string"
@@ -31304,6 +31328,14 @@
             "title": "By Api Key",
             "type": "array"
           },
+          "by_channel": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/UsageGroupRow"
+            },
+            "title": "By Channel",
+            "type": "array"
+          },
           "by_endpoint": {
             "items": {
               "$ref": "#/components/schemas/UsageGroupRow"
@@ -31316,6 +31348,14 @@
               "$ref": "#/components/schemas/UsageGroupRow"
             },
             "title": "By Model",
+            "type": "array"
+          },
+          "by_policy": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/UsageGroupRow"
+            },
+            "title": "By Policy",
             "type": "array"
           },
           "by_provider": {
@@ -31360,6 +31400,14 @@
               "$ref": "#/components/schemas/UsageGroupRow"
             },
             "title": "By User",
+            "type": "array"
+          },
+          "by_workspace": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/UsageGroupRow"
+            },
+            "title": "By Workspace",
             "type": "array"
           },
           "end_date": {
@@ -31480,6 +31528,11 @@
           "cache_write_tokens": {
             "title": "Cache Write Tokens",
             "type": "integer"
+          },
+          "charged_cost": {
+            "default": 0.0,
+            "title": "Charged Cost",
+            "type": "number"
           },
           "completion_tokens": {
             "title": "Completion Tokens",
@@ -42807,7 +42860,10 @@
                 "api_key_id",
                 "source",
                 "provider",
-                "workspace_id"
+                "workspace_id",
+                "source_label",
+                "channel",
+                "policy_name"
               ],
               "title": "Group By",
               "type": "string"
@@ -43407,6 +43463,9 @@
                       "source_label",
                       "endpoint",
                       "provider",
+                      "channel",
+                      "policy",
+                      "workspace",
                       "status_code",
                       "tool",
                       "none"
@@ -56236,7 +56295,10 @@
                 "api_key_id",
                 "source",
                 "provider",
-                "workspace_id"
+                "workspace_id",
+                "source_label",
+                "channel",
+                "policy_name"
               ],
               "title": "Group By",
               "type": "string"
@@ -57316,6 +57378,9 @@
                       "source_label",
                       "endpoint",
                       "provider",
+                      "channel",
+                      "policy",
+                      "workspace",
                       "status_code",
                       "tool",
                       "none"
@@ -57362,6 +57427,73 @@
               "description": "Also compute 'totals.p95_latency_ms', the 95th-percentile total latency over the requests, which sorts the window's latencies. Off by default, so a caller that does not show it does not pay for it.",
               "title": "Include P95",
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). Read from the rows, since the hourly rollups keep no latency distribution; the fold row's stays null.",
+            "in": "query",
+            "name": "p95_by",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "model",
+                    "user",
+                    "api_key",
+                    "source",
+                    "source_label",
+                    "endpoint",
+                    "provider",
+                    "channel",
+                    "policy",
+                    "workspace"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). Read from the rows, since the hourly rollups keep no latency distribution; the fold row's stays null.",
+              "title": "P95 By"
+            }
+          },
+          {
+            "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (the default), 'charged' (the spend that counted toward a budget), 'not_charged' (the rest), 'tokens' (billed input plus output), 'requests', 'failed' (failed requests) or 'p95' (each group's p95 latency, which every listed row then carries, and which reads the latency of every group in the window, so it takes exactly one breakdown in 'dimensions'). Ties fall back to the key; under 'p95' a group with no latency comes last.",
+            "in": "query",
+            "name": "rank_by",
+            "required": false,
+            "schema": {
+              "default": "cost",
+              "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (the default), 'charged' (the spend that counted toward a budget), 'not_charged' (the rest), 'tokens' (billed input plus output), 'requests', 'failed' (failed requests) or 'p95' (each group's p95 latency, which every listed row then carries, and which reads the latency of every group in the window, so it takes exactly one breakdown in 'dimensions'). Ties fall back to the key; under 'p95' a group with no latency comes last.",
+              "enum": [
+                "cost",
+                "charged",
+                "not_charged",
+                "tokens",
+                "requests",
+                "failed",
+                "p95"
+              ],
+              "title": "Rank By",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+            "in": "query",
+            "name": "rank_order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Rank Order",
+              "type": "string"
             }
           },
           {
@@ -67384,7 +67516,10 @@
                 "api_key_id",
                 "source",
                 "provider",
-                "workspace_id"
+                "workspace_id",
+                "source_label",
+                "channel",
+                "policy_name"
               ],
               "title": "Group By",
               "type": "string"
@@ -68165,7 +68300,7 @@
     },
     "/api/v1/usage/summary": {
       "get": {
-        "description": "Aggregate spend, tokens, and request volume for the dashboard Usage page.\n\nRange-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``\nlist, every aggregate is scoped to a bounded window so it stays served by the\ntimestamp index. Returns grand totals, breakdowns by model / user / API key /\nsource / session (``source_label``) / endpoint / provider (top rows plus a\nreconciling ``other`` fold, billed token counts), the error taxonomy grouped\nby failure status code, and a UTC-bucketed time series carrying each bucket's\nerror count and billed token composition (input incl. cache, cache read/write,\noutput).\n\nEach breakdown is its own ``GROUP BY`` pass, so a caller that reads only the\ntotals or the series should narrow ``dimensions`` rather than pay for all eight\n(the dashboard's tiles, timeline context, and model typeahead all do). Omitting\nthe parameter keeps the full set.\n\n``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match\nany of them, so one chart can compare a handful of models, users, or keys.",
+        "description": "Aggregate spend, tokens, and request volume for the dashboard Usage page.\n\nRange-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``\nlist, every aggregate is scoped to a bounded window so it stays served by the\ntimestamp index. Returns grand totals, breakdowns by model / user / API key /\nsource / session (``source_label``) / endpoint / provider / channel / routing\npolicy / workspace (top rows plus a reconciling ``other`` fold, billed token\ncounts, charged spend and failures), the error taxonomy grouped\nby failure status code, and a UTC-bucketed time series carrying each bucket's\nerror count and billed token composition (input incl. cache, cache read/write,\noutput).\n\nEach breakdown is its own ``GROUP BY`` pass, so a caller that reads only the\ntotals or the series should narrow ``dimensions`` rather than pay for all eight\n(the dashboard's tiles, timeline context, and model typeahead all do). Omitting\nthe parameter keeps the full set.\n\n``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match\nany of them, so one chart can compare a handful of models, users, or keys.\n\n``rank_by`` and ``rank_order`` pick which groups each breakdown keeps and list\nthem in that order, so a table sorted by any column is sorted over every group\nrather than over the top N by spend.",
         "operationId": "usage-usage_summary",
         "parameters": [
           {
@@ -68514,6 +68649,9 @@
                       "source_label",
                       "endpoint",
                       "provider",
+                      "channel",
+                      "policy",
+                      "workspace",
                       "status_code",
                       "tool",
                       "none"
@@ -68560,6 +68698,73 @@
               "description": "Also compute 'totals.p95_latency_ms', the 95th-percentile total latency over the requests, which sorts the window's latencies. Off by default, so a caller that does not show it does not pay for it.",
               "title": "Include P95",
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). Read from the rows, since the hourly rollups keep no latency distribution; the fold row's stays null.",
+            "in": "query",
+            "name": "p95_by",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "model",
+                    "user",
+                    "api_key",
+                    "source",
+                    "source_label",
+                    "endpoint",
+                    "provider",
+                    "channel",
+                    "policy",
+                    "workspace"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). Read from the rows, since the hourly rollups keep no latency distribution; the fold row's stays null.",
+              "title": "P95 By"
+            }
+          },
+          {
+            "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (the default), 'charged' (the spend that counted toward a budget), 'not_charged' (the rest), 'tokens' (billed input plus output), 'requests', 'failed' (failed requests) or 'p95' (each group's p95 latency, which every listed row then carries, and which reads the latency of every group in the window, so it takes exactly one breakdown in 'dimensions'). Ties fall back to the key; under 'p95' a group with no latency comes last.",
+            "in": "query",
+            "name": "rank_by",
+            "required": false,
+            "schema": {
+              "default": "cost",
+              "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (the default), 'charged' (the spend that counted toward a budget), 'not_charged' (the rest), 'tokens' (billed input plus output), 'requests', 'failed' (failed requests) or 'p95' (each group's p95 latency, which every listed row then carries, and which reads the latency of every group in the window, so it takes exactly one breakdown in 'dimensions'). Ties fall back to the key; under 'p95' a group with no latency comes last.",
+              "enum": [
+                "cost",
+                "charged",
+                "not_charged",
+                "tokens",
+                "requests",
+                "failed",
+                "p95"
+              ],
+              "title": "Rank By",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+            "in": "query",
+            "name": "rank_order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "description": "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last.",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Rank Order",
+              "type": "string"
             }
           },
           {

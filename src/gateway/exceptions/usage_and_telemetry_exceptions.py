@@ -26,6 +26,15 @@ class UsageSeriesTooLongError(TenancyValidationError):
         super().__init__(f"window spans more than {limit} {bucket} buckets; use bucket=day or narrow the range")
 
 
+class UsageP95RankError(TenancyValidationError):
+    """A summary ranked by p95 over more than one breakdown, each of which would read every group's latency."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def __init__(self) -> None:
+        super().__init__("rank_by=p95 reads every group's latency, so it takes exactly one breakdown in 'dimensions'")
+
+
 class UsageReadsBusyError(TenancyError):
     """Every heavy usage read this worker allows is running, and this one waited too long for a turn.
 

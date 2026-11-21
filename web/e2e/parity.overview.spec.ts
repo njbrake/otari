@@ -44,15 +44,8 @@ test.describe("Home and Sessions", () => {
     )
 
     const where = page.getByRole("region", { name: "Where it went" })
-    // The radio itself is visually hidden behind its label, which is what a
-    // person presses.
-    await where
-      .getByRole("radiogroup", { name: "Break down by" })
-      .getByText("Models", { exact: true })
-      .click()
-    await expect(
-      where.getByRole("radio", { name: "Models", exact: true }),
-    ).toBeChecked()
+    // More cuts than a segmented track holds, so they are picked from a list.
+    await pickOption(page, "Break down by", "Models")
     await expect(tableRows(page, "Spend by models").first()).toBeVisible()
     await expect(where).toContainText(PARITY.models.priced.model)
   })

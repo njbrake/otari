@@ -67,8 +67,11 @@ from gateway.api.routes.usage import (
     _MAX_REQUEST_GROUPS,
     _MODEL_MULTI_DESC,
     _ORDER_DESC,
+    _P95_BY_DESC,
     _PRICED_DESC,
     _PROVIDER_DESC,
+    _RANK_BY_DESC,
+    _RANK_ORDER_DESC,
     _REQUEST_GROUP_DESC,
     _SORT_DESC,
     _SOURCE_DESC,
@@ -87,6 +90,8 @@ from gateway.core.surface import Surface
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
 from gateway.schemas.usage_and_telemetry import (
+    BreakdownDimension,
+    BreakdownRankBy,
     Bucket,
     LogGroupBy,
     LogGroupOrder,
@@ -329,6 +334,9 @@ async def organization_usage_summary(
     dimensions: list[SummaryDimension] | None = Query(default=None, description=_DIMENSIONS_DESC),
     group_by_tag: GroupByTag = None,
     include_p95: Annotated[bool, Query(description=_INCLUDE_P95_DESC)] = False,
+    p95_by: Annotated[BreakdownDimension | None, Query(description=_P95_BY_DESC)] = None,
+    rank_by: Annotated[BreakdownRankBy, Query(description=_RANK_BY_DESC)] = "cost",
+    rank_order: Annotated[SortOrder, Query(description=_RANK_ORDER_DESC)] = "desc",
 ) -> UsageSummary:
     """Aggregate spend, tokens and request volume for the caller's organization.
 
@@ -359,7 +367,15 @@ async def organization_usage_summary(
         refine=refine,
     )
     return await usage.summary(
-        filters, scope, bucket=bucket, dimensions=dimensions, group_by_tag=group_by_tag, include_p95=include_p95
+        filters,
+        scope,
+        bucket=bucket,
+        dimensions=dimensions,
+        group_by_tag=group_by_tag,
+        include_p95=include_p95,
+        p95_by=p95_by,
+        rank_by=rank_by,
+        rank_order=rank_order,
     )
 
 
