@@ -58,6 +58,7 @@
   * [Rerank](api-endpoints/rerank.md)
   * [Responses](api-endpoints/responses.md)
   * [Routing](api-endpoints/routing.md)
+  * [Saved views](api-endpoints/saved-views.md)
   * [Scoped budgets](api-endpoints/scoped-budgets.md)
   * [Search](api-endpoints/search.md)
   * [Search tools](api-endpoints/search-tools.md)

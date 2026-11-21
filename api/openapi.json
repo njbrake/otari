@@ -25056,6 +25056,206 @@
         "title": "SandboxProvider",
         "type": "string"
       },
+      "SavedViewCreate": {
+        "additionalProperties": false,
+        "description": "A view to save: the page it belongs to, its name, and the query string it applies.",
+        "example": {
+          "name": "Failures this week",
+          "page": "requests",
+          "query": "range=7d&status=error"
+        },
+        "properties": {
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/SavedViewPage"
+          },
+          "query": {
+            "description": "The page's query string, without the leading '?'. Only the keys the page keeps in a view.",
+            "maxLength": 2000,
+            "title": "Query",
+            "type": "string"
+          },
+          "shared": {
+            "default": false,
+            "description": "Offer it to every member of the workspace.",
+            "title": "Shared",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "page",
+          "name",
+          "query"
+        ],
+        "title": "SavedViewCreate",
+        "type": "object"
+      },
+      "SavedViewPage": {
+        "description": "The pages that keep saved views. Closed, so a view cannot be filed under a page that never reads it.",
+        "enum": [
+          "sessions",
+          "requests"
+        ],
+        "title": "SavedViewPage",
+        "type": "string"
+      },
+      "SavedViewPublic": {
+        "description": "A view as the caller's menu lists it: built in, their own, or shared with the workspace.",
+        "properties": {
+          "built_in": {
+            "description": "Offered by the page itself, not stored; it cannot be changed or deleted.",
+            "title": "Built In",
+            "type": "boolean"
+          },
+          "can_delete": {
+            "title": "Can Delete",
+            "type": "boolean"
+          },
+          "can_edit": {
+            "description": "The caller may rename it or save the page's current filters over it.",
+            "title": "Can Edit",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The saved view's id, or `built-in:<slug>` for one the page offers itself.",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_mine": {
+            "description": "The caller saved it.",
+            "title": "Is Mine",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "owner_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who saved it, for a shared view; null for a built-in one.",
+            "title": "Owner Name"
+          },
+          "page": {
+            "$ref": "#/components/schemas/SavedViewPage"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "shared": {
+            "title": "Shared",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it was last saved; null for a built-in one.",
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "page",
+          "name",
+          "query",
+          "built_in",
+          "shared",
+          "is_mine",
+          "owner_name",
+          "can_edit",
+          "can_delete",
+          "updated_at"
+        ],
+        "title": "SavedViewPublic",
+        "type": "object"
+      },
+      "SavedViewUpdate": {
+        "additionalProperties": false,
+        "description": "What to change on one of the caller's views. A field left out, or sent as null, is left as it is.",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "description": "The page's query string, without the leading '?'. Only the keys the page keeps in a view.",
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
+          }
+        },
+        "title": "SavedViewUpdate",
+        "type": "object"
+      },
+      "SavedViewsPublic": {
+        "description": "A page's views in a workspace: the built-in ones, then the caller's own, then those shared with it.",
+        "properties": {
+          "can_share": {
+            "description": "The caller manages the workspace, so may share a view with it.",
+            "title": "Can Share",
+            "type": "boolean"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SavedViewPublic"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data",
+          "can_share"
+        ],
+        "title": "SavedViewsPublic",
+        "type": "object"
+      },
       "ScopedBudgetResponse": {
         "description": "One scoped ceiling and its live counters.\n\nUnlike ``/api/v1/budgets``, the counters are the row's own: a scoped ceiling is\nenforced against ``current_spend + reserved_spend``, so there is no rollup\nover users to compute.\n\nEvery limit, along with ``budget_duration_sec`` and ``reset_alignment``, is\nread off the budget rather than stored here, and carried on the wire so a\ncaller can render a ceiling without fetching every budget to resolve one id.",
         "properties": {
@@ -30382,7 +30582,9 @@
               "model",
               "user_id",
               "api_key_id",
-              "source"
+              "source",
+              "provider",
+              "workspace_id"
             ],
             "title": "Group By",
             "type": "string"
@@ -42444,7 +42646,9 @@
                 "model",
                 "user_id",
                 "api_key_id",
-                "source"
+                "source",
+                "provider",
+                "workspace_id"
               ],
               "title": "Group By",
               "type": "string"
@@ -55102,7 +55306,9 @@
                 "model",
                 "user_id",
                 "api_key_id",
-                "source"
+                "source",
+                "provider",
+                "workspace_id"
               ],
               "title": "Group By",
               "type": "string"
@@ -65479,7 +65685,9 @@
                 "model",
                 "user_id",
                 "api_key_id",
-                "source"
+                "source",
+                "provider",
+                "workspace_id"
               ],
               "title": "Group By",
               "type": "string"
@@ -71857,6 +72065,253 @@
         "summary": "Set Workspace Provider Policy",
         "tags": [
           "workspace-hosted-providers"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/saved-views": {
+      "get": {
+        "description": "List the views the caller may open on a page: the built-in ones, their own, then the workspace's shared ones.",
+        "operationId": "saved-views-list_saved_views",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The dashboard page the views belong to.",
+            "in": "query",
+            "name": "page",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SavedViewPage",
+              "description": "The dashboard page the views belong to."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewsPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Saved Views",
+        "tags": [
+          "saved-views"
+        ]
+      },
+      "post": {
+        "description": "Save a view. Sharing it with the workspace takes someone who manages the workspace.",
+        "operationId": "saved-views-create_saved_view",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Create Saved View",
+        "tags": [
+          "saved-views"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/saved-views/{view_id}": {
+      "delete": {
+        "description": "Delete one of the caller's views, or a shared one when they manage the workspace.",
+        "operationId": "saved-views-delete_saved_view",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "view_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "View Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Delete Saved View",
+        "tags": [
+          "saved-views"
+        ]
+      },
+      "patch": {
+        "description": "Rename, re-save or re-share one of the caller's own views.",
+        "operationId": "saved-views-update_saved_view",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "view_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "View Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Update Saved View",
+        "tags": [
+          "saved-views"
         ]
       }
     },
