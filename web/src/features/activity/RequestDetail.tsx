@@ -8,7 +8,11 @@ import { Chip } from "@/design-system/indicators/Chip"
 import { dataLocationLabel } from "@/features/hostedProviders/dataLocations"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { userDisplay } from "@/features/users/userDisplay"
-import { formatNumber, formatUnitRate } from "@/shared/helpers/format"
+import {
+  formatNumber,
+  formatThroughput,
+  formatUnitRate,
+} from "@/shared/helpers/format"
 import { providerDisplayName } from "@/shared/helpers/providers"
 import {
   buildTokenComposition,
@@ -377,6 +381,11 @@ export function RequestDetail({
           </DetailField>
           <DetailField label="Total time">
             {formatLatencyCell(entry.latency_ms)}
+          </DetailField>
+          <DetailField label="Throughput">
+            {entry.output_tokens_per_second == null
+              ? "—"
+              : formatThroughput(entry.output_tokens_per_second)}
           </DetailField>
           {/* Provider-reported compute time, best-effort (Groq, Ollama today).
               formatLatencyCell's null placeholder means not reported, not zero.
