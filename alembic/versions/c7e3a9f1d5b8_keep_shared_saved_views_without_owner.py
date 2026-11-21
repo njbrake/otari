@@ -50,9 +50,7 @@ def _views(*, nullable: bool) -> sa.Table:
         sa.Column("shared", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Index(
-            "uq_saved_views_owner_name", "workspace_id", "page", _COLUMN, sa.text("lower(name)"), unique=True
-        ),
+        sa.Index("uq_saved_views_owner_name", "workspace_id", "page", _COLUMN, sa.text("lower(name)"), unique=True),
         sa.Index("ix_saved_views_user_id", _COLUMN),
     )
 
