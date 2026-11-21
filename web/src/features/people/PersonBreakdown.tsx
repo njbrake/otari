@@ -30,10 +30,14 @@ import {
   BreakdownSortSelect,
   breakdownFigureColumns,
   breakdownSortProps,
+  MODEL_P95_NOTE,
+  NotChargedLine,
 } from "@/features/usage/BreakdownColumns"
+import { fittedColumns } from "@/features/usage/breakdownFit"
 import { type BreakdownSort, sortRows } from "@/features/usage/breakdownSort"
 import { Band } from "@/shared/components/Band"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
+import { useElementWidth } from "@/shared/hooks/useElementWidth"
 
 /** Rows shown before the rest folds behind "Show all". */
 const TOP_ROWS = 5
@@ -70,6 +74,7 @@ export function PersonBreakdown({
   const [isShowingAll, setShowingAll] = useState(false)
   const navigate = useNavigate()
   const isMobile = useIsMobile()
+  const [measureTable, tableWidth] = useElementWidth<HTMLDivElement>()
   const workspace = useTheirWorkspace(person)
   const hasSurface = useSurfaces()
   const shown = personCutOf(cut)
@@ -143,8 +148,16 @@ export function PersonBreakdown({
       align: "end",
       allowsSorting: true,
       cell: (row) => (
-        <span className="text-mono-caption text-foreground">
-          {formatSpend(row.budgeted + row.exempt)}
+        <span className="flex flex-col items-end">
+          <span className="text-mono-caption whitespace-nowrap text-foreground">
+            {formatSpend(row.budgeted + row.exempt)}
+          </span>
+          {hasExempt &&
+          !isMobile &&
+          !fit.has("charged") &&
+          !fit.has("not_charged") ? (
+            <NotChargedLine figures={rowFigures(row)} money={formatSpend} />
+          ) : null}
         </span>
       ),
     },
@@ -153,6 +166,7 @@ export function PersonBreakdown({
       hasNotCharged: hasExempt,
       isP95Loading: false,
       money: formatSpend,
+      p95Note: cut === "models" ? MODEL_P95_NOTE : undefined,
     }),
     ...(canOpen
       ? ([
@@ -175,6 +189,19 @@ export function PersonBreakdown({
       : []),
   ]
 
+  // The lanes that fit the table's width, so it does not scroll sideways. Its
+  // actions are the row's link.
+  const fit = fittedColumns(
+    columns.map((column) => column.id),
+    isMobile ? undefined : tableWidth,
+    { keep: sort.key, widths: { actions: 116 } },
+  )
+  const fittedTable = columns.filter((column) => fit.has(column.id))
+  // A sort whose lane gave way is still offered, from the phone's sort select.
+  const hasDroppedSort = columns.some(
+    (column) => column.allowsSorting && !fit.has(column.id),
+  )
+
   // A deployment that records no sessions names none, so it offers no cut by them.
   const cuts = PERSON_CUTS.filter(
     (one) => one.value !== "sessions" || hasSurface("traces"),
@@ -195,7 +222,7 @@ export function PersonBreakdown({
             onChange={pick}
             options={cuts}
           />
-          {isMobile ? (
+          {isMobile || hasDroppedSort ? (
             <BreakdownSortSelect
               sort={sort}
               onSort={changeSort}
@@ -206,27 +233,29 @@ export function PersonBreakdown({
       }
     >
       <ErrorBanner error={spend.error} />
-      <TableScrollFrame className="otari-breakdown">
-        <DataTable
-          key={cut}
-          ariaLabel={`${person.name}'s spend by ${shown.label.toLowerCase()}`}
-          columns={columns}
-          rows={visible}
-          isLoading={isLoading}
-          getRowKey={(row) => row.id}
-          {...breakdownSortProps(sort, changeSort)}
-          emptyContent={
-            <EmptyMessage>
-              {spend.error
-                ? "Could not load"
-                : window.kind === "6m"
-                  ? `Nothing was spent ${windowWords(window)}.`
-                  : `Nothing was spent ${windowWords(window)}. Pick a longer window above.`}
-            </EmptyMessage>
-          }
-          mobileLayout="cards"
-        />
-      </TableScrollFrame>
+      <div ref={measureTable}>
+        <TableScrollFrame className="otari-breakdown">
+          <DataTable
+            key={cut}
+            ariaLabel={`${person.name}'s spend by ${shown.label.toLowerCase()}`}
+            columns={fittedTable}
+            rows={visible}
+            isLoading={isLoading}
+            getRowKey={(row) => row.id}
+            {...breakdownSortProps(sort, changeSort)}
+            emptyContent={
+              <EmptyMessage>
+                {spend.error
+                  ? "Could not load"
+                  : window.kind === "6m"
+                    ? `Nothing was spent ${windowWords(window)}.`
+                    : `Nothing was spent ${windowWords(window)}. Pick a longer window above.`}
+              </EmptyMessage>
+            }
+            mobileLayout="cards"
+          />
+        </TableScrollFrame>
+      </div>
       {rows.length > visible.length ? (
         <button
           type="button"

@@ -1,8 +1,10 @@
 import type { SortDescriptor } from "react-aria-components"
+import { FiInfo } from "react-icons/fi"
 import type { BreakdownRankBy } from "@/client"
 import type { DataTableColumn } from "@/design-system/data/DataTable"
 import { Skeleton } from "@/design-system/feedback/Skeleton"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
+import { Tooltip } from "@/design-system/overlays/Tooltip"
 import {
   type BreakdownFigures,
   type BreakdownSort,
@@ -30,12 +32,15 @@ export function breakdownFigureColumns<Row>({
   hasNotCharged,
   isP95Loading,
   money = formatUsd,
+  p95Note,
 }: {
   figuresOf: (row: Row) => BreakdownFigures | undefined
   hasNotCharged: boolean
   isP95Loading: boolean
   /** How a dollar figure reads; the person page shows a fraction of a cent. */
   money?: (value: number) => string
+  /** What the p95 column means on this cut, told from a tooltip beside its header. */
+  p95Note?: string
 }): DataTableColumn<Row>[] {
   const figure = (
     row: Row,
@@ -107,6 +112,14 @@ export function breakdownFigureColumns<Row>({
     {
       id: "p95",
       header: <span className="normal-case">p95 latency</span>,
+      headerAction: p95Note ? (
+        <Tooltip content={p95Note}>
+          <span className="inline-flex items-center text-muted">
+            <FiInfo aria-hidden className="size-3.5" />
+            <span className="sr-only">About p95 latency: {p95Note}</span>
+          </span>
+        </Tooltip>
+      ) : undefined,
       align: "end",
       allowsSorting: true,
       cell: (row) =>
@@ -121,6 +134,30 @@ export function breakdownFigureColumns<Row>({
     },
   ]
 }
+
+/**
+ * What of a row's spend was not charged, under its spend where the Charged and
+ * Not charged lanes have given way to a narrower table. Nothing when all of it
+ * was charged or the figures are not known.
+ */
+export function NotChargedLine({
+  figures,
+  money = formatUsd,
+}: {
+  figures: BreakdownFigures | undefined
+  money?: (value: number) => string
+}) {
+  const notCharged = figures ? Math.max(0, figures.cost - figures.charged) : 0
+  return notCharged > 0 ? (
+    <span className="whitespace-nowrap text-caption text-muted">
+      {money(notCharged)} not charged
+    </span>
+  ) : null
+}
+
+/** The p95 a models cut shows, which no summary can add up across a model's provider ids. */
+export const MODEL_P95_NOTE =
+  "A model's p95 is the slowest of its provider ids' p95s"
 
 /** The DataTable's sort props for a breakdown sort, a new column starting largest first. */
 export function breakdownSortProps(
@@ -172,7 +209,8 @@ const ASC_LABELS: Record<BreakdownRankBy, string> = {
 }
 
 /**
- * The sort on a phone, whose cards have no header to press: each figure,
+ * The sort where no header can be pressed for it, on a phone's cards or for
+ * a lane a narrow table gave up: each figure,
  * largest first, and the current sort as it is when it runs the other way.
  */
 export function BreakdownSortSelect({

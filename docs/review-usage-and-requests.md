@@ -80,10 +80,14 @@ its **Requests**, **Tokens**, **Failed** requests and **p95 latency**, and its
 share of the total. People, keys, providers and workspaces also show their top
 model, and people, keys and workspaces the spend limit they work under, with a
 meter and when the limit resets. A key's row also says when it was last used,
-and warns when it expires within 7 days.
+and warns when it expires within 7 days. Where the table has less room than
+its columns take, it gives some up rather than scroll sideways, in this order:
+**Not charged**, the top model, the share (then shown beside the spend),
+**Tokens**, **Charged** (what was not charged then shows under the spend),
+**p95 latency**, **Failed** and **Requests**. The column it is sorted by stays.
 
 Press a column's header to sort by it, and again to turn it around; on a phone,
-pick the order from **Sort by**. The sort is kept in the URL and decides which
+or for a column the table gave up, pick the order from **Sort by**. The sort is kept in the URL and decides which
 rows the server lists, so sorting by **Failed** shows the rows with the most
 failures even when they spent little. The p95 latency is read from the requests
 themselves and can arrive a moment after the rest. The five first rows show,

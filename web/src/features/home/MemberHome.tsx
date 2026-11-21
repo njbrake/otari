@@ -82,7 +82,10 @@ import {
   BreakdownSortSelect,
   breakdownFigureColumns,
   breakdownSortProps,
+  MODEL_P95_NOTE,
+  NotChargedLine,
 } from "@/features/usage/BreakdownColumns"
+import { fittedColumns } from "@/features/usage/breakdownFit"
 import {
   sortFromUrl,
   sortRows,
@@ -109,6 +112,7 @@ import {
 } from "@/shared/helpers/format"
 import { useUrlState } from "@/shared/helpers/urlState"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
+import { useElementWidth } from "@/shared/hooks/useElementWidth"
 
 const CUTS = (
   [
@@ -152,6 +156,7 @@ export function MemberHome({
   const navigate = useNavigate()
   const { get, patch } = useUrlState(URL_DEFAULTS)
   const isMobile = useIsMobile()
+  const [measureTable, tableWidth] = useElementWidth<HTMLDivElement>()
   const owner = useCurrentOwner()
   const me = owner.ownerId || undefined
   const canCreateKey = useCanCreateKey()
@@ -502,13 +507,21 @@ export function MemberHome({
       align: "end",
       allowsSorting: true,
       cell: (row) => (
-        <span className="text-mono-caption text-foreground">
-          {formatUsd(row.cost)}
-          {isMobile && total > 0 ? (
-            <span className="text-muted">
-              {" · "}
-              {wholePct(row.cost / total)}
-            </span>
+        <span className="flex flex-col items-end">
+          <span className="text-mono-caption whitespace-nowrap text-foreground">
+            {formatUsd(row.cost)}
+            {(isMobile || !fit.has("share")) && total > 0 ? (
+              <span className="text-muted">
+                {" · "}
+                {wholePct(row.cost / total)}
+              </span>
+            ) : null}
+          </span>
+          {hasNotCharged &&
+          !isMobile &&
+          !fit.has("charged") &&
+          !fit.has("not_charged") ? (
+            <NotChargedLine figures={spendFigures(row)} />
           ) : null}
         </span>
       ),
@@ -517,6 +530,7 @@ export function MemberHome({
       figuresOf: spendFigures,
       hasNotCharged,
       isP95Loading: spend.breakdown.isLoading,
+      p95Note: cut.value === "models" ? MODEL_P95_NOTE : undefined,
     }),
     ...(hasTopModel
       ? ([
@@ -563,6 +577,18 @@ export function MemberHome({
       ),
     },
   ]
+  // The lanes that fit the table's width, so it does not scroll sideways. Its
+  // actions carry the row's link as well as its menu.
+  const fit = fittedColumns(
+    columns.map((column) => column.id),
+    isMobile ? undefined : tableWidth,
+    { keep: sort.key, widths: { actions: 190 } },
+  )
+  const fittedTable = columns.filter((column) => fit.has(column.id))
+  // A sort whose lane gave way is still offered, from the phone's sort select.
+  const hasDroppedSort = columns.some(
+    (column) => column.allowsSorting && !fit.has(column.id),
+  )
 
   // Only a window still under way can be spent in "yet".
   const nothingYet = `Nothing spent ${words}${
@@ -830,7 +856,7 @@ export function MemberHome({
             onChange={(next) => patch({ by: next })}
             options={cuts}
           />
-          {isMobile && cut.value !== "tools" ? (
+          {(isMobile || hasDroppedSort) && cut.value !== "tools" ? (
             <BreakdownSortSelect
               sort={sort}
               onSort={(next) => patch(sortToUrl(next))}
@@ -863,33 +889,35 @@ export function MemberHome({
             emptyText={nothingYet}
           />
         ) : (
-          <TableScrollFrame className="otari-breakdown otari-spend-table flex flex-col gap-2">
-            <DataTable
-              key={cut.value}
-              ariaLabel={`Your spend by ${cut.label.toLowerCase()}`}
-              columns={columns}
-              rows={rows}
-              getRowKey={(row) => row.id}
-              isLoading={
-                spend.isLoading ||
-                ((cut.value === "sessions" ||
-                  cut.value === "channels" ||
-                  cut.value === "policies") &&
-                  spend.breakdown.isLoading)
-              }
-              {...breakdownSortProps(sort, (next) => patch(sortToUrl(next)))}
-              emptyContent={
-                <EmptyMessage>
-                  {usage === "failed"
-                    ? "Could not load"
-                    : canCreateKey
-                      ? `${nothingYet} Each ${cut.each} shows up here with what it spent.`
-                      : nothingYet}
-                </EmptyMessage>
-              }
-              mobileLayout="cards"
-            />
-          </TableScrollFrame>
+          <div ref={measureTable}>
+            <TableScrollFrame className="otari-breakdown otari-spend-table flex flex-col gap-2">
+              <DataTable
+                key={cut.value}
+                ariaLabel={`Your spend by ${cut.label.toLowerCase()}`}
+                columns={fittedTable}
+                rows={rows}
+                getRowKey={(row) => row.id}
+                isLoading={
+                  spend.isLoading ||
+                  ((cut.value === "sessions" ||
+                    cut.value === "channels" ||
+                    cut.value === "policies") &&
+                    spend.breakdown.isLoading)
+                }
+                {...breakdownSortProps(sort, (next) => patch(sortToUrl(next)))}
+                emptyContent={
+                  <EmptyMessage>
+                    {usage === "failed"
+                      ? "Could not load"
+                      : canCreateKey
+                        ? `${nothingYet} Each ${cut.each} shows up here with what it spent.`
+                        : nothingYet}
+                  </EmptyMessage>
+                }
+                mobileLayout="cards"
+              />
+            </TableScrollFrame>
+          </div>
         )}
         {rows.length > 0 && cut.value === "keys" && canCreateKey ? (
           <p className="text-sm text-muted">

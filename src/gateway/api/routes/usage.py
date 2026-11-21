@@ -247,7 +247,8 @@ _RANK_BY_DESC = (
     "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (the "
     "default), 'charged' (the spend that counted toward a budget), 'not_charged' (the rest), 'tokens' "
     "(billed input plus output), 'requests', 'failed' (failed requests) or 'p95' (each group's p95 latency, "
-    "which every listed row then carries, and which reads the latency of every group in the window). "
+    "which every listed row then carries, and which reads the latency of every group in the window, so it "
+    "takes exactly one breakdown in 'dimensions'). "
     "Ties fall back to the key; under 'p95' a group with no latency comes last."
 )
 _RANK_ORDER_DESC = (

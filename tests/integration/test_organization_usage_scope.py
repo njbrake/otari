@@ -574,13 +574,16 @@ def test_the_workspace_breakdown_lists_only_the_callers_own_workspaces(
     client: TestClient, world: _World, who: str, expected: tuple[str, ...], rank_by: str
 ) -> None:
     """By workspace and by model, ranked any way and with each group's p95, nothing outside the caller's scope."""
-    query = f"?dimensions=workspace&dimensions=model&p95_by=workspace&rank_by={rank_by}&rank_order=asc"
-    code, body = _as(client, world, who, f"{API_ROOT}/organizations/me/usage/summary{query}")
-    assert code == status.HTTP_200_OK, body
-    assert isinstance(body, dict)
-    assert {row["key"] for row in body["by_workspace"]} == {str(world.workspaces[name]) for name in expected}
-    beta_models = set(_BETA_MODELS) if who != "beta_owner" else set(_ALPHA_ONE_MODELS) | set(_ALPHA_TWO_MODELS)
-    assert not {row["key"] for row in body["by_model"]} & beta_models
+    outside = set(_BETA_MODELS) if who != "beta_owner" else set(_ALPHA_ONE_MODELS) | set(_ALPHA_TWO_MODELS)
+    for dimension in ("workspace", "model"):
+        query = f"?dimensions={dimension}&p95_by={dimension}&rank_by={rank_by}&rank_order=asc"
+        code, body = _as(client, world, who, f"{API_ROOT}/organizations/me/usage/summary{query}")
+        assert code == status.HTTP_200_OK, body
+        assert isinstance(body, dict)
+        if dimension == "workspace":
+            assert {row["key"] for row in body["by_workspace"]} == {str(world.workspaces[name]) for name in expected}
+        else:
+            assert not {row["key"] for row in body["by_model"]} & outside
 
 
 def test_the_deployment_publishes_and_scopes_the_surface(client: TestClient, world: _World) -> None:

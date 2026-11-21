@@ -184,6 +184,12 @@ describe("Home, Where it went by model", () => {
       // Each name with the link to its sessions under it.
     ).toEqual(["DeepSeek V4.1 Flash 1017Sessions", "Kimi K3.1 ProSessions"])
     expect(within(rows[0]).getByText("$199.80")).toBeVisible()
+    // A model's p95 is no one percentile, which the header says beside itself.
+    expect(
+      within(table).getByText(
+        /A model's p95 is the slowest of its provider ids/,
+      ),
+    ).toBeInTheDocument()
 
     await userEvent.setup().click(
       within(rows[0]).getByRole("link", {
@@ -1164,6 +1170,18 @@ describe("Home, Where it went by any figure", () => {
         (one) =>
           one.get("rank_by") === "failed" && one.get("rank_order") === "desc",
       ),
+    ).toBe(true)
+    // Ranked by p95, the read names its one breakdown, as the server requires.
+    await user.click(
+      within(table).getByRole("columnheader", { name: /p95 latency/ }),
+    )
+    await waitFor(() =>
+      expect(reads.some((one) => one.get("rank_by") === "p95")).toBe(true),
+    )
+    expect(
+      reads
+        .filter((one) => one.has("rank_by"))
+        .every((one) => one.getAll("dimensions").join() === "policy"),
     ).toBe(true)
   })
 

@@ -38,6 +38,7 @@ def _row(
     policy_name: str | None = None,
     tokens: int = 10,
     source_label: str | None = None,
+    tags: dict[str, str] | None = None,
 ) -> None:
     if db.query(User).filter(User.user_id == "rank").first() is None:
         db.add(User(user_id="rank", alias="rank", spend=0.0, blocked=False))
@@ -62,6 +63,7 @@ def _row(
             latency_ms=latency_ms,
             counts_toward_budget=counts_toward_budget,
             policy_name=policy_name,
+            tags=tags,
         )
     )
 
@@ -156,6 +158,22 @@ def test_ranking_picks_which_groups_make_the_cap(
     assert sum(row["requests"] for row in by_failed) == 105
 
 
+def test_the_tag_breakdown_carries_charged_spend_and_failures(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    """Its fold subtracts the listed groups from the totals, so each group has to carry both figures."""
+    _row(db_session, model="a", cost="1.00", tags={"role": "x"})
+    _row(db_session, model="a", cost="0.50", counts_toward_budget=False, tags={"role": "x"})
+    _row(db_session, model="a", cost="0.25", status="error", tags={"role": "y"})
+    db_session.commit()
+    body = _summary(client, master_key_header, dimensions="none", group_by_tag="role")
+    rows = {row["key"]: row for row in body["by_tag"]}
+    assert rows["x"]["charged_cost"] == pytest.approx(1.0)
+    assert rows["y"]["error_count"] == 1
+    assert body["totals"]["charged_cost"] == pytest.approx(sum(row["charged_cost"] for row in body["by_tag"]))
+    assert body["totals"]["error_count"] == sum(row["error_count"] for row in body["by_tag"])
+
+
 def test_channel_policy_and_workspace_breakdowns(
     client: TestClient, master_key_header: dict[str, str], db_session: Session
 ) -> None:
@@ -204,3 +222,20 @@ def test_the_series_splits_by_channel_session_and_policy(
 def test_rank_by_rejects_an_unknown_column(client: TestClient, master_key_header: dict[str, str]) -> None:
     assert client.get(SUMMARY_PATH, headers=master_key_header, params={"rank_by": "nope"}).status_code == 422
     assert client.get(SUMMARY_PATH, headers=master_key_header, params={"p95_by": "tool"}).status_code == 422
+
+
+@pytest.mark.parametrize("dimensions", [None, ["model", "provider"], ["none"], ["model", "tool"]])
+def test_rank_by_p95_takes_exactly_one_breakdown(
+    client: TestClient, master_key_header: dict[str, str], dimensions: list[str] | None
+) -> None:
+    """Each breakdown ranked by p95 reads every group's latency, so more than one, or none, is refused."""
+    params: dict[str, Any] = {"rank_by": "p95"}
+    if dimensions is not None:
+        params["dimensions"] = dimensions
+    response = client.get(SUMMARY_PATH, headers=master_key_header, params=params)
+    if dimensions == ["model", "tool"]:
+        # The tool spend is no ranked breakdown, so one remains.
+        assert response.status_code == 200, response.text
+        return
+    assert response.status_code == 422, response.text
+    assert "exactly one breakdown" in response.text

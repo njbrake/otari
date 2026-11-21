@@ -104,7 +104,10 @@ import {
   BreakdownSortSelect,
   breakdownFigureColumns,
   breakdownSortProps,
+  MODEL_P95_NOTE,
+  NotChargedLine,
 } from "@/features/usage/BreakdownColumns"
+import { fittedColumns } from "@/features/usage/breakdownFit"
 import {
   type BreakdownSort,
   sortFromUrl,
@@ -132,6 +135,7 @@ import type { DashboardSearch } from "@/shared/helpers/search"
 import { useUrlState } from "@/shared/helpers/urlState"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
+import { useElementWidth } from "@/shared/hooks/useElementWidth"
 
 /** Rows shown before the rest folds behind "Show all". */
 const TOP_ROWS = 5
@@ -330,6 +334,7 @@ export function TeamHome({
   const [editing, setEditing] = useState<LimitTarget>()
   const [isShowingAll, setShowingAll] = useState(false)
   const isMobile = useIsMobile()
+  const [measureTable, tableWidth] = useElementWidth<HTMLDivElement>()
   // The list `useSpend` reads, so this asks nothing new.
   const keys = useKeys()
   const keyById = new Map((keys.data ?? []).map((key) => [key.id, key]))
@@ -694,13 +699,24 @@ export function TeamHome({
       align: "end",
       allowsSorting: true,
       cell: (row) => (
-        <span className="text-mono-caption text-foreground">
-          {row.isUnread || row.isFolded ? "—" : formatUsd(row.cost)}
-          {isMobile && isTotalKnown && !row.isFolded && tableTotal > 0 ? (
-            <span className="text-muted">
-              {" · "}
-              {wholePct(row.cost / tableTotal)}
-            </span>
+        <span className="flex flex-col items-end">
+          <span className="text-mono-caption whitespace-nowrap text-foreground">
+            {row.isUnread || row.isFolded ? "—" : formatUsd(row.cost)}
+            {(isMobile || !fit.has("share")) &&
+            isTotalKnown &&
+            !row.isFolded &&
+            tableTotal > 0 ? (
+              <span className="text-muted">
+                {" · "}
+                {wholePct(row.cost / tableTotal)}
+              </span>
+            ) : null}
+          </span>
+          {hasNotCharged &&
+          !isMobile &&
+          !fit.has("charged") &&
+          !fit.has("not_charged") ? (
+            <NotChargedLine figures={spendFigures(row)} />
           ) : null}
         </span>
       ),
@@ -709,6 +725,7 @@ export function TeamHome({
       figuresOf: spendFigures,
       hasNotCharged,
       isP95Loading: spend.breakdown.isLoading,
+      p95Note: cut.value === "models" ? MODEL_P95_NOTE : undefined,
     }),
     ...(hasTopModel
       ? ([
@@ -775,6 +792,18 @@ export function TeamHome({
       ),
     },
   ]
+
+  // The lanes that fit the table's width, so it does not scroll sideways.
+  const fit = fittedColumns(
+    columns.map((column) => column.id),
+    isMobile ? undefined : tableWidth,
+    { keep: sort.key },
+  )
+  const fittedTable = columns.filter((column) => fit.has(column.id))
+  // A sort whose lane gave way is still offered, from the phone's sort select.
+  const hasDroppedSort = columns.some(
+    (column) => column.allowsSorting && !fit.has(column.id),
+  )
 
   const organization = spend.organization.limits.binding
   const orgTarget = spend.organization.target
@@ -1150,7 +1179,9 @@ export function TeamHome({
                 onChange={pickCut}
               />
             )}
-            {isMobile && cut.value !== "tools" && shownCut !== undefined ? (
+            {(isMobile || hasDroppedSort) &&
+            cut.value !== "tools" &&
+            shownCut !== undefined ? (
               <BreakdownSortSelect
                 sort={sort}
                 onSort={onSort}
@@ -1194,32 +1225,34 @@ export function TeamHome({
             emptyText="No gateway tool ran in this window."
           />
         ) : (
-          <TableScrollFrame className="otari-breakdown otari-spend-table flex flex-col gap-2">
-            {/* Which columns is the roster's answer, so none show before it. */}
-            {shownCut === undefined ? (
-              <PageLoading />
-            ) : (
-              <DataTable
-                key={cut.value}
-                ariaLabel={`Spend by ${cut.label.toLowerCase()}`}
-                columns={columns}
-                rows={isLoading ? [] : visible}
-                getRowKey={(row) => row.id}
-                isLoading={isLoading}
-                {...breakdownSortProps(sort, onSort)}
-                emptyContent={
-                  <EmptyMessage>
-                    {isTableFailed
-                      ? "Could not load"
-                      : period === "6m"
-                        ? "Nothing was spent in this window."
-                        : "Nothing was spent in this window. Pick a longer one above."}
-                  </EmptyMessage>
-                }
-                mobileLayout="cards"
-              />
-            )}
-          </TableScrollFrame>
+          <div ref={measureTable}>
+            <TableScrollFrame className="otari-breakdown otari-spend-table flex flex-col gap-2">
+              {/* Which columns is the roster's answer, so none show before it. */}
+              {shownCut === undefined ? (
+                <PageLoading />
+              ) : (
+                <DataTable
+                  key={cut.value}
+                  ariaLabel={`Spend by ${cut.label.toLowerCase()}`}
+                  columns={fittedTable}
+                  rows={isLoading ? [] : visible}
+                  getRowKey={(row) => row.id}
+                  isLoading={isLoading}
+                  {...breakdownSortProps(sort, onSort)}
+                  emptyContent={
+                    <EmptyMessage>
+                      {isTableFailed
+                        ? "Could not load"
+                        : period === "6m"
+                          ? "Nothing was spent in this window."
+                          : "Nothing was spent in this window. Pick a longer one above."}
+                    </EmptyMessage>
+                  }
+                  mobileLayout="cards"
+                />
+              )}
+            </TableScrollFrame>
+          </div>
         )}
         {cut.value !== "tools" && !isLoading && hidden > 0 ? (
           <button

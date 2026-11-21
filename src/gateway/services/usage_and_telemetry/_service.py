@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from gateway.core.metered_pricing import quantize_cost
 from gateway.core.unit_of_work import UnitOfWork
-from gateway.exceptions.usage_and_telemetry_exceptions import UsageSeriesTooLongError
+from gateway.exceptions.usage_and_telemetry_exceptions import UsageP95RankError, UsageSeriesTooLongError
 from gateway.repositories.usage_and_telemetry import (
     KeyNameTraffic,
     NameAttempts,
@@ -339,6 +339,9 @@ class UsageService:
         # ``none`` is dropped rather than rejected: it exists only so a caller can send
         # an empty selection, and it never contributes a dimension of its own.
         requested = _ALL_SUMMARY_DIMENSIONS if dimensions is None else {d for d in dimensions if d != "none"}
+        if rank_by == "p95" and len(requested & set(_SUMMARY_DIMENSIONS)) != 1:
+            # Each breakdown ranked by p95 reads the latency of every group in the window.
+            raise UsageP95RankError
         async with self._heavy_read():
             filters = await self._searched(filters, scope)
             totals = await self._usage_logs.totals(filters, scope)

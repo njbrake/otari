@@ -1509,10 +1509,17 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 arms.append(column.is_(None))
             measured.append(or_(*arms))
         if dialect_name(self.db) == "postgresql":
-            stmt = (
-                select(column, func.percentile_cont(0.95).within_group(UsageLog.latency_ms.asc()))
+            # Materialized, so the window is read by its own best path and then sorted:
+            # grouped in place, PostgreSQL walks an index on the group column to get
+            # its rows presorted, which visits every row the column has ever held.
+            window = (
+                select(column.label("key"), UsageLog.latency_ms.label("latency_ms"))
                 .where(*measured)
-                .group_by(column)
+                .cte("measured")
+                .prefix_with("MATERIALIZED")
+            )
+            stmt = select(window.c.key, func.percentile_cont(0.95).within_group(window.c.latency_ms.asc())).group_by(
+                window.c.key
             )
             return {row[0]: round(float(row[1])) for row in (await self.db.execute(stmt)).all() if row[1] is not None}
         # SQLite has no ordered-set aggregate: read each group's latencies in order.
@@ -1693,6 +1700,8 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 cost_sum,
                 _billed_input_sum() + _billed_output_sum(),
                 _request_count_expr(single_status(filters)),
+                func.coalesce(func.sum(case((UsageLog.counts_toward_budget, UsageLog.cost), else_=0)), 0.0),
+                func.coalesce(func.sum(case((UsageLog.status == "error", 1), else_=0)), 0),
             )
             .where(*usage_conditions(filters, scope))
             .group_by(column)
@@ -1701,7 +1710,14 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         if limit is not None:
             stmt = stmt.limit(limit)
         return [
-            UsageGroupRow(key=row[0], cost=float(row[1]), tokens=int(row[2]), requests=int(row[3]))
+            UsageGroupRow(
+                key=row[0],
+                cost=float(row[1]),
+                tokens=int(row[2]),
+                requests=int(row[3]),
+                charged_cost=float(row[4]),
+                error_count=int(row[5]),
+            )
             for row in (await self.db.execute(stmt)).all()
         ]
 

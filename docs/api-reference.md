@@ -422,7 +422,8 @@ tokens and requests. `p95_by=<dimension>` adds each group's `p95_latency_ms` in
 that one breakdown, read from the rows rather than the hourly rollups.
 `rank_by` picks which groups each breakdown keeps before its `other` fold and
 lists them in that order: `cost` (the default), `charged`, `not_charged`,
-`tokens`, `requests`, `failed` or `p95`, which reads every group's latency.
+`tokens`, `requests`, `failed` or `p95`, which reads every group's latency and so
+takes exactly one breakdown in `dimensions` (anything else is a 422).
 `rank_order` is `desc` (the default) or `asc`; the fold stays last. `/series`
 also splits by `source_label`, `channel` and `policy_name`.
 
