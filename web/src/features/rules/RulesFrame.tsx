@@ -9,36 +9,26 @@ import { NewRuleDialog } from "@/features/rules/NewRuleDialog"
 import { RULE_TAB_LABEL, type RuleTab, ruleTabs } from "@/features/rules/rules"
 import { ViewTabs } from "@/shared/components/ViewTabs"
 
-/** The view a frame is over: a type of rule, or Routing. */
-export type RulesView = RuleTab | "routing"
-
-/**
- * The title over the list of rules (`RulesPage.tsx`, one tab per type) or the
- * routing policies (`features/routing/RoutingPage.tsx`, at `/routing`).
- * Routing has a rail row of its own, so it is titled Routing and carries no
- * rule tabs, and the rule tabs do not lead to it.
- */
+/** Rules' title, its New rule action and the tab row of rule types. */
 export function RulesFrame({
   current,
   error,
   children,
 }: {
-  current: RulesView
+  current: RuleTab
   error?: unknown
   children: ReactNode
 }) {
   const isManager = useIsOrganizationManager()
   const [isNewOpen, setNewOpen] = useState(false)
-  const isRouting = current === "routing"
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
       <div className="otari-rules-intro flex flex-col">
         <PageIntro
-          title={isRouting ? "Routing" : "Rules"}
+          title="Rules"
           action={
-            // Routing's own Create policy is the action on that view.
-            isManager && !isRouting ? (
+            isManager ? (
               <Button variant="primary" onPress={() => setNewOpen(true)}>
                 <FiPlus aria-hidden className="size-4" />
                 New rule
@@ -51,18 +41,16 @@ export function RulesFrame({
             <ErrorBanner error={error} />
           </div>
         ) : null}
-        {isRouting ? null : (
-          <ViewTabs
-            label="Rule types"
-            current={current}
-            tabs={ruleTabs(isManager).map((one) => ({
-              id: one,
-              to: "/rules",
-              label: RULE_TAB_LABEL[one],
-              search: one === "all" ? {} : { type: one },
-            }))}
-          />
-        )}
+        <ViewTabs
+          label="Rule types"
+          current={current}
+          tabs={ruleTabs(isManager).map((one) => ({
+            id: one,
+            to: "/rules",
+            label: RULE_TAB_LABEL[one],
+            search: one === "all" ? {} : { type: one },
+          }))}
+        />
       </div>
       {children}
       {isNewOpen ? <NewRuleDialog onClose={() => setNewOpen(false)} /> : null}

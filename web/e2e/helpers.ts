@@ -122,9 +122,9 @@ export async function openNested(
 }
 
 /**
- * Open a rail row, then one of the tabs its page draws under its title: a
- * tool under Tools, Routing under Rules. The tab is current once it has
- * opened. The names are spelled at the call site so the docs check sees them.
+ * Open a rail row, then one of the tabs its page draws under its title, such
+ * as a tool under Tools. The tab is current once it has opened. The names are
+ * spelled at the call site so the docs check sees them.
  */
 export async function openTab(
   page: Page,
