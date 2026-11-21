@@ -7,6 +7,8 @@ import {
 } from "@tanstack/react-query"
 import type {
   InFlightResponse,
+  LogGroupBy,
+  LogGroupOrder,
   SummaryDimension,
   UsageBucket,
   UsageCount,
@@ -14,6 +16,7 @@ import type {
   UsageFilters,
   UsageGroupBy,
   UsageGroupedSeries,
+  UsageLogGroups,
   UsageSortKey,
   UsageSortOrder,
   UsageSummary,
@@ -521,6 +524,74 @@ export function useUsageValueGroups(
     placeholderData: keepPreviousData,
     staleTime: 30_000,
     ...HEAVY_READ,
+  })
+}
+
+/**
+ * The request log collapsed to one row per value of a column, with what each
+ * group's requests add up to, ranked by `order` and paged on the server.
+ */
+export function useUsageLogGroups(
+  filters: UsageFilters,
+  groupBy: LogGroupBy,
+  {
+    order = "recent",
+    limit = 50,
+    enabled = true,
+    refetchInterval,
+  }: {
+    order?: LogGroupOrder
+    limit?: number
+    enabled?: boolean
+    refetchInterval?: number | false
+  } = {},
+) {
+  const scope = useUsageScope("caller")
+  return useQuery({
+    queryKey: [USAGE, "grouped", scope.base, filters, groupBy, order, limit],
+    meta: workspaceMeta(filters.workspace_id),
+    queryFn: ({ signal }) => {
+      const params = usageParams(filters)
+      params.set("group_by", groupBy)
+      params.set("order", order)
+      params.set("limit", String(limit))
+      return apiFetch<UsageLogGroups>(
+        `${scope.base}/grouped?${params.toString()}`,
+        { signal: heavyReadSignal(signal) },
+      )
+    },
+    enabled: enabled && scope.isReady,
+    placeholderData: keepPreviousData,
+    staleTime: 10_000,
+    refetchInterval,
+    ...HEAVY_READ,
+  })
+}
+
+/**
+ * The newest rows of each of several filtered views, `limit` apiece, one read
+ * per view: what a grouped log shows under each open group.
+ */
+export function useUsageLogPreviews(
+  views: readonly UsageFilters[],
+  limit: number,
+  { refetchInterval }: { refetchInterval?: number | false } = {},
+) {
+  const scope = useUsageScope("caller")
+  return useQueries({
+    queries: views.map((filters) => ({
+      queryKey: [USAGE, "list", scope.base, filters, 0, limit, NEWEST_FIRST],
+      meta: workspaceMeta(filters.workspace_id),
+      queryFn: () => {
+        const params = sortParams(usageParams(filters), NEWEST_FIRST)
+        params.set("limit", String(limit))
+        return apiFetch<UsageEntry[]>(`${scope.base}?${params.toString()}`)
+      },
+      enabled: scope.isReady,
+      placeholderData: keepPreviousData,
+      staleTime: 10_000,
+      refetchInterval,
+    })),
   })
 }
 

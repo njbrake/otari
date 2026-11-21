@@ -43,13 +43,22 @@ export function cacheShare(totals: UsageTotals): number {
 export function RequestTotals({
   totals,
   isLoading,
+  isPinned = false,
 }: {
   totals: UsageTotals | undefined
   isLoading: boolean
+  /**
+   * The phone's line pinned over its list as it scrolls: the requests, the
+   * failures, what was billed and the tokens, on one line.
+   */
+  isPinned?: boolean
 }) {
+  const frame = isPinned
+    ? "otari-request-totals otari-request-totals--pinned"
+    : "otari-request-totals"
   if (isLoading || totals === undefined) {
     return (
-      <div className="otari-request-totals">
+      <div className={frame}>
         <Skeleton className="h-4 w-24" />
         <Skeleton className="h-4 w-80 max-w-[60%]" />
         <span className="sr-only">Loading totals</span>
@@ -57,6 +66,27 @@ export function RequestTotals({
     )
   }
   const { billed, subscription } = splitCost(totals)
+  if (isPinned) {
+    return (
+      <section aria-label="Totals" className={frame}>
+        <span className="min-w-0 truncate text-mono-caption text-muted">
+          <span className="text-caption text-foreground">
+            {formatNumber(totals.request_count)}{" "}
+            {totals.request_count === 1 ? "request" : "requests"}
+          </span>
+          {totals.error_count ? (
+            <span className="text-danger">
+              {" "}
+              · {formatNumber(totals.error_count)} failed
+            </span>
+          ) : null}
+          <span className="text-foreground"> · {formatUsd(billed)} billed</span>
+          {" · "}
+          {formatTokens(billedTokenTotal(totals) ?? 0)} tokens
+        </span>
+      </section>
+    )
+  }
   const p95 = formatLatency(totals.p95_latency_ms)
   const parts: { key: string; node: ReactNode }[] = [
     {
@@ -122,7 +152,7 @@ export function RequestTotals({
     parts.push({ key: "p95", node: <span>P95 {p95}</span> })
   }
   return (
-    <section aria-label="Totals" className="otari-request-totals">
+    <section aria-label="Totals" className={frame}>
       {/* Each fact keeps its separator and never breaks inside, so a narrow
           line wraps whole facts rather than leaving a label alone. */}
       <InlineList className="text-mono-caption text-muted">

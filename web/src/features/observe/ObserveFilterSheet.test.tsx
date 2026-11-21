@@ -96,7 +96,6 @@ describe("ObserveFilterSheet on Requests", () => {
       "Routing",
       "API key",
       "Tokens",
-      "Cost",
       "Total time",
       "Status",
     ])
@@ -134,6 +133,22 @@ describe("ObserveFilterSheet on Requests", () => {
       within(sheet).getByRole("checkbox", { name: "Newest first" }),
     )
     await waitFor(() => expect(urlParams().has("sort")).toBe(false))
+  })
+
+  it("sets a cost threshold from one row of choices", async () => {
+    mockApi({ rows: [entry()] })
+    await renderRequests()
+    await screen.findAllByText("gpt-4o")
+    const { user, sheet } = await openSheet()
+    const cost = within(sheet).getByRole("radiogroup", { name: "Cost above" })
+    expect(within(cost).getByRole("radio", { name: "Any cost" })).toBeChecked()
+
+    await user.click(within(cost).getByRole("radio", { name: "> $0.10" }))
+    await waitFor(() => expect(urlParams().get("cost_gt")).toBe("0.1"))
+    expect(within(cost).getByRole("radio", { name: "> $0.10" })).toBeChecked()
+
+    await user.click(within(cost).getByRole("radio", { name: "Any cost" }))
+    await waitFor(() => expect(urlParams().has("cost_gt")).toBe(false))
   })
 
   it("reads a section's values only once it is expanded", async () => {
@@ -233,14 +248,19 @@ describe("ObserveFilterSheet on Requests", () => {
     mockApi({ rows: [entry()] })
     await renderRequests()
     const { user, sheet } = await openSheet()
-    await user.click(within(sheet).getByRole("button", { name: "Cost" }))
+    // Cost is one open section: its threshold as a row of choices, and pricing.
+    expect(within(sheet).queryByRole("button", { name: /^Cost/ })).toBeNull()
 
     await user.click(
       within(sheet).getByRole("checkbox", { name: "Unpriced only" }),
     )
     await waitFor(() => expect(urlParams().get("priced")).toBe("false"))
-    await user.click(within(sheet).getByRole("checkbox", { name: "> $0.10" }))
+    await user.click(within(sheet).getByRole("radio", { name: "> $0.10" }))
     await waitFor(() => expect(urlParams().get("cost_gt")).toBe("0.1"))
+    // One control writes the threshold.
+    expect(
+      within(sheet).queryAllByRole("checkbox", { name: "> $0.10" }),
+    ).toEqual([])
   })
 
   it("counts the filters applied on its badge", async () => {
@@ -260,16 +280,17 @@ describe("ObserveFilterSheet on Requests", () => {
   it("opens a filtered section expanded, and clears everything", async () => {
     const user = userEvent.setup()
     mockApi({ rows: [entry()] })
-    await renderRequests("?cost_gt=0.1")
+    await renderRequests("?cost_gt=0.1&tokens_gt=10000")
     await user.click(await filtersButton())
     const sheet = await screen.findByRole("dialog", { name: "Filters" })
 
     expect(
-      within(sheet).getByRole("button", { name: /^Cost\s*Filtered$/ }),
+      within(sheet).getByRole("button", { name: /^Tokens\s*Filtered$/ }),
     ).toHaveAttribute("aria-expanded", "true")
     expect(
-      within(sheet).getByRole("checkbox", { name: "> $0.10" }),
+      within(sheet).getByRole("checkbox", { name: /^> 10k$/i }),
     ).toBeChecked()
+    expect(within(sheet).getByRole("radio", { name: "> $0.10" })).toBeChecked()
 
     await user.click(within(sheet).getByRole("button", { name: "Clear all" }))
     await waitFor(() => expect(urlParams().has("cost_gt")).toBe(false))

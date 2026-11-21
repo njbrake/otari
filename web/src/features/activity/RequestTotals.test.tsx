@@ -42,6 +42,32 @@ describe("RequestTotals", () => {
     expect(target.searchParams.has("page")).toBe(false)
   })
 
+  it("pins the phone's line to the requests, failures, billed cost and tokens", async () => {
+    renderPage(
+      <RequestTotals
+        totals={usageTotals({
+          request_count: 1234,
+          error_count: 5,
+          cost: 12.5,
+          imported_cost: 2.5,
+          unpriced_requests: 7,
+          billed_input_tokens: 800_000,
+          billed_output_tokens: 200_000,
+          p95_latency_ms: 2400,
+        })}
+        isLoading={false}
+        isPinned
+      />,
+      "/requests",
+    )
+    const line = await screen.findByRole("region", { name: "Totals" })
+    expect(line).toHaveTextContent(
+      "1,234 requests · 5 failed · $10.00 billed · 1.0M tokens",
+    )
+    expect(line).not.toHaveTextContent("P95")
+    expect(screen.queryByRole("link", { name: "7 unpriced" })).toBeNull()
+  })
+
   it("leaves out the figures that are zero and say nothing", async () => {
     renderPage(
       <RequestTotals

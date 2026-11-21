@@ -33,7 +33,7 @@ from sqlalchemy import (
 from sqlalchemy import cast as sql_cast
 
 from gateway.core.metered_pricing import ChargeLine
-from gateway.core.sql import bucket_expr, canonical_bucket, dialect_name, match_any, utc_bound
+from gateway.core.sql import bucket_expr, canonical_bucket, dialect_name, match_any, utc_bound, utc_iso
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.usage import (
     PLAYGROUND_USAGE_ENDPOINT,
@@ -48,9 +48,13 @@ from gateway.schemas.usage_and_telemetry import (
     GATEWAY_TOOL_NAMES,
     TOOL_METER_NAMESPACE,
     Bucket,
+    LogGroupBy,
+    LogGroupOrder,
     SortOrder,
     UsageGroupedSeriesPoint,
     UsageGroupRow,
+    UsageLogGroup,
+    UsageLogGroupModel,
     UsageSeriesPoint,
     UsageSort,
     UsageToolRow,
@@ -389,6 +393,9 @@ def _group_column(rows: Subquery, dimension: str) -> ColumnElement[Any]:
     column = rows.c[_GROUP_COLUMNS[dimension]]
     return sql_cast(column, String) if dimension == "workspace" else column
 
+
+# How many of a log group's most-used models it names.
+_TOP_MODELS = 3
 
 # The columns a filter menu lists the values of, among those the rollups keep.
 _VALUE_COLUMNS: dict[str, str] = {
@@ -1464,6 +1471,100 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         return [
             UsageValueGroup(key=row[0], requests=int(row[1]), errors=int(row[2]), cost=float(row[3])) for row in page
         ], total
+
+    async def log_groups(
+        self,
+        filters: UsageFilters,
+        scope: UsageScope,
+        *,
+        group_by: LogGroupBy,
+        order: LogGroupOrder,
+        skip: int,
+        limit: int,
+    ) -> tuple[list[UsageLogGroup], int]:
+        """A page of the request log collapsed to one row per value of a column, and how many groups there are.
+
+        Ranked by ``order``, with ties broken by key so a page cuts the same groups
+        wherever the sums came from. Each group carries its three most-used models,
+        read in one more statement over the page's keys.
+        """
+        rows = await self._usage_rows(filters, scope)
+        column = rows.c[_VALUE_COLUMNS[group_by]]
+        status = single_status(filters)
+        requests = _requests(rows, status)
+        cost = _summed(rows.c.cost, 0.0)
+        last = func.max(rows.c.ts)
+        # The models a group's requests ran on, counted as ``_top_models`` lists them.
+        served_model = rows.c.model if status == "absorbed" else case((rows.c.status != "absorbed", rows.c.model))
+        ranked = {"recent": last.desc(), "requests": requests.desc(), "cost": cost.desc()}[order]
+        stmt = (
+            select(
+                column,
+                requests,
+                _summed(case((rows.c.status == "error", rows.c.rows), else_=0)),
+                cost,
+                _summed(rows.c.billed_input_tokens) + _summed(rows.c.billed_output_tokens),
+                _summed(rows.c.latency_ms),
+                _summed(rows.c.latency_count),
+                func.min(rows.c.ts),
+                last,
+                func.count(func.distinct(served_model)),
+                func.count().over(),
+            )
+            .group_by(column)
+            .order_by(ranked, column.asc().nulls_last())
+            .offset(skip)
+            .limit(limit)
+        )
+        page = (await self.db.execute(stmt)).all()
+        if page:
+            total = int(page[0][10])
+        elif skip:
+            # Past the last page there is no row to carry the count.
+            grouped = select(column).group_by(column).subquery()
+            total = int((await self.db.execute(select(func.count()).select_from(grouped))).scalar_one())
+        else:
+            total = 0
+        models = await self._top_models(rows, column, [row[0] for row in page], status)
+        return [
+            UsageLogGroup(
+                key=row[0],
+                requests=int(row[1]),
+                errors=int(row[2]),
+                cost=float(row[3]),
+                tokens=int(row[4]),
+                latency_ms=float(row[5]) / int(row[6]) if row[6] else None,
+                first_at=utc_iso(row[7]),
+                last_at=utc_iso(row[8]),
+                top_models=models.get(row[0], []),
+                model_count=int(row[9]),
+            )
+            for row in page
+        ], total
+
+    async def _top_models(
+        self, rows: Subquery, column: Any, keys: Sequence[str | None], status: str | None
+    ) -> dict[str | None, list[UsageLogGroupModel]]:
+        """Each key's three most-used models over the usage relation, most requests first, ties by name."""
+        if not keys:
+            return {}
+        named = [key for key in keys if key is not None]
+        matched = [column.in_(named)] if named else []
+        if len(named) < len(keys):
+            matched.append(column.is_(None))
+        requests = _requests(rows, status)
+        stmt = (
+            select(column, rows.c.model, requests)
+            .where(or_(*matched))
+            .group_by(column, rows.c.model)
+            .order_by(column, requests.desc(), rows.c.model)
+        )
+        out: dict[str | None, list[UsageLogGroupModel]] = {}
+        for key, model, count in (await self.db.execute(stmt)).all():
+            listed = out.setdefault(key, [])
+            if len(listed) < _TOP_MODELS and int(count) > 0:
+                listed.append(UsageLogGroupModel(model=model, requests=int(count)))
+        return out
 
     async def _tag_groups(
         self, filters: UsageFilters, scope: UsageScope, *, tag_key: str, limit: int | None

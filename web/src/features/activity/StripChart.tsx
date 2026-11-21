@@ -331,6 +331,18 @@ export function StripChart({
       })
     }
   }
+  // On a phone a range is hard to drag with a thumb, so a slide reads out the
+  // bucket under the finger instead and lifting picks that one.
+  // The press starts on the first bucket the finger is read over, since a
+  // touch's own start can arrive before the chart knows which bucket it is on.
+  const scrub = (index: number | null) => {
+    if (index === null) return
+    const current = dragRef.current
+    if (!current) setDragBoth({ start: index, end: index, moved: false })
+    else if (index !== current.end) {
+      setDragBoth({ start: index, end: index, moved: true })
+    }
+  }
   const commit = (how: "release" | "leave" | "touch") => {
     const picked = releasedSelection(dragRef.current, how, last)
     setDragBoth(undefined)
@@ -367,7 +379,8 @@ export function StripChart({
           }}
           onTouchMove={(state) => {
             lastTouchRef.current = Date.now()
-            extend(toIndex(state))
+            if (phone) scrub(toIndex(state))
+            else extend(toIndex(state))
           }}
           onTouchEnd={() => {
             lastTouchRef.current = Date.now()

@@ -293,6 +293,21 @@ def test_a_filter_menus_values_are_scoped_like_the_list(client: TestClient, worl
     assert (body["groups"], body["total"]) == ([], 0)
 
 
+def test_the_grouped_log_is_scoped_like_the_list(client: TestClient, world: _World) -> None:
+    """``/grouped`` sums the rows the caller may read, and no others."""
+    code, body = _as(client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage/grouped?group_by=model")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert {group["key"] for group in body["groups"]} == set(_ALPHA_ONE_MODELS)
+    assert body["total"] == len(set(_ALPHA_ONE_MODELS))
+    assert all(model["model"] in _ALPHA_ONE_MODELS for group in body["groups"] for model in group["top_models"])
+
+    code, body = _as(client, world, "alpha_newcomer", f"{API_ROOT}/organizations/me/usage/grouped?group_by=user")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert (body["groups"], body["total"]) == ([], 0)
+
+
 def test_a_viewer_is_scoped_like_a_member_and_not_like_an_admin(client: TestClient, world: _World) -> None:
     """``viewer`` is the fourth role and is outside ``MANAGEMENT_ROLES``.
 

@@ -36,6 +36,8 @@ from gateway.models.api_keys import APIKey
 from gateway.schemas.usage_and_telemetry import (
     GATEWAY_TOOL_NAMES,
     Bucket,
+    LogGroupBy,
+    LogGroupOrder,
     RequestSettlement,
     SeriesGroupBy,
     SortOrder,
@@ -44,6 +46,7 @@ from gateway.schemas.usage_and_telemetry import (
     UsageCount,
     UsageEntry,
     UsageGroupedSeries,
+    UsageLogGroups,
     UsageSort,
     UsageSummary,
     UsageValueGroups,
@@ -207,6 +210,14 @@ _API_KEY_MULTI_DESC = (
 _GROUP_BY_DESC = (
     "The column to list the values of: 'policy' is the routing policy a request was served through, "
     "under a null key for the requests that named a model directly."
+)
+_LOG_GROUP_BY_DESC = (
+    "The column to group the log by: 'api_key', 'source_label' (the session), 'model', or 'user' (the billed "
+    "user). The rows with no value in it form one group under a null key."
+)
+_LOG_GROUP_ORDER_DESC = (
+    "How groups are ranked: 'recent' (the latest request first, the default), 'requests' (most first), "
+    "or 'cost' (most spend first). Ties fall back to the key."
 )
 _SORT_DESC = (
     "Order rows by this column; ties fall back to newest first, then the row id. 'user' is the billed user's "
@@ -704,3 +715,60 @@ async def usage_value_groups(
         refine=refine,
     )
     return await usage.value_groups(filters, usage_scope, group_by=group_by, search=search, skip=skip, limit=limit)
+
+
+@operator_router.get("/grouped")
+async def usage_log_groups(
+    usage: UsageServiceDep,
+    usage_scope: CallerUsageScope,
+    refine: UsageRefinementsQuery,
+    group_by: LogGroupBy = Query(description=_LOG_GROUP_BY_DESC),
+    start_date: datetime | None = Query(default=None, description=_START_DESC),
+    end_date: datetime | None = Query(default=None, description=_END_DESC),
+    user_id: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_USER_MULTI_DESC)] = None,
+    status: str | None = Query(default=None, description=_STATUS_DESC),
+    status_code: int | None = Query(default=None, description=_STATUS_CODE_DESC),
+    model: Annotated[list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_MODEL_MULTI_DESC)] = None,
+    endpoint: str | None = Query(default=None, description=_ENDPOINT_DESC),
+    provider: str | None = Query(default=None, description=_PROVIDER_DESC),
+    source: str | None = Query(default=None, description=_SOURCE_DESC),
+    source_label: str | None = Query(default=None, description=_SOURCE_LABEL_DESC),
+    tag: TagFilter = None,
+    api_key_id: Annotated[
+        list[str] | None, Query(max_length=MAX_FILTER_VALUES, description=_API_KEY_MULTI_DESC)
+    ] = None,
+    priced: bool | None = Query(default=None, description=_PRICED_DESC),
+    tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
+    counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
+    workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
+    order: LogGroupOrder = Query(default="recent", description=_LOG_GROUP_ORDER_DESC),
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> UsageLogGroups:
+    """The request log collapsed to one row per API key, session, model or user, with what each group adds up to.
+
+    Same filters and window bounds as ``/summary``. Each group carries its
+    requests, failures, cost, billed tokens, mean latency, first and last request,
+    and most-used models; ``total`` counts every group the filters leave, so a
+    client can page through them.
+    """
+    filters = UsageFilters(
+        start_date=start_date,
+        end_date=end_date,
+        user_id=user_id,
+        status=status,
+        status_code=status_code,
+        model=model,
+        endpoint=endpoint,
+        provider=provider,
+        source=source,
+        source_label=source_label,
+        tags=parse_tag_filters(tag),
+        api_key_id=api_key_id,
+        priced=priced,
+        tool=tool,
+        counts_toward_budget=counts_toward_budget,
+        workspace_id=workspace_id,
+        refine=refine,
+    )
+    return await usage.log_groups(filters, usage_scope, group_by=group_by, order=order, skip=skip, limit=limit)

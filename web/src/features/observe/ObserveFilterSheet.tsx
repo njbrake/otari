@@ -5,6 +5,7 @@ import { Button } from "@/design-system/actions/Button"
 import { ColumnFilterList } from "@/design-system/data/ColumnFilterList"
 import { Dialog } from "@/design-system/feedback/Dialog"
 import { Disclosure } from "@/design-system/navigation/Disclosure"
+import { Segmented } from "@/design-system/navigation/Segmented"
 import {
   readSort,
   readSortChoice,
@@ -20,6 +21,8 @@ import {
 import { OBSERVE_FILTER_COLUMNS } from "./observeColumnFilters"
 import {
   type ObserveFilterState,
+  readThreshold,
+  THRESHOLDS,
   useObserveFilterState,
 } from "./observeFilters"
 import type { ObserveView } from "./observeSearch"
@@ -82,12 +85,22 @@ export function ObserveFilterSheet({
 // filtered then.
 function SheetSections({ view }: { view: ObserveView }) {
   const state = useObserveFilterState(view)
-  const columns = OBSERVE_FILTER_COLUMNS[view]
+  const offered = OBSERVE_FILTER_COLUMNS[view]
     .map((column) => ({
       label: column.label,
       sections: offeredSections(column.sections, state),
     }))
     .filter((column) => column.sections.length > 0)
+  // On Requests the column holding the cost threshold is drawn open as the
+  // Cost section below the sort, its threshold as one row of choices, rather
+  // than a second section of the same name.
+  const isCost = (column: (typeof offered)[number]) =>
+    state.isRequests &&
+    column.sections.some(
+      (section) => section.kind === "threshold" && section.key === "cost_gt",
+    )
+  const cost = offered.find(isCost)
+  const columns = offered.filter((column) => !isCost(column))
   const [expanded, setExpanded] = useState(() =>
     columns
       .filter((column) => isFiltered(column.sections, state))
@@ -113,10 +126,79 @@ function SheetSections({ view }: { view: ObserveView }) {
   return state.isRequests ? (
     <>
       <SortSection state={state} />
+      {cost ? (
+        <CostSection
+          view={view}
+          state={state}
+          rest={cost.sections.filter((section) => section.kind !== "threshold")}
+        />
+      ) : null}
       {sections}
     </>
   ) : (
     sections
+  )
+}
+
+// The Cost column's thresholds, smallest first as a row of segments reads.
+const COST = THRESHOLDS.cost_gt
+const COST_STEPS = [...COST.presets].reverse()
+
+/**
+ * The cost a request has to pass to be listed, one tap away: the Cost
+ * column's own thresholds, which a desk sets from that column's funnel.
+ */
+function CostSection({
+  view,
+  state,
+  rest,
+}: {
+  view: ObserveView
+  state: ObserveFilterState
+  /** The column's other filters, such as priced or unpriced, listed under the threshold. */
+  rest: ReturnType<typeof offeredSections>
+}) {
+  const current = readThreshold(state.url.get("cost_gt"))
+  const value =
+    current === undefined
+      ? ""
+      : COST_STEPS.includes(current)
+        ? String(current)
+        : "other"
+  const options = [
+    { value: "", label: "Any cost" },
+    ...COST_STEPS.map((step) => ({
+      value: String(step),
+      label: COST.describe(step),
+    })),
+    // A threshold set elsewhere stays the choice shown until another is made.
+    ...(value === "other" && current !== undefined
+      ? [{ value: "other", label: COST.describe(current) }]
+      : []),
+  ]
+  return (
+    <div className="flex flex-col gap-2 border-border border-t px-6 py-3">
+      <span className="text-body">Cost</span>
+      <Segmented
+        label="Cost above"
+        isFullWidth
+        value={value}
+        options={options}
+        onChange={(next) => {
+          if (next !== "other") state.patch({ cost_gt: next })
+        }}
+      />
+      {rest.length > 0 ? (
+        <div className="-mx-3 flex flex-col">
+          <ObserveFilterSections
+            view={view}
+            label="Cost"
+            sections={rest}
+            state={state}
+          />
+        </div>
+      ) : null}
+    </div>
   )
 }
 

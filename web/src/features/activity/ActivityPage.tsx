@@ -49,6 +49,8 @@ import {
   useLiveUsageCount,
   useRequestGroups,
   useUsageCount,
+  useUsageLogGroups,
+  useUsageLogPreviews,
   useUsageLogs,
   useUsageScope,
   useUsageSummary,
@@ -85,8 +87,11 @@ import {
   groupsWithEarlierAttempts,
   nestRecoveredAttempts,
 } from "./cellFilters"
+import { GroupByControl } from "./GroupByControl"
+import { GroupedRequests, groupId } from "./GroupedRequests"
 import { InFlightControl } from "./InFlightControl"
 import { LiveControl, type LivePause } from "./LiveControl"
+import { PhoneRequestList } from "./PhoneRequestList"
 import { RequestPeek } from "./RequestPeek"
 import { RequestTotals } from "./RequestTotals"
 import { RoutingCell } from "./RoutingCell"
@@ -102,6 +107,16 @@ import {
   TIME_COLUMN,
   toolFilterFor,
 } from "./requestColumns"
+import {
+  GROUP_PAGE,
+  GROUP_PAGE_MAX,
+  GROUP_PREVIEW,
+  groupFilters,
+  PHONE_BATCH,
+  PHONE_LIMIT_MAX,
+  readGroupBy,
+  showGroupSearch,
+} from "./requestGroups"
 import {
   boundsWindow,
   nextSort,
@@ -160,6 +175,8 @@ const URL_DEFAULTS = {
   // The column the log is ordered by and which way; absent is newest first.
   sort: "",
   order: "",
+  // The column the log is grouped by; absent is a flat list.
+  group: "",
   page: "0",
   size: String(DEFAULT_PAGE_SIZE),
   // The request open in the panel: a usage row's id, or the `Otari-Request-ID`
@@ -229,11 +246,19 @@ function ActivityPageContent({
   const search = url.get("q").trim()
   const sort = readSort(url.get("sort"), url.get("order"))
   const showRecovered = url.get("recovered") === "show"
+  const groupBy = readGroupBy(url.get("group"))
+  // A column sort has no stretch of time to group, so grouping waits it out.
+  const groupPaused = groupBy !== undefined && sort.sort !== NEWEST_FIRST.sort
+  // The phone lists its rows flat; a link carrying a grouping still opens there.
+  const isMobile = useIsMobile()
+  const isGrouped = groupBy !== undefined && !groupPaused && !isMobile
   // The server reads any order but time, and a substring search, over a bounded
   // window, an omitted start as the last 30 days. Under "All" those reads take
   // the year the timeline spans instead, so the rows match the bars above them.
   const boundedRead = boundsWindow(sort, search)
-  const page = Math.max(0, url.getNumber("page"))
+  const urlPage = Math.max(0, url.getNumber("page"))
+  // The phone always lists from the first rows, so it reads no page.
+  const page = isMobile ? 0 : urlPage
   // The request open in the panel: a usage row's id, or the request id.
   const requestId = url.get("request")
   // Snap URL-supplied sizes to the nearest offered option: an old bookmark
@@ -428,6 +453,31 @@ function ActivityPageContent({
     }
   }, [filtersKey, url, page, requestId])
 
+  // How many rows the phone has loaded, and which groups the desk lists and
+  // has open. They start over when the reader changes the view, which a live
+  // re-anchor of the window is not, so the key is the selection rather than
+  // the instants it resolves to.
+  const [phoneLimit, setPhoneLimit] = useState(PHONE_BATCH)
+  const [groupLimit, setGroupLimit] = useState(GROUP_PAGE)
+  const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  )
+  const viewKey = JSON.stringify({
+    ...filters,
+    start_date: undefined,
+    end_date: undefined,
+    selectionKey,
+    sort,
+    groupBy,
+  })
+  const [seenViewKey, setSeenViewKey] = useState(viewKey)
+  if (seenViewKey !== viewKey) {
+    setSeenViewKey(viewKey)
+    setPhoneLimit(PHONE_BATCH)
+    setGroupLimit(GROUP_PAGE)
+    setOpenGroups(new Set())
+  }
+
   // Live mode: on unless the reader paused it, and holding still on its own
   // while they read a later page, have a request open, sort by a column, or look at a window
   // that has ended, so no row moves under someone reading it.
@@ -438,7 +488,7 @@ function ActivityPageContent({
     ? "ended"
     : requestId !== ""
       ? "request"
-      : page > 0
+      : page > 0 || (isMobile && phoneLimit > PHONE_BATCH)
         ? "page"
         : sorted
           ? "sort"
@@ -460,10 +510,15 @@ function ActivityPageContent({
     setExtentWin(resolveExtentWindow(range, liveClock))
   }, [liveClock, range, startParam, endParam])
 
-  const usage = useUsageLogs(filters, page, pageSize, true, "caller", {
-    sort,
-    refetchInterval: liveRefetch,
-  })
+  // The phone reads its first `phoneLimit` rows; the desk a page, unless grouped.
+  const usage = useUsageLogs(
+    filters,
+    page,
+    isMobile ? phoneLimit : pageSize,
+    !isGrouped,
+    "caller",
+    { sort, refetchInterval: liveRefetch },
+  )
   const count = useUsageCount(filters, {
     sort: sort.sort,
     refetchInterval: liveRefetch,
@@ -586,6 +641,43 @@ function ActivityPageContent({
     "caller",
     { includeP95: true },
   )
+  // The groups read the window the totals do, so the two add up alike.
+  const logGroups = useUsageLogGroups(totalsFilters, groupBy ?? "model", {
+    limit: groupLimit,
+    enabled: isGrouped,
+    refetchInterval: liveRefetch,
+  })
+  const groupRows = isGrouped ? logGroups.data?.groups : undefined
+  const openGroupRows = (groupRows ?? []).filter((group) =>
+    openGroups.has(groupId(group)),
+  )
+  const previewFilters = useMemo(
+    () => ({ ...filters, start_date: totalsFilters.start_date }),
+    [filters, totalsFilters.start_date],
+  )
+  const previewReads = useUsageLogPreviews(
+    groupBy
+      ? openGroupRows.map((group) =>
+          groupFilters(previewFilters, groupBy, group.key),
+        )
+      : [],
+    GROUP_PREVIEW,
+    { refetchInterval: liveRefetch },
+  )
+  const previews = new Map(
+    openGroupRows.map((group, index) => [
+      groupId(group),
+      {
+        rows: previewReads[index]?.data,
+        isLoading: previewReads[index]?.isLoading ?? false,
+      },
+    ]),
+  )
+  const previewRows = openGroupRows.flatMap(
+    (_group, index) => previewReads[index]?.data ?? [],
+  )
+  const previewRowsKey = previewRows.map((row) => row.id).join(",")
+
   const timelineSeries = (contextSummary.data?.series ?? []).map((point) => ({
     bucketStart: point.bucket_start,
     requests: point.requests,
@@ -594,7 +686,11 @@ function ActivityPageContent({
     errors: point.errors ?? 0,
   }))
 
-  const pageRows = usage.data ?? []
+  // What the panel walks and the outcomes are read for: the page, or the
+  // open groups' newest rows in the order the groups are listed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the rows' ids, not the array each render builds
+  const groupedRows = useMemo(() => previewRows, [previewRowsKey])
+  const pageRows = isGrouped ? groupedRows : (usage.data ?? [])
 
   // What the live control may report. A failed poll leaves the list unknown, not
   // unchanged: TanStack keeps the last successful payload, so without the
@@ -762,7 +858,6 @@ function ActivityPageContent({
     linkedRequest.isSuccess &&
     !linkedRequest.isPlaceholderData
   // Below md the panel covers the page, which then takes no focus or presses.
-  const isMobile = useIsMobile()
   // Stable per open row, so DataTable's row cache holds while the page polls.
   // `is-peeked` washes the cells (see globals.css) and composes with the row's
   // own failure tint.
@@ -1032,6 +1127,25 @@ function ActivityPageContent({
     [isMobile, columns, layout.hidden],
   )
 
+  const emptyContent = anyFilter
+    ? "No requests match these filters."
+    : "No requests recorded yet."
+  // Who sent a row, as the phone's second line names them: the person, or the
+  // key where the list is the reader's own.
+  const senderOf = (entry: UsageEntry) =>
+    filtersUsers && entry.user_id !== null
+      ? userDisplay(entry.user_id, entry.user_alias, memberLabels).label
+      : apiKeyLabel(entry)
+  // Picking a grouping while a column sort holds returns the log to newest
+  // first, which is what lets the grouping apply.
+  const pickGrouping = (next: string) =>
+    url.patch({
+      group: next,
+      ...(next && groupPaused ? { sort: "", order: "" } : {}),
+      page: 0,
+      request: "",
+    })
+
   // What says the log is still moving: the in-flight count, Live, the badge
   // while paused, and Refresh. Inside the Overview they sit at the end of the
   // filter row; on its own the page puts them beside the chart.
@@ -1055,7 +1169,10 @@ function ActivityPageContent({
           setLiveWanted(wanted)
           // Resuming clears what held it: the first page of the newest
           // requests, newest first, with nothing open.
-          if (resume) url.patch({ page: 0, request: "", sort: "", order: "" })
+          if (resume) {
+            setPhoneLimit(PHONE_BATCH)
+            url.patch({ page: 0, request: "", sort: "", order: "" })
+          }
         }}
       />
       {newRows > 0 ? (
@@ -1095,6 +1212,16 @@ function ActivityPageContent({
         {embedded ? (
           <ObserveFilterRow
             view="requests"
+            controls={
+              isMobile ? undefined : (
+                <GroupByControl
+                  value={groupBy}
+                  isPaused={groupPaused}
+                  offersPerson={filtersUsers}
+                  onChange={pickGrouping}
+                />
+              )
+            }
             search={
               <ObserveSearchBox
                 value={url.get("q")}
@@ -1147,6 +1274,7 @@ function ActivityPageContent({
         <RequestTotals
           totals={totalsSummary.data?.totals}
           isLoading={totalsSummary.isPending && !totalsSummary.data}
+          isPinned={isMobile}
         />
 
         <div className="flex flex-col gap-3">
@@ -1164,59 +1292,122 @@ function ActivityPageContent({
               </Button>
             </div>
           ) : null}
-          <TableScrollFrame className="otari-activity-table">
-            <DataTable
-              mobileLayout="cards"
-              ariaLabel="Activity log"
-              columns={shownColumns}
-              isResizable
-              sortDescriptor={sortDescriptorFor(sort)}
-              onSortChange={(descriptor) =>
-                url.patch({
-                  ...sortUrl(nextSort(sort, String(descriptor.column))),
-                  page: 0,
-                  request: "",
+          {isMobile ? (
+            <PhoneRequestList
+              rows={rows}
+              isLoading={usage.isLoading}
+              senderOf={senderOf}
+              openId={openId}
+              onOpen={openRequest}
+              onMore={
+                rows.length >= phoneLimit &&
+                phoneLimit < PHONE_LIMIT_MAX &&
+                (total === null || total > rows.length)
+                  ? () =>
+                      setPhoneLimit((limit) =>
+                        Math.min(PHONE_LIMIT_MAX, limit + PHONE_BATCH),
+                      )
+                  : undefined
+              }
+              isFetchingMore={usage.isFetching && usage.isPlaceholderData}
+              emptyContent={emptyContent}
+            />
+          ) : isGrouped && groupBy ? (
+            <GroupedRequests
+              groupBy={groupBy}
+              groups={groupRows}
+              total={logGroups.data?.total ?? 0}
+              isLoading={logGroups.isLoading}
+              memberLabels={memberLabels}
+              openGroups={openGroups}
+              onToggleGroup={(id) =>
+                setOpenGroups((current) => {
+                  const next = new Set(current)
+                  if (!next.delete(id)) next.add(id)
+                  return next
                 })
               }
-              columnWidths={layout.widths}
-              onColumnResizeEnd={layout.resize}
-              rows={rows}
-              getRowKey={getActivityRowKey}
-              isLoading={usage.isLoading}
-              emptyContent={
-                anyFilter
-                  ? "No requests match these filters."
-                  : "No requests recorded yet."
-              }
-              onRowAction={openRequest}
+              previews={previews}
+              columns={shownColumns}
+              onOpenRequest={openRequest}
               rowClassName={rowClassName}
+              onShowAll={(group) =>
+                navigate({
+                  to: ".",
+                  search: (prev) =>
+                    showGroupSearch(
+                      prev as DashboardSearch,
+                      groupBy,
+                      group.key,
+                    ),
+                })
+              }
+              onMore={
+                (groupRows?.length ?? 0) < (logGroups.data?.total ?? 0) &&
+                groupLimit < GROUP_PAGE_MAX
+                  ? () =>
+                      setGroupLimit((limit) =>
+                        Math.min(GROUP_PAGE_MAX, limit + GROUP_PAGE),
+                      )
+                  : undefined
+              }
+              isFetchingMore={
+                logGroups.isFetching && logGroups.isPlaceholderData
+              }
+              emptyContent={emptyContent}
             />
-          </TableScrollFrame>
+          ) : (
+            <>
+              <TableScrollFrame className="otari-activity-table">
+                <DataTable
+                  ariaLabel="Activity log"
+                  columns={shownColumns}
+                  isResizable
+                  sortDescriptor={sortDescriptorFor(sort)}
+                  onSortChange={(descriptor) =>
+                    url.patch({
+                      ...sortUrl(nextSort(sort, String(descriptor.column))),
+                      page: 0,
+                      request: "",
+                    })
+                  }
+                  columnWidths={layout.widths}
+                  onColumnResizeEnd={layout.resize}
+                  rows={rows}
+                  getRowKey={getActivityRowKey}
+                  isLoading={usage.isLoading}
+                  emptyContent={emptyContent}
+                  onRowAction={openRequest}
+                  rowClassName={rowClassName}
+                />
+              </TableScrollFrame>
 
-          <TablePagination
-            page={page}
-            pageSize={pageSize}
-            total={total}
-            rowsOnPage={rows.length}
-            // Paging re-reads the count as well as the rows. The total is a property of
-            // the filters, not of the page, so it is not in the count's key and a frozen
-            // page would carry whichever value it loaded with. That understates a table
-            // traffic has grown, and `TablePagination` derives `isLast` from the total
-            // whenever it has one, so the operator hits a wall short of the real end and
-            // the oldest rows sit past it, unreachable until a manual refresh. Paging is
-            // a deliberate act, so re-reading here keeps the total describing a set the
-            // operator can actually navigate, without putting a self-moving number under
-            // a table that deliberately holds still.
-            onPageChange={(next) => {
-              url.patch({ page: next, request: "" })
-              void count.refetch()
-            }}
-            onPageSizeChange={(size) =>
-              url.patch({ size, page: 0, request: "" })
-            }
-            isFetching={usage.isFetching}
-            hasNextFallback={rows.length === pageSize}
-          />
+              <TablePagination
+                page={page}
+                pageSize={pageSize}
+                total={total}
+                rowsOnPage={rows.length}
+                // Paging re-reads the count as well as the rows. The total is a property of
+                // the filters, not of the page, so it is not in the count's key and a frozen
+                // page would carry whichever value it loaded with. That understates a table
+                // traffic has grown, and `TablePagination` derives `isLast` from the total
+                // whenever it has one, so the operator hits a wall short of the real end and
+                // the oldest rows sit past it, unreachable until a manual refresh. Paging is
+                // a deliberate act, so re-reading here keeps the total describing a set the
+                // operator can actually navigate, without putting a self-moving number under
+                // a table that deliberately holds still.
+                onPageChange={(next) => {
+                  url.patch({ page: next, request: "" })
+                  void count.refetch()
+                }}
+                onPageSizeChange={(size) =>
+                  url.patch({ size, page: 0, request: "" })
+                }
+                isFetching={usage.isFetching}
+                hasNextFallback={rows.length === pageSize}
+              />
+            </>
+          )}
         </div>
       </div>
 
