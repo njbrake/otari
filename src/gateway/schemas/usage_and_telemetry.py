@@ -193,7 +193,9 @@ UsageChannel = Literal["api", "imported", "playground"]
 # The columns a filter can ask to be empty: no API key, no billed user, no session.
 NullableUsageField = Literal["api_key", "user", "session"]
 
-SeriesGroupBy = Literal["model", "user_id", "api_key_id", "source", "provider", "workspace_id"]
+SeriesGroupBy = Literal[
+    "model", "user_id", "api_key_id", "source", "provider", "workspace_id", "source_label", "channel", "policy_name"
+]
 
 # Coarse display buckets for a failure's status code. A closed Literal rather than
 # a bare str so the set lands in the OpenAPI schema as an enum and a consumer can
@@ -211,8 +213,30 @@ GATEWAY_TOOL_NAMES: tuple[str, ...] = tuple(tool for tool in get_args(ToolFilter
 # Every breakdown a summary can compute; the extra ``none`` is the explicit empty
 # selection (a repeated query param cannot express an empty list on the wire).
 SummaryDimension = Literal[
-    "model", "user", "api_key", "source", "source_label", "endpoint", "provider", "status_code", "tool", "none"
+    "model",
+    "user",
+    "api_key",
+    "source",
+    "source_label",
+    "endpoint",
+    "provider",
+    "channel",
+    "policy",
+    "workspace",
+    "status_code",
+    "tool",
+    "none",
 ]
+
+# The breakdowns that group spend by a value, which ``p95_by`` can name.
+BreakdownDimension = Literal[
+    "model", "user", "api_key", "source", "source_label", "endpoint", "provider", "channel", "policy", "workspace"
+]
+
+# What ranks a breakdown's groups, and so which make its top N before the fold:
+# all spend, the spend that counted toward a budget, the spend that did not, billed
+# tokens, requests, failed requests, or the group's 95th-percentile latency.
+BreakdownRankBy = Literal["cost", "charged", "not_charged", "tokens", "requests", "failed", "p95"]
 
 
 class UsageEntry(BaseModel):
@@ -410,6 +434,8 @@ class UsageTotals(BaseModel):
     # The 95th-percentile total latency over the requests, absorbed attempts left
     # out. Computed only when the summary is asked for it (``include_p95``).
     p95_latency_ms: int | None = None
+    # The part of ``cost`` that counted toward a budget (``counts_toward_budget``).
+    charged_cost: float = 0.0
 
 
 class UsageGroupRow(BaseModel):
@@ -439,6 +465,15 @@ class UsageGroupRow(BaseModel):
     tokens: int
     requests: int
     is_other: bool = False
+    # The part of ``cost`` that counted toward a budget; the rest was tracked and not
+    # charged, such as imported subscription usage or a budget-exempt key's.
+    charged_cost: float = 0.0
+    # Failed requests (status ``error``).
+    error_count: int = 0
+    # The 95th-percentile total latency over the group's requests, absorbed attempts
+    # left out. Null unless ``p95_by`` named this breakdown or ``rank_by`` is ``p95``,
+    # on the fold row, and for a group none of whose requests recorded a latency.
+    p95_latency_ms: int | None = None
 
 
 # The columns a filter menu lists the values of. ``policy`` is the routing policy
@@ -604,6 +639,12 @@ class UsageSummary(BaseModel):
     # other endpoint reports.
     by_endpoint: list[UsageGroupRow]
     by_provider: list[UsageGroupRow]
+    # How a request came in (``api``, ``imported`` or ``playground``), the routing
+    # policy that served it (a null key for a model named directly), and the
+    # workspace it ran in.
+    by_channel: list[UsageGroupRow] = []
+    by_policy: list[UsageGroupRow] = []
+    by_workspace: list[UsageGroupRow] = []
     # Gateway-run tool spend. Empty when the window has none, and MCP tools are
     # excluded by design (their names are unbounded, see GATEWAY_TOOL_NAMES).
     by_tool: list[UsageToolRow] = []

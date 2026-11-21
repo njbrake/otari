@@ -70,20 +70,39 @@ budget has counted, the same figure as the sidebar. Point at a day, or focus the
 read it.
 
 **Where it went** then breaks the window's spend down by **People**,
-**API keys**, **Models**, **Providers** or **Workspaces** (offered when there is
-more than one workspace). Each row shows what it spent, its tokens and its share
-of the total; outside **Models**, it also shows its top model, and outside
-**Models** and **Providers** the spend limit it works under, with a meter and
-when the limit resets. A key's row also says when it was last used, and warns
-when it expires within 7 days. The five largest
-rows show first, and **Show all** lists the rest. A person's name opens their
-page (see [One person's spend](#one-persons-spend)). At the end of each row,
-**Sessions** opens its sessions over the same window, **Requests** a provider's
-requests, and **People** narrows the table to that workspace's people. A row's
-menu sets or changes its spend limit, and a key's row can be opened in
-**API keys**.
+**API keys**, **Models**, **Providers**, **Sessions** (the session label agent
+traffic carries; offered where the deployment records sessions), **Channels**
+(**API**, **Imported** or **Playground**), **Routing policies** (**Direct** for
+the requests that named a model), **Workspaces** (offered when there is more
+than one workspace) or **Tools**. Each row shows what it spent, and once any of
+the window's spend was not charged, **Charged** and **Not charged** apart; then
+its **Requests**, **Tokens**, **Failed** requests and **p95 latency**, and its
+share of the total. People, keys, providers and workspaces also show their top
+model, and people, keys and workspaces the spend limit they work under, with a
+meter and when the limit resets. A key's row also says when it was last used,
+and warns when it expires within 7 days.
 
-Above the table, a chart stacks each hour or day of the window from the
+Press a column's header to sort by it, and again to turn it around; on a phone,
+pick the order from **Sort by**. The sort is kept in the URL and decides which
+rows the server lists, so sorting by **Failed** shows the rows with the most
+failures even when they spent little. The p95 latency is read from the requests
+themselves and can arrive a moment after the rest. The five first rows show,
+and **Show all** lists the rest. A person's name opens their page (see
+[One person's spend](#one-persons-spend)). At the end of each row,
+**Sessions** opens its sessions over the same window, **Requests** its requests
+(providers, sessions, channels and policies), and **People** narrows the table
+to that workspace's people. A row's menu sets or changes its spend limit, opens
+its requests, opens the requests without it (people, keys, models and
+policies), and for a key opens it in **API keys**.
+
+**Tools** lists each tool Otari ran itself (web search, web fetch, code
+execution): its calls, failed calls and failure rate, what a call was billed on
+average and the total cost. Each row opens the requests that ran it. A
+deployment operator can set code execution's price per call from its row, and
+reach the Web search page, where each search and fetch tool is priced, from the
+others.
+
+Above the table (except for **Tools**), a chart stacks each hour or day of the window from the
 breakdown's four largest rows by spend and **Other** for the rest. It shows
 **Cost**, **Tokens** or **Requests**; when part of the window was not charged,
 **Include not charged** leaves that spend in or takes it out. Drag across the
@@ -109,9 +128,10 @@ there, their tokens and their sessions. Their **Needs attention** lists their
 own refused and failed requests of the last 24 hours and their own keys that
 expire within the week, and **Recent failures** lists their own failed
 requests.
-**Where it went** breaks their spend down by **API keys**, **Models** or
-**Providers**, with the same chart over it, and each row ends with **Sessions**,
-or **Requests** for a provider, which opens what it ran. **Month against the
+**Where it went** breaks their spend down by **API keys**, **Models**,
+**Providers**, **Sessions**, **Channels**, **Routing policies** or **Tools**,
+with the same columns, sorting and chart, and each row ends with **Sessions**,
+or **Requests** where Sessions cannot filter on it, which opens what it ran. **Month against the
 budget** reads their own charged spend, against the workspace's limit for each
 person when that resets monthly.
 Someone with no active key and no session yet is offered
@@ -139,12 +159,14 @@ figure's line says how much (**+$40.00 not charged**). The two add up to the
 **Spent** figure Home shows for them, which counts both.
 
 **Where it went** breaks their spend down by **Models**, **API keys**,
-**Providers** or **Sources**, the costliest first. Each row shows its requests,
-tokens and spend; once any of the window's spend is exempt, the spend is shown
-in two columns, **Budgeted** and **Exempt**. A key exempt from budget is marked
-**Exempt from budget**. Each row ends with **Sessions** (models and keys) or
-**Requests** (providers and sources), which opens what they ran on it over the
-same window.
+**Providers**, **Sources**, **Sessions**, **Channels** or **Routing policies**,
+the costliest first. Each row shows its spend, and once any of the window's
+spend was not charged, **Charged** and **Not charged** apart; then its requests,
+tokens, failed requests and p95 latency. Each column sorts the table, as on
+Home, and **Show all** lists past the first five. A key exempt from budget is
+marked **Exempt from budget**. Each row ends with **Sessions** (models and keys)
+or **Requests** (the others), which opens what they ran on it over the same
+window.
 
 ## Requests
 

@@ -13,6 +13,8 @@ const row = (overrides: Partial<UsageGroupRow>): UsageGroupRow => ({
   tokens: 0,
   requests: 0,
   is_other: false,
+  charged_cost: 0,
+  error_count: 0,
   ...overrides,
 })
 
@@ -29,6 +31,9 @@ function summary(overrides: Partial<UsageSummary> = {}): UsageSummary {
     by_source_label: [],
     by_endpoint: [],
     by_provider: [],
+    by_channel: [],
+    by_policy: [],
+    by_workspace: [],
     by_tool: [],
     by_tag: [],
     errors_by_status_code: [],
@@ -60,31 +65,53 @@ describe("splitTotals", () => {
 })
 
 describe("splitRows", () => {
-  it("joins a value's budgeted and exempt rows and sorts by their total", () => {
+  it("splits each value's spend into charged and not charged, the costliest first", () => {
     const rows = splitRows(
       "providers",
       summary({
         by_provider: [
-          row({ key: "openai", cost: 5, tokens: 100, requests: 2 }),
-          row({ key: "anthropic", cost: 1, tokens: 50, requests: 1 }),
-        ],
-      }),
-      summary({
-        by_provider: [
-          row({ key: "anthropic", cost: 9, tokens: 900, requests: 4 }),
+          row({
+            key: "anthropic",
+            cost: 10,
+            charged_cost: 1,
+            tokens: 950,
+            requests: 5,
+            error_count: 2,
+            p95_latency_ms: 900,
+          }),
+          row({
+            key: "openai",
+            cost: 5,
+            charged_cost: 5,
+            tokens: 100,
+            requests: 2,
+          }),
         ],
       }),
       [],
     )
     expect(
-      rows.map(({ id, budgeted, exempt, requests, tokens, filterValues }) => ({
-        id,
-        budgeted,
-        exempt,
-        requests,
-        tokens,
-        filterValues,
-      })),
+      rows.map(
+        ({
+          id,
+          budgeted,
+          exempt,
+          requests,
+          tokens,
+          failed,
+          p95,
+          filterValues,
+        }) => ({
+          id,
+          budgeted,
+          exempt,
+          requests,
+          tokens,
+          failed,
+          p95,
+          filterValues,
+        }),
+      ),
     ).toEqual([
       {
         id: "providers:anthropic",
@@ -92,6 +119,8 @@ describe("splitRows", () => {
         exempt: 9,
         requests: 5,
         tokens: 950,
+        failed: 2,
+        p95: 900,
         filterValues: ["anthropic"],
       },
       {
@@ -100,6 +129,8 @@ describe("splitRows", () => {
         exempt: 0,
         requests: 2,
         tokens: 100,
+        failed: 0,
+        p95: null,
         filterValues: ["openai"],
       },
     ])
@@ -115,12 +146,9 @@ describe("splitRows", () => {
             label: "GLM 5.3",
             model_group: "glm53",
             cost: 2,
+            charged_cost: 2,
             requests: 1,
           }),
-        ],
-      }),
-      summary({
-        by_model: [
           row({
             key: "zai-org/GLM-5.3",
             label: "GLM 5.3",
@@ -153,12 +181,12 @@ describe("splitRows", () => {
       "keys",
       summary({
         by_api_key: [
-          row({ key: "k-ci", cost: 4, requests: 3 }),
+          row({ key: "k-sub", cost: 20, requests: 9 }),
+          row({ key: "k-ci", cost: 4, charged_cost: 4, requests: 3 }),
           row({ key: "k-gone", label: "old-key", cost: 1, requests: 1 }),
           row({ key: null, cost: 0.5, requests: 1 }),
         ],
       }),
-      summary({ by_api_key: [row({ key: "k-sub", cost: 20, requests: 9 })] }),
       keys,
     )
     expect(
@@ -176,18 +204,31 @@ describe("splitRows", () => {
     ])
   })
 
+  it("names the requests with no session or no policy, which a filter can still ask for", () => {
+    const [none] = splitRows(
+      "policies",
+      summary({ by_policy: [row({ key: null, cost: 1, requests: 2 })] }),
+      [],
+    )
+    expect(none).toMatchObject({ name: "Direct", isNone: true })
+    const [session] = splitRows(
+      "sessions",
+      summary({ by_source_label: [row({ key: null, cost: 1, requests: 2 })] }),
+      [],
+    )
+    expect(session).toMatchObject({ name: "No session", isNone: true })
+  })
+
   it("keeps the fold last and leaves out values with nothing on them", () => {
     const rows = splitRows(
       "sources",
       summary({
         by_source: [
           row({ key: null, is_other: true, cost: 50, requests: 20 }),
+          row({ key: "claude_code", cost: 2, requests: 1 }),
           row({ key: "gateway", cost: 1, requests: 1 }),
           row({ key: "codex", cost: 0, requests: 0 }),
         ],
-      }),
-      summary({
-        by_source: [row({ key: "claude_code", cost: 2, requests: 1 })],
       }),
       [],
     )
@@ -199,8 +240,8 @@ describe("splitRows", () => {
     expect(rows.at(-1)?.filterValues).toEqual([])
   })
 
-  it("has no rows before either summary is read", () => {
-    expect(splitRows("models", undefined, undefined, [])).toEqual([])
+  it("has no rows before the summary is read", () => {
+    expect(splitRows("models", undefined, [])).toEqual([])
   })
 })
 

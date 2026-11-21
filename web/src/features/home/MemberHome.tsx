@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router"
 import { type ReactNode, useState } from "react"
-import { FiKey, FiLayers } from "react-icons/fi"
+import { FiKey, FiLayers, FiList, FiMinusCircle } from "react-icons/fi"
 import { RefreshButton } from "@/design-system/actions/RefreshButton"
 import { RowMenu, type RowMenuAction } from "@/design-system/actions/RowMenu"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
@@ -13,11 +13,16 @@ import { Sparkline } from "@/design-system/metrics/charts"
 import { KpiCell } from "@/design-system/metrics/KpiCell"
 import { KpiStrip } from "@/design-system/metrics/KpiStrip"
 import { TrendChip } from "@/design-system/metrics/TrendChip"
-import { Segmented } from "@/design-system/navigation/Segmented"
+import { FilterSelect } from "@/design-system/navigation/FilterSelect"
+import {
+  HOME_CUTS,
+  type HomeCut,
+  rowExclusion,
+  rowFilter,
+} from "@/features/home/breakdownCuts"
 import { FigureLinks } from "@/features/home/FigureLinks"
 import { failureSeverity, spendSplit } from "@/features/home/homeFigures"
 import {
-  GROUP_BY,
   HOME_CHART_URL,
   HomeWindowPicker,
   homeWindow,
@@ -42,6 +47,7 @@ import { RowOpenLink } from "@/features/home/RowOpenLink"
 import { ShareCell } from "@/features/home/ShareCell"
 import { ShareDialog } from "@/features/home/ShareDialog"
 import { shareCardOf } from "@/features/home/shareCard"
+import { ToolsBreakdown } from "@/features/home/ToolsBreakdown"
 import {
   UsageBreakdownChart,
   useBreakdownChart,
@@ -65,12 +71,23 @@ import {
 } from "@/features/spend/period"
 import { usePageClock } from "@/features/spend/usePageClock"
 import {
-  filterValues,
+  isFoldRow,
   type ReadState,
   readState,
   type SpendRow,
+  spendFigures,
   useSpend,
 } from "@/features/spend/useSpend"
+import {
+  BreakdownSortSelect,
+  breakdownFigureColumns,
+  breakdownSortProps,
+} from "@/features/usage/BreakdownColumns"
+import {
+  sortFromUrl,
+  sortRows,
+  sortToUrl,
+} from "@/features/usage/breakdownSort"
 import { TopModelCell } from "@/features/usage/TopModelCell"
 import { billedTokenTotal, cacheSums } from "@/features/usage/usageTotals"
 import { useTopModels } from "@/features/usage/useTopModels"
@@ -93,26 +110,25 @@ import {
 import { useUrlState } from "@/shared/helpers/urlState"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
 
-type Cut = "keys" | "models" | "providers"
+const CUTS = (
+  [
+    "keys",
+    "models",
+    "providers",
+    "sessions",
+    "channels",
+    "policies",
+    "tools",
+  ] satisfies HomeCut[]
+).map((one) => HOME_CUTS[one])
 
-const CUTS: {
-  value: Cut
-  label: string
-  noun: string
-  /** What the empty table says shows up in it once there is spend. */
-  each: string
-}[] = [
-  { value: "keys", label: "API keys", noun: "API key", each: "key you make" },
-  { value: "models", label: "Models", noun: "Model", each: "model you use" },
-  {
-    value: "providers",
-    label: "Providers",
-    noun: "Provider",
-    each: "provider you use",
-  },
-]
-
-const URL_DEFAULTS = { period: DEFAULT_PERIOD, by: "", ...HOME_CHART_URL }
+const URL_DEFAULTS = {
+  period: DEFAULT_PERIOD,
+  by: "",
+  sort: "",
+  order: "",
+  ...HOME_CHART_URL,
+}
 
 /**
  * Home for someone who uses the team rather than runs it: the owner's Home,
@@ -145,13 +161,20 @@ export function MemberHome({
 
   const period = periodFromUrl(get("period"))
   const window = homeWindow(period, get("start"), get("end"), now)
-  const cut = CUTS.find((one) => one.value === get("by")) ?? CUTS[0]
+  // A deployment that records no sessions serves no route to count them, and
+  // has none to open or to break spend down by.
+  const hasSurface = useSurfaces()
+  const hasSessions = hasSurface("traces")
+  const cuts = CUTS.filter((one) => one.value !== "sessions" || hasSessions)
+  const cut = cuts.find((one) => one.value === get("by")) ?? cuts[0]
+  const sort = sortFromUrl(get("sort"), get("order"))
 
   const spend = useSpend(window, {
     workspaceId,
     userId: me,
     isEnabled: me !== undefined,
     resetEndedAt: now,
+    breakdown: cut.dimension ? { dimension: cut.dimension, sort } : undefined,
   })
   const keys = useKeys(workspaceId)
   const attention = useMemberAttention({
@@ -170,13 +193,9 @@ export function MemberHome({
   })
   const members = useOrganizationMembers()
   const defaults = useWorkspaceBudgetDefaults(workspaceId)
-  // A deployment that records no sessions serves no route to count them, and
-  // has none to open.
-  const hasSurface = useSurfaces()
-  const hasSessions = hasSurface("traces")
-  // Sessions cannot filter on a provider, so a provider's row opens Requests.
-  const canOpenRows =
-    cut.value === "providers" ? hasSurface("usage") : hasSessions
+  // Sessions cannot filter on a provider and the cuts after it, so their
+  // rows open Requests.
+  const canOpenRows = cut.to === "/sessions" ? hasSessions : hasSurface("usage")
   const sessions = useTraceCount(
     {
       workspaceId,
@@ -189,13 +208,19 @@ export function MemberHome({
   )
   const ownKeys = new Map((keys.data ?? []).map((key) => [key.id, key]))
   // Rows the window spent on: keys with nothing spent are on Keys.
-  const rows: SpendRow[] = (
-    cut.value === "keys"
-      ? spend.keys
-      : cut.value === "providers"
-        ? spend.providers
-        : spend.models
-  )
+  const cutRows: Partial<Record<HomeCut, SpendRow[]>> = {
+    keys: spend.keys,
+    models: spend.models,
+    providers: spend.providers,
+    sessions: spend.sessions,
+    channels: spend.channels,
+    policies: spend.policies,
+  }
+  const rows: SpendRow[] = sortRows(cutRows[cut.value] ?? [], sort, {
+    figuresOf: spendFigures,
+    nameOf: (row) => row.name,
+    isLast: isFoldRow,
+  })
     .filter((row) => row.requests > 0 || row.cost > 0)
     .map((row) => {
       if (cut.value !== "keys") return row
@@ -208,9 +233,10 @@ export function MemberHome({
           : "Never used",
       }
     })
+  const hasTopModel = cut.value === "keys" || cut.value === "providers"
   const topModels = useTopModels({
-    rows,
-    cut: cut.value,
+    rows: hasTopModel ? rows : [],
+    cut: cut.value === "providers" ? "providers" : "keys",
     window,
     workspaceId,
     userId: me,
@@ -252,6 +278,7 @@ export function MemberHome({
   const words = windowWords(window)
   const isReading = !spend.totals && usage === "loading"
   const split = spendSplit(total, detail.charged)
+  const hasNotCharged = split !== undefined
   // Charged and not charged lead, and stay whole: they reconcile Spent with
   // the person page's Charged. Today's spend only where nothing else is said.
   const spentFacts = split
@@ -379,37 +406,55 @@ export function MemberHome({
     workspaceId,
     userId: me,
     isEnabled: me !== undefined && !isFirstRun,
-    groupBy: GROUP_BY[cut.value],
+    groupBy: cut.groupBy,
     labelOf: labelFromRows(rows),
     metric,
     isIncludingNotCharged,
     totals: spend.series,
   })
 
-  const openTo = cut.value === "providers" ? "/requests" : "/sessions"
+  const openTo = cut.to === "/sessions" ? "/sessions" : "/requests"
   const searchFor = (row: SpendRow) => ({
     ...mySessions,
-    [cut.value === "keys"
-      ? "api_key_id"
-      : cut.value === "providers"
-        ? "provider"
-        : "model"]: filterValues(row),
+    ...rowFilter(cut.value, row),
   })
-  const open = (row: SpendRow) => {
-    if (!row.filterKey) return
-    void navigate({ to: openTo, search: searchFor(row) })
+  const open = (row: SpendRow, to: "/sessions" | "/requests" = openTo) => {
+    if (!rowFilter(cut.value, row)) return
+    void navigate({ to, search: searchFor(row) })
   }
 
   const menuFor = (row: SpendRow): RowMenuAction[] => {
     const actions: RowMenuAction[] = []
-    if (row.filterKey && canOpenRows) {
+    if (rowFilter(cut.value, row) && canOpenRows) {
       actions.push({
         id: "open",
-        label:
-          cut.value === "providers" ? "See its requests" : "See its sessions",
+        label: openTo === "/requests" ? "See its requests" : "See its sessions",
         hint: `What ran ${words}`,
         icon: FiLayers,
         run: () => open(row),
+      })
+      if (openTo === "/sessions" && hasSurface("usage")) {
+        actions.push({
+          id: "requests",
+          label: "See its requests",
+          hint: "Requests, only this",
+          icon: FiList,
+          run: () => open(row, "/requests"),
+        })
+      }
+    }
+    const exclusion = rowExclusion(cut.value, row)
+    if (exclusion && hasSurface("usage")) {
+      actions.push({
+        id: "without",
+        label: "See requests without it",
+        hint: "Requests, this left out",
+        icon: FiMinusCircle,
+        run: () =>
+          void navigate({
+            to: "/requests",
+            search: { ...mySessions, ...exclusion },
+          }),
       })
     }
     if (cut.value === "keys" && canOpenInKeys(row.filterKey, keys.data ?? [])) {
@@ -452,9 +497,10 @@ export function MemberHome({
         ),
     },
     {
-      id: "spend",
+      id: "cost",
       header: "Spent",
       align: "end",
+      allowsSorting: true,
       cell: (row) => (
         <span className="text-mono-caption text-foreground">
           {formatUsd(row.cost)}
@@ -467,17 +513,12 @@ export function MemberHome({
         </span>
       ),
     },
-    {
-      id: "tokens",
-      header: "Tokens",
-      align: "end",
-      cell: (row) => (
-        <span className="text-mono-caption text-foreground">
-          {formatTokens(row.tokens)}
-        </span>
-      ),
-    },
-    ...(cut.value !== "models"
+    ...breakdownFigureColumns<SpendRow>({
+      figuresOf: spendFigures,
+      hasNotCharged,
+      isP95Loading: spend.breakdown.isLoading,
+    }),
+    ...(hasTopModel
       ? ([
           {
             id: "model",
@@ -509,11 +550,11 @@ export function MemberHome({
       align: "end",
       cell: (row) => (
         <span className="inline-flex items-center justify-end gap-3">
-          {canOpenRows && row.filterKey ? (
+          {canOpenRows && rowFilter(cut.value, row) ? (
             <RowOpenLink
               to={openTo}
               search={searchFor(row)}
-              label={cut.value === "providers" ? "Requests" : "Sessions"}
+              label={openTo === "/requests" ? "Requests" : "Sessions"}
               subject={row.name}
             />
           ) : null}
@@ -783,16 +824,21 @@ export function MemberHome({
       <section aria-label="Where it went" className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
           <h2 className="text-title">Where it went</h2>
-          <Segmented
-            label="Break down by"
-            size="md"
-            options={CUTS}
+          <FilterSelect
+            ariaLabel="Break down by"
             value={cut.value}
             onChange={(next) => patch({ by: next })}
-            isFullWidth={isMobile}
+            options={cuts}
           />
+          {isMobile && cut.value !== "tools" ? (
+            <BreakdownSortSelect
+              sort={sort}
+              onSort={(next) => patch(sortToUrl(next))}
+              hasNotCharged={hasNotCharged}
+            />
+          ) : null}
         </div>
-        {isFirstRun ? null : (
+        {isFirstRun || !cut.groupBy ? null : (
           <UsageBreakdownChart
             view={chartView}
             window={window}
@@ -807,26 +853,44 @@ export function MemberHome({
             onSelectSpan={(span) => patch(span)}
           />
         )}
-        <TableScrollFrame className="otari-breakdown otari-spend-table flex flex-col gap-2">
-          <DataTable
-            key={cut.value}
-            ariaLabel={`Your spend by ${cut.label.toLowerCase()}`}
-            columns={columns}
-            rows={rows}
-            getRowKey={(row) => row.id}
-            isLoading={spend.isLoading}
-            emptyContent={
-              <EmptyMessage>
-                {usage === "failed"
-                  ? "Could not load"
-                  : canCreateKey
-                    ? `${nothingYet} Each ${cut.each} shows up here with what it spent.`
-                    : nothingYet}
-              </EmptyMessage>
-            }
-            mobileLayout="cards"
+        {cut.value === "tools" ? (
+          <ToolsBreakdown
+            window={window}
+            workspaceId={workspaceId}
+            userId={me}
+            isEnabled={me !== undefined}
+            canOpen={hasSurface("usage")}
+            emptyText={nothingYet}
           />
-        </TableScrollFrame>
+        ) : (
+          <TableScrollFrame className="otari-breakdown otari-spend-table flex flex-col gap-2">
+            <DataTable
+              key={cut.value}
+              ariaLabel={`Your spend by ${cut.label.toLowerCase()}`}
+              columns={columns}
+              rows={rows}
+              getRowKey={(row) => row.id}
+              isLoading={
+                spend.isLoading ||
+                ((cut.value === "sessions" ||
+                  cut.value === "channels" ||
+                  cut.value === "policies") &&
+                  spend.breakdown.isLoading)
+              }
+              {...breakdownSortProps(sort, (next) => patch(sortToUrl(next)))}
+              emptyContent={
+                <EmptyMessage>
+                  {usage === "failed"
+                    ? "Could not load"
+                    : canCreateKey
+                      ? `${nothingYet} Each ${cut.each} shows up here with what it spent.`
+                      : nothingYet}
+                </EmptyMessage>
+              }
+              mobileLayout="cards"
+            />
+          </TableScrollFrame>
+        )}
         {rows.length > 0 && cut.value === "keys" && canCreateKey ? (
           <p className="text-sm text-muted">
             Keys that spent nothing {words} are on{" "}

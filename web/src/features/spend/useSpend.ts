@@ -1,9 +1,11 @@
 import type {
   ApiKey,
+  BreakdownDimension,
   OrganizationMember,
   OrganizationSpendCeiling,
   UsageGroupRow,
   UsageSeriesPoint,
+  UsageSummary,
   UsageTotals,
 } from "@/client"
 import { keyState } from "@/features/keys/keyList"
@@ -21,6 +23,10 @@ import {
 } from "@/features/spend/limits"
 import { keyName, memberName } from "@/features/spend/names"
 import { type SpendWindow, usageRange } from "@/features/spend/period"
+import type {
+  BreakdownFigures,
+  BreakdownSort,
+} from "@/features/usage/breakdownSort"
 import { groupModels, OTHER } from "@/features/usage/modelGroups"
 import { billedTokenTotal } from "@/features/usage/usageTotals"
 import { useKeys } from "@/shared/api/apiKeys"
@@ -54,6 +60,14 @@ export interface SpendRow {
   cost: number
   requests: number
   tokens: number
+  /** The part of `cost` that counted toward a budget. */
+  charged: number
+  /** Failed requests. */
+  failed: number
+  /** The 95th-percentile latency, null where none was read or recorded. */
+  p95: number | null
+  /** The requests that recorded no value for the cut: no session, no policy. */
+  isNone?: boolean
   limits: RowLimits
   /** What a limit set from this row lands on; null where none can be set. */
   target: LimitTarget | null
@@ -100,6 +114,30 @@ const hasFold = (usage: readonly UsageGroupRow[]) =>
 const bySpend = (a: SpendRow, b: SpendRow) =>
   b.cost - a.cost || a.name.localeCompare(b.name)
 
+/** A usage row's figures beyond spend, tokens and requests; zero for a spender with none. */
+const figuresFrom = (row: UsageGroupRow | undefined) => ({
+  charged: row?.charged_cost ?? 0,
+  failed: row?.error_count ?? 0,
+  p95: row?.p95_latency_ms ?? null,
+})
+
+/** The figures a table sorts a row by, or none while they are unknown. */
+export function spendFigures(row: SpendRow): BreakdownFigures | undefined {
+  if (row.isUnread || row.isFolded) return undefined
+  return {
+    cost: row.cost,
+    charged: row.charged,
+    tokens: row.tokens,
+    requests: row.requests,
+    failed: row.failed,
+    p95: row.p95,
+  }
+}
+
+/** Whether a row is the server's fold of its smallest groups. */
+export const isFoldRow = (row: SpendRow) =>
+  row.id.endsWith(":other") && row.filterKey === null && !row.isNone
+
 /**
  * One row per active member, then one per spender the roster does not hold.
  * `isUnread`: the usage read has not answered, so no figure is known.
@@ -131,6 +169,7 @@ export function peopleRows(
         cost: row?.cost ?? 0,
         requests: row?.requests ?? 0,
         tokens: row?.tokens ?? 0,
+        ...figuresFrom(row),
         limits,
         workspaceIds: (member.workspaces ?? []).map(
           (place) => place.workspace_id,
@@ -167,6 +206,7 @@ export function peopleRows(
       cost: row.cost,
       requests: row.requests,
       tokens: row.tokens,
+      ...figuresFrom(row),
       limits: isNobody || isRosterRead ? NO_LIMITS : UNKNOWN_LIMITS,
       target: null,
     })
@@ -213,6 +253,7 @@ export function keyRows(
       cost: row?.cost ?? 0,
       requests: row?.requests ?? 0,
       tokens: row?.tokens ?? 0,
+      ...figuresFrom(row),
       limits,
       workspaceIds: [key.workspace_id],
       isUnread,
@@ -237,6 +278,7 @@ export function keyRows(
       cost: row.cost,
       requests: row.requests,
       tokens: row.tokens,
+      ...figuresFrom(row),
       limits: row.is_other || row.key === null ? NO_LIMITS : limitsFor(row.key),
       target: null,
     })
@@ -265,9 +307,11 @@ function breakdownRows(
           : `${kind}:${row.key}`,
       filterKey: row.is_other ? null : row.key,
       ...(row.is_other ? { name: OTHER } : named(row.key)),
+      isNone: !row.is_other && row.key === null,
       cost: row.cost,
       requests: row.requests,
       tokens: row.tokens,
+      ...figuresFrom(row),
       limits: NO_LIMITS,
       target: null,
     }))
@@ -286,6 +330,9 @@ export function modelRows(usage: readonly UsageGroupRow[]): SpendRow[] {
       cost: model.cost,
       requests: model.requests,
       tokens: model.tokens,
+      charged: model.charged,
+      failed: model.failed,
+      p95: model.p95,
       limits: NO_LIMITS,
       target: null,
     }))
@@ -307,6 +354,35 @@ export function providerRows(usage: readonly UsageGroupRow[]): SpendRow[] {
   )
 }
 
+/** One row per session (`source_label`), the requests that named none as one row. */
+export function sessionRows(usage: readonly UsageGroupRow[]): SpendRow[] {
+  return breakdownRows(usage, "session", (key) =>
+    key === null ? { name: "No session" } : { name: key },
+  )
+}
+
+const CHANNEL_NAMES: Record<string, string> = {
+  api: "API",
+  imported: "Imported",
+  playground: "Playground",
+}
+
+/** One row per way requests came in: the API, imported usage, the Playground. */
+export function channelRows(usage: readonly UsageGroupRow[]): SpendRow[] {
+  return breakdownRows(usage, "channel", (key) => ({
+    name: key === null ? "Unknown" : (CHANNEL_NAMES[key] ?? key),
+  }))
+}
+
+/** One row per routing policy, and one for the requests that named a model directly. */
+export function policyRows(usage: readonly UsageGroupRow[]): SpendRow[] {
+  return breakdownRows(usage, "policy", (key) =>
+    key === null
+      ? { name: "Direct", detail: "No routing policy" }
+      : { name: key },
+  )
+}
+
 /** What a row's filter takes: a model's every id, else its one key. */
 export function filterValues(row: SpendRow): string[] {
   return row.spellings ?? (row.filterKey === null ? [] : [row.filterKey])
@@ -321,6 +397,17 @@ export interface Spend {
   keys: SpendRow[]
   models: SpendRow[]
   providers: SpendRow[]
+  sessions: SpendRow[]
+  channels: SpendRow[]
+  policies: SpendRow[]
+  /** The breakdown read's workspace rows, by workspace id, for a workspace table's figures. */
+  workspaceFigures: Map<string, UsageGroupRow>
+  /**
+   * The breakdown the page shows, read on its own with each group's p95 and
+   * ranked by the table's sort. Until it answers, its rows are the main read's,
+   * which carry no p95 (`isLoading`).
+   */
+  breakdown: { isLoading: boolean; error: unknown }
   /** The organization's own limit, with its edit target for a manager. */
   organization: { limits: RowLimits; target: LimitTarget | null }
   /** Every ceiling a manager may read; empty for anyone else. */
@@ -334,6 +421,35 @@ export interface Spend {
   error: unknown
 }
 
+/** The summary field each breakdown fills. */
+const FIELDS: Record<
+  BreakdownDimension,
+  keyof Pick<
+    UsageSummary,
+    | "by_model"
+    | "by_user"
+    | "by_api_key"
+    | "by_source"
+    | "by_source_label"
+    | "by_endpoint"
+    | "by_provider"
+    | "by_channel"
+    | "by_policy"
+    | "by_workspace"
+  >
+> = {
+  model: "by_model",
+  user: "by_user",
+  api_key: "by_api_key",
+  source: "by_source",
+  source_label: "by_source_label",
+  endpoint: "by_endpoint",
+  provider: "by_provider",
+  channel: "by_channel",
+  policy: "by_policy",
+  workspace: "by_workspace",
+}
+
 export function useSpend(
   window: SpendWindow,
   {
@@ -342,8 +458,11 @@ export function useSpend(
     isEnabled = true,
     resetEndedAt,
     withPrevious = true,
+    breakdown,
   }: {
     workspaceId?: string
+    /** The breakdown a table shows and how it is sorted, read with its p95. */
+    breakdown?: { dimension: BreakdownDimension; sort: BreakdownSort }
     /** Narrows every figure to one person: their keys, their models. */
     userId?: string
     isEnabled?: boolean
@@ -380,6 +499,22 @@ export function useSpend(
     isEnabled && withPrevious,
     "organization",
   )
+  const cutRead = useUsageSummary(
+    { ...scope, ...usageRange(window) },
+    window.bucket,
+    breakdown ? [breakdown.dimension] : NO_BREAKDOWNS,
+    isEnabled && breakdown !== undefined,
+    "organization",
+    {
+      p95By: breakdown?.dimension,
+      rank: breakdown
+        ? { by: breakdown.sort.key, order: breakdown.sort.order }
+        : undefined,
+    },
+  )
+  // Another sort's or breakdown's answer is held while this one loads; its
+  // groups may not be this one's.
+  const cut = cutRead.isPlaceholderData ? undefined : cutRead.data
   const members = useOrganizationMembers()
   const keys = useKeys()
   // Owners and admins only: anyone else is refused the read, so it is not made.
@@ -405,6 +540,11 @@ export function useSpend(
   }
 
   const summary = current.data
+  /** A breakdown's rows: the breakdown read's where it is the one shown and has answered. */
+  const usageOf = (dimension: BreakdownDimension): UsageGroupRow[] =>
+    (breakdown?.dimension === dimension && cut
+      ? cut[FIELDS[dimension]]
+      : summary?.[FIELDS[dimension]]) ?? []
   const organizationId = context?.organization?.id
   const organizationLimits = limitsOf("organization", organizationId)
   const priorCost = previous.data?.totals.cost ?? 0
@@ -419,7 +559,7 @@ export function useSpend(
         : undefined,
     series: summary?.series ?? [],
     people: peopleRows(
-      summary?.by_user ?? [],
+      usageOf("user"),
       memberList,
       (member) =>
         reads.limits === "ready"
@@ -429,15 +569,27 @@ export function useSpend(
       { isUnread, isRosterRead: reads.roster === "ready" },
     ),
     keys: keyRows(
-      summary?.by_api_key ?? [],
+      usageOf("api_key"),
       keys.data ?? [],
       (key) => (key.user_id ? nameByUser.get(key.user_id) : "No owner"),
       (id) => limitsOf("api_token", id),
       canSetLimits,
       { isUnread, now: resetEndedAt },
     ),
-    models: modelRows(summary?.by_model ?? []),
-    providers: providerRows(summary?.by_provider ?? []),
+    models: modelRows(usageOf("model")),
+    providers: providerRows(usageOf("provider")),
+    sessions: sessionRows(usageOf("source_label")),
+    channels: channelRows(usageOf("channel")),
+    policies: policyRows(usageOf("policy")),
+    workspaceFigures: new Map(
+      usageOf("workspace")
+        .filter((row) => !row.is_other && row.key !== null)
+        .map((row) => [row.key as string, row]),
+    ),
+    breakdown: {
+      isLoading: breakdown !== undefined && cut === undefined,
+      error: cutRead.error,
+    },
     organization: {
       limits: organizationLimits,
       target:
@@ -521,6 +673,9 @@ export function useWorkspaceSpend(
         requests: summary?.request_count ?? 0,
         // Billed tokens, cache reads included, as the other breakdowns count.
         tokens: billedTokenTotal(summary) ?? 0,
+        charged: summary?.charged_cost ?? 0,
+        failed: summary?.error_count ?? 0,
+        p95: null,
         limits,
         byModel: summaries[index].data?.by_model,
         isUnread: summary === undefined,

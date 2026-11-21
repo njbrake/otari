@@ -31,6 +31,8 @@ const group = (overrides: Partial<UsageGroupRow>): UsageGroupRow => ({
   tokens: 10,
   requests: 1,
   is_other: false,
+  charged_cost: 0,
+  error_count: 0,
   ...overrides,
 })
 

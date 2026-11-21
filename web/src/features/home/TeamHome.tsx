@@ -1,6 +1,13 @@
 import { Link, useNavigate } from "@tanstack/react-router"
 import { type ReactNode, useState } from "react"
-import { FiDollarSign, FiKey, FiLayers, FiUsers } from "react-icons/fi"
+import {
+  FiDollarSign,
+  FiKey,
+  FiLayers,
+  FiList,
+  FiMinusCircle,
+  FiUsers,
+} from "react-icons/fi"
 import type { ApiKey, UsageSummary } from "@/client"
 import { RefreshButton } from "@/design-system/actions/RefreshButton"
 import { RowMenu, type RowMenuAction } from "@/design-system/actions/RowMenu"
@@ -21,6 +28,12 @@ import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { Segmented } from "@/design-system/navigation/Segmented"
 import { MemberAvatar } from "@/features/account/avatar/MemberAvatar"
 import { breakdownCut } from "@/features/home/breakdownCut"
+import {
+  HOME_CUTS,
+  type HomeCut,
+  rowExclusion,
+  rowFilter,
+} from "@/features/home/breakdownCuts"
 import { ceilingCounter, monthlyCap } from "@/features/home/budgetMonth"
 import { busiestWorkspace } from "@/features/home/busiestWorkspace"
 import { FigureLinks } from "@/features/home/FigureLinks"
@@ -32,7 +45,6 @@ import {
   spendSplit,
 } from "@/features/home/homeFigures"
 import {
-  GROUP_BY,
   HOME_CHART_URL,
   HomeWindowPicker,
   homeWindow,
@@ -48,6 +60,7 @@ import { ShareCell } from "@/features/home/ShareCell"
 import { ShareDialog } from "@/features/home/ShareDialog"
 import { shareCardOf } from "@/features/home/shareCard"
 import { TeamAttentionBand } from "@/features/home/TeamAttentionBand"
+import { ToolsBreakdown } from "@/features/home/ToolsBreakdown"
 import {
   UsageBreakdownChart,
   useBreakdownChart,
@@ -79,17 +92,31 @@ import {
 import { SetLimitDialog } from "@/features/spend/SetLimitDialog"
 import { usePageClock } from "@/features/spend/usePageClock"
 import {
-  filterValues,
+  isFoldRow,
+  readState,
   type SpendRow,
+  spendFigures,
   useSpend,
   useWorkspaceSpend,
 } from "@/features/spend/useSpend"
 import { WorkspaceDefaultLimit } from "@/features/spend/WorkspaceDefaultLimit"
+import {
+  BreakdownSortSelect,
+  breakdownFigureColumns,
+  breakdownSortProps,
+} from "@/features/usage/BreakdownColumns"
+import {
+  type BreakdownSort,
+  sortFromUrl,
+  sortRows,
+  sortToUrl,
+} from "@/features/usage/breakdownSort"
 import { TopModelCell } from "@/features/usage/TopModelCell"
 import { billedTokenTotal, cacheSums } from "@/features/usage/usageTotals"
 import { useTopModels } from "@/features/usage/useTopModels"
 import { useKeys } from "@/shared/api/apiKeys"
 import { apiFetch } from "@/shared/api/client"
+import { useOrganizationMembers } from "@/shared/api/organizations"
 import { useTraceCount } from "@/shared/api/traces"
 import { useUsageScope } from "@/shared/api/usage"
 import { useWorkspaces } from "@/shared/api/workspaces"
@@ -109,61 +136,40 @@ import { useSurfaces } from "@/shared/hooks/useDeployment"
 /** Rows shown before the rest folds behind "Show all". */
 const TOP_ROWS = 5
 
-type Cut = "people" | "keys" | "models" | "providers" | "workspaces"
-
-const CUTS: {
-  value: Cut
-  label: string
-  /** The first column's head. */
-  noun: string
-  /** What "Show all 19 …" counts. */
-  plural: string
-  /**
-   * The filter a row opens on, where a row is one: Sessions', or Requests' for
-   * a provider, which Sessions cannot filter on.
-   */
-  filter?: "user_id" | "api_key_id" | "model" | "provider"
-}[] = [
-  {
-    value: "people",
-    label: "People",
-    noun: "Person",
-    plural: "people",
-    filter: "user_id",
-  },
-  {
-    value: "keys",
-    label: "API keys",
-    noun: "API key",
-    plural: "API keys",
-    filter: "api_key_id",
-  },
-  {
-    value: "models",
-    label: "Models",
-    noun: "Model",
-    plural: "models",
-    filter: "model",
-  },
-  {
-    value: "providers",
-    label: "Providers",
-    noun: "Provider",
-    plural: "providers",
-    filter: "provider",
-  },
-  {
-    value: "workspaces",
-    label: "Workspaces",
-    noun: "Workspace",
-    plural: "workspaces",
-  },
+/** The cuts in the order the picker lists them; Workspaces only where there are several. */
+const CUT_ORDER: HomeCut[] = [
+  "people",
+  "keys",
+  "models",
+  "providers",
+  "sessions",
+  "channels",
+  "policies",
+  "workspaces",
+  "tools",
 ]
+
+/** The cuts whose rows have a limit to show. */
+const LIMIT_CUTS: ReadonlySet<HomeCut> = new Set([
+  "people",
+  "keys",
+  "workspaces",
+])
+
+/** The cuts whose rows are asked for their top model. */
+const TOP_MODEL_CUTS: ReadonlySet<HomeCut> = new Set([
+  "people",
+  "keys",
+  "providers",
+  "workspaces",
+])
 
 const URL_DEFAULTS = {
   period: DEFAULT_PERIOD,
   by: "",
   workspace: "",
+  sort: "",
+  order: "",
   ...HOME_CHART_URL,
 }
 
@@ -334,29 +340,47 @@ export function TeamHome({
   const workspaceId = get("workspace")
   const hasWorkspaces = (workspaces.data?.length ?? 0) > 1
 
-  const spend = useSpend(window, {
-    workspaceId: workspaceId || undefined,
-    resetEndedAt: now,
-  })
-  const members = spend.people.filter((row) => row.isMember)
+  // A deployment that records no sessions serves no route to count them, and
+  // has none to open or to break spend down by.
+  const hasSurface = useSurfaces()
+  const cuts = CUT_ORDER.filter(
+    (one) =>
+      (one !== "workspaces" || hasWorkspaces) &&
+      (one !== "sessions" || hasSurface("traces")),
+  ).map((one) => HOME_CUTS[one])
   // Alone in the organization, "who spent it" has one answer: lead with keys.
-  const isTeam = members.length > 1
-  const cuts = CUTS.filter((one) => one.value !== "workspaces" || hasWorkspaces)
+  // Read off the roster `useSpend` reads, so the breakdown it asks for is known
+  // before it is called.
+  const roster = useOrganizationMembers()
   const shownCut = breakdownCut({
     chosen: cuts.find((one) => one.value === get("by"))?.value,
-    roster: spend.reads.roster,
-    isTeam,
+    roster: readState(roster),
+    isTeam:
+      (roster.data ?? []).filter((member) => member.status === "active")
+        .length > 1,
   })
   // Until there is one, the table under it is loading whichever it is.
   const cut =
     cuts.find((one) => one.value === shownCut) ??
     cuts.find((one) => one.value === "keys") ??
     cuts[0]
+  const sort = sortFromUrl(get("sort"), get("order"))
+  const onSort = (next: BreakdownSort) => {
+    setShowingAll(false)
+    patch(sortToUrl(next))
+  }
+  const spend = useSpend(window, {
+    workspaceId: workspaceId || undefined,
+    resetEndedAt: now,
+    breakdown:
+      shownCut !== undefined && cut.dimension
+        ? { dimension: cut.dimension, sort }
+        : undefined,
+  })
+  const members = spend.people.filter((row) => row.isMember)
+  const isTeam = members.length > 1
   const byWorkspace = useWorkspaceSpend(window, cut.value === "workspaces", now)
-  // A deployment that records no sessions serves no route to count them, and
-  // has none to open. Over the page's own scope: a workspace it picked, or
-  // every one.
-  const hasSurface = useSurfaces()
+  // Over the page's own scope: a workspace it picked, or every one.
   const hasSessions = hasSurface("traces")
   const hasRequests = hasSurface("usage")
   const detail = useSpendDetail({ window, now, workspaceId })
@@ -371,18 +395,47 @@ export function TeamHome({
   )
 
   const total = spend.totals?.cost ?? 0
-  const rows: SpendRow[] =
-    cut.value === "people"
-      ? spend.people
-      : cut.value === "keys"
-        ? spend.keys
-        : cut.value === "models"
-          ? spend.models
-          : cut.value === "providers"
-            ? spend.providers
-            : byWorkspace.rows
+  // Charged and not charged get columns of their own once any is not charged.
+  const hasNotCharged = spendSplit(total, detail.charged) !== undefined
+  // A workspace's figures beyond its spend are the breakdown read's.
+  const workspaceRows = byWorkspace.rows.map((row) => {
+    const figures = row.filterKey
+      ? spend.workspaceFigures.get(row.filterKey)
+      : undefined
+    return figures
+      ? {
+          ...row,
+          charged: figures.charged_cost,
+          failed: figures.error_count,
+          p95: figures.p95_latency_ms ?? null,
+        }
+      : row
+  })
+  const cutRows: Record<HomeCut, SpendRow[]> = {
+    people: spend.people,
+    keys: spend.keys,
+    models: spend.models,
+    providers: spend.providers,
+    sessions: spend.sessions,
+    channels: spend.channels,
+    policies: spend.policies,
+    workspaces: workspaceRows,
+    tools: [],
+  }
+  const rows = sortRows(cutRows[cut.value], sort, {
+    figuresOf: spendFigures,
+    nameOf: (row) => row.name,
+    isLast: isFoldRow,
+  })
+  // The cuts the main read holds no rows for wait on the breakdown read.
+  const isOwnRead =
+    cut.value === "sessions" ||
+    cut.value === "channels" ||
+    cut.value === "policies"
   const isLoading =
-    cut.value === "workspaces" ? byWorkspace.isLoading : spend.isLoading
+    cut.value === "workspaces"
+      ? byWorkspace.isLoading
+      : spend.isLoading || (isOwnRead && spend.breakdown.isLoading)
   // A workspace's own total is the whole organization's when none is picked.
   const tableTotal =
     cut.value === "workspaces"
@@ -392,9 +445,17 @@ export function TeamHome({
   const isTotalKnown = !rows.some((row) => row.isUnread)
   const visible = isShowingAll ? rows : rows.slice(0, TOP_ROWS)
   const hidden = rows.length - visible.length
+  const hasTopModel = TOP_MODEL_CUTS.has(cut.value)
   const topModels = useTopModels({
-    rows: visible,
-    cut: cut.value,
+    rows: hasTopModel ? visible : [],
+    cut:
+      cut.value === "workspaces"
+        ? "workspaces"
+        : cut.value === "providers"
+          ? "providers"
+          : cut.value === "keys"
+            ? "keys"
+            : "people",
     window,
     workspaceId,
   })
@@ -407,7 +468,7 @@ export function TeamHome({
   // requests, and anything else its sessions.
   const canOpenRows =
     cut.value === "workspaces" ||
-    (cut.value === "providers" ? hasRequests : hasSessions)
+    (cut.to === "/sessions" ? hasSessions : hasRequests)
 
   /**
    * Sessions lists one workspace, so a row opens in the workspace its
@@ -420,7 +481,7 @@ export function TeamHome({
     // candidate; a person's or a key's are the ones they are in.
     const candidates =
       row.workspaceIds ?? (workspaces.data ?? []).map((one) => one.id)
-    const { filter } = cut
+    const filter = rowFilter(cut.value, row)
     if (candidates.length <= 1 || !filter) return candidates[0]
     const costs = await Promise.all(
       candidates.map((candidate) => {
@@ -430,7 +491,11 @@ export function TeamHome({
           bucket: "day",
           dimensions: "none",
         })
-        for (const value of filterValues(row)) params.append(filter, value)
+        for (const [name, value] of Object.entries(filter)) {
+          for (const one of typeof value === "string" ? [value] : value) {
+            params.append(name, one)
+          }
+        }
         return apiFetch<UsageSummary>(`${usageScope.base}/summary?${params}`)
           .then((summary) => summary.totals.cost)
           .catch(() => undefined)
@@ -447,25 +512,34 @@ export function TeamHome({
           workspace: row.filterKey ?? "",
           by: "people",
         }
-      : cut.filter
-        ? { ...sessionsSearchFor(window), [cut.filter]: filterValues(row) }
-        : {}
+      : { ...sessionsSearchFor(window), ...rowFilter(cut.value, row) }
 
-  const open = async (row: SpendRow) => {
+  const open = async (
+    row: SpendRow,
+    to: "/sessions" | "/requests" = cut.to === "/sessions"
+      ? "/sessions"
+      : "/requests",
+  ) => {
     if (cut.value === "workspaces") {
       // A workspace opens as its own people, which is the next question.
       patch({ workspace: row.filterKey ?? "", by: "people" })
       return
     }
-    if (!cut.filter || !row.filterKey) return
+    const filter = rowFilter(cut.value, row)
+    if (!filter) return
     const target = await workspaceFor(row)
     if (target) select(target)
+    void navigate({ to, search: { ...sessionsSearchFor(window), ...filter } })
+  }
+
+  /** Requests without a row's value, over the page's scope. */
+  const openWithout = (row: SpendRow) => {
+    const exclusion = rowExclusion(cut.value, row)
+    if (!exclusion) return
+    pointShell?.()
     void navigate({
-      to: cut.value === "providers" ? "/requests" : "/sessions",
-      search: {
-        ...sessionsSearchFor(window),
-        [cut.filter]: filterValues(row),
-      },
+      to: "/requests",
+      search: { ...sessionsSearchFor(window), ...exclusion },
     })
   }
 
@@ -495,18 +569,38 @@ export function TeamHome({
         icon: FiUsers,
         run: () => void open(row),
       })
-    } else if (row.filterKey && canOpenRows) {
+    } else if (rowFilter(cut.value, row) && canOpenRows) {
+      const isSessions = cut.to === "/sessions"
       actions.push({
         id: "open",
         label:
           cut.value === "people"
             ? "See their sessions"
-            : cut.value === "providers"
-              ? "See its requests"
-              : "See its sessions",
+            : isSessions
+              ? "See its sessions"
+              : "See its requests",
         hint: `What ran ${windowWords(window)}`,
         icon: FiLayers,
         run: () => void open(row),
+      })
+      if (isSessions && hasRequests) {
+        actions.push({
+          id: "requests",
+          label:
+            cut.value === "people" ? "See their requests" : "See its requests",
+          hint: "Requests, only this",
+          icon: FiList,
+          run: () => void open(row, "/requests"),
+        })
+      }
+    }
+    if (canOpenCounts && rowExclusion(cut.value, row)) {
+      actions.push({
+        id: "without",
+        label: "See requests without it",
+        hint: "Requests, this left out",
+        icon: FiMinusCircle,
+        run: () => openWithout(row),
       })
     }
     // Only a key the caller's keys endpoint lists, which is every key for the
@@ -529,21 +623,16 @@ export function TeamHome({
 
   /** What a row ran, named on the row, or nothing for a row that is no one spender. */
   const openLink = (row: SpendRow) =>
-    canOpenRows && row.filterKey ? (
+    canOpenRows &&
+    (cut.value === "workspaces" ? row.filterKey : rowFilter(cut.value, row)) ? (
       <span className="flex">
         <RowOpenLink
-          to={
-            cut.value === "workspaces"
-              ? "/"
-              : cut.value === "providers"
-                ? "/requests"
-                : "/sessions"
-          }
+          to={cut.to}
           search={searchFor(row)}
           label={
             cut.value === "workspaces"
               ? "People"
-              : cut.value === "providers"
+              : cut.to === "/requests"
                 ? "Requests"
                 : "Sessions"
           }
@@ -600,9 +689,10 @@ export function TeamHome({
       ),
     },
     {
-      id: "spend",
+      id: "cost",
       header: "Spent",
       align: "end",
+      allowsSorting: true,
       cell: (row) => (
         <span className="text-mono-caption text-foreground">
           {row.isUnread || row.isFolded ? "—" : formatUsd(row.cost)}
@@ -615,17 +705,12 @@ export function TeamHome({
         </span>
       ),
     },
-    {
-      id: "tokens",
-      header: "Tokens",
-      align: "end",
-      cell: (row) => (
-        <span className="text-mono-caption text-foreground">
-          {row.isUnread || row.isFolded ? "—" : formatTokens(row.tokens)}
-        </span>
-      ),
-    },
-    ...(cut.value !== "models"
+    ...breakdownFigureColumns<SpendRow>({
+      figuresOf: spendFigures,
+      hasNotCharged,
+      isP95Loading: spend.breakdown.isLoading,
+    }),
+    ...(hasTopModel
       ? ([
           {
             id: "model",
@@ -659,7 +744,7 @@ export function TeamHome({
         ] satisfies DataTableColumn<SpendRow>[])),
     // A provider's limit is set on a stored key, not on the name a request
     // records, so no row here has one to show.
-    ...(cut.value !== "models" && cut.value !== "providers"
+    ...(LIMIT_CUTS.has(cut.value)
       ? ([
           {
             id: "limit",
@@ -740,7 +825,7 @@ export function TeamHome({
     colorWindow: windowOf(period, now),
     now,
     workspaceId,
-    groupBy: shownCut === undefined ? undefined : GROUP_BY[cut.value],
+    groupBy: shownCut === undefined ? undefined : cut.groupBy,
     labelOf: labelFromRows(rows),
     metric,
     isIncludingNotCharged,
@@ -858,6 +943,7 @@ export function TeamHome({
       <ErrorBanner
         error={
           spend.error ??
+          spend.breakdown.error ??
           (cut.value === "workspaces" ? byWorkspace.error : undefined)
         }
       />
@@ -1064,9 +1150,16 @@ export function TeamHome({
                 onChange={pickCut}
               />
             )}
+            {isMobile && cut.value !== "tools" && shownCut !== undefined ? (
+              <BreakdownSortSelect
+                sort={sort}
+                onSort={onSort}
+                hasNotCharged={hasNotCharged}
+              />
+            ) : null}
           </div>
         </div>
-        {shownCut !== undefined ? (
+        {shownCut !== undefined && cut.groupBy ? (
           <UsageBreakdownChart
             view={chartView}
             window={window}
@@ -1082,32 +1175,53 @@ export function TeamHome({
           />
         ) : null}
         {isTeam && cut.value === "people" ? <WorkspaceDefaultLimit /> : null}
-        <TableScrollFrame className="otari-breakdown otari-spend-table flex flex-col gap-2">
-          {/* Which columns is the roster's answer, so none show before it. */}
-          {shownCut === undefined ? (
-            <PageLoading />
-          ) : (
-            <DataTable
-              key={cut.value}
-              ariaLabel={`Spend by ${cut.label.toLowerCase()}`}
-              columns={columns}
-              rows={isLoading ? [] : visible}
-              getRowKey={(row) => row.id}
-              isLoading={isLoading}
-              emptyContent={
-                <EmptyMessage>
-                  {isTableFailed
-                    ? "Could not load"
-                    : period === "6m"
-                      ? "Nothing was spent in this window."
-                      : "Nothing was spent in this window. Pick a longer one above."}
-                </EmptyMessage>
-              }
-              mobileLayout="cards"
-            />
-          )}
-        </TableScrollFrame>
-        {!isLoading && hidden > 0 ? (
+        {cut.value === "tools" ? (
+          <ToolsBreakdown
+            window={window}
+            workspaceId={workspaceId}
+            canOpen={canOpenCounts}
+            onOpen={
+              pointShell
+                ? (tool) => {
+                    pointShell()
+                    void navigate({
+                      to: "/requests",
+                      search: { ...sessionsSearchFor(window), tool },
+                    })
+                  }
+                : undefined
+            }
+            emptyText="No gateway tool ran in this window."
+          />
+        ) : (
+          <TableScrollFrame className="otari-breakdown otari-spend-table flex flex-col gap-2">
+            {/* Which columns is the roster's answer, so none show before it. */}
+            {shownCut === undefined ? (
+              <PageLoading />
+            ) : (
+              <DataTable
+                key={cut.value}
+                ariaLabel={`Spend by ${cut.label.toLowerCase()}`}
+                columns={columns}
+                rows={isLoading ? [] : visible}
+                getRowKey={(row) => row.id}
+                isLoading={isLoading}
+                {...breakdownSortProps(sort, onSort)}
+                emptyContent={
+                  <EmptyMessage>
+                    {isTableFailed
+                      ? "Could not load"
+                      : period === "6m"
+                        ? "Nothing was spent in this window."
+                        : "Nothing was spent in this window. Pick a longer one above."}
+                  </EmptyMessage>
+                }
+                mobileLayout="cards"
+              />
+            )}
+          </TableScrollFrame>
+        )}
+        {cut.value !== "tools" && !isLoading && hidden > 0 ? (
           <button
             type="button"
             onClick={() => setShowingAll(true)}

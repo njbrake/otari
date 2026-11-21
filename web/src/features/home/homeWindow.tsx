@@ -52,8 +52,14 @@ export function labelFromRows(
   for (const row of rows) {
     for (const value of filterValues(row)) names.set(value, row.name)
   }
+  // The requests that recorded no value: no session, no routing policy.
+  const none = rows.find((row) => row.isNone)?.name
   return (group) =>
-    (group.key !== null ? names.get(group.key) : undefined) ??
+    (group.key !== null
+      ? names.get(group.key)
+      : group.is_other
+        ? undefined
+        : none) ??
     group.label ??
     group.key ??
     "Unknown"

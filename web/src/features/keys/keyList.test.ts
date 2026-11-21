@@ -155,6 +155,8 @@ describe("a key's spend", () => {
         tokens: 1200,
         requests: 3,
         is_other: false,
+        charged_cost: 0,
+        error_count: 0,
       },
       {
         key: null,
@@ -163,6 +165,8 @@ describe("a key's spend", () => {
         tokens: 10,
         requests: 1,
         is_other: false,
+        charged_cost: 0,
+        error_count: 0,
       },
       {
         key: null,
@@ -171,6 +175,8 @@ describe("a key's spend", () => {
         tokens: 5,
         requests: 9,
         is_other: true,
+        charged_cost: 0,
+        error_count: 0,
       },
     ]
     const folded = new Map(rows.map((one) => [one.key, one]))

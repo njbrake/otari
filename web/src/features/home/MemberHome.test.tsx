@@ -84,6 +84,9 @@ function summary(start: string, cost: number): UsageSummary {
     by_endpoint: [],
     by_model: [],
     by_provider: [],
+    by_channel: [],
+    by_policy: [],
+    by_workspace: [],
     by_source: [],
     by_source_label: [],
     by_tag: [],
@@ -169,6 +172,8 @@ async function renderMemberHome({
               requests: 3,
               tokens: 900,
               is_other: false,
+              charged_cost: 0,
+              error_count: 0,
             },
           ],
           // Asked by a provider row, for its top model; else the window's.
@@ -181,6 +186,8 @@ async function renderMemberHome({
                   requests: 2,
                   tokens: 600,
                   is_other: false,
+                  charged_cost: 0,
+                  error_count: 0,
                 },
               ]
             : byModel,
@@ -192,6 +199,8 @@ async function renderMemberHome({
               requests: 2,
               tokens: 600,
               is_other: false,
+              charged_cost: 0,
+              error_count: 0,
             },
             {
               key: null,
@@ -200,6 +209,8 @@ async function renderMemberHome({
               requests: 1,
               tokens: 300,
               is_other: false,
+              charged_cost: 0,
+              error_count: 0,
             },
           ],
         })
@@ -246,6 +257,8 @@ describe("MemberHome, by model", () => {
       label: "GLM 5.3",
       model_group: "z-ai/glm-5.3",
       is_other: false,
+      charged_cost: 0,
+      error_count: 0,
     }
     await renderMemberHome({
       windowCost: 2,
@@ -418,15 +431,20 @@ describe("MemberHome, by provider", () => {
   }
 
   it("offers Providers beside their keys and models", async () => {
+    const user = userEvent.setup()
     await renderMemberHome({ windowCost: 2, periodCost: 2 })
-    const cuts = await screen.findByRole("radiogroup", {
-      name: "Break down by",
-    })
-    expect(
-      within(cuts)
-        .getAllByRole("radio")
-        .map((radio) => radio.closest("label")?.textContent),
-    ).toEqual(["API keys", "Models", "Providers"])
+    await user.click(
+      await screen.findByRole("button", { name: /Break down by/ }),
+    )
+    const options = await screen.findAllByRole("option")
+    expect(options.map((option) => option.textContent)).toEqual([
+      "API keys",
+      "Models",
+      "Providers",
+      "Channels",
+      "Routing policies",
+      "Tools",
+    ])
   })
 
   it("lists their spend by provider, the unrecorded ones as one row", async () => {

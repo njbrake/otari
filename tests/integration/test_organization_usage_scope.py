@@ -565,6 +565,24 @@ def test_the_summary_p95_reads_only_the_callers_own_rows(client: TestClient, wor
     assert body["totals"]["request_count"] == len(_ALPHA_ONE_MODELS)
 
 
+@pytest.mark.parametrize(
+    ("who", "expected"),
+    [("alpha_owner", ("alpha_one", "alpha_two")), ("alpha_member", ("alpha_one",)), ("beta_owner", ("beta_one",))],
+)
+@pytest.mark.parametrize("rank_by", ["cost", "failed", "p95"])
+def test_the_workspace_breakdown_lists_only_the_callers_own_workspaces(
+    client: TestClient, world: _World, who: str, expected: tuple[str, ...], rank_by: str
+) -> None:
+    """By workspace and by model, ranked any way and with each group's p95, nothing outside the caller's scope."""
+    query = f"?dimensions=workspace&dimensions=model&p95_by=workspace&rank_by={rank_by}&rank_order=asc"
+    code, body = _as(client, world, who, f"{API_ROOT}/organizations/me/usage/summary{query}")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert {row["key"] for row in body["by_workspace"]} == {str(world.workspaces[name]) for name in expected}
+    beta_models = set(_BETA_MODELS) if who != "beta_owner" else set(_ALPHA_ONE_MODELS) | set(_ALPHA_TWO_MODELS)
+    assert not {row["key"] for row in body["by_model"]} & beta_models
+
+
 def test_the_deployment_publishes_and_scopes_the_surface(client: TestClient, world: _World) -> None:
     """Every test here is the several-organization case.
 

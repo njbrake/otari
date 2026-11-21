@@ -22,6 +22,8 @@ function group(key: string | null, cost: number, extra = {}): UsageGroupRow {
     tokens: cost * 100,
     requests: Math.round(cost),
     is_other: false,
+    charged_cost: 0,
+    error_count: 0,
     ...extra,
   }
 }
@@ -95,7 +97,7 @@ describe("foldSeries", () => {
         group("c", 30),
         group("d", 20),
         group("e", 10),
-        group(null, 5, { is_other: true }),
+        group(null, 5, { is_other: true, charged_cost: 0, error_count: 0 }),
       ],
       points: [
         point(DAY1, "a", 50),
@@ -153,7 +155,10 @@ describe("foldSeries", () => {
 
   it("keeps a real group with no key apart from the fold", () => {
     const data = {
-      groups: [group(null, 3), group(null, 1, { is_other: true })],
+      groups: [
+        group(null, 3),
+        group(null, 1, { is_other: true, charged_cost: 0, error_count: 0 }),
+      ],
       points: [point(DAY1, null, 3), point(DAY1, null, 1, true)],
     }
     const folded = foldSeries({ data, starts: STARTS, metric: "cost", labelOf })

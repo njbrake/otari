@@ -17,6 +17,7 @@ import {
 } from "@/tests/fixtures"
 import { AppProviders as Provider } from "@/tests/providers"
 import { LocationProbe, renderWithRouter } from "@/tests/router"
+import { pickOption } from "@/tests/select"
 
 const ADA = organizationMember({
   organization_member_id: "om-ada",
@@ -58,6 +59,8 @@ const row = (overrides: Partial<UsageGroupRow>): UsageGroupRow => ({
   tokens: 0,
   requests: 0,
   is_other: false,
+  charged_cost: 0,
+  error_count: 0,
   ...overrides,
 })
 
@@ -108,6 +111,30 @@ const EXEMPT: Half = {
 
 const NOTHING: Half = { cost: 0, requests: 0, by: {} }
 
+/** Both halves as one summary sees them: each row carrying what of it was charged. */
+function bothHalves(budgeted: Half, exempt: Half): Half {
+  const by: Record<string, UsageGroupRow[]> = {}
+  for (const [half, isCharged] of [
+    [budgeted, true],
+    [exempt, false],
+  ] as const) {
+    for (const [dimension, rows] of Object.entries(half.by)) {
+      by[dimension] = [
+        ...(by[dimension] ?? []),
+        ...(rows ?? []).map((one) => ({
+          ...one,
+          charged_cost: isCharged ? one.cost : 0,
+        })),
+      ]
+    }
+  }
+  return {
+    cost: budgeted.cost + exempt.cost,
+    requests: budgeted.requests + exempt.requests,
+    by,
+  }
+}
+
 const FIELDS: Record<string, keyof UsageSummary> = {
   model: "by_model",
   user: "by_user",
@@ -136,6 +163,9 @@ function summaryFor(half: Half, dimensions: string[]): UsageSummary {
     by_source_label: [],
     by_endpoint: [],
     by_provider: [],
+    by_channel: [],
+    by_policy: [],
+    by_workspace: [],
     by_tool: [],
     by_tag: [],
     errors_by_status_code: [],
@@ -155,6 +185,7 @@ async function renderPerson({
     "ws-platform",
   )
   const halves: URLSearchParams[] = []
+  const breakdowns: URLSearchParams[] = []
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const [path, query = ""] = String(input).slice(API_ROOT.length).split("?")
     const params = new URLSearchParams(query)
@@ -181,8 +212,9 @@ async function renderPerson({
         const side = params.get("counts_toward_budget")
         const dimensions = params.getAll("dimensions")
         if (side === null) {
+          if (params.get("p95_by")) breakdowns.push(params)
           return Response.json(
-            summaryFor({ cost: 52.5, requests: 38, by: {} }, dimensions),
+            summaryFor(bothHalves(budgeted, exempt), dimensions),
           )
         }
         halves.push(params)
@@ -212,7 +244,7 @@ async function renderPerson({
       </Provider>
     ),
   })
-  return { halves }
+  return { halves, breakdowns }
 }
 
 const breakdown = () =>
@@ -232,21 +264,36 @@ describe("A person's page", () => {
     expect(within(cell).getByText("+$40.00 not charged")).toBeVisible()
   })
 
-  it("asks each half for the model breakdown, and the key one on API keys", async () => {
+  it("asks one summary for the model breakdown with its p95, and the key one on API keys", async () => {
     const user = userEvent.setup()
-    const { halves } = await renderPerson()
+    const { halves, breakdowns } = await renderPerson()
     const table = await breakdown()
     expect(await within(table).findByText("Claude Opus 5")).toBeVisible()
-    expect(halves.map((one) => one.getAll("dimensions"))).toContainEqual([
+    expect(breakdowns.map((one) => one.getAll("dimensions"))).toContainEqual([
       "model",
     ])
+    expect(breakdowns.every((one) => one.get("p95_by") === "model")).toBe(true)
+    // The halves are totals alone.
     expect(
       new Set(halves.map((one) => one.get("counts_toward_budget"))),
     ).toEqual(new Set(["true", "false"]))
-    expect(halves.every((one) => one.get("user_id") === "u-ada")).toBe(true)
+    expect(
+      halves.every((one) => one.getAll("dimensions").join() === "none"),
+    ).toBe(true)
+    expect(
+      [...halves, ...breakdowns].every((one) => one.get("user_id") === "u-ada"),
+    ).toBe(true)
+    // Charged and not charged, as the figures above them say it.
+    const opus = within(table)
+      .getByText("Claude Opus 5")
+      .closest("tr") as HTMLElement
+    expect(within(opus).getAllByText("$40.00")).toHaveLength(2)
+    expect(
+      within(table).getByRole("columnheader", { name: /Not charged/ }),
+    ).toBeVisible()
 
-    halves.length = 0
-    await user.click(screen.getByRole("radio", { name: "API keys" }))
+    breakdowns.length = 0
+    await pickOption(user, "Break down by", "API keys")
     const keys = await screen.findByRole("grid", {
       name: "Ada Lovelace's spend by api keys",
     })
@@ -254,13 +301,32 @@ describe("A person's page", () => {
       await within(keys).findByText("claude-subscription")
     ).closest("tr") as HTMLElement
     expect(within(exemptRow).getByText("Exempt from budget")).toBeVisible()
-    expect(within(exemptRow).getByText("$40.00")).toBeVisible()
+    expect(within(exemptRow).getAllByText("$40.00")[0]).toBeVisible()
     const ciRow = within(keys).getByText("ci-bot").closest("tr") as HTMLElement
     expect(within(ciRow).queryByText("Exempt from budget")).toBeNull()
     expect(
-      halves.every((one) => one.getAll("dimensions").join() === "api_key"),
+      breakdowns.every((one) => one.getAll("dimensions").join() === "api_key"),
     ).toBe(true)
-    expect(halves).toHaveLength(2)
+    expect(breakdowns.length).toBeGreaterThan(0)
+  })
+
+  it("sorts the breakdown on the server by the column pressed", async () => {
+    const user = userEvent.setup()
+    const { breakdowns } = await renderPerson()
+    const table = await breakdown()
+    await within(table).findByText("Claude Opus 5")
+    breakdowns.length = 0
+    await user.click(
+      within(table).getByRole("columnheader", { name: /Failed/ }),
+    )
+    await waitFor(() =>
+      expect(
+        breakdowns.some(
+          (one) =>
+            one.get("rank_by") === "failed" && one.get("rank_order") === "desc",
+        ),
+      ).toBe(true),
+    )
   })
 
   it("reads the window the picker chooses", async () => {
@@ -334,7 +400,7 @@ describe("A person's page", () => {
       within(table).getByRole("columnheader", { name: "Spent" }),
     ).toBeVisible()
     expect(
-      within(table).queryByRole("columnheader", { name: "Exempt" }),
+      within(table).queryByRole("columnheader", { name: /Not charged/ }),
     ).toBeNull()
   })
 })

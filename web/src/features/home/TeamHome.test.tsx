@@ -482,16 +482,23 @@ describe("Home, by provider", () => {
   }
 
   it("offers Providers beside the other cuts", async () => {
+    const user = userEvent.setup()
     mockApi()
     await renderHome("/")
-    const cuts = await screen.findByRole("radiogroup", {
-      name: "Break down by",
-    })
-    expect(
-      within(cuts)
-        .getAllByRole("radio")
-        .map((radio) => radio.closest("label")?.textContent),
-    ).toEqual(["People", "API keys", "Models", "Providers"])
+    await waitFor(() =>
+      expect(selectTrigger("Break down by")).toBeInTheDocument(),
+    )
+    await user.click(selectTrigger("Break down by"))
+    const options = await screen.findAllByRole("option")
+    expect(options.map((option) => option.textContent)).toEqual([
+      "People",
+      "API keys",
+      "Models",
+      "Providers",
+      "Channels",
+      "Routing policies",
+      "Tools",
+    ])
   })
 
   it("lists each provider's spend and share, the unrecorded ones as one row", async () => {
@@ -1011,5 +1018,166 @@ describe("Home, the figures and what needs attention", () => {
     ).toBeVisible()
     expect(screen.getByRole("button", { name: "Refresh" })).toBeVisible()
     expect(screen.getByText(/^Updated /)).toBeVisible()
+  })
+})
+
+describe("Home, Where it went by any figure", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  })
+
+  const POLICIES = [
+    {
+      key: "fast",
+      label: null,
+      cost: 3,
+      charged_cost: 3,
+      tokens: 300,
+      requests: 10,
+      error_count: 4,
+      p95_latency_ms: 2400,
+      is_other: false,
+    },
+    {
+      key: null,
+      label: null,
+      cost: 5,
+      charged_cost: 2,
+      tokens: 500,
+      requests: 20,
+      error_count: 0,
+      p95_latency_ms: 300,
+      is_other: false,
+    },
+  ]
+
+  function RequestsProbe() {
+    const search = useRouterState({
+      select: (state) => state.location.searchStr,
+    })
+    return <output aria-label="Requests search">{search}</output>
+  }
+
+  /** Every summary read, and the breakdown read answering with `POLICIES`. */
+  function mockPolicies() {
+    const reads: URLSearchParams[] = []
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const [path, query = ""] = String(input).slice(API_ROOT.length).split("?")
+      const params = new URLSearchParams(query)
+      if (path === "/organizations/me") {
+        return Response.json(
+          organizationContext({ role: "owner", deployment_operator: false }),
+        )
+      }
+      if (path === "/organizations/me/members") {
+        return Response.json({ data: [ADA, WEI], count: 2 })
+      }
+      if (path === "/organizations/me/usage/summary") {
+        reads.push(params)
+        const isPolicies = params.getAll("dimensions").includes("policy")
+        return Response.json({
+          // What counted toward a budget is read as its own total.
+          totals:
+            params.get("counts_toward_budget") === "true"
+              ? usageTotals({ cost: 5, charged_cost: 5, request_count: 30 })
+              : usageTotals({ cost: 8, charged_cost: 5, request_count: 30 }),
+          series: [],
+          by_user: [],
+          by_api_key: [],
+          by_model: [],
+          by_provider: [],
+          by_policy: isPolicies ? POLICIES : [],
+          errors_by_status_code: [],
+        })
+      }
+      if (path === "/organizations/me/spend-ceilings") {
+        return Response.json({ data: [], count: 0 })
+      }
+      if (path.endsWith("/traces/count")) return Response.json({ count: 3 })
+      if (path === "/workspaces") return Response.json({ data: [], count: 0 })
+      if (path.endsWith("/usage/series")) return Response.json(groupedSeries())
+      return Response.json([])
+    })
+    return reads
+  }
+
+  async function renderPolicies(url: string) {
+    await renderWithRouter(<TeamHome />, {
+      url,
+      routes: [{ path: "/requests", element: <RequestsProbe /> }],
+      shell: (
+        <Provider>
+          <DeploymentProvider value={bootstrap()}>
+            <SelectedWorkspaceProvider>
+              <Outlet />
+            </SelectedWorkspaceProvider>
+          </DeploymentProvider>
+        </Provider>
+      ),
+    })
+    const table = await screen.findByRole("grid", {
+      name: "Spend by routing policies",
+    })
+    await within(table).findByText("fast")
+    return table
+  }
+
+  it("shows each policy's charged and not charged spend, failures and p95, Direct included", async () => {
+    const reads = mockPolicies()
+    const table = await renderPolicies("/?by=policies")
+    const direct = within(table)
+      .getByText("Direct")
+      .closest("tr") as HTMLElement
+    expect(within(direct).getByText("$5.00")).toBeVisible()
+    // $2.00 charged, $3.00 not.
+    expect(within(direct).getByText("$2.00")).toBeVisible()
+    expect(within(direct).getByText("$3.00")).toBeVisible()
+    const fast = within(table).getByText("fast").closest("tr") as HTMLElement
+    expect(within(fast).getByText("2.40 s")).toBeVisible()
+    expect(within(fast).getByText("4")).toHaveClass("text-danger")
+    // The breakdown is read with each policy's p95.
+    expect(
+      reads.some(
+        (one) =>
+          one.get("p95_by") === "policy" &&
+          one.getAll("dimensions").join() === "policy",
+      ),
+    ).toBe(true)
+  })
+
+  it("sorts by a pressed column on the server, and lists the rows in that order", async () => {
+    const user = userEvent.setup()
+    const reads = mockPolicies()
+    const table = await renderPolicies("/?by=policies")
+    const names = () =>
+      within(table)
+        .getAllByRole("rowheader")
+        .map((cell) => cell.textContent)
+    expect(names()[0]).toMatch(/^Direct/)
+    await user.click(
+      within(table).getByRole("columnheader", { name: /Failed/ }),
+    )
+    await waitFor(() => expect(names()[0]).toMatch(/^fast/))
+    expect(
+      reads.some(
+        (one) =>
+          one.get("rank_by") === "failed" && one.get("rank_order") === "desc",
+      ),
+    ).toBe(true)
+  })
+
+  it("opens the requests that named a model directly from the Direct row", async () => {
+    const user = userEvent.setup()
+    mockPolicies()
+    const table = await renderPolicies("/?by=policies")
+    await user.click(
+      within(table).getByRole("link", { name: "Requests for Direct" }),
+    )
+    const search = new URLSearchParams(
+      (await screen.findByRole("status", { name: "Requests search" }))
+        .textContent ?? "",
+    )
+    expect(search.get("routed")).toBe("false")
   })
 })

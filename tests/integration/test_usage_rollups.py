@@ -34,7 +34,15 @@ from gateway.repositories.usage_and_telemetry import (
     UsageScope,
 )
 from gateway.repositories.usage_and_telemetry.usage_log_repository import MAX_MARKED_HOURS
-from gateway.schemas.usage_and_telemetry import GATEWAY_TOOL_NAMES, Bucket, LogGroupBy, LogGroupOrder, ValueGroupBy
+from gateway.schemas.usage_and_telemetry import (
+    GATEWAY_TOOL_NAMES,
+    BreakdownRankBy,
+    Bucket,
+    LogGroupBy,
+    LogGroupOrder,
+    SortOrder,
+    ValueGroupBy,
+)
 from gateway.services.usage_and_telemetry import UsageRollupService
 
 # Every hour the rows fall in is over by then, so a refresh builds them all.
@@ -230,7 +238,18 @@ _VALUE_GROUPS: tuple[ValueGroupBy, ...] = (
     "policy",
 )
 
-_DIMENSIONS = ("model", "user", "api_key", "source", "source_label", "endpoint", "provider", "workspace")
+_DIMENSIONS = (
+    "model",
+    "user",
+    "api_key",
+    "source",
+    "source_label",
+    "endpoint",
+    "provider",
+    "workspace",
+    "channel",
+    "policy",
+)
 
 
 def _scopes(workspace_id: uuid.UUID) -> list[UsageScope]:
@@ -295,6 +314,19 @@ async def _read_all(repo: UsageLogRepository, filters: UsageFilters, scope: Usag
         out[f"top:{dimension}"] = [
             row.model_dump() for row in await repo.groups(filters, scope, dimension=dimension, limit=2)
         ]
+    rankings: tuple[tuple[BreakdownRankBy, SortOrder], ...] = (
+        ("charged", "desc"),
+        ("not_charged", "asc"),
+        ("failed", "desc"),
+        ("tokens", "asc"),
+    )
+    for rank_by, rank_order in rankings:
+        out[f"ranked:{rank_by}:{rank_order}"] = [
+            row.model_dump()
+            for row in await repo.groups(
+                filters, scope, dimension="user", limit=2, rank_by=rank_by, rank_order=rank_order
+            )
+        ]
     for group_by in _VALUE_GROUPS:
         groups, total = await repo.value_groups(
             filters, scope, group_by=group_by, search=None, named=(), skip=0, limit=200
@@ -313,6 +345,8 @@ async def _read_all(repo: UsageLogRepository, filters: UsageFilters, scope: Usag
         ("hour", "user", {"u1"}, True),
         ("day", "provider", {"openai"}, True),
         ("hour", "workspace", workspace_keys, False),
+        ("day", "channel", {"api"}, False),
+        ("hour", "policy", {"fast"}, True),
     )
     for bucket, dimension, named, keeps_null in grids:
         cells = await repo.grouped_series(

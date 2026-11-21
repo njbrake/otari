@@ -407,10 +407,28 @@ last 30 days when `start_date` is omitted, and at most 366. Pass the same `sort`
 to `/count` so the total is the total of those pages.
 
 `/summary`'s totals carry `absorbed_count` (recovered attempts),
-`incomplete_count` and `imported_cost` (the part of `cost` imported usage
-accounts for, which nothing charged through the gateway). With
+`incomplete_count`, `imported_cost` (the part of `cost` imported usage
+accounts for, which nothing charged through the gateway) and `charged_cost`
+(the part that counted toward a budget). With
 `include_p95=true` they also carry `p95_latency_ms`, the 95th-percentile total
 latency over the requests, which costs a sort of the window's latencies.
+
+Besides `model`, `user`, `api_key`, `source`, `source_label`, `endpoint` and
+`provider`, `dimensions` takes `channel` (`api`, `imported` or `playground`),
+`policy` (the routing policy that served a request, a null key for a model named
+directly) and `workspace`, filling `by_channel`, `by_policy` and `by_workspace`.
+Every breakdown row carries `charged_cost` and `error_count` beside its spend,
+tokens and requests. `p95_by=<dimension>` adds each group's `p95_latency_ms` in
+that one breakdown, read from the rows rather than the hourly rollups.
+`rank_by` picks which groups each breakdown keeps before its `other` fold and
+lists them in that order: `cost` (the default), `charged`, `not_charged`,
+`tokens`, `requests`, `failed` or `p95`, which reads every group's latency.
+`rank_order` is `desc` (the default) or `asc`; the fold stays last. `/series`
+also splits by `source_label`, `channel` and `policy_name`.
+
+```
+GET /api/v1/organizations/me/usage/summary?dimensions=policy&p95_by=policy&rank_by=failed
+```
 
 ```
 GET /api/v1/usage?q=claude&sort=cost&order=desc&include_absorbed=false

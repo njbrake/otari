@@ -8030,8 +8030,9 @@ export interface paths {
          *     Range-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``
          *     list, every aggregate is scoped to a bounded window so it stays served by the
          *     timestamp index. Returns grand totals, breakdowns by model / user / API key /
-         *     source / session (``source_label``) / endpoint / provider (top rows plus a
-         *     reconciling ``other`` fold, billed token counts), the error taxonomy grouped
+         *     source / session (``source_label``) / endpoint / provider / channel / routing
+         *     policy / workspace (top rows plus a reconciling ``other`` fold, billed token
+         *     counts, charged spend and failures), the error taxonomy grouped
          *     by failure status code, and a UTC-bucketed time series carrying each bucket's
          *     error count and billed token composition (input incl. cache, cache read/write,
          *     output).
@@ -8043,6 +8044,10 @@ export interface paths {
          *
          *     ``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match
          *     any of them, so one chart can compare a handful of models, users, or keys.
+         *
+         *     ``rank_by`` and ``rank_order`` pick which groups each breakdown keeps and list
+         *     them in that order, so a table sorted by any column is sorted over every group
+         *     rather than over the top N by spend.
          */
         get: operations["usage-usage_summary"];
         put?: never;
@@ -23832,8 +23837,18 @@ export interface components {
          *     mislabel deleted-user usage as the fold.
          */
         UsageGroupRow: {
+            /**
+             * Charged Cost
+             * @default 0
+             */
+            charged_cost: number;
             /** Cost */
             cost: number;
+            /**
+             * Error Count
+             * @default 0
+             */
+            error_count: number;
             /**
              * Is Other
              * @default false
@@ -23845,6 +23860,8 @@ export interface components {
             label?: string | null;
             /** Model Group */
             model_group?: string | null;
+            /** P95 Latency Ms */
+            p95_latency_ms?: number | null;
             /** Requests */
             requests: number;
             /** Tokens */
@@ -23870,7 +23887,7 @@ export interface components {
              * Group By
              * @enum {string}
              */
-            group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id";
+            group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id" | "source_label" | "channel" | "policy_name";
             /** Groups */
             groups: components["schemas"]["UsageGroupRow"][];
             /** Points */
@@ -24148,10 +24165,20 @@ export interface components {
             bucket: "hour" | "day";
             /** By Api Key */
             by_api_key: components["schemas"]["UsageGroupRow"][];
+            /**
+             * By Channel
+             * @default []
+             */
+            by_channel: components["schemas"]["UsageGroupRow"][];
             /** By Endpoint */
             by_endpoint: components["schemas"]["UsageGroupRow"][];
             /** By Model */
             by_model: components["schemas"]["UsageGroupRow"][];
+            /**
+             * By Policy
+             * @default []
+             */
+            by_policy: components["schemas"]["UsageGroupRow"][];
             /** By Provider */
             by_provider: components["schemas"]["UsageGroupRow"][];
             /** By Source */
@@ -24170,6 +24197,11 @@ export interface components {
             by_tool: components["schemas"]["UsageToolRow"][];
             /** By User */
             by_user: components["schemas"]["UsageGroupRow"][];
+            /**
+             * By Workspace
+             * @default []
+             */
+            by_workspace: components["schemas"]["UsageGroupRow"][];
             /** End Date */
             end_date: string;
             /** Errors By Status Code */
@@ -24230,6 +24262,11 @@ export interface components {
             cache_write_1h_tokens: number;
             /** Cache Write Tokens */
             cache_write_tokens: number;
+            /**
+             * Charged Cost
+             * @default 0
+             */
+            charged_cost: number;
             /** Completion Tokens */
             completion_tokens: number;
             /** Cost */
@@ -29818,7 +29855,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Dimension to split the series by */
-                group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id";
+                group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id" | "source_label" | "channel" | "policy_name";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -29906,7 +29943,7 @@ export interface operations {
                 /** @description Time-series granularity: 'hour' or 'day' */
                 bucket?: "hour" | "day";
                 /** @description Which breakdowns to compute; repeatable (dimensions=model&dimensions=user). Each value names the 'by_<value>' response field it fills, except 'status_code', which fills the failure taxonomy in 'errors_by_status_code'. Omit for every breakdown (the default); pass 'none' for a totals-and-series-only response. Each dimension left out skips one GROUP BY scan, so a caller that reads only the tiles or the time series should say so. Fields that were not requested come back empty. */
-                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
+                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "channel" | "policy" | "workspace" | "status_code" | "tool" | "none")[] | null;
                 /** @description A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key. */
                 group_by_tag?: string | null;
             };
@@ -35455,7 +35492,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Dimension to split the series by */
-                group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id";
+                group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id" | "source_label" | "channel" | "policy_name";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -35587,11 +35624,17 @@ export interface operations {
                 /** @description Time-series granularity: 'hour' or 'day' */
                 bucket?: "hour" | "day";
                 /** @description Which breakdowns to compute; repeatable (dimensions=model&dimensions=user). Each value names the 'by_<value>' response field it fills, except 'status_code', which fills the failure taxonomy in 'errors_by_status_code'. Omit for every breakdown (the default); pass 'none' for a totals-and-series-only response. Each dimension left out skips one GROUP BY scan, so a caller that reads only the tiles or the time series should say so. Fields that were not requested come back empty. */
-                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
+                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "channel" | "policy" | "workspace" | "status_code" | "tool" | "none")[] | null;
                 /** @description A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key. */
                 group_by_tag?: string | null;
                 /** @description Also compute 'totals.p95_latency_ms', the 95th-percentile total latency over the requests, which sorts the window's latencies. Off by default, so a caller that does not show it does not pay for it. */
                 include_p95?: boolean;
+                /** @description Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). Read from the rows, since the hourly rollups keep no latency distribution; the fold row's stays null. */
+                p95_by?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "channel" | "policy" | "workspace") | null;
+                /** @description What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (the default), 'charged' (the spend that counted toward a budget), 'not_charged' (the rest), 'tokens' (billed input plus output), 'requests', 'failed' (failed requests) or 'p95' (each group's p95 latency, which every listed row then carries, and which reads the latency of every group in the window). Ties fall back to the key; under 'p95' a group with no latency comes last. */
+                rank_by?: "cost" | "charged" | "not_charged" | "tokens" | "requests" | "failed" | "p95";
+                /** @description Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last. */
+                rank_order?: "asc" | "desc";
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */
@@ -39508,7 +39551,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Dimension to split the series by */
-                group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id";
+                group_by: "model" | "user_id" | "api_key_id" | "source" | "provider" | "workspace_id" | "source_label" | "channel" | "policy_name";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -39673,11 +39716,17 @@ export interface operations {
                 /** @description Time-series granularity: 'hour' or 'day' */
                 bucket?: "hour" | "day";
                 /** @description Which breakdowns to compute; repeatable (dimensions=model&dimensions=user). Each value names the 'by_<value>' response field it fills, except 'status_code', which fills the failure taxonomy in 'errors_by_status_code'. Omit for every breakdown (the default); pass 'none' for a totals-and-series-only response. Each dimension left out skips one GROUP BY scan, so a caller that reads only the tiles or the time series should say so. Fields that were not requested come back empty. */
-                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
+                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "channel" | "policy" | "workspace" | "status_code" | "tool" | "none")[] | null;
                 /** @description A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key. */
                 group_by_tag?: string | null;
                 /** @description Also compute 'totals.p95_latency_ms', the 95th-percentile total latency over the requests, which sorts the window's latencies. Off by default, so a caller that does not show it does not pay for it. */
                 include_p95?: boolean;
+                /** @description Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). Read from the rows, since the hourly rollups keep no latency distribution; the fold row's stays null. */
+                p95_by?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "channel" | "policy" | "workspace") | null;
+                /** @description What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (the default), 'charged' (the spend that counted toward a budget), 'not_charged' (the rest), 'tokens' (billed input plus output), 'requests', 'failed' (failed requests) or 'p95' (each group's p95 latency, which every listed row then carries, and which reads the latency of every group in the window). Ties fall back to the key; under 'p95' a group with no latency comes last. */
+                rank_by?: "cost" | "charged" | "not_charged" | "tokens" | "requests" | "failed" | "p95";
+                /** @description Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last. */
+                rank_order?: "asc" | "desc";
                 /** @description Leave out rows served by these models. At most 50 per call. */
                 exclude_model?: string[] | null;
                 /** @description Leave out rows billed to these users; rows with no user stay. At most 50 per call. */

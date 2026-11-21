@@ -35,6 +35,8 @@ from gateway.inflight import get_registry
 from gateway.models.api_keys import APIKey
 from gateway.schemas.usage_and_telemetry import (
     GATEWAY_TOOL_NAMES,
+    BreakdownDimension,
+    BreakdownRankBy,
     Bucket,
     LogGroupBy,
     LogGroupOrder,
@@ -235,6 +237,22 @@ _COUNT_SORT_DESC = (
 _INCLUDE_P95_DESC = (
     "Also compute 'totals.p95_latency_ms', the 95th-percentile total latency over the requests, which "
     "sorts the window's latencies. Off by default, so a caller that does not show it does not pay for it."
+)
+_P95_BY_DESC = (
+    "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or "
+    "'dimensions' is omitted). Read from the rows, since the hourly rollups keep no latency distribution; "
+    "the fold row's stays null."
+)
+_RANK_BY_DESC = (
+    "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (the "
+    "default), 'charged' (the spend that counted toward a budget), 'not_charged' (the rest), 'tokens' "
+    "(billed input plus output), 'requests', 'failed' (failed requests) or 'p95' (each group's p95 latency, "
+    "which every listed row then carries, and which reads the latency of every group in the window). "
+    "Ties fall back to the key; under 'p95' a group with no latency comes last."
+)
+_RANK_ORDER_DESC = (
+    "Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, "
+    "largest first) or 'asc'. The 'other' fold stays last."
 )
 _MAX_GROUP_SEARCH = 200
 _GROUP_SEARCH_DESC = (
@@ -555,14 +573,18 @@ async def usage_summary(
     dimensions: list[SummaryDimension] | None = Query(default=None, description=_DIMENSIONS_DESC),
     group_by_tag: GroupByTag = None,
     include_p95: Annotated[bool, Query(description=_INCLUDE_P95_DESC)] = False,
+    p95_by: Annotated[BreakdownDimension | None, Query(description=_P95_BY_DESC)] = None,
+    rank_by: Annotated[BreakdownRankBy, Query(description=_RANK_BY_DESC)] = "cost",
+    rank_order: Annotated[SortOrder, Query(description=_RANK_ORDER_DESC)] = "desc",
 ) -> UsageSummary:
     """Aggregate spend, tokens, and request volume for the dashboard Usage page.
 
     Range-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``
     list, every aggregate is scoped to a bounded window so it stays served by the
     timestamp index. Returns grand totals, breakdowns by model / user / API key /
-    source / session (``source_label``) / endpoint / provider (top rows plus a
-    reconciling ``other`` fold, billed token counts), the error taxonomy grouped
+    source / session (``source_label``) / endpoint / provider / channel / routing
+    policy / workspace (top rows plus a reconciling ``other`` fold, billed token
+    counts, charged spend and failures), the error taxonomy grouped
     by failure status code, and a UTC-bucketed time series carrying each bucket's
     error count and billed token composition (input incl. cache, cache read/write,
     output).
@@ -574,6 +596,10 @@ async def usage_summary(
 
     ``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match
     any of them, so one chart can compare a handful of models, users, or keys.
+
+    ``rank_by`` and ``rank_order`` pick which groups each breakdown keeps and list
+    them in that order, so a table sorted by any column is sorted over every group
+    rather than over the top N by spend.
     """
     filters = UsageFilters(
         start_date=start_date,
@@ -595,7 +621,15 @@ async def usage_summary(
         refine=refine,
     )
     return await usage.summary(
-        filters, usage_scope, bucket=bucket, dimensions=dimensions, group_by_tag=group_by_tag, include_p95=include_p95
+        filters,
+        usage_scope,
+        bucket=bucket,
+        dimensions=dimensions,
+        group_by_tag=group_by_tag,
+        include_p95=include_p95,
+        p95_by=p95_by,
+        rank_by=rank_by,
+        rank_order=rank_order,
     )
 
 

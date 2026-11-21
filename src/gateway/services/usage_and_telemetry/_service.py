@@ -23,6 +23,8 @@ from gateway.repositories.usage_and_telemetry import (
     user_used_within,
 )
 from gateway.schemas.usage_and_telemetry import (
+    BreakdownDimension,
+    BreakdownRankBy,
     Bucket,
     LogGroupBy,
     LogGroupOrder,
@@ -75,6 +77,9 @@ _SUMMARY_DIMENSIONS: dict[str, int] = {
     "source_label": _SESSION_BREAKDOWN_TOP_N,
     "endpoint": _BREAKDOWN_TOP_N,
     "provider": _BREAKDOWN_TOP_N,
+    "channel": _BREAKDOWN_TOP_N,
+    "policy": _BREAKDOWN_TOP_N,
+    "workspace": _BREAKDOWN_TOP_N,
 }
 
 # The failure taxonomy (``errors_by_status_code``) is a GROUP BY pass like the
@@ -97,6 +102,9 @@ _SERIES_DIMENSIONS: dict[str, str] = {
     "source": "source",
     "provider": "provider",
     "workspace_id": "workspace",
+    "source_label": "source_label",
+    "channel": "channel",
+    "policy_name": "policy",
 }
 
 
@@ -313,12 +321,18 @@ class UsageService:
         dimensions: list[SummaryDimension] | None,
         group_by_tag: str | None = None,
         include_p95: bool = False,
+        p95_by: BreakdownDimension | None = None,
+        rank_by: BreakdownRankBy = "cost",
+        rank_order: SortOrder = "desc",
     ) -> UsageSummary:
         """Totals, the requested breakdowns and a zero-filled series over a bounded window.
 
         Each breakdown is its own ``GROUP BY`` pass, so ``dimensions`` names the
         ones to compute; ``None`` computes them all. ``include_p95`` adds the
-        totals' 95th-percentile latency, which sorts the window's latencies.
+        totals' 95th-percentile latency, which sorts the window's latencies, and
+        ``p95_by`` each group's in that one breakdown. ``rank_by`` and
+        ``rank_order`` pick which groups each breakdown keeps before its fold and
+        list them in that order; ``p95`` reads every group's latency to rank them.
         """
         start, end = resolve_window(filters.start_date, filters.end_date)
         filters = replace(filters, start_date=start, end_date=end)
@@ -333,7 +347,16 @@ class UsageService:
                     update={"p95_latency_ms": await self._usage_logs.p95_latency_ms(filters, scope)}
                 )
             breakdowns = {
-                name: await self._breakdown(filters, scope, totals, dimension=name, limit=cap)
+                name: await self._breakdown(
+                    filters,
+                    scope,
+                    totals,
+                    dimension=name,
+                    limit=cap,
+                    rank_by=rank_by,
+                    rank_order=rank_order,
+                    with_p95=p95_by == name,
+                )
                 for name, cap in _SUMMARY_DIMENSIONS.items()
                 if name in requested
             }
@@ -375,6 +398,9 @@ class UsageService:
             by_source_label=breakdowns.get("source_label", []),
             by_endpoint=breakdowns.get("endpoint", []),
             by_provider=breakdowns.get("provider", []),
+            by_channel=breakdowns.get("channel", []),
+            by_policy=breakdowns.get("policy", []),
+            by_workspace=breakdowns.get("workspace", []),
             by_tool=by_tool,
             by_tag=by_tag,
             errors_by_status_code=errors_by_status_code,
@@ -499,7 +525,16 @@ class UsageService:
         )
 
     async def _breakdown(
-        self, filters: UsageFilters, scope: UsageScope, totals: UsageTotals, *, dimension: str, limit: int
+        self,
+        filters: UsageFilters,
+        scope: UsageScope,
+        totals: UsageTotals,
+        *,
+        dimension: str,
+        limit: int,
+        rank_by: BreakdownRankBy = "cost",
+        rank_order: SortOrder = "desc",
+        with_p95: bool = False,
     ) -> list[UsageGroupRow]:
         """One dimension's top groups, labeled where the key is an opaque id, with the remainder folded.
 
@@ -507,9 +542,23 @@ class UsageService:
         resolving the label here is what lets a client offer a user or key filter
         without holding those whole tables. A model is labeled and grouped with
         its other spellings (:func:`grouped_models`); a source or endpoint
-        already reads as its own name.
+        already reads as its own name. ``with_p95`` reads each listed group's
+        latency from the rows; ranking by ``p95`` reads every group's, since
+        which groups make the cap depends on all of them.
         """
-        rows = await self._usage_logs.groups(filters, scope, dimension=dimension, limit=limit)
+        if rank_by == "p95":
+            every = await self._usage_logs.groups(filters, scope, dimension=dimension, limit=None)
+            latencies = await self._usage_logs.p95_by_group(filters, scope, dimension=dimension, keys=None)
+            rows = _ranked_by_p95(every, latencies, rank_order)[:limit]
+        else:
+            rows = await self._usage_logs.groups(
+                filters, scope, dimension=dimension, limit=limit, rank_by=rank_by, rank_order=rank_order
+            )
+            if with_p95:
+                latencies = await self._usage_logs.p95_by_group(
+                    filters, scope, dimension=dimension, keys={row.key for row in rows}
+                )
+                rows = [row.model_copy(update={"p95_latency_ms": latencies.get(row.key)}) for row in rows]
         if dimension == "model":
             return _with_fold(grouped_models(rows), totals)
         keys = {row.key for row in rows if row.key is not None}
@@ -539,6 +588,20 @@ def list_window(filters: UsageFilters, *, sort: UsageSort) -> UsageFilters:
     return replace(filters, start_date=start, end_date=end)
 
 
+def _ranked_by_p95(
+    rows: list[UsageGroupRow], latencies: dict[str | None, int], order: SortOrder
+) -> list[UsageGroupRow]:
+    """Every group with its latency, slowest first (``asc``: fastest), a group with none last, ties by key."""
+    measured = [row.model_copy(update={"p95_latency_ms": latencies.get(row.key)}) for row in rows]
+    sign = 1 if order == "asc" else -1
+
+    def rank(row: UsageGroupRow) -> tuple[int, int, int, str]:
+        latency = row.p95_latency_ms
+        return (latency is None, sign * (latency or 0), row.key is None, row.key or "")
+
+    return sorted(measured, key=rank)
+
+
 def _with_fold(rows: list[UsageGroupRow], totals: UsageTotals) -> list[UsageGroupRow]:
     """Append the groups past the cap as one synthesized ``other`` row, so a breakdown reconciles with the totals."""
     # request_count is an exact integer, so a positive residual is the reliable
@@ -555,5 +618,7 @@ def _with_fold(rows: list[UsageGroupRow], totals: UsageTotals) -> list[UsageGrou
             tokens=billed_total - sum(row.tokens for row in rows),
             requests=residual_requests,
             is_other=True,
+            charged_cost=totals.charged_cost - sum(row.charged_cost for row in rows),
+            error_count=totals.error_count - sum(row.error_count for row in rows),
         ),
     ]

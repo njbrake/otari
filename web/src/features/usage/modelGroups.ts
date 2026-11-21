@@ -16,6 +16,15 @@ export interface ModelGroup {
   cost: number
   tokens: number
   requests: number
+  /** The part of `cost` that counted toward a budget. */
+  charged: number
+  failed: number
+  /**
+   * The slowest of its ids' 95th-percentile latencies: one model's requests on
+   * several providers have no single p95 the summary can add up, and the
+   * highest is the one that bounds them all.
+   */
+  p95: number | null
   /** The server's fold of its smallest rows, which is no one model. */
   isOther: boolean
 }
@@ -44,6 +53,12 @@ export function groupModels(rows: readonly UsageGroupRow[]): ModelGroup[] {
       group.cost += row.cost
       group.tokens += row.tokens
       group.requests += row.requests
+      group.charged += row.charged_cost ?? 0
+      group.failed += row.error_count ?? 0
+      const p95 = row.p95_latency_ms ?? null
+      if (p95 !== null && (group.p95 === null || p95 > group.p95)) {
+        group.p95 = p95
+      }
       if (row.key !== null) group.spellings.push(row.key)
       continue
     }
@@ -55,6 +70,9 @@ export function groupModels(rows: readonly UsageGroupRow[]): ModelGroup[] {
       cost: row.cost,
       tokens: row.tokens,
       requests: row.requests,
+      charged: row.charged_cost ?? 0,
+      failed: row.error_count ?? 0,
+      p95: row.p95_latency_ms ?? null,
       isOther: row.is_other ?? false,
     })
   }
