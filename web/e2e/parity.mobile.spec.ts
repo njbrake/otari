@@ -61,11 +61,13 @@ const PAGES = [
   {
     route: "/requests",
     heading: "Sessions",
-    // A paginated table: the pager row is what could not wrap.
+    // Rows run edge to edge, under a totals line pinned the same way.
     ready: async (page: Page) => {
-      await expect(table(page, "Activity log")).toBeVisible()
       await expect(
-        page.getByRole("button", { name: /Last page/ }),
+        page.getByRole("list", { name: "Activity log" }),
+      ).toBeVisible()
+      await expect(
+        page.getByRole("button", { name: "Load 20 more" }),
       ).toBeVisible()
     },
   },

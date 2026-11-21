@@ -249,6 +249,28 @@ def _to_the_hour(group: dict[str, Any]) -> dict[str, Any]:
     return group
 
 
+async def _log_group_reads(reader: _Reader, filters: UsageFilters, scope: UsageScope) -> dict[str, Any]:
+    """The request log grouped every way it can be, one order per grouping, in a comparable shape."""
+    groupings: tuple[tuple[LogGroupBy, LogGroupOrder], ...] = (
+        ("api_key", "recent"),
+        ("source_label", "requests"),
+        ("model", "cost"),
+        ("user", "requests"),
+    )
+    out: dict[str, Any] = {}
+    async with reader.uow:
+        for group_by, order in groupings:
+            groups, total = await reader.repo.log_groups(
+                filters, scope, group_by=group_by, order=order, skip=0, limit=200
+            )
+            listed = [_to_the_hour(group.model_dump()) for group in groups]
+            if order == "recent":
+                # Groups last seen in one rolled-up hour tie there, so only the set is comparable.
+                listed.sort(key=lambda group: group["key"] or "")
+            out[f"{group_by}:{order}"] = (listed, total)
+    return out
+
+
 async def _reads(reader: _Reader, filters: UsageFilters, scope: UsageScope) -> dict[str, Any]:
     """Every aggregate read the rollups serve, in a comparable shape."""
     async with reader.uow:
@@ -282,18 +304,6 @@ async def _read_all(repo: UsageLogRepository, filters: UsageFilters, scope: Usag
         filters, scope, group_by="user", search="U", named=("k-none",), skip=0, limit=1
     )
     out["values:searched"] = ([group.model_dump() for group in searched], total)
-    log_group_bys: tuple[LogGroupBy, ...] = ("api_key", "source_label", "model", "user")
-    log_orders: tuple[LogGroupOrder, ...] = ("recent", "requests", "cost")
-    for log_group_by in log_group_bys:
-        for order in log_orders:
-            log_groups, total = await repo.log_groups(
-                filters, scope, group_by=log_group_by, order=order, skip=0, limit=200
-            )
-            listed = [_to_the_hour(group.model_dump()) for group in log_groups]
-            if order == "recent":
-                # Groups last seen in one rolled-up hour tie there, so only the set is comparable.
-                listed.sort(key=lambda group: group["key"] or "")
-            out[f"log_groups:{log_group_by}:{order}"] = (listed, total)
     for bucket in ("hour", "day"):
         points = await repo.series(filters, scope, bucket=bucket)
         out[f"series:{bucket}"] = sorted((point.model_dump() for point in points), key=lambda p: p["bucket_start"])
@@ -396,6 +406,35 @@ async def test_rollups_answer_as_the_rows_do(
     await async_db.commit()
     assert await _marked(async_db) == 0
     await _assert_parity(rollups, rows, rng, workspace_id, stride=6)
+
+
+@pytest.mark.asyncio
+async def test_rollups_group_the_log_as_the_rows_do(
+    test_db: Session, async_db: AsyncSession, sessions: tuple[_Reader, _Reader]
+) -> None:
+    """The grouped request log matches the rows, its first and last request to the hour."""
+    rng = random.Random(2028)
+    workspace_id = seed_workspace_id(test_db)
+    _seed_identities(test_db, workspace_id)
+    test_db.add_all(_rows(rng, workspace_id, 400))
+    test_db.commit()
+    rollups, rows = sessions
+    await _refresh_all(async_db)
+    await async_db.commit()
+    test_db.add_all(_rows(rng, workspace_id, 30))
+    test_db.commit()
+    scopes = _scopes(workspace_id)
+    for index, (start, end) in enumerate(_windows(rng)[:6]):
+        scope = scopes[index % len(scopes)]
+        specs: tuple[dict[str, Any], ...] = ({}, {"status": "error"})
+        for spec in specs:
+            filters = UsageFilters(start_date=start, end_date=end, **spec)
+            assert await _log_group_reads(rollups, filters, scope) == await _log_group_reads(rows, filters, scope), (
+                start,
+                end,
+                spec,
+                scope,
+            )
 
 
 @pytest.mark.asyncio
