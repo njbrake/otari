@@ -2,7 +2,7 @@
 
 Otari serves an OpenAPI document at `/api/v1/openapi.json` and interactive API
 docs at `/api/v1/docs` by default. The repository also commits the generated
-[OpenAPI specification](https://github.com/mozilla-ai/otari/blob/550419252c95aa9575feeb770e16c601b5b98e1b/docs/public/openapi.json), the source of truth for paths,
+[OpenAPI specification](https://github.com/mozilla-ai/otari/blob/afb8d1999d515a399fc4b7ba3c76e8ebc38273c4/docs/public/openapi.json), the source of truth for paths,
 parameters, and schemas.
 
 ## Base URL
@@ -425,6 +425,21 @@ page past `limit`. The dashboard's column filters read it.
 
 ```
 GET /api/v1/usage/groups?group_by=user&search=ada&exclude_status=absorbed
+```
+
+`GET /api/v1/usage/grouped?group_by=<column>` collapses the request log to one
+row per `api_key`, `source_label`, `model` or `user`, under the same filters and
+window as `/summary`. Each group carries `requests` (recovered attempts left
+out), `errors`, `cost`, billed `tokens`, the mean `latency_ms`, `first_at` and
+`last_at` (to the hour where older traffic is read from the hourly rollups), and
+its three most-used models in `top_models` with `model_count`, how many it ran on. `order` ranks groups by `recent`
+(the default), `requests` or `cost`; `skip` and `limit` (at most 200) page them,
+and `total` counts every group. The rows with no value in the column form one
+group under a null `key`. The dashboard's **Group by** on Requests reads it, and
+`/api/v1/organizations/me/usage/grouped` is the tenant-scoped copy.
+
+```
+GET /api/v1/usage/grouped?group_by=source_label&order=cost&limit=20
 ```
 
 ### The `user` field
