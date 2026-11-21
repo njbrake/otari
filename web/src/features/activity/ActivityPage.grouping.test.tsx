@@ -180,6 +180,44 @@ describe("the request log on a phone", () => {
     expect(paramsOf(rowCalls(calls).at(-1)?.url ?? "").get("skip")).toBe("0")
   })
 
+  it("pauses live once more rows are loaded, and resuming goes back to the first batch", async () => {
+    asPhone()
+    const rows = Array.from({ length: 20 }, (_, index) =>
+      entry({ id: `r-${index}` }),
+    )
+    const { calls } = mockApi({ rows, total: 45 })
+    renderRequests()
+    const user = userEvent.setup()
+
+    const live = await screen.findByRole("button", { name: "Live updates" })
+    expect(live).toHaveAttribute("aria-pressed", "true")
+    await user.click(
+      await screen.findByRole("button", { name: "Load 20 more" }),
+    )
+    await waitFor(() => expect(live).toHaveAttribute("aria-pressed", "false"))
+    expect(live).toHaveAccessibleDescription(/later page/)
+
+    await user.click(live)
+    await waitFor(() => expect(live).toHaveAttribute("aria-pressed", "true"))
+    await waitFor(() =>
+      expect(paramsOf(rowCalls(calls).at(-1)?.url ?? "").get("limit")).toBe(
+        "20",
+      ),
+    )
+  })
+
+  it("reads no page on a phone, so a link to a later page neither skips rows nor pauses", async () => {
+    asPhone()
+    const { calls } = mockApi({ rows: [entry()], total: 300 })
+    renderRequests("?page=3")
+
+    await screen.findByRole("list", { name: "Activity log" })
+    expect(
+      await screen.findByRole("button", { name: "Live updates" }),
+    ).toHaveAttribute("aria-pressed", "true")
+    expect(paramsOf(rowCalls(calls).at(-1)?.url ?? "").get("skip")).toBe("0")
+  })
+
   it("lists flat on a phone whatever grouping the link carries", async () => {
     asPhone()
     const { calls } = mockApi({ rows: ROWS })

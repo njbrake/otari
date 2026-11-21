@@ -85,12 +85,22 @@ export function ObserveFilterSheet({
 // filtered then.
 function SheetSections({ view }: { view: ObserveView }) {
   const state = useObserveFilterState(view)
-  const columns = OBSERVE_FILTER_COLUMNS[view]
+  const offered = OBSERVE_FILTER_COLUMNS[view]
     .map((column) => ({
       label: column.label,
       sections: offeredSections(column.sections, state),
     }))
     .filter((column) => column.sections.length > 0)
+  // On Requests the column holding the cost threshold is drawn open as the
+  // Cost section below the sort, its threshold as one row of choices, rather
+  // than a second section of the same name.
+  const isCost = (column: (typeof offered)[number]) =>
+    state.isRequests &&
+    column.sections.some(
+      (section) => section.kind === "threshold" && section.key === "cost_gt",
+    )
+  const cost = offered.find(isCost)
+  const columns = offered.filter((column) => !isCost(column))
   const [expanded, setExpanded] = useState(() =>
     columns
       .filter((column) => isFiltered(column.sections, state))
@@ -116,7 +126,13 @@ function SheetSections({ view }: { view: ObserveView }) {
   return state.isRequests ? (
     <>
       <SortSection state={state} />
-      <CostSection state={state} />
+      {cost ? (
+        <CostSection
+          view={view}
+          state={state}
+          rest={cost.sections.filter((section) => section.kind !== "threshold")}
+        />
+      ) : null}
       {sections}
     </>
   ) : (
@@ -132,7 +148,16 @@ const COST_STEPS = [...COST.presets].reverse()
  * The cost a request has to pass to be listed, one tap away: the Cost
  * column's own thresholds, which a desk sets from that column's funnel.
  */
-function CostSection({ state }: { state: ObserveFilterState }) {
+function CostSection({
+  view,
+  state,
+  rest,
+}: {
+  view: ObserveView
+  state: ObserveFilterState
+  /** The column's other filters, such as priced or unpriced, listed under the threshold. */
+  rest: ReturnType<typeof offeredSections>
+}) {
   const current = readThreshold(state.url.get("cost_gt"))
   const value =
     current === undefined
@@ -163,6 +188,16 @@ function CostSection({ state }: { state: ObserveFilterState }) {
           if (next !== "other") state.patch({ cost_gt: next })
         }}
       />
+      {rest.length > 0 ? (
+        <div className="-mx-3 flex flex-col">
+          <ObserveFilterSections
+            view={view}
+            label="Cost"
+            sections={rest}
+            state={state}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }

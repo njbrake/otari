@@ -256,7 +256,9 @@ function ActivityPageContent({
   // window, an omitted start as the last 30 days. Under "All" those reads take
   // the year the timeline spans instead, so the rows match the bars above them.
   const boundedRead = boundsWindow(sort, search)
-  const page = Math.max(0, url.getNumber("page"))
+  const urlPage = Math.max(0, url.getNumber("page"))
+  // The phone always lists from the first rows, so it reads no page.
+  const page = isMobile ? 0 : urlPage
   // The request open in the panel: a usage row's id, or the request id.
   const requestId = url.get("request")
   // Snap URL-supplied sizes to the nearest offered option: an old bookmark
@@ -486,7 +488,7 @@ function ActivityPageContent({
     ? "ended"
     : requestId !== ""
       ? "request"
-      : page > 0
+      : page > 0 || (isMobile && phoneLimit > PHONE_BATCH)
         ? "page"
         : sorted
           ? "sort"
@@ -511,7 +513,7 @@ function ActivityPageContent({
   // The phone reads its first `phoneLimit` rows; the desk a page, unless grouped.
   const usage = useUsageLogs(
     filters,
-    isMobile ? 0 : page,
+    page,
     isMobile ? phoneLimit : pageSize,
     !isGrouped,
     "caller",
@@ -1167,7 +1169,10 @@ function ActivityPageContent({
           setLiveWanted(wanted)
           // Resuming clears what held it: the first page of the newest
           // requests, newest first, with nothing open.
-          if (resume) url.patch({ page: 0, request: "", sort: "", order: "" })
+          if (resume) {
+            setPhoneLimit(PHONE_BATCH)
+            url.patch({ page: 0, request: "", sort: "", order: "" })
+          }
         }}
       />
       {newRows > 0 ? (

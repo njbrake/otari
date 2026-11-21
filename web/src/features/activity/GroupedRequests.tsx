@@ -52,7 +52,7 @@ function GroupRow({
   const panelId = useId()
   const { title, isMono } = describeGroup(groupBy, group, memberLabels)
   const latency = formatLatency(group.latency_ms)
-  const models = groupBy === "model" ? "" : describeTopModels(group.top_models)
+  const models = groupBy === "model" ? "" : describeTopModels(group)
   return (
     <li className="border-border border-b last:border-b-0">
       <h3 className="m-0 text-title">

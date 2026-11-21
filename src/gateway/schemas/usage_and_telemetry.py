@@ -507,6 +507,8 @@ class UsageLogGroup(BaseModel):
     last_at: str
     # Up to three, most requests first.
     top_models: list[UsageLogGroupModel]
+    # How many models the group's requests ran on, of which ``top_models`` names the first three.
+    model_count: int
 
 
 class UsageLogGroups(BaseModel):

@@ -394,10 +394,10 @@ def _group_column(rows: Subquery, dimension: str) -> ColumnElement[Any]:
     return sql_cast(column, String) if dimension == "workspace" else column
 
 
-# The columns a filter menu lists the values of, among those the rollups keep.
 # How many of a log group's most-used models it names.
 _TOP_MODELS = 3
 
+# The columns a filter menu lists the values of, among those the rollups keep.
 _VALUE_COLUMNS: dict[str, str] = {
     "model": "model",
     "user": "user_id",
@@ -1494,6 +1494,8 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         requests = _requests(rows, status)
         cost = _summed(rows.c.cost, 0.0)
         last = func.max(rows.c.ts)
+        # The models a group's requests ran on, counted as ``_top_models`` lists them.
+        served_model = rows.c.model if status == "absorbed" else case((rows.c.status != "absorbed", rows.c.model))
         ranked = {"recent": last.desc(), "requests": requests.desc(), "cost": cost.desc()}[order]
         stmt = (
             select(
@@ -1506,6 +1508,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 _summed(rows.c.latency_count),
                 func.min(rows.c.ts),
                 last,
+                func.count(func.distinct(served_model)),
                 func.count().over(),
             )
             .group_by(column)
@@ -1515,7 +1518,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         )
         page = (await self.db.execute(stmt)).all()
         if page:
-            total = int(page[0][9])
+            total = int(page[0][10])
         elif skip:
             # Past the last page there is no row to carry the count.
             grouped = select(column).group_by(column).subquery()
@@ -1534,6 +1537,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                 first_at=utc_iso(row[7]),
                 last_at=utc_iso(row[8]),
                 top_models=models.get(row[0], []),
+                model_count=int(row[9]),
             )
             for row in page
         ], total

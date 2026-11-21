@@ -1,9 +1,4 @@
-import type {
-  LogGroupBy,
-  UsageFilters,
-  UsageLogGroup,
-  UsageLogGroupModel,
-} from "@/client"
+import type { LogGroupBy, UsageFilters, UsageLogGroup } from "@/client"
 import { userDisplay } from "@/features/users/userDisplay"
 import type { DashboardSearch } from "@/shared/helpers/search"
 import { applyCellFilter } from "./cellFilters"
@@ -83,9 +78,16 @@ export function groupFilters(
   }
 }
 
+// The list filter each funnel writes, which "Show all" narrows to one value.
+const INCLUDE_KEY: Record<Exclude<LogGroupBy, "source_label">, string> = {
+  api_key: "api_key_id",
+  model: "model",
+  user: "user_id",
+}
+
 /**
- * The search "Show all" leaves: the group's value added to the filter its
- * column's funnel writes, the grouping off, on the first page with nothing open.
+ * The search "Show all" leaves: the filter its column's funnel writes narrowed
+ * to the group's value, the grouping off, on the first page with nothing open.
  */
 export function showGroupSearch(
   prev: DashboardSearch,
@@ -102,7 +104,10 @@ export function showGroupSearch(
     ).filter((one) => one !== "session")
     return { ...next, is_null: [...fields, "session"] }
   }
-  return applyCellFilter(rest, groupBy, key, "include")
+  // A group under a list of several values is one of them, so the list
+  // gives way to it rather than keeping the others.
+  const { [INCLUDE_KEY[groupBy]]: _listed, ...narrowed } = rest
+  return applyCellFilter(narrowed, groupBy, key, "include")
 }
 
 /** A group's heading, and whether it is an identifier set in mono. */
@@ -136,10 +141,12 @@ export function describeGroup(
 
 /** A group's most-used models as a short list: two named, the rest counted. */
 export function describeTopModels(
-  models: readonly UsageLogGroupModel[],
+  group: Pick<UsageLogGroup, "top_models" | "model_count">,
 ): string {
-  const named = models.slice(0, 2).map((one) => one.model)
-  const rest = models.length - named.length
+  const named = group.top_models.slice(0, 2).map((one) => one.model)
+  // The read names three at most; the count is every model the group ran on.
+  const rest =
+    Math.max(group.model_count, group.top_models.length) - named.length
   return rest > 0 ? `${named.join(", ")} +${rest}` : named.join(", ")
 }
 

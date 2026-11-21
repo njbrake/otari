@@ -23931,6 +23931,8 @@ export interface components {
             last_at: string;
             /** Latency Ms */
             latency_ms: number | null;
+            /** Model Count */
+            model_count: number;
             /** Requests */
             requests: number;
             /** Tokens */

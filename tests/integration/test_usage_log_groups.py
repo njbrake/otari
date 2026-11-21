@@ -128,6 +128,8 @@ def test_a_group_sums_its_requests(
     assert _instant(k1["last_at"]) == seeded["k1_new"]
     # Most requests first, ties by name; the absorbed attempt's model has none.
     assert k1["top_models"] == [{"model": "gpt-4o", "requests": 2}, {"model": "gpt-4o-mini", "requests": 1}]
+    # The absorbed attempt's model served no request of the group.
+    assert k1["model_count"] == 2
     assert by_key[None]["label"] is None
     assert by_key[None]["requests"] == 1
 
@@ -169,6 +171,17 @@ def test_groups_read_the_log_filters(
     models = _get(client, master_key_header, group_by="model", order="requests")
     assert models["groups"][0]["key"] == "gpt-4o"
     assert models["groups"][0]["top_models"] == [{"model": "gpt-4o", "requests": 3}]
+
+
+def test_a_group_counts_every_model_past_the_three_it_names(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    for minutes, model in enumerate(("a", "b", "c", "d", "e", "a")):
+        _log(db_session, minutes_ago=minutes + 1, api_key_id="k9", model=model)
+    db_session.commit()
+    (group,) = _get(client, master_key_header, group_by="api_key")["groups"]
+    assert [model["model"] for model in group["top_models"]] == ["a", "b", "c"]
+    assert group["model_count"] == 5
 
 
 def test_an_unknown_grouping_is_refused(client: TestClient, master_key_header: dict[str, str]) -> None:

@@ -30717,6 +30717,10 @@
             ],
             "title": "Latency Ms"
           },
+          "model_count": {
+            "title": "Model Count",
+            "type": "integer"
+          },
           "requests": {
             "title": "Requests",
             "type": "integer"
@@ -30742,7 +30746,8 @@
           "latency_ms",
           "first_at",
           "last_at",
-          "top_models"
+          "top_models",
+          "model_count"
         ],
         "title": "UsageLogGroup",
         "type": "object"

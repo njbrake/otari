@@ -229,7 +229,8 @@ Requests are listed as rows of three lines: the model and its cost; who sent it,
 with its tokens and total time; and how long ago, with its outcome when it did
 not simply succeed. A colored square at the start of the row is the outcome.
 The list starts with the 20 newest and **Load 20 more** adds the next ones to
-the end, up to 1,000. The totals line stays pinned over the list as it scrolls.
+the end, up to 1,000; live updates pause once more than the first 20 are
+listed, as they do on a later page, and resuming goes back to the first 20. The totals line stays pinned over the list as it scrolls.
 Pressing a row opens the request over the whole screen.
 
 The chart on a phone picks one bar rather than a range: press it and slide
@@ -238,8 +239,9 @@ finger; lift to filter the log to that bar.
 
 Since the list has no headers, the row of controls has a **Filters** button
 instead, with a count of the filters applied. It opens a sheet with a **Sort**
-section that orders the list, a **Cost** row that keeps only the requests above
-$0.01, $0.10 or $0.40, and one section per filterable column, in the table's
+section that orders the list, a **Cost** section that keeps only the requests
+above $0.01, $0.10 or $0.40 in one row of choices and offers **Priced only** or
+**Unpriced only**, and one section per other filterable column, in the table's
 order, each holding what that column's funnel holds. Expand a section to load
 its values; changes apply as you make them. **Done** closes the sheet and
 **Clear all** removes every filter.

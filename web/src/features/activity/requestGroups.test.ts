@@ -21,6 +21,7 @@ const group = (overrides: Partial<UsageLogGroup> = {}): UsageLogGroup => ({
   first_at: "2026-11-20T10:00:00Z",
   last_at: "2026-11-20T11:00:00Z",
   top_models: [],
+  model_count: 0,
   ...overrides,
 })
 
@@ -88,6 +89,23 @@ describe("showGroupSearch", () => {
     ).toEqual({ source_label: "s1" })
   })
 
+  it("narrows a filter of several values to the group's own", () => {
+    expect(
+      showGroupSearch(
+        { group: "api_key", api_key_id: ["k1", "k2"] },
+        "api_key",
+        "k1",
+      ),
+    ).toEqual({ api_key_id: ["k1"] })
+    expect(
+      showGroupSearch(
+        { group: "model", model: ["gpt-4o", "claude"] },
+        "model",
+        "claude",
+      ),
+    ).toEqual({ model: ["claude"] })
+  })
+
   it("filters to the empty column for the group with no value", () => {
     expect(showGroupSearch({ group: "api_key" }, "api_key", null)).toEqual({
       is_null: ["api_key"],
@@ -123,11 +141,15 @@ describe("describeGroup", () => {
 })
 
 describe("describeTopModels", () => {
-  it("names two and counts the rest", () => {
-    const models = ["a", "b", "c"].map((model) => ({ model, requests: 1 }))
-    expect(describeTopModels(models)).toBe("a, b +1")
-    expect(describeTopModels(models.slice(0, 1))).toBe("a")
-    expect(describeTopModels([])).toBe("")
+  it("names two and counts every other model the group ran on", () => {
+    const top_models = ["a", "b", "c"].map((model) => ({ model, requests: 1 }))
+    expect(describeTopModels({ top_models, model_count: 3 })).toBe("a, b +1")
+    // The read names three; a group that ran on seven counts the other five.
+    expect(describeTopModels({ top_models, model_count: 7 })).toBe("a, b +5")
+    expect(
+      describeTopModels({ top_models: top_models.slice(0, 1), model_count: 1 }),
+    ).toBe("a")
+    expect(describeTopModels({ top_models: [], model_count: 0 })).toBe("")
   })
 })
 

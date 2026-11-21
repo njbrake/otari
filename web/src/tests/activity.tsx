@@ -246,6 +246,7 @@ export function mockApi(
             latency_ms: members[0].latency_ms,
             first_at: times[0],
             last_at: times.at(-1) ?? times[0],
+            model_count: models.size,
             top_models: [...models.entries()]
               .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
               .slice(0, 3)
