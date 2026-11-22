@@ -1,8 +1,9 @@
 """A catalog model's token limits and capabilities.
 
 From what an operator or organization set (``_overrides``), then what the
-engine serving it says (``_served``), then the live models.dev catalog, then
-the pricing snapshot.
+provider's own listing says (``_served``), then the live models.dev catalog,
+then the pricing snapshot. models.dev is read under the provider's own type
+and, for another Otari, under the vendor its ``vendor/model`` id names.
 """
 
 import uuid
@@ -12,7 +13,8 @@ from any_llm import AnyLLM
 from pydantic import BaseModel, Field
 
 from gateway.core.config import GatewayConfig
-from gateway.services.catalog._metadata import metadata_entry
+from gateway.models.catalog import LISTING_ENGINE
+from gateway.services.catalog._metadata import catalog_provider_type, metadata_entry
 from gateway.services.catalog._model_type import model_type
 from gateway.services.catalog._overrides import MetadataOverride, metadata_override
 from gateway.services.catalog._served import ServedFacts, served_facts
@@ -87,13 +89,14 @@ def _entry(
     """models.dev's entry for a ``provider:model`` key; a bare key names no provider to look it up under.
 
     A model an engine serves is looked up by its Hugging Face id when its
-    provider has no entry for it, which a self-hosted provider never does.
+    provider has no entry for it, which a self-hosted provider never does. A
+    listing that is no engine's names no loaded model, so it is not.
     """
     instance, separator, model_id = model_key.partition(":")
     if not separator:
         return None
-    entry = metadata_entry(models_dev, config.provider_instance_type(instance), model_id)
-    if entry is not None or served is None:
+    entry = metadata_entry(models_dev, catalog_provider_type(config, instance), model_id)
+    if entry is not None or served is None or served.engine == LISTING_ENGINE:
         return entry
     for name in dict.fromkeys((model_id, served.root)):
         if name and (entry := metadata_entry(models_dev, _OPEN_WEIGHTS_PROVIDER, name)) is not None:
@@ -123,13 +126,14 @@ def model_limits(
 ) -> ModelLimits:
     """The token limits of a ``provider:model`` (or bare) key, as a caller in ``organization_id`` reaches it.
 
-    An override first, then the engine serving the model, because it reports
-    the context length it actually runs the model at. Then the live models.dev
+    An override first, then what the provider's own listing says, because
+    the engine reports the context length it actually runs the model at and
+    another Otari or OpenRouter lists both limits. Then the live models.dev
     catalog, because it describes the model as that provider serves it, then
     the pricing snapshot for the context window. The snapshot keeps no output
-    limit, so without a live entry there is none, and no output limit models.dev
-    gives exceeds the context window the override or the engine sets. A bare
-    key names no provider to look any up under.
+    limit, so without a listed or live one there is none, and no output limit
+    exceeds the context window that wins, from wherever it came. A bare key
+    names no provider to look any up under.
     """
     instance, separator, model_id = model_key.partition(":")
     if not separator:
@@ -137,16 +141,16 @@ def model_limits(
     override = _override(config, model_key, organization_id) or MetadataOverride()
     served = _served(config, model_key, organization_id)
     metadata = _entry(config, models_dev, model_key, served)
-    window = override.context_window or (served.context_window if served else None)
-    max_output = metadata.max_output_tokens if metadata else None
+    window = (
+        override.context_window
+        or (served.context_window if served else None)
+        or (metadata.context_window if metadata else None)
+        or model_context_window(instance, model_id)
+    )
+    max_output = (served.max_output_tokens if served else None) or (metadata.max_output_tokens if metadata else None)
     if max_output is not None and window is not None:
         max_output = min(max_output, window)
-    return ModelLimits(
-        context_window=window
-        or (metadata.context_window if metadata else None)
-        or model_context_window(instance, model_id),
-        max_output_tokens=override.max_output_tokens or max_output,
-    )
+    return ModelLimits(context_window=window, max_output_tokens=override.max_output_tokens or max_output)
 
 
 def served_context_window(provider: str | None, model: str, organization_id: uuid.UUID | None = None) -> int | None:
@@ -190,8 +194,9 @@ def model_capabilities(
     An engine that names its parsers overrides two of those flags: it calls
     tools only with a tool-call parser, whatever the model can do, and a
     reasoning parser means the model reasons, as does a listing that describes
-    its reasoning options. What it says it reads overrides models.dev's input
-    modalities, whether or not it named its parsers. An override's fields win
+    its reasoning options or names ``reasoning`` among its parameters. What the
+    engine or listing says it reads overrides models.dev's input modalities,
+    whether or not it named its parsers. An override's fields win
     over all of them, except that it cannot offer ``response_format`` where
     any-llm refuses it.
     """
@@ -228,7 +233,7 @@ def model_capabilities(
             structured_output = override.structured_output
         if override.input_modalities is not None:
             input_modalities = list(override.input_modalities)
-    if not _sends_response_format(config.provider_instance_type(instance), model_id):
+    if not _sends_response_format(catalog_provider_type(config, instance), model_id):
         structured_output = False
     flags = (
         (tool_call, ("tools", "tool_choice")),

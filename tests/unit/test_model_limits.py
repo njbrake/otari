@@ -2,6 +2,8 @@
 
 from typing import Any
 
+import pytest
+
 from gateway.core.config import GatewayConfig
 from gateway.services.catalog._limits import (
     ModelArchitecture,
@@ -12,6 +14,7 @@ from gateway.services.catalog._limits import (
     model_limits,
 )
 from gateway.services.merged_catalog_service import ModelObject
+from gateway.services.providers import _hosted_name_index
 from gateway.types.models_dev import parse_catalog
 
 # Limits that differ from the pricing snapshot's wherever both know the model, so a test can tell which one answered.
@@ -180,3 +183,64 @@ def test_an_undescribed_model_reports_unknown_capabilities() -> None:
     apply_model_metadata(_config(), MODELS_DEV, model)
 
     assert (model.name, model.supported_parameters, model.architecture) == (None, None, None)
+
+
+# --------------------------------------------------------------------------- #
+# Another Otari's ``vendor/model``, read under the vendor
+# --------------------------------------------------------------------------- #
+
+
+def test_another_otari_s_model_is_described_by_its_vendor_s_entry() -> None:
+    config = _config(platform={"provider_type": "otari", "api_key": "t"})
+
+    assert model_limits(config, MODELS_DEV, "platform:openai/gpt-4o") == ModelLimits(64000, 16384)
+    capabilities = model_capabilities(config, MODELS_DEV, "platform:openai/gpt-4o")
+    assert capabilities is not None and capabilities.name == "GPT-4o"
+    assert capabilities.input_modalities == ["text", "image"]
+
+
+def test_a_hosted_otari_provider_is_read_under_its_implementation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Connect names the provider ``otari-ai``, which is no implementation's own name."""
+    monkeypatch.setattr(_hosted_name_index, "_names", {"otari-ai": "otari"})
+
+    assert model_limits(_config(), MODELS_DEV, "otari-ai:openai/gpt-4o") == ModelLimits(64000, 16384)
+
+
+def test_the_vendor_fallback_misses_what_the_vendor_does_not_list() -> None:
+    config = _config(platform={"provider_type": "otari", "api_key": "t"})
+
+    assert model_limits(config, MODELS_DEV, "platform:openai/made-up-model") == ModelLimits(None, None)
+    # An id with no vendor names nothing to look up under.
+    assert model_limits(config, MODELS_DEV, "platform:gpt-4o") == ModelLimits(None, None)
+    assert model_capabilities(config, MODELS_DEV, "platform:gpt-4o") is None
+
+
+def test_only_another_otari_reads_the_vendor_entry() -> None:
+    """OpenRouter spells ids ``vendor/model`` too, but models.dev lists them under OpenRouter itself."""
+    config = _config(router={"provider_type": "openrouter", "api_key": "t"})
+
+    assert model_limits(config, MODELS_DEV, "router:openai/gpt-4o") == ModelLimits(None, None)
+
+
+def test_an_entry_under_the_otari_provider_itself_wins() -> None:
+    catalog = parse_catalog(
+        {
+            "otari": {"models": {"openai/gpt-4o": {"limit": {"context": 1000, "output": 100}}}},
+            "openai": {"models": {"gpt-4o": {"limit": {"context": 64000, "output": 16384}}}},
+        }
+    )
+    config = _config(platform={"provider_type": "otari", "api_key": "t"})
+
+    assert model_limits(config, catalog, "platform:openai/gpt-4o") == ModelLimits(1000, 100)
+
+
+def test_a_listed_output_limit_is_held_to_models_devs_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A listing that gives an output limit and no window is still held to the window models.dev gives."""
+    from gateway.services.catalog import _served
+    from gateway.services.catalog._served import ServedFacts
+
+    monkeypatch.setattr(
+        _served, "_served", {(None, "openai"): {"gpt-4o": ServedFacts(engine="listing", max_output_tokens=100000)}}
+    )
+
+    assert model_limits(_config(), MODELS_DEV, "openai:gpt-4o") == ModelLimits(64000, 64000)

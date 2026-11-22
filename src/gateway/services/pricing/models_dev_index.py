@@ -19,6 +19,7 @@ from typing import Any
 
 from gateway.core.metered_pricing import TIER_THRESHOLD_FIELD
 from gateway.types.models_dev import (
+    OTARI_PROVIDER_TYPE,
     RATE_FIELDS,
     ModelsDevCatalog,
     ModelsDevCost,
@@ -28,6 +29,7 @@ from gateway.types.models_dev import (
     ModelsDevRates,
     models_dev_provider_id,
     models_dev_provider_ids,
+    otari_vendor_model,
     parse_catalog,
 )
 from gateway.types.price_rates import RateColumns, columns_from_pricing
@@ -45,10 +47,6 @@ _HF_BACKEND_PROVIDER_IDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _BEDROCK_PROVIDER_ID = "amazon-bedrock"
-# The any-llm implementation that reaches another Otari, whose model ids are ``vendor:model``.
-_OTARI_PROVIDER = "otari"
-# Another Otari lists a model as ``vendor/model``; ``vendor:model`` is the selector spelling of the same.
-_OTARI_MODEL_ID = re.compile(r"([^/:]+)[/:](.+)")
 _BEDROCK_GEO_PREFIXES = ("us", "eu", "global", "apac", "jp", "au")
 _BEDROCK_VERSION_SUFFIX = re.compile(r"(?:-v\d+(?::\d+)?|:\d+)$")
 
@@ -273,8 +271,8 @@ def _scoped_attempts(provider: str | None, model: str, implementation: str | Non
         attempts += [(provider_id, base) for provider_id in _HF_BACKEND_PROVIDER_IDS.get(backend, (backend,))]
     for name in scoped:
         attempts += [(provider_id, model) for provider_id in dict.fromkeys((*models_dev_provider_ids(name), name))]
-    if _OTARI_PROVIDER in scoped and (split := _OTARI_MODEL_ID.match(model)) is not None:
-        vendor, vendor_model = split.groups()
+    if OTARI_PROVIDER_TYPE in scoped and (split := otari_vendor_model(model)) is not None:
+        vendor, vendor_model = split
         attempts += [
             (provider_id, vendor_model) for provider_id in dict.fromkeys((*models_dev_provider_ids(vendor), vendor))
         ]

@@ -1,4 +1,4 @@
-"""Unit tests for what a vLLM-format or SGLang server says about the models it serves, and how a listing uses it."""
+"""Unit tests for what a provider's model listing says about the models it serves, and how the catalog uses it."""
 
 import uuid
 from collections.abc import Callable
@@ -74,16 +74,98 @@ def test_a_vllm_listing_gives_the_served_context_and_the_loaded_model() -> None:
     assert facts == ServedFacts(engine="vllm", context_window=262144, root="Qwen/Qwen3-32B")
 
 
-def test_a_listing_from_anything_else_says_nothing() -> None:
-    # OpenRouter's and Together's own listings carry ``context_length``, which is not vLLM's field.
+def test_a_listing_that_gives_no_limits_says_nothing() -> None:
     openai = Model.model_validate(
-        {"id": "gpt-4o", "object": "model", "created": 0, "owned_by": "openai", "context_length": 128000}
+        {"id": "gpt-4o", "object": "model", "created": 0, "owned_by": "openai", "display_name": "GPT-4o"}
     )
     # The declared ``models:`` fallback stamps the instance name, which may be ``vllm``, and adds no fields.
     declared = _vllm()
 
     assert facts_from_listing(openai, None) is None
     assert facts_from_listing(declared, None) is None
+
+
+def _listed(**extra: Any) -> Model:
+    return Model.model_validate(
+        {"id": "openai/gpt-4o-mini", "object": "model", "created": 0, "owned_by": "openai", **extra}
+    )
+
+
+def test_another_otari_s_listing_gives_its_limits_and_capabilities() -> None:
+    """otari.ai lists each model the way this gateway's own ``/v1/models`` does."""
+    listed = _listed(
+        context_window=128000,
+        max_output_tokens=16384,
+        supported_parameters=["tools", "tool_choice", "reasoning"],
+        architecture={"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+    )
+
+    assert facts_from_listing(listed, None) == ServedFacts(
+        engine="listing",
+        context_window=128000,
+        max_output_tokens=16384,
+        input_modalities=("text", "image"),
+        reasoning=True,
+    )
+
+
+def test_an_openrouter_listing_gives_its_limits() -> None:
+    listed = _listed(
+        context_length=128000,
+        top_provider={"context_length": 128000, "max_completion_tokens": 16384, "is_moderated": True},
+        supported_parameters=["tools", "temperature"],
+        architecture={"input_modalities": ["text"], "output_modalities": ["text"], "tokenizer": "GPT"},
+    )
+
+    assert facts_from_listing(listed, None) == ServedFacts(
+        engine="listing", context_window=128000, max_output_tokens=16384, input_modalities=("text",)
+    )
+
+
+def test_a_listed_modality_is_spelled_as_models_dev_spells_it() -> None:
+    """OpenRouter's ``file`` is models.dev's ``pdf``, which the catalog's filter offers; an unknown word is dropped."""
+    listed = _listed(context_length=1, architecture={"input_modalities": ["text", "file", "pdf", "hologram"]})
+    unknown = _listed(context_length=1, architecture={"input_modalities": ["hologram"]})
+
+    assert facts_from_listing(listed, None) == ServedFacts(
+        engine="listing", context_window=1, input_modalities=("text", "pdf")
+    )
+    assert facts_from_listing(unknown, None) == ServedFacts(engine="listing", context_window=1)
+
+
+def test_a_listing_with_only_an_output_limit_is_kept() -> None:
+    assert facts_from_listing(_listed(max_output_tokens=4096), None) == ServedFacts(
+        engine="listing", max_output_tokens=4096
+    )
+
+
+def test_a_listing_s_bad_limits_and_capabilities_are_ignored() -> None:
+    for value in (0, -1, True, "128000", 2.5, 2**31, None):
+        assert (
+            facts_from_listing(_listed(context_window=value, context_length=value, max_output_tokens=value), None)
+            is None
+        )
+    for top_provider in ("16384", [16384], {"max_completion_tokens": "16384"}):
+        assert facts_from_listing(_listed(top_provider=top_provider), None) is None
+
+    architectures: list[object] = [
+        "text",
+        {"input_modalities": "text"},
+        {"input_modalities": []},
+        {"input_modalities": [1]},
+    ]
+    for architecture in architectures:
+        facts = facts_from_listing(_listed(context_window=1, architecture=architecture), None)
+        assert facts == ServedFacts(engine="listing", context_window=1)
+    facts = facts_from_listing(_listed(context_window=1, supported_parameters="reasoning"), None)
+    assert facts is not None and not facts.reasoning
+
+
+def test_a_vllm_listing_reads_only_its_own_window() -> None:
+    """``max_model_len`` is the length the server runs the model at, whatever else the entry says."""
+    facts = facts_from_listing(_vllm(max_model_len=262144, context_length=1048576, max_output_tokens=8192), None)
+
+    assert facts == ServedFacts(engine="vllm", context_window=262144)
 
 
 def test_a_server_built_on_vllm_is_read_under_its_own_name() -> None:
@@ -398,6 +480,28 @@ async def test_a_provider_that_is_no_engine_never_writes(writes: list[str]) -> N
 
 
 @pytest.mark.asyncio
+async def test_a_listing_s_limits_are_kept_and_its_declared_fallback_keeps_them(writes: list[str]) -> None:
+    await record_served_models("otari-ai", [_listed(context_window=128000, max_output_tokens=16384)], None)
+
+    await record_served_models("otari-ai", [_listed()], None)
+
+    assert served_facts("otari-ai", "openai/gpt-4o-mini") == ServedFacts(
+        engine="listing", context_window=128000, max_output_tokens=16384
+    )
+    assert writes == ["write"]
+
+
+@pytest.mark.asyncio
+async def test_a_listing_that_stops_giving_limits_drops_them(writes: list[str]) -> None:
+    await record_served_models("otari-ai", [_listed(context_window=128000)], None)
+
+    await record_served_models("otari-ai", [_listed(pricing_source="listed")], None)
+
+    assert served_facts("otari-ai", "openai/gpt-4o-mini") is None
+    assert len(writes) == 2
+
+
+@pytest.mark.asyncio
 async def test_a_hosted_provider_listing_is_kept_under_its_own_name(writes: list[str]) -> None:
     """A hosted provider is dialed through its own credential, and listed by its name, so it is kept under that."""
     get_model_cache().clear()
@@ -457,6 +561,25 @@ async def test_an_sglang_that_names_no_parsers_keeps_models_dev_s_tool_flags(mon
     assert capabilities is not None
     assert capabilities.supported_parameters == ["tools", "tool_choice", "response_format", "reasoning"]
     assert capabilities.input_modalities == ["text", "image"]
+
+
+def test_a_listed_output_limit_beats_models_dev_and_is_capped_by_the_window() -> None:
+    config = GatewayConfig(master_key="test", providers={"router": {"provider_type": "openrouter", "api_key": "k"}})
+    catalog = parse_catalog(
+        {"openrouter": {"models": {"m": {"limit": {"context": 64000, "output": 32000}}, "n": {"limit": {"output": 9}}}}}
+    )
+    _serve("router", "m", ServedFacts(engine="listing", context_window=8000, max_output_tokens=16000))
+    _serve("router", "n", ServedFacts(engine="listing", context_window=8000))
+
+    assert model_limits(config, catalog, "router:m") == ModelLimits(8000, 8000)
+    assert model_limits(config, catalog, "router:n") == ModelLimits(8000, 9)
+
+
+def test_a_plain_listing_is_not_looked_up_by_hugging_face_id() -> None:
+    """Only an engine names the open-weight model it loaded."""
+    _serve("cairn", "Qwen/Qwen3-32B", ServedFacts(engine="listing", context_window=1000))
+
+    assert model_limits(_config(), MODELS_DEV, "cairn:Qwen/Qwen3-32B") == ModelLimits(1000, None)
 
 
 def test_a_context_length_its_column_cannot_hold_is_left_unknown() -> None:

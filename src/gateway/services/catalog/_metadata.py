@@ -33,3 +33,18 @@ def metadata_entry(catalog: ModelsDevCatalog | None, provider_type: str, model_i
         return None
     model = catalog.model_for(provider_type, model_id)
     return None if model is None else ModelCatalogEntry.from_model(model)
+
+
+def catalog_provider_type(config: GatewayConfig, instance: str) -> str:
+    """The any-llm implementation behind ``instance``, a configured instance or a hosted provider.
+
+    A hosted provider's name need not be its implementation's: the otari.ai
+    provider Connect adds is ``otari-ai``, served by ``otari``. Any other name
+    is returned as it is, as ``provider_instance_type`` returns it.
+    """
+    if instance in config.providers:
+        return config.provider_instance_type(instance)
+    # Imported here: the providers package imports this one.
+    from gateway.services.providers import hosted_implementation  # noqa: PLC0415
+
+    return hosted_implementation(instance) or instance
