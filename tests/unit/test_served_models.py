@@ -122,6 +122,17 @@ def test_an_openrouter_listing_gives_its_limits() -> None:
     )
 
 
+def test_a_listed_modality_is_spelled_as_models_dev_spells_it() -> None:
+    """OpenRouter's ``file`` is models.dev's ``pdf``, which the catalog's filter offers; an unknown word is dropped."""
+    listed = _listed(context_length=1, architecture={"input_modalities": ["text", "file", "pdf", "hologram"]})
+    unknown = _listed(context_length=1, architecture={"input_modalities": ["hologram"]})
+
+    assert facts_from_listing(listed, None) == ServedFacts(
+        engine="listing", context_window=1, input_modalities=("text", "pdf")
+    )
+    assert facts_from_listing(unknown, None) == ServedFacts(engine="listing", context_window=1)
+
+
 def test_a_listing_with_only_an_output_limit_is_kept() -> None:
     assert facts_from_listing(_listed(max_output_tokens=4096), None) == ServedFacts(
         engine="listing", max_output_tokens=4096

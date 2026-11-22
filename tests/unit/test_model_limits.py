@@ -232,3 +232,15 @@ def test_an_entry_under_the_otari_provider_itself_wins() -> None:
     config = _config(platform={"provider_type": "otari", "api_key": "t"})
 
     assert model_limits(config, catalog, "platform:openai/gpt-4o") == ModelLimits(1000, 100)
+
+
+def test_a_listed_output_limit_is_held_to_models_devs_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A listing that gives an output limit and no window is still held to the window models.dev gives."""
+    from gateway.services.catalog import _served
+    from gateway.services.catalog._served import ServedFacts
+
+    monkeypatch.setattr(
+        _served, "_served", {(None, "openai"): {"gpt-4o": ServedFacts(engine="listing", max_output_tokens=100000)}}
+    )
+
+    assert model_limits(_config(), MODELS_DEV, "openai:gpt-4o") == ModelLimits(64000, 64000)

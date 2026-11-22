@@ -132,7 +132,7 @@ def model_limits(
     catalog, because it describes the model as that provider serves it, then
     the pricing snapshot for the context window. The snapshot keeps no output
     limit, so without a listed or live one there is none, and no output limit
-    exceeds the context window the override or the listing sets. A bare key
+    exceeds the context window that wins, from wherever it came. A bare key
     names no provider to look any up under.
     """
     instance, separator, model_id = model_key.partition(":")
@@ -141,16 +141,16 @@ def model_limits(
     override = _override(config, model_key, organization_id) or MetadataOverride()
     served = _served(config, model_key, organization_id)
     metadata = _entry(config, models_dev, model_key, served)
-    window = override.context_window or (served.context_window if served else None)
+    window = (
+        override.context_window
+        or (served.context_window if served else None)
+        or (metadata.context_window if metadata else None)
+        or model_context_window(instance, model_id)
+    )
     max_output = (served.max_output_tokens if served else None) or (metadata.max_output_tokens if metadata else None)
     if max_output is not None and window is not None:
         max_output = min(max_output, window)
-    return ModelLimits(
-        context_window=window
-        or (metadata.context_window if metadata else None)
-        or model_context_window(instance, model_id),
-        max_output_tokens=override.max_output_tokens or max_output,
-    )
+    return ModelLimits(context_window=window, max_output_tokens=override.max_output_tokens or max_output)
 
 
 def served_context_window(provider: str | None, model: str, organization_id: uuid.UUID | None = None) -> int | None:

@@ -196,9 +196,10 @@ override sets them (see [Overriding a model's details](#overriding-a-models-deta
   (`context_length`, `top_provider.max_completion_tokens`) or an
   OpenAI-compatible server listing `context_window` and `max_output_tokens`
   does, reports those over models.dev's, and no `max_output_tokens` above the
-  context window. They are stored as a server's are. Such a listing's `architecture.input_modalities` sets
-  `input_modalities`, and `reasoning` among its `supported_parameters` adds
-  `reasoning`.
+  context window. They are stored as a server's are. Such a listing's
+  `architecture.input_modalities` sets `input_modalities`, in models.dev's
+  words (OpenRouter's `file` is `pdf`), and `reasoning` among its
+  `supported_parameters` adds `reasoning`.
 - A provider of the `otari` implementation, such as the `otari-ai` provider
   **Connect otari.ai** adds, names a model `vendor/model`, which models.dev
   lists under the vendor. Where models.dev has no entry under the provider

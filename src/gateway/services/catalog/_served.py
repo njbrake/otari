@@ -55,6 +55,9 @@ _MAX_PARSER_CHARS = 64
 _MAX_CONTEXT_WINDOW = 2**31 - 1
 # What a listing says a model reads, bounded as the parsers are: a handful of short words.
 _MAX_MODALITIES = 8
+# A listed modality in the models.dev words the catalog filters by. OpenRouter says
+# ``file`` where models.dev says ``pdf``; a word with no models.dev match is dropped.
+_LISTED_MODALITIES = {"text": "text", "image": "image", "audio": "audio", "video": "video", "pdf": "pdf", "file": "pdf"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +140,8 @@ def _listed_modalities(extra: Mapping[str, Any]) -> tuple[str, ...] | None:
         return None
     if not all(_text(value, _MAX_PARSER_CHARS) for value in listed):
         return None
-    return tuple(dict.fromkeys(listed))
+    known = tuple(dict.fromkeys(_LISTED_MODALITIES[value] for value in listed if value in _LISTED_MODALITIES))
+    return known or None
 
 
 def _listed_reasoning(extra: Mapping[str, Any]) -> bool:
