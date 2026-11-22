@@ -10,6 +10,8 @@ from gateway.models.base import Base
 
 # The inference engines whose model listing says how they serve a model.
 SERVED_ENGINES = ("vllm", "sglang")
+# A listing that is no engine's but carries a model's limits itself, as another Otari's or OpenRouter's does.
+LISTING_ENGINE = "listing"
 
 
 class ServedModel(Base):
@@ -28,12 +30,13 @@ class ServedModel(Base):
     ``settings_reported`` says whether the engine told how it was started.
     Without it a ``None`` parser means unknown rather than switched off.
     ``reasoning`` says the listing described the model's reasoning options.
+    ``max_output_tokens`` is only ever a listing's own, since no engine reports one.
     """
 
     __tablename__ = "served_models"
     __table_args__ = (
         CheckConstraint(
-            "engine IN (" + ", ".join(f"'{engine}'" for engine in SERVED_ENGINES) + ")",
+            "engine IN (" + ", ".join(f"'{engine}'" for engine in (*SERVED_ENGINES, LISTING_ENGINE)) + ")",
             name="ck_served_models_engine",
         ),
         CheckConstraint("(organization_id IS NULL) = (org_provider_key_id IS NULL)", name="ck_served_models_key_owner"),
@@ -66,6 +69,7 @@ class ServedModel(Base):
     )
     engine: Mapped[str] = mapped_column(String(16))
     context_window: Mapped[int | None] = mapped_column(default=None)
+    max_output_tokens: Mapped[int | None] = mapped_column(default=None)
     root: Mapped[str | None] = mapped_column(String(512), default=None)
     settings_reported: Mapped[bool] = mapped_column(default=False)
     reasoning_parser: Mapped[str | None] = mapped_column(String(64), default=None)

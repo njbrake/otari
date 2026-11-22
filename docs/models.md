@@ -192,6 +192,19 @@ override sets them (see [Overriding a model's details](#overriding-a-models-deta
   added or its models are refreshed. Where the provider has no models.dev entry for the model,
   the entry comes from models.dev's Hugging Face listing, under the model's own
   name or the model the server loaded.
+- Any other provider whose listing gives a model's limits, as OpenRouter
+  (`context_length`, `top_provider.max_completion_tokens`) or an
+  OpenAI-compatible server listing `context_window` and `max_output_tokens`
+  does, reports those over models.dev's, and no `max_output_tokens` above the
+  context window. They are stored as a server's are. Such a listing's `architecture.input_modalities` sets
+  `input_modalities`, and `reasoning` among its `supported_parameters` adds
+  `reasoning`.
+- A provider of the `otari` implementation, such as the `otari-ai` provider
+  **Connect otari.ai** adds, names a model `vendor/model`, which models.dev
+  lists under the vendor. Where models.dev has no entry under the provider
+  itself, the entry is the vendor's (`openai` and `gpt-4o-mini` for
+  `openai/gpt-4o-mini`), so its limits and capabilities are estimates from the
+  vendor's public entry.
 - Until the gateway has fetched models.dev, and always with
   `models_dev_metadata: false`, the entry comes from the models.dev catalog
   bundled with the gateway.
@@ -203,6 +216,8 @@ override sets them (see [Overriding a model's details](#overriding-a-models-deta
   same values for each offering.
 - An instance declared `openai-compatible` is looked up under OpenAI, so a
   model it serves under another name usually has no models.dev entry.
+- A hosted provider is looked up under its implementation, whatever its name
+  (`groq-eu` under Groq, `otari-ai` under `otari`).
 
 Each model also says what it accepts, in the fields OpenRouter's model listing
 uses:

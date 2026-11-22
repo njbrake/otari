@@ -5,7 +5,12 @@ server runs it at, and ``root``, the model it loaded under whatever name it is
 served by. A server built on vLLM keeps ``max_model_len`` under an ``owned_by``
 of its own, and may describe the model's reasoning options in ``reasoning``.
 SGLang also answers ``/model_info`` with the tool-call and reasoning parsers it
-was started with and what it reads besides text. Discovery reports
+was started with and what it reads besides text. Any other listing may carry
+the limits itself: another Otari lists ``context_window`` and
+``max_output_tokens``, OpenRouter ``context_length`` and
+``top_provider.max_completion_tokens``, and both what a model reads in
+``architecture.input_modalities`` and whether it reasons in
+``supported_parameters``. Discovery reports
 each listing here; a listing is the same whichever way the provider was
 connected, so a configured instance and a hosted provider are covered alike,
 and an organization's own key reports its listings under its organization.
@@ -29,7 +34,7 @@ from any_llm.types.model import Model
 from gateway.core.database import DATABASE_ERRORS, describe_database_error
 from gateway.core.unit_of_work import UnitOfWork, create_unit_of_work
 from gateway.log_config import logger
-from gateway.models.catalog import SERVED_ENGINES, ServedModel
+from gateway.models.catalog import LISTING_ENGINE, SERVED_ENGINES, ServedModel
 from gateway.repositories.catalog import ModelMetadataOverrideRepository, ServedModelRepository
 from gateway.services.catalog._overrides import overrides_generation, replace_overrides
 
@@ -48,6 +53,8 @@ _MAX_MODELS_PER_LISTING = 1000
 _MAX_MODEL_CHARS = 512
 _MAX_PARSER_CHARS = 64
 _MAX_CONTEXT_WINDOW = 2**31 - 1
+# What a listing says a model reads, bounded as the parsers are: a handful of short words.
+_MAX_MODALITIES = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +77,7 @@ class ServedFacts:
 
     engine: str
     context_window: int | None = None
+    max_output_tokens: int | None = None
     root: str | None = None
     settings_reported: bool = False
     reasoning_parser: str | None = None
@@ -112,10 +120,56 @@ def _engine(model: Model) -> str | None:
 
 
 def _positive_int(value: object) -> int | None:
-    """A context length its column can hold, else ``None``."""
+    """A token count its column can hold, else ``None``."""
     if isinstance(value, int) and not isinstance(value, bool) and 0 < value <= _MAX_CONTEXT_WINDOW:
         return value
     return None
+
+
+def _mapping(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _listed_modalities(extra: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """What ``architecture.input_modalities`` says a model reads, or ``None`` when it says nothing usable."""
+    listed = _mapping(extra.get("architecture")).get("input_modalities")
+    if not isinstance(listed, list) or not 0 < len(listed) <= _MAX_MODALITIES:
+        return None
+    if not all(_text(value, _MAX_PARSER_CHARS) for value in listed):
+        return None
+    return tuple(dict.fromkeys(listed))
+
+
+def _listed_reasoning(extra: Mapping[str, Any]) -> bool:
+    """Whether the listing says the model reasons, by a ``reasoning`` object or a ``reasoning`` parameter."""
+    if isinstance(extra.get("reasoning"), dict):
+        return True
+    parameters = extra.get("supported_parameters")
+    return isinstance(parameters, list) and "reasoning" in parameters
+
+
+def _listing_facts(model: Model) -> ServedFacts | None:
+    """What a listing that is no engine's says of its model, or ``None`` when it gives no limit.
+
+    Read only from a listing that gives a context window or an output limit,
+    so a provider whose listing describes no model's limits records nothing.
+    any-llm reads ``context_window`` or ``context_length`` into the model's
+    own ``context_window``.
+    """
+    extra = model.model_extra or {}
+    window = _positive_int(model.context_window) or _positive_int(extra.get("context_length"))
+    max_output = _positive_int(extra.get("max_output_tokens")) or _positive_int(
+        _mapping(extra.get("top_provider")).get("max_completion_tokens")
+    )
+    if window is None and max_output is None:
+        return None
+    return ServedFacts(
+        engine=LISTING_ENGINE,
+        context_window=window,
+        max_output_tokens=max_output,
+        input_modalities=_listed_modalities(extra),
+        reasoning=_listed_reasoning(extra),
+    )
 
 
 def _text(value: object, limit: int) -> str | None:
@@ -124,11 +178,17 @@ def _text(value: object, limit: int) -> str | None:
 
 
 def facts_from_listing(model: Model, settings: EngineSettings | None) -> ServedFacts | None:
-    """What a vLLM-format or SGLang listing entry says about its model, or ``None`` for any other listing."""
-    engine = _engine(model)
-    if engine is None or len(model.id) > _MAX_MODEL_CHARS:
+    """What a listing entry says about its model, or ``None`` when it says nothing Otari keeps.
+
+    A vLLM-format or SGLang entry is read by its engine's fields, and any other
+    by the limit fields it carries (:func:`_listing_facts`).
+    """
+    if len(model.id) > _MAX_MODEL_CHARS:
         return None
     extra = model.model_extra or {}
+    engine = _engine(model)
+    if engine is None:
+        return _listing_facts(model)
     facts = ServedFacts(
         engine=engine,
         context_window=_positive_int(extra.get("max_model_len")),
@@ -233,6 +293,7 @@ def _facts(row: ServedModel) -> ServedFacts:
     return ServedFacts(
         engine=row.engine,
         context_window=row.context_window,
+        max_output_tokens=row.max_output_tokens,
         root=row.root,
         settings_reported=row.settings_reported,
         reasoning_parser=row.reasoning_parser,
@@ -257,10 +318,10 @@ async def record_served_models(
     is the deployment's. ``uow`` is the caller's own, for a request; a worker
     passes none and the write gets one of its own.
 
-    Writes only when the answer changed, so a provider that is no engine, or
-    one whose answer holds, costs nothing per dial. A listing with no engine
-    fields at all keeps what was stored, because it is the instance's declared
-    ``models:`` standing in for a listing that failed. A failed write is
+    Writes only when the answer changed, so a provider whose listing gives no
+    limits, or one whose answer holds, costs nothing per dial. A listing with
+    no fields beyond the standard ones keeps what was stored, because it is the
+    instance's declared ``models:`` standing in for a listing that failed. A failed write is
     logged: the worker keeps the answer, and the next listing that differs from
     the stored one tries again.
     """

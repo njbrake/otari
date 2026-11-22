@@ -18,6 +18,7 @@ snapshot is cut with the same rules as every snapshot the gateway stores.
 """
 
 import math
+import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass
@@ -33,6 +34,7 @@ __all__ = [
     "MODELS_DEV_BASE_URL",
     "MODELS_DEV_SOURCES",
     "MODELS_DEV_UNITS",
+    "OTARI_PROVIDER_TYPE",
     "RATE_FIELDS",
     "REFUSE_DAMAGED_SHARE",
     "ModelsDevApi",
@@ -54,6 +56,7 @@ __all__ = [
     "models_dev_provider_id",
     "models_dev_provider_ids",
     "normalize_models_dev_base_url",
+    "otari_vendor_model",
     "parse_catalog",
     "parse_catalog_v2",
     "read_catalog_document",
@@ -158,6 +161,19 @@ def models_dev_provider_ids(provider_type: str) -> tuple[str, ...]:
     first = models_dev_provider_id(provider_type)
     moved = _MODELS_DEV_MOVED_PROVIDERS.get(first)
     return (first,) if moved is None else (first, moved)
+
+
+# The any-llm implementation that reaches another Otari, such as otari.ai. It
+# lists a model as ``vendor/model`` (``vendor:model`` in a selector), and
+# models.dev knows that model under the vendor's own provider id.
+OTARI_PROVIDER_TYPE = "otari"
+_OTARI_MODEL_ID = re.compile(r"([^/:]+)[/:](.+)")
+
+
+def otari_vendor_model(model_id: str) -> tuple[str, str] | None:
+    """The ``(vendor, model)`` another Otari's ``vendor/model`` id names, or ``None`` for an id with no vendor."""
+    split = _OTARI_MODEL_ID.fullmatch(model_id)
+    return None if split is None else (split.group(1), split.group(2))
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,7 +439,17 @@ class ModelsDevCatalog:
         An exact id wins; failing one, an id that differs only in case matches,
         because models.dev lowercases some providers' ids (OVHcloud's) that the
         provider itself lists in mixed case.
+
+        Another Otari's ``vendor/model``, which models.dev has no provider for,
+        is looked up as the vendor's ``model`` when nothing is listed under it.
         """
+        found = self._model_under(provider_type, model_id)
+        if found is not None or provider_type != OTARI_PROVIDER_TYPE:
+            return found
+        split = otari_vendor_model(model_id)
+        return None if split is None else self._model_under(*split)
+
+    def _model_under(self, provider_type: str, model_id: str) -> ModelsDevModel | None:
         names = (model_id, model_id.removeprefix(LISTING_PREFIX))
         providers = [self.providers[key] for key in models_dev_provider_ids(provider_type) if key in self.providers]
         for provider in providers:

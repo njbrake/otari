@@ -15,7 +15,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from gateway.core.config import API_ROOT, GatewayConfig
-from gateway.services.catalog._metadata import metadata_entry
+from gateway.services.catalog._metadata import catalog_provider_type, metadata_entry
 from gateway.services.model_identity import own_providers_for_vendor_slug, vendor_slug
 from gateway.types.model_type import ModelType
 from gateway.types.models_dev import ModelsDevCatalog
@@ -138,7 +138,7 @@ def model_type(config: GatewayConfig, models_dev: ModelsDevCatalog | None, selec
     instance, separator, model_id = selector.partition(":")
     if not separator:
         return None
-    return offering_model_type(models_dev, instance, config.provider_instance_type(instance), model_id)
+    return offering_model_type(models_dev, instance, catalog_provider_type(config, instance), model_id)
 
 
 def catalog_model_type(offerings: Sequence[tuple[str, ModelType | None]], vendor: str | None) -> ModelType | None:
