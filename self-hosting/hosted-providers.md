@@ -237,6 +237,9 @@ What a connection stores:
   Both are stored whether `default_pricing` is on or off, for a provider of the
   `otari` implementation only. Set your own rate to replace either. A model
   neither prices is offered switched off, as on any hosted provider.
+- Each model's context window as otari.ai lists it, and otherwise the limits
+  and capabilities of the vendor's models.dev entry (see
+  [Models](https://docs.otari.ai/reference/gateway/models)).
 
 Connecting again replaces the key of the existing `otari-ai` provider. The
 earlier key stays valid on otari.ai until you revoke it on its

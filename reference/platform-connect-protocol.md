@@ -175,6 +175,13 @@ After the key is issued, the gateway reads the platform's model listing
   model's rate on the gateway. A model whose block is null, or lacks a numeric
   input or output rate, is priced from its vendor's public rate as an estimate,
   the vendor being the part of the `id` before the first `/`.
+- A model's `context_window`, where the listing gives one, is the context
+  window the gateway lists for it. The gateway also reads `max_output_tokens`,
+  `architecture.input_modalities` and `reasoning` among `supported_parameters`
+  where they reach it, which the Otari client it lists models with does not
+  carry today. A limit or capability that does not arrive is estimated from
+  the vendor's public models.dev entry, the vendor named as for pricing, and
+  no output limit exceeds the listed context window.
 
 ## What the platform may rely on
 
