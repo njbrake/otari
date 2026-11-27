@@ -507,7 +507,8 @@ def tool_not_allowed_detail(
 def _known_prefix(config: GatewayConfig, prefix: str, key_slugs: Collection[str]) -> bool:
     """Whether a prefix names something a model allow-list entry can legitimately gate.
 
-    A configured provider instance, a known any-llm provider, or one of
+    A configured provider instance, a known any-llm provider, a hosted provider
+    by its own name (``otari-ai``, which no implementation is called), or one of
     ``key_slugs``, the slugs the organization's own keys are reached by. The
     configured decision providers are accepted because ``/v1/decisions`` checks
     ``<provider>:<model>``.
@@ -515,6 +516,11 @@ def _known_prefix(config: GatewayConfig, prefix: str, key_slugs: Collection[str]
     if prefix in config.providers or prefix in key_slugs:
         return True
     if prefix in config.decision_providers:
+        return True
+    # Imported here: the providers package imports this module.
+    from gateway.services.providers import hosted_implementation  # noqa: PLC0415
+
+    if hosted_implementation(prefix) is not None:
         return True
     try:
         LLMProvider(prefix)
