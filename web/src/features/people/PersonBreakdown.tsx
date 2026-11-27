@@ -18,7 +18,7 @@ import {
   personCutOf,
   rowFigures,
   splitRows,
-} from "@/features/people/personBreakdown"
+} from "@/features/people/personBreakdownModel"
 import type { PersonSpend } from "@/features/people/usePersonSpend"
 import { useTheirWorkspace } from "@/features/people/useTheirWorkspace"
 import {

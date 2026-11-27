@@ -1,5 +1,8 @@
 import type { UsageSummary } from "@/client"
-import { type PersonCut, personCutOf } from "@/features/people/personBreakdown"
+import {
+  type PersonCut,
+  personCutOf,
+} from "@/features/people/personBreakdownModel"
 import { type SpendWindow, usageRange } from "@/features/spend/period"
 import type { BreakdownSort } from "@/features/usage/breakdownSort"
 import { NO_BREAKDOWNS, useUsageSummary } from "@/shared/api/usage"

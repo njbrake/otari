@@ -21,7 +21,7 @@ import {
   formatSpend,
   personCutOf,
   splitTotals,
-} from "@/features/people/personBreakdown"
+} from "@/features/people/personBreakdownModel"
 import {
   DEFAULT_PERSON_PERIOD,
   PERSON_PERIODS,
