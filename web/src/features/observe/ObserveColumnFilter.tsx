@@ -49,6 +49,15 @@ const EXTRAS: Record<
       { on: "false", label: "Unpriced only" },
     ],
   },
+  // Who paid the provider: a hosted provider the deployment pays for, or the
+  // organization's own keys and endpoints.
+  paid: {
+    key: "paid_by",
+    choices: [
+      { on: "true", label: "Hosted only" },
+      { on: "false", label: "Own keys only" },
+    ],
+  },
   direct: {
     key: "routed",
     choices: [{ on: "false", label: "Direct requests only" }],

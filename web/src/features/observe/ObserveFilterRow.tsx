@@ -11,6 +11,7 @@ import {
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import {
   describeSource,
+  PAID_BY_OPTIONS,
   PRICED_OPTIONS,
   STATUS_OPTIONS,
   TOOL_OPTIONS,
@@ -86,6 +87,7 @@ const CLEARED: Partial<Record<ObserveUrlKey, string | []>> = {
   cost_gt: "",
   latency_ms_gt: "",
   priced: "",
+  paid_by: "",
   tool: "",
   source: "",
   exclude_source: [],
@@ -309,6 +311,9 @@ export function ObserveFilterRow({
       : []),
     ...singleChip("priced", "Priced", (value) =>
       labelFrom(PRICED_OPTIONS, value),
+    ),
+    ...singleChip("paid_by", "Paid by", (value) =>
+      labelFrom(PAID_BY_OPTIONS, value),
     ),
     ...singleChip("tool", "Tool", (value) => labelFrom(TOOL_OPTIONS, value)),
     ...singleChip("source", "Source", describeSource),

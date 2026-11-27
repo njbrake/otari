@@ -52,7 +52,8 @@ With nothing to act on it says so in one line. The figures follow:
   when Home shows one workspace, since **Requests** lists one at a time.
 - Billed tokens, and how much of the input was read from cache.
 - **People active**: how many members spent anything in the window, and how
-  many sessions ran. **See the sessions** opens them.
+  many sessions ran. **See the sessions** opens them, on the workspace Home
+  shows or on all of them.
 
 **Month against the budget** reads one calendar month at a time: its charged
 spend (what counted toward a budget) as a running total, a bar a day, against
@@ -335,6 +336,15 @@ or delete it. It cannot be made private again, since nobody would be left to
 open it, so its menu offers **Delete** where an owner's offers **Stop sharing**.
 Should its owner return to the workspace, it is theirs again. On a
 phone, **Views** sits in the same row of controls as **Filters**.
+
+The views follow the workspace selected in the dashboard. A link from Home opens
+them on the workspace Home showed instead, or on all workspaces, and a
+**Workspace** control beside the title says which and changes it. Picking a
+workspace in the dashboard's switcher goes back to following it.
+
+The **Router savings** tab beside them has its own period control and none of
+these filters; it is covered under
+[Agent model recommendations](routing.md#agent-model-recommendations).
 
 ## Find one request
 

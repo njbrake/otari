@@ -562,15 +562,10 @@ class UsageService:
         rank_order: SortOrder = "desc",
         with_p95: bool = False,
     ) -> list[UsageGroupRow]:
-        """One dimension's top groups, labeled where the key is an opaque id, with the remainder folded.
+        """One dimension's top groups, read on its own and labeled.
 
-        The user and key dimensions are labeled because their keys are ids:
-        resolving the label here is what lets a client offer a user or key filter
-        without holding those whole tables. A model is labeled and grouped with
-        its other spellings (:func:`grouped_models`); a source or endpoint
-        already reads as its own name. ``with_p95`` reads each listed group's
-        latency from the rows; ranking by ``p95`` reads every group's, since
-        which groups make the cap depends on all of them.
+        ``with_p95`` reads each listed group's latency; ranking by ``p95`` reads
+        every group's, since which groups make the cap depends on all of them.
         """
         if rank_by == "p95":
             every = await self._usage_logs.groups(filters, scope, dimension=dimension, limit=None)
@@ -585,6 +580,17 @@ class UsageService:
                     filters, scope, dimension=dimension, keys={row.key for row in rows}
                 )
                 rows = [row.model_copy(update={"p95_latency_ms": latencies.get(row.key)}) for row in rows]
+        return await self._labeled(rows, totals, dimension=dimension)
+
+    async def _labeled(self, rows: list[UsageGroupRow], totals: UsageTotals, *, dimension: str) -> list[UsageGroupRow]:
+        """One dimension's top groups, labeled where the key is an opaque id, with the remainder folded.
+
+        The user and key dimensions are labeled because their keys are ids:
+        resolving the label here is what lets a client offer a user or key filter
+        without holding those whole tables. A model is labeled and grouped with
+        its other spellings (:func:`grouped_models`); a source or endpoint
+        already reads as its own name.
+        """
         if dimension == "model":
             return _with_fold(grouped_models(rows), totals)
         keys = {row.key for row in rows if row.key is not None}

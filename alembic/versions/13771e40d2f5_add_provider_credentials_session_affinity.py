@@ -24,6 +24,10 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _has_plain_client_args() -> bool:
+    return any(c["name"] == "client_args" for c in sa.inspect(op.get_bind()).get_columns("provider_credentials"))
+
+
 def _provider_credentials(*, with_session_affinity: bool) -> sa.Table:
     columns = [
         sa.Column("instance", sa.String(), nullable=False),
@@ -31,7 +35,13 @@ def _provider_credentials(*, with_session_affinity: bool) -> sa.Table:
         sa.Column("api_base", sa.String(), nullable=True),
         sa.Column("encrypted_api_key", sa.String(), nullable=True),
         sa.Column("last4", sa.String(), nullable=True),
-        sa.Column("client_args", sa.JSON(), nullable=False),
+        # Upstream's b2d4f6a8c0e3 encrypts this column, and on a fresh chain it may
+        # run before this revision, so the declared shape follows the table.
+        (
+            sa.Column("client_args", sa.JSON(), nullable=False)
+            if _has_plain_client_args()
+            else sa.Column("encrypted_client_args", sa.String(), nullable=True)
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     ]

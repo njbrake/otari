@@ -33,7 +33,16 @@ from sqlalchemy import (
 from sqlalchemy import cast as sql_cast
 
 from gateway.core.metered_pricing import ChargeLine
-from gateway.core.sql import bucket_expr, canonical_bucket, dialect_name, match_any, utc_bound, utc_iso
+from gateway.core.sql import (
+    WorkspaceIds,
+    bucket_expr,
+    canonical_bucket,
+    dialect_name,
+    in_workspaces,
+    match_any,
+    utc_bound,
+    utc_iso,
+)
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage import MIN_THROUGHPUT_TOKENS
 from gateway.models.usage import (
@@ -249,7 +258,7 @@ class UsageScope:
     narrows the scope to the rows one key wrote.
     """
 
-    workspaces: Collection[uuid.UUID] | Select[uuid.UUID] | None
+    workspaces: WorkspaceIds | None
     api_key_id: str | None = None
 
 
@@ -336,6 +345,7 @@ class UsageFilters:
     priced: bool | None = None
     tool: str | None = None
     counts_toward_budget: bool | None = None
+    deployment_paid: bool | None = None
     request_group_id: list[str] | None = None
     workspace_id: uuid.UUID | None = None
     refine: UsageRefinements = field(default_factory=UsageRefinements)
@@ -478,23 +488,15 @@ _ROLLUP_KEYS: tuple[str, ...] = (
     "status",
     "status_code",
     "counts_toward_budget",
+    "deployment_paid",
 )
 
 
 def _scope_conditions(scope: UsageScope, columns: Any) -> list[ColumnElement[bool]]:
     conditions: list[ColumnElement[bool]] = []
-    workspaces = scope.workspaces
-    if isinstance(workspaces, Select):
-        conditions.append(columns.workspace_id.in_(workspaces))
-    elif workspaces is not None:
-        ids = sorted(workspaces)
-        if not ids:
-            # Belongs to no workspace yet: nothing was refused, there is simply nothing here.
-            conditions.append(false())
-        elif len(ids) == 1:
-            conditions.append(columns.workspace_id == ids[0])
-        else:
-            conditions.append(columns.workspace_id.in_(ids))
+    if scope.workspaces is not None:
+        # An empty set is a caller in no workspace yet: nothing was refused, there is simply nothing here.
+        conditions.append(in_workspaces(columns.workspace_id, scope.workspaces))
     if scope.api_key_id is not None:
         conditions.append(columns.api_key_id == scope.api_key_id)
     return conditions
@@ -546,6 +548,8 @@ def _key_conditions(
         conditions.append(needs_pricing)
     if filters.counts_toward_budget is not None:
         conditions.append(columns.counts_toward_budget.is_(filters.counts_toward_budget))
+    if filters.deployment_paid is not None:
+        conditions.append(columns.deployment_paid.is_(filters.deployment_paid))
     refine = filters.refine
     for values, column, nullable in (
         (refine.exclude_model, columns.model, False),
@@ -709,6 +713,11 @@ def _search_condition(refine: UsageRefinements) -> ColumnElement[bool] | None:
     return or_(*arms)
 
 
+def _deployment_paid_cost_expr() -> Any:
+    """A row's deployment-paid cost: the recorded split, else its whole cost where its model call was."""
+    return func.coalesce(UsageLog.deployment_paid_cost, case((UsageLog.deployment_paid, UsageLog.cost), else_=None))
+
+
 def _tag_expr(key: str) -> Any:
     """The value of tag ``key`` on a row, or null when the row does not carry it."""
     return UsageLog.tags[key].as_string()
@@ -845,6 +854,7 @@ def _billed_output_sum() -> Any:
 # or a bulk change marked much of the history, and the rows then read in one pass.
 MAX_MARKED_HOURS = 48
 
+
 _HOUR = timedelta(hours=1)
 # Any fixed number serves; it only has to be the rollup refresh's alone.
 _REFRESH_LOCK = 0x7573_6167_6572_6F6C
@@ -875,6 +885,7 @@ def _row_measures() -> dict[str, Any]:
         "billed_cache_write_tokens": _billed_expr("cache_write_tokens", UsageLog.cache_write_tokens),
         "latency_ms": UsageLog.latency_ms,
         "latency_count": case((UsageLog.latency_ms.is_not(None), 1), else_=0),
+        "deployment_paid_cost": _deployment_paid_cost_expr(),
     }
     for tool in GATEWAY_TOOL_NAMES:
         calls = _tool_calls_expr(tool)
@@ -1486,6 +1497,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
                     _summed(case((c.status == "incomplete", c.rows), else_=0)),
                     _summed(case((c.source != SERVED_HERE_SLUG, c.cost), else_=0), 0.0),
                     _summed(case((c.counts_toward_budget, c.cost), else_=0), 0.0),
+                    _summed(c.deployment_paid_cost, 0.0),
                 )
             )
         ).one()
@@ -1508,6 +1520,7 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
             incomplete_count=int(row[15]),
             imported_cost=float(row[16]),
             charged_cost=float(row[17]),
+            deployment_paid_cost=float(row[18]),
         )
 
     async def groups(

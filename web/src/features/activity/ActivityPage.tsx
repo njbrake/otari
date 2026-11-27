@@ -39,6 +39,7 @@ import {
   useObserveTableLayout,
 } from "@/features/observe/observeTableLayout"
 import { useObserveScope } from "@/features/observe/useObserveScope"
+import { useViewWorkspace } from "@/features/observe/viewWorkspace"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
 import { userDisplay } from "@/features/users/userDisplay"
 import { useSetPricing } from "@/shared/api/pricing"
@@ -149,6 +150,7 @@ const URL_DEFAULTS = {
   user_id: "",
   api_key_id: "",
   priced: "",
+  paid_by: "",
   source: "",
   source_label: "",
   endpoint: "",
@@ -232,6 +234,7 @@ function ActivityPageContent({
   const { userIds: userFilters, scope: observeScope } = observe
   const apiKeyFilters = url.getAll("api_key_id")
   const pricedFilter = url.get("priced")
+  const paidByFilter = url.get("paid_by")
   // Provenance: gateway traffic vs an imported agent source. Set by its own select,
   // or by a drill-down (the pricing alarm links here scoped to gateway traffic).
   const sourceFilter = url.get("source")
@@ -341,6 +344,12 @@ function ActivityPageContent({
       : pricedFilter === "false"
         ? false
         : undefined
+  const deploymentPaid =
+    paidByFilter === "true"
+      ? true
+      : paidByFilter === "false"
+        ? false
+        : undefined
 
   // The refinements the column headers set: values left out, the routing
   // policy, and thresholds. Read as one set and keyed on its serialized form,
@@ -388,14 +397,13 @@ function ActivityPageContent({
     (value) => value !== undefined,
   )
 
-  const { selected: workspace } = useSelectedWorkspace()
+  const workspaceId = useViewWorkspace() || undefined
   // What every read of the window shares; the list and its count add one thing
   // (`filters`, below), and the totals read this as it is.
   const readFilters: UsageFilters = useMemo(
     () => ({
-      // From the sidebar's switcher, not from a control on this page: it scopes
-      // the whole shell, and the operator's own filters sit below it.
-      workspace_id: workspace?.workspace_id,
+      // The shell's workspace, or the one a link into Sessions named.
+      workspace_id: workspaceId,
       start_date: win.start ?? (boundedRead ? extentWin.start : undefined),
       end_date: win.end,
       status: statusFilter || undefined,
@@ -411,11 +419,13 @@ function ActivityPageContent({
       priced,
       q: search || undefined,
       ...refinements,
+      deployment_paid: deploymentPaid,
     }),
     [
       refinements,
       search,
-      workspace,
+      workspaceId,
+      deploymentPaid,
       win,
       boundedRead,
       extentWin.start,
@@ -579,7 +589,7 @@ function ActivityPageContent({
     : (extentPreset?.bucket ?? "day")
   const contextFilters: UsageFilters = useMemo(
     () => ({
-      workspace_id: workspace?.workspace_id,
+      workspace_id: workspaceId,
       start_date: winOutsideExtent ? win.start : extentWin.start,
       end_date: winOutsideExtent ? win.end : undefined,
       status: statusFilter || undefined,
@@ -595,11 +605,13 @@ function ActivityPageContent({
       priced,
       q: search || undefined,
       ...refinements,
+      deployment_paid: deploymentPaid,
     }),
     [
       refinements,
       search,
-      workspace?.workspace_id,
+      workspaceId,
+      deploymentPaid,
       winOutsideExtent,
       toolFilter,
       win,

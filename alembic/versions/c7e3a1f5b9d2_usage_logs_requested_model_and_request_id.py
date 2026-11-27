@@ -35,7 +35,9 @@ _REQUEST_ID_INDEX = "ix_usage_logs_request_id"
 
 
 def upgrade() -> None:
-    op.add_column(_TABLE, sa.Column("requested_model", sa.String(), nullable=True))
+    # Upstream's 02003653d88c adds the same column, and on a fresh chain it may run first.
+    if not any(c["name"] == "requested_model" for c in sa.inspect(op.get_bind()).get_columns(_TABLE)):
+        op.add_column(_TABLE, sa.Column("requested_model", sa.String(), nullable=True))
     op.add_column(_TABLE, sa.Column("request_id", sa.String(), nullable=True))
     with op.get_context().autocommit_block():
         op.create_index(_REQUEST_ID_INDEX, _TABLE, ["request_id"], postgresql_concurrently=True)

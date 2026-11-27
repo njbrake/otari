@@ -61,7 +61,7 @@ class McpUserMergeListener:
             }
         if clashing:
             # Read before the rows go, while their servers still hold the clients the tokens were issued to.
-            self._revocations, self._unread = await collect_revocations(
+            self._revocations, self._unread, _ = await collect_revocations(
                 self._connections, self._servers, server_ids=clashing, user_id=from_user_id
             )
         await self._grants.drop_shared_with_user(from_user_id, to_user_id, by="server_id")
