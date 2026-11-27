@@ -408,6 +408,9 @@ async def _marked(async_db: AsyncSession) -> int:
     return int((await async_db.execute(select(func.count()).select_from(UsageRollupDirtyHour))).scalar_one())
 
 
+# Every filter spec is read twice after each of five writes, which takes about
+# 95s on a CI runner, too close to the suite's 120s ceiling to pass reliably.
+@pytest.mark.timeout(300)
 @pytest.mark.asyncio
 async def test_rollups_answer_as_the_rows_do(
     test_db: Session, async_db: AsyncSession, sessions: tuple[_Reader, _Reader]

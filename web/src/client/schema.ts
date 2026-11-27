@@ -37247,6 +37247,8 @@ export interface operations {
                 tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
                 /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
                 counts_toward_budget?: boolean | null;
+                /** @description Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row */
+                deployment_paid?: boolean | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
                 /** @description How groups are ranked: 'recent' (the latest request first, the default), 'requests' (most first), or 'cost' (most spend first). Ties fall back to the key. */
@@ -37347,6 +37349,8 @@ export interface operations {
                 tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
                 /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
                 counts_toward_budget?: boolean | null;
+                /** @description Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row */
+                deployment_paid?: boolean | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
                 /** @description Keep the values that contain this, case-insensitive, or whose name does: a user's alias, an API key's name. What a column's filter menu searches. At most 200 characters. */
@@ -41318,6 +41322,8 @@ export interface operations {
                 tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
                 /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
                 counts_toward_budget?: boolean | null;
+                /** @description Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row */
+                deployment_paid?: boolean | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
                 /** @description How groups are ranked: 'recent' (the latest request first, the default), 'requests' (most first), or 'cost' (most spend first). Ties fall back to the key. */
@@ -41418,6 +41424,8 @@ export interface operations {
                 tool?: ("any" | "web_search" | "web_fetch" | "code_execution") | null;
                 /** @description Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key */
                 counts_toward_budget?: boolean | null;
+                /** @description Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row */
+                deployment_paid?: boolean | null;
                 /** @description Only usage recorded in this workspace. */
                 workspace_id?: string | null;
                 /** @description Keep the values that contain this, case-insensitive, or whose name does: a user's alias, an API key's name. What a column's filter menu searches. At most 200 characters. */

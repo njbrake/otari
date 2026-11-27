@@ -189,7 +189,8 @@ Filter from a column's header: each filterable column has a funnel that opens
 its values with how many requests carry each, busiest first, with a search box
 when the list is long. Check a value to keep only its rows, or press the slash
 beside it to leave it out. On Requests, **Model** also lists providers and,
-once the window ran one, the gateway tool a request used; **API key** lists
+once the window ran one, the gateway tool a request used, and offers
+**Hosted only** or **Own keys only** for who paid the provider; **API key** lists
 the sources requests came from once there is more than one, the channel a
 request came in by (**API**, **Imported** or **Playground**) and **No API key**
 or **No session**; **User** offers **No user**; **Routing** lists routing

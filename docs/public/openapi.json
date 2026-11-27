@@ -57763,6 +57763,24 @@
             }
           },
           {
+            "description": "Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row",
+            "in": "query",
+            "name": "deployment_paid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row",
+              "title": "Deployment Paid"
+            }
+          },
+          {
             "description": "Only usage recorded in this workspace.",
             "in": "query",
             "name": "workspace_id",
@@ -58533,6 +58551,24 @@
               ],
               "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
               "title": "Counts Toward Budget"
+            }
+          },
+          {
+            "description": "Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row",
+            "in": "query",
+            "name": "deployment_paid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row",
+              "title": "Deployment Paid"
             }
           },
           {
@@ -69066,6 +69102,24 @@
             }
           },
           {
+            "description": "Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row",
+            "in": "query",
+            "name": "deployment_paid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row",
+              "title": "Deployment Paid"
+            }
+          },
+          {
             "description": "Only usage recorded in this workspace.",
             "in": "query",
             "name": "workspace_id",
@@ -69836,6 +69890,24 @@
               ],
               "description": "Filter by budget participation, which is not the same question as provenance: true = only enforced gateway rows, false = every row that never touches a budget, meaning imported usage and also gateway traffic on a budget-exempt key",
               "title": "Counts Toward Budget"
+            }
+          },
+          {
+            "description": "Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row",
+            "in": "query",
+            "name": "deployment_paid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by who paid the provider: true = only rows served on a credential the deployment pays for (a hosted provider), false = every other row",
+              "title": "Deployment Paid"
             }
           },
           {

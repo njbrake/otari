@@ -729,6 +729,7 @@ async def usage_value_groups(
     priced: bool | None = Query(default=None, description=_PRICED_DESC),
     tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
     counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
+    deployment_paid: bool | None = Query(default=None, description=_PAID_DESC),
     workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
     search: Annotated[str | None, Query(max_length=_MAX_GROUP_SEARCH, description=_GROUP_SEARCH_DESC)] = None,
     skip: Annotated[int, Query(ge=0)] = 0,
@@ -758,6 +759,7 @@ async def usage_value_groups(
         priced=priced,
         tool=tool,
         counts_toward_budget=counts_toward_budget,
+        deployment_paid=deployment_paid,
         workspace_id=workspace_id,
         refine=refine,
     )
@@ -787,6 +789,7 @@ async def usage_log_groups(
     priced: bool | None = Query(default=None, description=_PRICED_DESC),
     tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
     counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
+    deployment_paid: bool | None = Query(default=None, description=_PAID_DESC),
     workspace_id: Annotated[uuid.UUID | None, Query(description=_WORKSPACE_DESC)] = None,
     order: LogGroupOrder = Query(default="recent", description=_LOG_GROUP_ORDER_DESC),
     skip: Annotated[int, Query(ge=0)] = 0,
@@ -815,6 +818,7 @@ async def usage_log_groups(
         priced=priced,
         tool=tool,
         counts_toward_budget=counts_toward_budget,
+        deployment_paid=deployment_paid,
         workspace_id=workspace_id,
         refine=refine,
     )
