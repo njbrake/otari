@@ -8,7 +8,7 @@ Add MCP as a top-level request field, not a `tools` entry.
 Use either or both of:
 
 - `mcp_servers`: inline MCP server configs the gateway should connect to directly
-- `mcp_server_ids`: ids of MCP servers your workspace has configured
+- `mcp_server_ids`: ids of MCP servers your workspace has configured, or your organization added for every workspace
 
 Otari resolves `mcp_server_ids` first and appends the resulting server configs
 to any inline `mcp_servers`, reading the servers the workspace configured on
@@ -625,11 +625,12 @@ server, the key or the user deletes them.
 #### Servers named in a request
 
 `mcp_servers` in a completion request names a server by URL, which no ACL covers.
-A workspace refuses such a request with a `400` unless
-`request_mcp_servers_allowed` is on, so its ACLs cannot be stepped around. A new
-workspace starts with it off; one that existed before ACLs, including the default
-workspace an install migrates into, keeps it on. Change it with
-`PATCH /api/v1/workspaces/{workspace_id}`.
+A workspace refuses such a request with a `400` (`request_mcp_servers_disallowed`)
+unless `request_mcp_servers_allowed` is on, so its ACLs cannot be stepped around.
+A new workspace starts with it off; one that existed before ACLs, including the
+default workspace an install migrates into, keeps it on. Change it with the
+**Allow servers outside this list** switch on the workspace's **MCP servers**
+card, or with `PATCH /api/v1/workspaces/{workspace_id}`.
 
 The switch also covers asking a provider to dial a server itself: a Responses tool
 of `type: "mcp"`, or a Gemini tool with a non-empty `mcp_servers`
@@ -792,9 +793,27 @@ Authorization: Bearer <token>
 }
 ```
 
-Call this once per server when you prepare a run, and reuse the answer for every
-tool from that server for the length of the run. There is no cross-run cache, so
-a later run rediscovers.
+Call it when you prepare a run, and reuse the answer for every tool from that
+server for the length of the run. Otari keeps each server's own tool listing for
+up to five minutes and answers from it, so discovering at the start of every run
+opens no connection to the server while the listing is kept:
+
+- The `Age` response header is how many seconds ago Otari last asked the server.
+- Send `Cache-Control: no-cache` to have Otari ask the server again, for example
+  right after you changed the server's tools yourself. Each Otari replica keeps
+  its own listing, so the fresh answer replaces only the copy on the replica
+  that served your request; another replica may answer from its own copy for
+  up to five minutes.
+- An edit to the stored server (its URL, credential or allowlist, everything
+  `server_revision` covers) is never answered from a listing kept before it.
+- A per-user server's listing is kept per user, read with that user's own token.
+- The key's [access rule](#server-access) and the screening below apply on every
+  call, not to the kept listing, so two keys sharing a server each see only
+  their own tools.
+
+A tool the server itself adds or removes, with no edit in Otari, can therefore
+take up to five minutes to appear, or be proposed from the listing after it is
+gone; execution then returns the server's own typed error.
 
 Where the stored server has an allowlist, `tools` is its intersection with the
 live catalog, so a tool the server added later is not exposed just because it

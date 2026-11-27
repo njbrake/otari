@@ -26,6 +26,20 @@ is shown again, and offers a **Retry** button. It opens as soon as an attempt
 answers, with no reload. A refusal such as a 404 is not retried on its own; use
 **Retry** once the address is fixed.
 
+The dashboard reads `GET /api/v1/bootstrap` before it renders anything. If the
+gateway does not answer (it is down, restarting, or too slow to answer within 8
+seconds), the dashboard does not guess what it is connected to. It says the
+gateway is unreachable, keeps trying in the background with a growing wait of up
+to 30 seconds, tries again at once when the browser comes back online or the tab
+is shown again, and offers a **Retry now** button. It opens as soon as an
+attempt answers, with no reload. A refusal such as a 404 is not retried on its
+own; use **Retry** once the address is fixed. A 401, or a redirect to a
+sign-in page from something in front of the gateway such as an access proxy,
+asks for a **Reload**, which opens that sign-in; behind a redirect the
+dashboard also keeps asking in the background and opens by itself if the
+gateway answers. A 403 also offers **Reload**, to sign in again, or ask
+whoever runs the gateway for access.
+
 ## Sign-in and secrets
 
 | Credential | Purpose |
@@ -118,7 +132,7 @@ The bootstrap operator is the account the master key acts as (see
 someone else:
 
 1. Make sure their account is active, has a password and an email address it
-   verified by email (not one only vouched for by a passed-on link), and is not
+   verified by email (not one an organization supplied through a passed-on link), and is not
    blocked.
 2. On **Accounts**, choose **Make operator** from the menu on their row if they
    are not an operator yet.
@@ -153,11 +167,13 @@ gateway process rather than to an organization:
 | Accounts | Every account on the deployment | [Deployment-wide account administration](sign-in.md#deployment-wide-account-administration) |
 | Hosted providers | The provider keys the deployment serves inference on | [The Hosted providers page](hosted-providers.md#the-hosted-providers-page) |
 | Subagent router | The decision models that pick the model a coding agent's subagent runs on | [Subagent router](#subagent-router), [Subagent routers](https://docs.otari.ai/reference/gateway/routing#subagent-routers) |
+| Deployment budgets | Every budget on the deployment, a tenant's included, and the gateway users assigned to each | [Budgets](https://docs.otari.ai/guides/control/budgets) |
 | Web search | The search and fetch tools the deployment runs for every workspace, and their prices | [Web search and Code execution pricing](#web-search-and-code-execution-pricing) |
 | Code execution pricing | The price per successful `otari:code_execution` call | [Web search and Code execution pricing](#web-search-and-code-execution-pricing) |
 
-Only a deployment operator sees Accounts, Hosted providers, Web search and Code
-execution pricing; anyone else who opens them is told they are not available.
+Only a deployment operator sees Accounts, Hosted providers, Deployment budgets,
+Web search and Code execution pricing; anyone else who opens them is told they
+are not available.
 **Tools > Web search** links an operator to the Web search page.
 
 ### Settings
@@ -226,6 +242,13 @@ no rate, because a request that would run it is refused. See
 
 ## The setup guide
 
+The guide walks a workspace to its first successful request. Its owners and
+admins share one guide for the workspace: once a request from code succeeds
+there (a Playground message does not count), or one of them skips it, it is
+gone for all of them. A member who may run requests
+in the workspace without managing it gets a guide of their own: their own API
+key, their own first request and their own **Skip**. Viewers are not offered it.
+
 The guide creates its API key only when you ask for one. Reopened after that,
 it offers the key it already issued, named by its last characters, instead of
 a new one: **Use it** keeps that key, and **Replace it** issues a new one and
@@ -274,4 +297,4 @@ service and privacy notice. The account menu links each one set; see
 The dashboard source is under `web/`, and the Docker image includes the
 bundle. From a source checkout, run `make dashboard` for the gateway to serve
 it, or `pnpm --dir web dev` for frontend development. See
-[web/README.md](https://github.com/mozilla-ai/otari/blob/3098fb9f5659b2916b07c9056fd9dd58c92c1260/web/README.md).
+[web/README.md](https://github.com/mozilla-ai/otari/blob/342a93e6b5c4a9a7beac202476aa2e344bec40f0/web/README.md).
