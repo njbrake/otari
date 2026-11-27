@@ -107,6 +107,11 @@ def _row(rng: random.Random, workspace_id: uuid.UUID, timestamp: datetime) -> Us
         status=status,
         status_code=rng.choice([429, 500, 502, None]) if status == "error" else None,
         counts_toward_budget=rng.random() < 0.8,
+        deployment_paid=(paid := rng.random() < 0.3),
+        # A row from before the split was recorded leaves it empty and counts whole.
+        deployment_paid_cost=(
+            rng.choice([None, Decimal(rng.randint(0, 1_000_000)) / Decimal(1_000_000)]) if paid else None
+        ),
         cost=rng.choice([None, Decimal(rng.randint(0, 2_000_000)) / Decimal(1_000_000)]),
         prompt_tokens=prompt,
         completion_tokens=completion,
@@ -195,6 +200,8 @@ _FILTERS: list[dict[str, Any]] = [
     {"priced": True},
     {"priced": False},
     {"counts_toward_budget": False},
+    {"deployment_paid": True},
+    {"deployment_paid": False},
     # Filters the rollups cannot serve read the rows on both sides.
     {"tags": {"team": ["a"]}},
     {"tool": "web_search"},
@@ -401,6 +408,9 @@ async def _marked(async_db: AsyncSession) -> int:
     return int((await async_db.execute(select(func.count()).select_from(UsageRollupDirtyHour))).scalar_one())
 
 
+# Every filter spec is read twice after each of five writes, which takes about
+# 95s on a CI runner, too close to the suite's 120s ceiling to pass reliably.
+@pytest.mark.timeout(300)
 @pytest.mark.asyncio
 async def test_rollups_answer_as_the_rows_do(
     test_db: Session, async_db: AsyncSession, sessions: tuple[_Reader, _Reader]

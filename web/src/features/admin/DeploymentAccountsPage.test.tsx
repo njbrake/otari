@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type {
   BlockedEmail,
   DeploymentUser,
+  MailReadiness,
   MergeUserResponse,
   PasswordLink,
 } from "@/client"
@@ -135,12 +136,16 @@ function mockApi(opts: {
   return requests
 }
 
-function renderPage(ui: ReactElement, url = "/admin/accounts") {
+function renderPage(
+  ui: ReactElement,
+  url = "/admin/accounts",
+  mail: MailReadiness = "none",
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
   return renderWithRouter(
-    <DeploymentProvider value={bootstrap()}>
+    <DeploymentProvider value={bootstrap({ mail })}>
       <QueryClientProvider client={client}>{ui}</QueryClientProvider>
     </DeploymentProvider>,
     { url },
@@ -298,6 +303,23 @@ describe("DeploymentAccountsPage", () => {
       ),
     ).toBeInTheDocument()
   })
+
+  it.each([
+    ["sends_only", "Create the link"],
+    ["delivers", "Email the link"],
+  ] as const)(
+    "offers to %s the link by what a recipient actually receives",
+    async (mail, label) => {
+      mockApi({ accounts: [ANALYST] })
+      await renderPage(<DeploymentAccountsPage />, "/admin/accounts", mail)
+
+      const user = userEvent.setup()
+      await screen.findByText("Analyst")
+      await pressRowAction(user, "Send Analyst a password link")
+
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument()
+    },
+  )
 
   it("says the link was emailed, and shows none, where mail went out", async () => {
     mockApi({

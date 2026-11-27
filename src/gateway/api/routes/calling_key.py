@@ -24,6 +24,7 @@ from gateway.api.routes.usage import (
     _END_DESC,
     _ENDPOINT_DESC,
     _MODEL_MULTI_DESC,
+    _PAID_DESC,
     _PRICED_DESC,
     _PROVIDER_DESC,
     _SOURCE_DESC,
@@ -108,6 +109,7 @@ async def get_key_usage_summary(
     priced: bool | None = Query(default=None, description=_PRICED_DESC),
     tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
     counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
+    deployment_paid: bool | None = Query(default=None, description=_PAID_DESC),
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
     dimensions: list[SummaryDimension] | None = Query(default=None, description=_DIMENSIONS_DESC),
     group_by_tag: GroupByTag = None,
@@ -134,6 +136,7 @@ async def get_key_usage_summary(
         priced=priced,
         tool=tool,
         counts_toward_budget=counts_toward_budget,
+        deployment_paid=deployment_paid,
     )
     summary = await usage.summary(
         filters, _own_rows(api_key), bucket=bucket, dimensions=dimensions, group_by_tag=group_by_tag
@@ -159,6 +162,7 @@ async def get_key_usage_series(
     priced: bool | None = Query(default=None, description=_PRICED_DESC),
     tool: ToolFilter | None = Query(default=None, description=_TOOL_DESC),
     counts_toward_budget: bool | None = Query(default=None, description=_COUNTS_DESC),
+    deployment_paid: bool | None = Query(default=None, description=_PAID_DESC),
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
 ) -> UsageGroupedSeries:
     """The calling key's own requests over time, split by one dimension.
@@ -180,6 +184,7 @@ async def get_key_usage_series(
         priced=priced,
         tool=tool,
         counts_toward_budget=counts_toward_budget,
+        deployment_paid=deployment_paid,
     )
     series = await usage.grouped_series(filters, _own_rows(api_key), bucket=bucket, group_by=group_by)
     if group_by != "user_id":

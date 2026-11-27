@@ -76,6 +76,8 @@ function usageParams(filters: UsageFilters): URLSearchParams {
   if (filters.counts_toward_budget !== undefined) {
     params.set("counts_toward_budget", String(filters.counts_toward_budget))
   }
+  if (filters.deployment_paid !== undefined)
+    params.set("deployment_paid", String(filters.deployment_paid))
   appendAll("exclude_model", filters.exclude_model)
   appendAll("exclude_user_id", filters.exclude_user_id)
   appendAll("exclude_api_key_id", filters.exclude_api_key_id)

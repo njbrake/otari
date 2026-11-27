@@ -171,6 +171,8 @@ export interface UsageFilters {
   // Free text: a row or request id exactly, or a substring of the model, the
   // name the caller sent, the source, the session, the user or the key's name.
   q?: string
+  // Who paid the provider: true = only rows a hosted provider served, false = the rest.
+  deployment_paid?: boolean
 }
 
 /** Which tool/guardrail service a settings test targets. A path parameter in the

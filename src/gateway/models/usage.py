@@ -43,6 +43,9 @@ SERVED_HERE_SLUG = "gateway"
 # ``chat.USAGE_ENDPOINT`` does.
 PLAYGROUND_USAGE_ENDPOINT = "/v1/playground/chat/completions"
 
+# The endpoint label on a usage row for every decisions path.
+DECISIONS_ENDPOINT = "/v1/decisions"
+
 
 class UsageLog(Base):
     """Usage log model for tracking API requests."""
@@ -170,6 +173,12 @@ class UsageLog(Base):
     # is, where looking up the tools' prices failed, and on every row written
     # before the column existed.
     tool_cost: Mapped[Decimal | None] = mapped_column(UsdCost())
+    # The part of ``cost`` the deployment's account ran, which is what it charges the
+    # organization for: the model's cost where ``deployment_paid``, plus each
+    # gateway-run tool call it ran whoever paid for the model call. Null where
+    # neither part has a cost, on rows written by a path that does not split it, and
+    # on every row written before the column existed.
+    deployment_paid_cost: Mapped[Decimal | None] = mapped_column(UsdCost())
 
     # Why ``cost`` is the amount it is, which the row cannot re-derive on its own:
     # ``pricing_source`` names the price list that settled it ("organization",
@@ -234,8 +243,9 @@ class UsageLog(Base):
     policy_name: Mapped[str | None] = mapped_column(index=True)
     # The model name the caller sent, before an alias or a policy resolved it into
     # ``model``. Null on rows written before the column, and on rows that bill
-    # something other than the completion the caller named (a vision side-call).
-    # Indexed because the routing traffic read matches policy and alias names on it.
+    # something other than a model the caller named (a vision side-call, imported
+    # usage). Indexed because the routing traffic read matches policy and alias
+    # names on it.
     requested_model: Mapped[str | None] = mapped_column(index=True)
     selection_reason: Mapped[str | None] = mapped_column()
     attempt_position: Mapped[int | None] = mapped_column()
@@ -278,44 +288,6 @@ class UsageLog(Base):
     api_key = relationship("APIKey", back_populates="usage_logs")
     user = relationship("User", back_populates="usage_logs")
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert model to dictionary."""
-        return {
-            "id": self.id,
-            "api_key_id": self.api_key_id,
-            "user_id": self.user_id,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
-            "model": self.model,
-            "endpoint": self.endpoint,
-            "source": self.source,
-            "source_label": self.source_label,
-            "tags": self.tags,
-            "counts_toward_budget": self.counts_toward_budget,
-            "prompt_tokens": self.prompt_tokens,
-            "completion_tokens": self.completion_tokens,
-            "total_tokens": self.total_tokens,
-            "cache_read_tokens": self.cache_read_tokens,
-            "cache_write_tokens": self.cache_write_tokens,
-            "cache_write_1h_tokens": self.cache_write_1h_tokens,
-            "reasoning_tokens": self.reasoning_tokens,
-            "cache_tokens_in_prompt": self.cache_tokens_in_prompt,
-            "billing_meters": self.billing_meters,
-            "pricing_breakdown": self.pricing_breakdown,
-            "cost": self.cost,
-            "tool_cost": self.tool_cost,
-            "status": self.status,
-            "error_message": self.error_message,
-            "stream_cut_by": self.stream_cut_by,
-            "status_code": self.status_code,
-            "latency_ms": self.latency_ms,
-            "provider_latency_ms": self.provider_latency_ms,
-            "policy_name": self.policy_name,
-            "selection_reason": self.selection_reason,
-            "attempt_position": self.attempt_position,
-            "attempt_count": self.attempt_count,
-            "request_group_id": self.request_group_id,
-        }
-
 
 class UsageRollup(Base):
     """One hour's usage rows that share every key a usage read filters or groups by, summed.
@@ -345,6 +317,7 @@ class UsageRollup(Base):
     status: Mapped[str] = mapped_column()
     status_code: Mapped[int | None] = mapped_column()
     counts_toward_budget: Mapped[bool] = mapped_column()
+    deployment_paid: Mapped[bool] = mapped_column()
     needs_pricing: Mapped[bool] = mapped_column()
 
     rows: Mapped[int] = mapped_column(BigInteger)
@@ -362,6 +335,7 @@ class UsageRollup(Base):
     billed_cache_write_tokens: Mapped[int] = mapped_column(BigInteger)
     latency_ms: Mapped[int | None] = mapped_column(BigInteger)
     latency_count: Mapped[int] = mapped_column(BigInteger)
+    deployment_paid_cost: Mapped[Decimal | None] = mapped_column(Numeric)
     # One set per gateway-run tool (``schemas.usage_and_telemetry.GATEWAY_TOOL_NAMES``):
     # its billable calls, its failed calls, its spend and the rows that ran it.
     web_search_calls: Mapped[int | None] = mapped_column(BigInteger)

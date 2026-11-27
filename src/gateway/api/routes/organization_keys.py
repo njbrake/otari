@@ -67,6 +67,7 @@ from gateway.api.deps import (
     CurrentIdentity,
     DeploymentAdministrationAccessDep,
     OrganizationServiceDep,
+    OrgProviderKeyServiceDep,
     PersonGrowthSignalPortDep,
     RoutingServiceDep,
     get_config,
@@ -292,8 +293,10 @@ async def _load_own_writable_key(
     key_id: str,
     *,
     revoking: bool = False,
-) -> APIKey:
-    """A key the caller may touch (see ``_key_condition``), or 404, refused with 403 to a viewer of its workspace.
+) -> tuple[Organization, APIKey]:
+    """The caller's organization and a key in it they may touch (see ``_key_condition``), or 404.
+
+    Refused with 403 to a viewer of the key's workspace.
 
     A viewer
     still lists their keys; changing, rotating or revoking one is a write, and an
@@ -306,7 +309,7 @@ async def _load_own_writable_key(
     await organizations.hold_workspace_write_access(
         user=identity, organization_id=organization.id, workspace_id=key.workspace_id, revoking=revoking
     )
-    return key
+    return organization, key
 
 
 async def _load_member_key(
@@ -347,6 +350,7 @@ async def create_own_key(
     key_format: ApiKeyFormatPortDep,
     organizations: OrganizationServiceDep,
     budgets: BudgetServiceDep,
+    org_provider_keys: OrgProviderKeyServiceDep,
 ) -> CreateKeyResponse:
     """Create an API key owned by the caller, in a workspace they may see.
 
@@ -415,8 +419,11 @@ async def create_own_key(
         user=identity, organization_id=organization.id, workspace_id=workspace_id, revoking=False
     )
 
+    key_slugs = await org_provider_keys.slug_providers(organization.id)
     try:
-        allowed_models = validate_allowed_models(config, request.allowed_models)
+        allowed_models = validate_allowed_models(
+            config, request.allowed_models, organization_id=organization.id, key_slugs=key_slugs
+        )
         allowed_tools = validate_allowed_tools(config, request.allowed_tools)
         scopes = KeyScopeSet.checked(request.scopes, is_service_key=request.is_service_key)
     except ValueError as exc:
@@ -443,7 +450,19 @@ async def create_own_key(
         alias=identity.full_name or identity.email,
     )
     # A key must not grant more than its owner's default, the same narrow-only
-    # rule the operator surface enforces.
+    # rule the operator surface enforces. A catalog ID stands for the offerings
+    # that default covers.
+    if owner.allowed_models is not None:
+        try:
+            allowed_models = validate_allowed_models(
+                config,
+                request.allowed_models,
+                organization_id=organization.id,
+                within=owner.allowed_models,
+                key_slugs=key_slugs,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if not is_allowlist_subset(allowed_models, owner.allowed_models, tool_keys=config.legacy_search_tool_keys()):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=KEY_MODELS_EXCEED_USER_DETAIL)
     if not tools_within_user(config, allowed_tools, user_tools=owner.allowed_tools, user_models=owner.allowed_models):
@@ -595,11 +614,12 @@ async def update_own_key(
     api_keys: ApiKeyServiceDep,
     organizations: OrganizationServiceDep,
     budgets: BudgetServiceDep,
+    org_provider_keys: OrgProviderKeyServiceDep,
 ) -> KeyInfo:
     """Update a key the caller may touch: their own, or for an owner or admin one of the organization's."""
     fields = request.model_fields_set
     switching_off = fields == {"is_active"} and request.is_active is False
-    key = await _load_own_writable_key(db, organizations, identity, key_id, revoking=switching_off)
+    organization, key = await _load_own_writable_key(db, organizations, identity, key_id, revoking=switching_off)
     refuse_service_key_flag_change(key, request.is_service_key)
 
     # Tri-state via model_fields_set: the nullable columns take null to clear
@@ -627,7 +647,14 @@ async def update_own_key(
     )
 
     try:
-        await api_keys.update_owned(config, key, changes, owner_id=str(key.user_id))
+        await api_keys.update_owned(
+            config,
+            key,
+            changes,
+            owner_id=str(key.user_id),
+            organization_id=organization.id,
+            key_slugs=await org_provider_keys.slug_providers(organization.id),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except DATABASE_ERRORS as exc:
@@ -651,7 +678,7 @@ async def rotate_own_key(
     immediately with no grace window. An owner or admin who manages a member's
     key is refused with 403: the new secret would act as that member.
     """
-    key = await _load_own_writable_key(db, organizations, identity, key_id)
+    _, key = await _load_own_writable_key(db, organizations, identity, key_id)
     if key.user_id != str(identity.id) and not key.is_organization_service_key():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -687,7 +714,7 @@ async def delete_own_key(
     organizations: OrganizationServiceDep,
 ) -> None:
     """Delete (revoke) a key the caller may touch: their own, or for an owner or admin one of the organization's."""
-    key = await _load_own_writable_key(db, organizations, identity, key_id, revoking=True)
+    _, key = await _load_own_writable_key(db, organizations, identity, key_id, revoking=True)
 
     await db.delete(key)
     try:

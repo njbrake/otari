@@ -26,12 +26,14 @@ test("the deployment bootstrap is served unauthenticated", async ({
       "models",
       "organization_guardrails",
       "organization_providers",
+      "organization_sso",
       "organization_usage",
       "organizations",
       "playground",
       "pricing",
       "routing",
       "settings",
+      "subagent_savings",
       "tools",
       "traces",
       "update_check",
@@ -64,6 +66,11 @@ test("the deployment bootstrap is served unauthenticated", async ({
     // needs a registered passkey; see docs/access-control.md.
     passkeys_enabled: true,
     passkeys_ready: false,
+    // organization_oidc_enabled keeps its default here, so an organization may configure its
+    // own OIDC connection and the sign-in screen offers a company row. Off,
+    // the two SSO route groups are not mounted and organization_sso leaves the
+    // surface list above; see docs/configuration.md.
+    organization_oidc_enabled: true,
     oauth_providers: [],
     // This fork ships no feedback, so nothing offers Contact.
     feedback_enabled: false,
@@ -74,13 +81,13 @@ test("the deployment bootstrap is served unauthenticated", async ({
     federation_member_rules: true,
     // No SMTP configured in this e2e environment, so invitations are
     // creatable but not emailed; see docs/configuration.md#mail.
-    mail_ready: false,
+    mail: "none",
     // The catalog stays behind the sign-in screen unless an operator opens it
     // with public_catalog; see docs/configuration.md#a-public-catalog.
     public_catalog: false,
-    // Closed, which is the default and is what mail_ready above would force
-    // anyway: signup sends a verification link, so a deployment that cannot
-    // send one registers nobody.
+    // Closed, which is the default and is what the mail state above would
+    // force anyway: signup sends a verification link, so a deployment that
+    // cannot send one registers nobody.
     open_signup: false,
   })
 })

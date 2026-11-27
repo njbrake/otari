@@ -7,7 +7,7 @@ Built ``CONCURRENTLY`` with the same handling of a pre-built or invalid index
 as ``b8e2d4f6a1c3``.
 
 Revision ID: a1f3c5e7b9d2
-Revises: e5a7c9b1d3f6
+Revises: c3e9a5f1b7d4
 Create Date: 2026-11-20
 """
 
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a1f3c5e7b9d2"
-down_revision: str | Sequence[str] | None = "e5a7c9b1d3f6"
+down_revision: str | Sequence[str] | None = "c3e9a5f1b7d4"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -68,7 +68,9 @@ import {
 import { metricFromUrl } from "@/features/home/usageChartModel"
 import { useHomeRefresh } from "@/features/home/useHomeRefresh"
 import { useSpendDetail } from "@/features/home/useSpendDetail"
+import { workspaceSearch } from "@/features/observe/viewWorkspace"
 import { personPeriodFromUrl } from "@/features/people/personPeriod"
+import { RouterSavingsTile } from "@/features/routerSavings/RouterSavingsTile"
 import { limitDialogCopy } from "@/features/spend/limitCopy"
 import {
   type AppliedLimit,
@@ -79,6 +81,7 @@ import {
   wholePct,
 } from "@/features/spend/limits"
 import { paceOf } from "@/features/spend/pace"
+import { paidSplitLine } from "@/features/spend/paidSplit"
 import {
   comparedWith,
   DEFAULT_PERIOD,
@@ -994,11 +997,12 @@ export function TeamHome({
           subline={
             !spend.totals
               ? unreadLine
-              : spentFacts.length > 0
-                ? spentFacts
-                : delta === null
-                  ? `${formatNumber(spend.totals.request_count)} requests`
-                  : undefined
+              : paidSplitLine(spend.totals) ||
+                (spentFacts.length > 0
+                  ? spentFacts
+                  : delta === null
+                    ? `${formatNumber(spend.totals.request_count)} requests`
+                    : undefined)
           }
           graphic={
             spend.series.length > 1 ? (
@@ -1110,7 +1114,8 @@ export function TeamHome({
             !spend.totals
               ? unreadLine
               : cacheTotals.input > 0
-                ? `${formatPct(cacheTotals.read / cacheTotals.input)} of input from cache`
+                ? // The split took the request count off the Spent tile.
+                  `${paidSplitLine(spend.totals) ? `${formatNumber(spend.totals.request_count)} requests · ` : ""}${formatPct(cacheTotals.read / cacheTotals.input)} of input from cache`
                 : `${formatNumber(spend.totals.request_count)} requests`
           }
           graphic={
@@ -1139,7 +1144,10 @@ export function TeamHome({
             hasSessions ? (
               <Link
                 to="/sessions"
-                search={sessionsSearchFor(window)}
+                search={{
+                  ...sessionsSearchFor(window),
+                  ...workspaceSearch(workspaceId),
+                }}
                 className="self-start text-xs text-link underline max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
               >
                 See the sessions
@@ -1157,6 +1165,7 @@ export function TeamHome({
         capLabel={budgetName}
         noBudgetFact={noBudgetFact}
       />
+      <RouterSavingsTile window={window} workspaceId={workspaceId} />
       <section aria-label="Where it went" className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-3">

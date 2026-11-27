@@ -26,7 +26,7 @@ from gateway.models.budgets import Budget, BudgetReservation, BudgetResetLog
 from gateway.models.files import FileObject
 from gateway.models.inference import BatchRecord, IdempotencyRecord, VideoJobRecord
 from gateway.models.providers import ModelAlias, ProviderEndpoint
-from gateway.models.routing import RoutingPolicy
+from gateway.models.routing import RoutingPolicy, SubagentDecision
 from gateway.models.tenancy import Organization, OrganizationMember, Workspace
 from gateway.models.tenancy import User as Identity
 from gateway.models.tools import (
@@ -321,7 +321,11 @@ def test_a_merge_moves_a_users_own_provider_endpoint(
 def _seed_every_reference(session: Session, workspace_id: uuid.UUID, user_id: str) -> uuid.UUID:
     """One row naming ``user_id`` in each table that references ``users``, beyond the world's; the MCP server's id."""
     now = datetime.now(UTC)
-    server = WorkspaceMcpServer(workspace_id=workspace_id, name="docs", url="https://mcp.example.com")
+    workspace = session.get(Workspace, workspace_id)
+    assert workspace is not None
+    server = WorkspaceMcpServer(
+        organization_id=workspace.organization_id, workspace_id=workspace_id, name="docs", url="https://mcp.example.com"
+    )
     budget = Budget()
     session.add_all([server, budget])
     session.commit()
@@ -357,6 +361,17 @@ def _seed_every_reference(session: Session, workspace_id: uuid.UUID, user_id: st
             ),
             AgentTelemetry(user_id=user_id, name="tool_call", source="claude_code", dedup_key="seed"),
             AgentTelemetryUserBarrier(user_id=user_id),
+            SubagentDecision(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                user_id=user_id,
+                harness="claude-code",
+                agent_type="Explore",
+                parent_model="claude-opus-5",
+                baseline_model="claude-opus-5",
+                baseline_source="parent",
+                recommended_model="haiku",
+            ),
             BatchRecord(id="batch_merge", provider="openai", user_id=user_id, model="gpt-4o"),
             VideoJobRecord(id="video_merge", provider="openai", model="sora", user_id=user_id),
             IdempotencyRecord(
@@ -369,7 +384,7 @@ def _seed_every_reference(session: Session, workspace_id: uuid.UUID, user_id: st
                 locked_until=now,
                 expires_at=now + timedelta(hours=1),
             ),
-            WorkspaceMcpServerGrant(server_id=server.id, user_id=user_id, tools=[]),
+            WorkspaceMcpServerGrant(server_id=server.id, workspace_id=workspace_id, user_id=user_id, tools=[]),
             McpUserConnection(server_id=server.id, user_id=user_id, encrypted_access_token="t", **connection),
             McpOAuthFlow(
                 state_hash="merge",
@@ -490,7 +505,7 @@ def test_a_dropped_mcp_connection_is_revoked_once_the_merge_commits(
     async def collect(_connections: Any, _servers: Any, *, server_ids: set[uuid.UUID], user_id: str) -> Any:
         # Which tokens a revocation sends is the deletion path's to decide; this checks what the merge hands it.
         collected.append((set(server_ids), user_id))
-        return ["the source's token"], 0
+        return ["the source's token"], 0, 1
 
     monkeypatch.setattr(user_merge_listeners, "collect_revocations", collect)
     monkeypatch.setattr(

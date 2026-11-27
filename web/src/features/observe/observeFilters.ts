@@ -34,8 +34,8 @@ export type ValueDimension =
 /** A threshold a row must exceed, on the token, cost and latency columns. */
 export type ThresholdKey = "tokens_gt" | "cost_gt" | "latency_ms_gt"
 
-/** A filter a column carries beside its values: priced or unpriced rows, direct requests, recovered attempts. */
-export type ExtraKey = "priced" | "direct" | "recovered"
+/** A filter a column carries beside its values: priced or unpriced rows, who paid, direct requests, recovered attempts. */
+export type ExtraKey = "priced" | "paid" | "direct" | "recovered"
 
 /** A column a row may have nothing in, which `is_null` asks for. */
 export type EmptyField = "user" | "api_key" | "session"
@@ -70,6 +70,7 @@ const URL_DEFAULTS = {
   cost_gt: "",
   latency_ms_gt: "",
   priced: "",
+  paid_by: "",
   source: "",
   exclude_source: "",
   source_label: "",
@@ -241,6 +242,7 @@ function usageFiltersFor(
   const threshold = (key: ThresholdKey) =>
     isRequests ? readThreshold(url.get(key)) : undefined
   const priced = url.get("priced")
+  const paidBy = url.get("paid_by")
   const statuses =
     leaveOut !== "status" && state.statusApplied
       ? isRequests
@@ -277,6 +279,8 @@ function usageFiltersFor(
           latency_ms_gt: threshold("latency_ms_gt"),
           priced:
             priced === "true" ? true : priced === "false" ? false : undefined,
+          deployment_paid:
+            paidBy === "true" ? true : paidBy === "false" ? false : undefined,
           source:
             leaveOut === "source" ? undefined : url.get("source") || undefined,
           exclude_source: out("source"),

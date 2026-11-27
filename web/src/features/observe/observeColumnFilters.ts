@@ -39,8 +39,8 @@ export const OBSERVE_FILTER_COLUMNS: Record<
         { kind: "empty", field: "user" },
       ],
     },
-    // The provider has no column, and the Model cell carries the tool marker,
-    // so both are filtered here.
+    // The provider has no column, and the Model cell carries the tool and
+    // hosted markers, so all three are filtered here.
     {
       label: "Model",
       headers: [{ column: "model" }],
@@ -48,6 +48,7 @@ export const OBSERVE_FILTER_COLUMNS: Record<
         { kind: "values", dimension: "model" },
         { kind: "values", dimension: "provider" },
         { kind: "tool" },
+        { kind: "extra", key: "paid" },
       ],
     },
     {

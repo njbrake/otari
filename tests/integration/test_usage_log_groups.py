@@ -38,6 +38,7 @@ def _log(
     completion_tokens: int = 5,
     latency_ms: int | None = 100,
     source_label: str | None = None,
+    deployment_paid: bool = False,
 ) -> datetime:
     workspace_id = seed_workspace_id(db)
     if user_id is not None and db.get(User, user_id) is None:
@@ -68,6 +69,7 @@ def _log(
             source="gateway",
             source_label=source_label,
             counts_toward_budget=True,
+            deployment_paid=deployment_paid,
             status=status,
             error_message="boom" if status == "error" else None,
             cost=Decimal(cost),
@@ -171,6 +173,26 @@ def test_groups_read_the_log_filters(
     models = _get(client, master_key_header, group_by="model", order="requests")
     assert models["groups"][0]["key"] == "gpt-4o"
     assert models["groups"][0]["top_models"] == [{"model": "gpt-4o", "requests": 3}]
+
+
+def test_groups_and_menu_values_read_who_paid(
+    client: TestClient, master_key_header: dict[str, str], db_session: Session
+) -> None:
+    """``deployment_paid`` narrows the groups and a column menu's values, as it does the list."""
+    _log(db_session, minutes_ago=1, model="hosted", deployment_paid=True)
+    _log(db_session, minutes_ago=2, model="byo")
+    db_session.commit()
+
+    grouped = _get(client, master_key_header, group_by="model", deployment_paid="true")
+    assert [group["key"] for group in grouped["groups"]] == ["hosted"]
+
+    response = client.get(
+        f"{API_ROOT}/usage/groups",
+        headers=master_key_header,
+        params={"group_by": "model", "deployment_paid": "false"},
+    )
+    assert response.status_code == 200, response.text
+    assert [group["key"] for group in response.json()["groups"]] == ["byo"]
 
 
 def test_a_group_counts_every_model_past_the_three_it_names(
