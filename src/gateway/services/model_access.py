@@ -580,9 +580,8 @@ def _validate_entry(
     if "*" in model and (model.count("*") > 1 or not model.endswith("*")):
         raise ValueError(f"'{entry}': only a single trailing '*' is allowed (openai:* or openai:gpt-4*)")
     if offerings := _catalog_offerings(entry, workspace_id=workspace_id, organization_id=organization_id):
-        # No entry can name a hosted provider called otherwise than its
-        # implementation or a hosted region, so the model's other offerings
-        # stand for those.
+        # An offering whose prefix no entry can name is dropped, and the
+        # model's other offerings stand for it.
         if storable := [
             offering for offering in offerings if _known_prefix(config, offering.partition(":")[0], key_slugs)
         ]:

@@ -293,6 +293,17 @@ def test_an_entry_may_name_a_hosted_provider_by_its_own_name(entry: str, monkeyp
     assert validate_allowed_models(GatewayConfig(), [entry]) == [entry]
 
 
+def test_a_catalog_id_stands_for_its_offering_on_a_renamed_hosted_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The request gate compares ``openai-eu:gpt-4o`` for that offering, so the stored entry names it."""
+    monkeypatch.setattr(_hosted_name_index, "_names", {"openai-eu": "openai"})
+    rows = [OfferingRow("openai-eu:gpt-4o", "openai-eu", "openai", 2.0)]
+    set_selector_index(build_selector_index(rows, {"openai/gpt-4o": ("openai/gpt-4o", ("openai-eu:gpt-4o",))}))
+    try:
+        assert validate_allowed_models(GatewayConfig(), ["openai/gpt-4o"]) == ["openai-eu:gpt-4o"]
+    finally:
+        reset_selector_index()
+
+
 def test_a_catalog_id_stands_for_an_offering_on_a_slugged_key() -> None:
     rows = [OfferingRow("acme-openai:gpt-4o", "acme-openai", "openai", 2.0)]
     set_selector_index(build_selector_index(rows, {"openai/gpt-4o": ("openai/gpt-4o", ("acme-openai:gpt-4o",))}))
