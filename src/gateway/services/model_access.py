@@ -507,7 +507,8 @@ def tool_not_allowed_detail(
 def _known_prefix(config: GatewayConfig, prefix: str, key_slugs: Collection[str]) -> bool:
     """Whether a prefix names something a model allow-list entry can legitimately gate.
 
-    A configured provider instance, a known any-llm provider, or one of
+    A configured provider instance, a known any-llm provider, a hosted provider
+    by its own name (``otari-ai``, which no implementation is called), or one of
     ``key_slugs``, the slugs the organization's own keys are reached by. The
     configured decision providers are accepted because ``/v1/decisions`` checks
     ``<provider>:<model>``.
@@ -515,6 +516,11 @@ def _known_prefix(config: GatewayConfig, prefix: str, key_slugs: Collection[str]
     if prefix in config.providers or prefix in key_slugs:
         return True
     if prefix in config.decision_providers:
+        return True
+    # Imported here: the providers package imports this module.
+    from gateway.services.providers import hosted_implementation  # noqa: PLC0415
+
+    if hosted_implementation(prefix) is not None:
         return True
     try:
         LLMProvider(prefix)
@@ -574,9 +580,8 @@ def _validate_entry(
     if "*" in model and (model.count("*") > 1 or not model.endswith("*")):
         raise ValueError(f"'{entry}': only a single trailing '*' is allowed (openai:* or openai:gpt-4*)")
     if offerings := _catalog_offerings(entry, workspace_id=workspace_id, organization_id=organization_id):
-        # No entry can name a hosted provider called otherwise than its
-        # implementation or a hosted region, so the model's other offerings
-        # stand for those.
+        # An offering whose prefix no entry can name is dropped, and the
+        # model's other offerings stand for it.
         if storable := [
             offering for offering in offerings if _known_prefix(config, offering.partition(":")[0], key_slugs)
         ]:

@@ -37,6 +37,7 @@ from gateway.services.model_access import (
     validate_allowed_tools,
 )
 from gateway.services.organizations import AccessLists
+from gateway.services.providers import _hosted_name_index
 from gateway.services.tenancy import org_provider_key_service as org_store
 from gateway.services.tenancy.org_provider_key_service import KeyOffer
 
@@ -280,6 +281,27 @@ def test_an_entry_may_name_an_organization_key_by_its_slug(entry: str) -> None:
     assert validate_allowed_models(GatewayConfig(), [entry], key_slugs={"acme-openai"}) == [entry]
     with pytest.raises(ValueError, match="unknown provider or instance 'acme-openai'"):
         validate_allowed_models(GatewayConfig(), [entry])
+
+
+@pytest.mark.parametrize("entry", ["otari-ai:*", "otari-ai:fireworks:accounts/fireworks/models/kimi-k3"])
+def test_an_entry_may_name_a_hosted_provider_by_its_own_name(entry: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The request gate reads a hosted provider's own name, so an allow-list must be able to store it."""
+    with pytest.raises(ValueError, match="unknown provider or instance 'otari-ai'"):
+        validate_allowed_models(GatewayConfig(), [entry])
+    monkeypatch.setattr(_hosted_name_index, "_names", {"otari-ai": "otari"})
+
+    assert validate_allowed_models(GatewayConfig(), [entry]) == [entry]
+
+
+def test_a_catalog_id_stands_for_its_offering_on_a_renamed_hosted_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The request gate compares ``openai-eu:gpt-4o`` for that offering, so the stored entry names it."""
+    monkeypatch.setattr(_hosted_name_index, "_names", {"openai-eu": "openai"})
+    rows = [OfferingRow("openai-eu:gpt-4o", "openai-eu", "openai", 2.0)]
+    set_selector_index(build_selector_index(rows, {"openai/gpt-4o": ("openai/gpt-4o", ("openai-eu:gpt-4o",))}))
+    try:
+        assert validate_allowed_models(GatewayConfig(), ["openai/gpt-4o"]) == ["openai-eu:gpt-4o"]
+    finally:
+        reset_selector_index()
 
 
 def test_a_catalog_id_stands_for_an_offering_on_a_slugged_key() -> None:
