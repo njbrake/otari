@@ -4,7 +4,7 @@ import {
   personCutOf,
   splitRows,
   splitTotals,
-} from "@/features/people/personBreakdown"
+} from "@/features/people/personBreakdownModel"
 import { apiKey, usageTotals } from "@/tests/fixtures"
 
 const row = (overrides: Partial<UsageGroupRow>): UsageGroupRow => ({
